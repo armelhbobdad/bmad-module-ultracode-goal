@@ -1,19 +1,19 @@
 {
-  "name": "my-module",
-  "owner": { "name": "Your Name" },
+  "name": "bmad-module-ultracode-goal",
+  "owner": { "name": "Armel" },
   "license": "MIT",
-  "homepage": "https://github.com/your-org/my-module",
-  "repository": "https://github.com/your-org/my-module",
-  "keywords": ["bmad"],
+  "homepage": "https://github.com/armelhbobdad/bmad-module-ultracode-goal",
+  "repository": "https://github.com/armelhbobdad/bmad-module-ultracode-goal",
+  "keywords": ["bmad", "claude-code", "goal-mode", "autonomous-delivery", "test-architect", "quality-gates"],
   "plugins": [
     {
-      "name": "my-module",
+      "name": "bmad-module-ultracode-goal",
       "source": "./",
-      "description": "TODO: What your module does in one sentence.",
-      "version": "1.0.0",
-      "author": { "name": "Your Name" },
+      "description": "Supercharges BMAD with Claude Code Goal Mode, Auto Mode, and Auto Memory: autonomous Epic execution to a machine-checked, TEA-gated Definition-of-Done. Execute Epics. Accumulate Knowledge. Deliver Outcomes.",
+      "version": "0.1.0",
+      "author": { "name": "Armel" },
       "skills": [
-        "./skills/my-skill"
+        "./skills/ultracode-goal"
       ]
     }
   ]
