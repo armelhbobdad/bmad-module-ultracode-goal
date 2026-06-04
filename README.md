@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/ucg-logo.svg" alt="UltraCode Goal — six stage nodes orbiting a deterministic gate whose verdict reads PASS" width="190"/>
+
 # UltraCode Goal (UCG)
 
 **Run a BMAD Epic autonomously to a machine-checked Definition-of-Done.**
