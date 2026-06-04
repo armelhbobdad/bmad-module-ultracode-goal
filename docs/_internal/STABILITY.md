@@ -1,4 +1,7 @@
-# Stability and Public Contract
+---
+title: Stability and Public Contract
+description: The 0.1.0 stability posture — which CLI, config, JSON, and gate surfaces are the supported public contract versus everything that is @internal and free to change.
+---
 
 > **Status:** 0.x — pre-1.0. The surfaces below are the intended public contract at `0.1.0`. Per [Semantic Versioning 2.0.0](https://semver.org/), a `0.x` series makes no stability guarantee across minor versions; this document records what we *try* to hold stable and what is explicitly `@internal`, so a consumer knows which surfaces to pin against and which to treat as free to change.
 
@@ -44,6 +47,19 @@ The skill name `ultracode-goal` and its documented invocation phrases — "run a
 
 - **CLI flags**: `--trace-output` (required), `--profile` (`light` | `production`, required), `--nfr`, `--test-review` (production only).
 - **Verdict vocabulary**: the `verdict` values `advance` / `defer` / `reloop` / `escalate`, and the `gate_status` values `PASS` / `CONCERNS` / `FAIL` / `WAIVED` / `NOT_EVALUATED`, plus the mapping between them. See the [gate model](../gate-model.md).
+
+The contractual mapping each `gate_status` resolves to:
+
+```mermaid
+flowchart LR
+    PASS["PASS"] --> ADV["advance"]
+    WAIVED["WAIVED"] --> ADV
+    CONCERNS["CONCERNS"] --> DEF["defer"]
+    FAIL["FAIL"] --> REL["reloop"]
+    NE["NOT_EVALUATED"] --> ESC["escalate"]
+    classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
+    class ADV,DEF,REL,ESC verdict
+```
 
 The printed JSON object's key set (`verdict`, `gate_status`, `p0_status`, `p1_status`, `overall_status`, `nfr_status`, `review_score`, `reasons`) is the consumable shape; the human-readable `reasons` strings are not contractual wording.
 

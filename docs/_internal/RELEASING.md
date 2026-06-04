@@ -1,4 +1,7 @@
-# Releasing
+---
+title: Releasing
+description: Maintainer runbook for cutting an UltraCode Goal release via the manual-dispatch, OIDC trusted-publishing release.yaml workflow.
+---
 
 Maintainer runbook for cutting a release of `bmad-module-ultracode-goal`. The canonical release path is [`.github/workflows/release.yaml`](../../.github/workflows/release.yaml) — manual dispatch, OIDC trusted publishing, no token secrets.
 
@@ -17,6 +20,30 @@ Dispatching `release.yaml` from `main` runs, in order:
 9. GitHub Release created from generated notes.
 
 Dispatching from a non-`main` ref skips the PR flow: the tag anchors on the CI-ephemeral commit and `main` is not advanced. This is the expected path for prerelease cuts from feature branches.
+
+How the dispatch ref forks the pipeline, and where the two paths rejoin to tag and publish:
+
+```mermaid
+flowchart TD
+    D["Dispatch release.yaml"] --> P["Approve release environment"]
+    P --> Q["Quality gate, version bump, marketplace + CHANGELOG sync"]
+    Q --> DR["npm publish --dry-run"]
+    DR --> REF{"Dispatched from main?"}
+    REF -->|"yes"| BR["Push commit to temp branch, open bot PR"]
+    BR --> FT["Force-dispatch quality.yaml on temp branch"]
+    FT --> WC["Wait for required status checks"]
+    WC --> AUTH{"Approved or admin-merged?"}
+    AUTH -->|"maintainer approval"| AM["Auto-merge with merge commit"]
+    AUTH -->|"admin bypass-merge"| MG["Merged on main"]
+    AM --> MG
+    MG --> TAG["Tag vX.Y.Z on merge commit"]
+    REF -->|"no"| SKIP["Skip PR flow, anchor tag on CI-ephemeral commit"]
+    SKIP --> TAG
+    TAG --> PUB["npm publish via OIDC trusted publishing"]
+    PUB --> REL["Create GitHub Release"]
+    classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
+    class REF,AUTH verdict
+```
 
 ## One-time setup
 

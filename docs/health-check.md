@@ -1,4 +1,7 @@
-# Health Check
+---
+title: Health Check
+description: The Finalize self-improvement reflection — what it computes locally, what leaves your machine and only after approval, how it dedups, and how to turn it off.
+---
 
 Every UltraCode Goal run that reaches Finalize ends with a health check: a brief self-improvement reflection that audits the run for friction, gaps, or bugs in *this module* and, when it finds something, offers to file a structured GitHub issue. The expected outcome is **zero findings** — a clean run exits in a line. This page covers exactly what it sends, the privacy model, how it dedups, and how to turn it off. The deterministic fingerprint and seen-cache plumbing is [`../skills/ultracode-goal/scripts/health_check_fp.py`](../skills/ultracode-goal/scripts/health_check_fp.py).
 
@@ -23,6 +26,44 @@ Explicitly **not** sent: no source code, no Epic content, no secrets. The eviden
 ## Privacy
 
 Issues are filed publicly on `armelhbobdad/bmad-module-ultracode-goal`. On an **attended** run nothing is sent silently: the health check always **HALTS at a `[Y]` / `[N]` / `[E]` gate** before submitting — yes to file, no to skip, edit to adjust first. You see the finding and approve it before it leaves your machine.
+
+The boundary below shows the disable path, everything computed on your machine, and the two points where anything crosses to GitHub — both behind a gate:
+
+```mermaid
+flowchart TD
+    Start["Reaches Finalize"] --> Enabled{"health_check_enabled true"}
+    Enabled -->|"false"| Off["Log one line and exit. Nothing computed, nothing sent"]
+    Enabled -->|"true"| Reflect["Reflect on this run. Grade bug, friction, gap"]
+    Reflect --> Clean{"Any findings"}
+    Clean -->|"no"| Done["Clean run. Exit in one line"]
+    Clean -->|"yes"| Gate{"Approved to submit"}
+    Gate -->|"no, queue or skip"| Queue["Write finding to local queue. Stays on disk"]
+    Gate -->|"yes"| Fp["Compute fingerprint and check seen-cache"]
+    Fp --> Search["Remote dedup search on GitHub"]
+    Search --> Create["Create or react on public issue"]
+
+    subgraph local["On your machine"]
+        Enabled
+        Off
+        Reflect
+        Clean
+        Done
+        Gate
+        Queue
+        Fp
+    end
+    subgraph net["Leaves the machine"]
+        Search
+        Create
+    end
+
+    classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
+    classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
+    class Gate accent
+    class Create verdict
+```
+
+The gate that admits anything to the right of the boundary is the `[Y]` approval on an attended run, or the autosubmit opt-in restricted to `bug`-severity findings on a headless run; the Environment table — never source code, Epic content, or secrets — is all that travels with a filed issue.
 
 ## Unattended behavior
 

@@ -1,4 +1,7 @@
-# Parallel Mode
+---
+title: Parallel Mode
+description: The experimental --parallel worktree fan-out for Stage 4 — how stories run isolated and converge on one epic gate, how concurrency is bounded, and the known limits to expect.
+---
 
 > **Experimental, opt-in.** `--parallel` is an additive execution path. The sequential `/goal` spine ([how it works](how-it-works.md), Stage 4) is the **default and recommended** path. Use `--parallel` only when you understand the known limits below, and expect to fall back to the spine.
 
@@ -7,6 +10,38 @@ When the operator passes `--parallel`, Stage 4 fans the Epic out across worktree
 ## What it does
 
 `--parallel` invokes the saved dynamic workflow `execute-epic.workflow.js` (registered as `/ultracode-goal-execute`). Each in-scope story runs in its **own git worktree** on its own branch, so concurrent stories never overwrite each other's working tree. Within a worktree the steps are the same as the spine and strictly ordered: `bmad-create-story` (Create mode) → `bmad-dev-story` un-skipping the story's red-phase ATDD tests → run and print tests/lint/build, then write the tests-ran marker → (production) `bmad-testarch-test-review` then `bmad-code-review` → commit at green → per-story `gate_eval.py`. After every story lands, the workflow runs one epic-level trace gate and returns `{ perStory: [{story, verdict, gate_status}], epicGate, deferred: [...] }`, which feeds Stages 5 and 6.
+
+The Epic branch is the trunk every story forks from, and the epic-level gate is where they converge:
+
+```mermaid
+flowchart TD
+    EB["Epic branch"]
+    EB --> WA["Worktree story A"]
+    EB --> WB["Worktree story B"]
+    EB --> WC["Worktree story N"]
+    WA --> GA["Per-story gate_eval.py"]
+    WB --> GB["Per-story gate_eval.py"]
+    WC --> GC["Per-story gate_eval.py"]
+    GA --> EG["Epic-level trace gate"]
+    GB --> EG
+    GC --> EG
+    EG --> RET["Merged result -> Stages 5 and 6"]
+
+    subgraph STEPS["Strict order inside each worktree"]
+        direction LR
+        S1["create-story"] --> S2["dev-story un-skip ATDD"]
+        S2 --> S3["tests, lint, build then marker"]
+        S3 --> S4["production review"]
+        S4 --> S5["commit at green on story branch"]
+    end
+
+    classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
+    classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
+    class EB accent
+    class EG,RET verdict
+```
+
+Stories are batched to `parallel_max_concurrency` (default 8): each batch fans out in parallel, batches run sequentially, and a worktree commit on its own story branch is the per-story unit of work. The "merge back" is the epic-level trace gate consolidating the landed branches into one verdict object — not a mid-run interactive step, since the fan-out takes no input once launched.
 
 Critically, this path **shares the sequential spine's truth sources**: the same `gate_eval.py` reading TEA's `gate-decision.json` (never the model, never the transcript-only `/goal` evaluator), and the same PreToolUse + Stop hooks merged at preflight enforce the invariants. The verdict mapping is owned by `gate_eval.py`; the spawned agents return its stdout fields verbatim and must not recompute TEA thresholds. See the [gate model](gate-model.md).
 

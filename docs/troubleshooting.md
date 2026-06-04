@@ -1,6 +1,28 @@
-# Troubleshooting
+---
+title: Troubleshooting
+description: Maps the real failure modes of an autonomous Epic run — preflight refusals, gate escalations, silent hooks, budget overruns, resume, and parallel fallback — to what the run does and what you do.
+---
 
 Real failure modes, sourced from the skill's stage files and scripts, with what the run does about each and what you do. For the design behind these behaviors see [how it works](how-it-works.md), [the gate model](gate-model.md), and [architecture](architecture.md).
+
+Start from the symptom you observed and follow it to the section that explains it:
+
+```mermaid
+flowchart TD
+    S["What did you observe"] --> P{"Run never launched"}
+    P -->|"yes"| PRE["See: Preflight cannot reach budget-zero"]
+    P -->|"no"| G{"Stopped at a gate, status NOT_EVALUATED or escalate"}
+    G -->|"yes"| GATE["See: gate_eval reports blocked / escalate"]
+    G -->|"no"| H{"A commit slipped past a guard"}
+    H -->|"yes"| HOOK["See: Hooks not firing"]
+    H -->|"no"| B{"A story stopped re-looping, escalation marker appeared"}
+    B -->|"yes"| BUD["See: Budget exhausted mid-story"]
+    B -->|"no"| R{"Run was interrupted, want to continue"}
+    R -->|"yes"| RES["See: Resume after an interruption"]
+    R -->|"no"| PAR["See: --parallel issues"]
+    classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
+    class PRE,GATE,HOOK,BUD,RES,PAR accent
+```
 
 ## Preflight can't reach budget-zero
 
@@ -26,6 +48,25 @@ The decision log carries the full blocker list with what each needs to clear. Re
 - **Wrong `trace_output_dir`.** The script reads the directory passed as `--trace-output` (resolved from `{workflow.trace_output_dir}`). If TEA wrote elsewhere — or the output dirs were never pre-created at preflight — the artifact is real but in a different place. Confirm `trace_output_dir` matches where TEA actually wrote.
 
 Note this is fail-closed on purpose: a missing or unreadable gate artifact escalates rather than being assumed green. The slim file's *absence alone* is not the problem — the script falls back to the summary, and that fallback is explicitly not a failure.
+
+How `gate_eval.py` resolves the artifact and why only the dead-end branch escalates:
+
+```mermaid
+flowchart TD
+    A["Read trace-output dir"] --> B{"gate-decision.json present"}
+    B -->|"yes"| OK["Read gate_status"]
+    B -->|"no, normal"| C{"e2e-trace-summary.json present"}
+    C -->|"yes, fallback not a failure"| OK
+    C -->|"no"| NE["gate_status NOT_EVALUATED"]
+    OK --> V{"gate_status value"}
+    V -->|"PASS or WAIVED"| ADV["advance"]
+    V -->|"CONCERNS"| DEF["defer"]
+    V -->|"FAIL"| REL["reloop"]
+    V -->|"NOT_EVALUATED"| ESC["escalate"]
+    NE --> ESC
+    classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
+    class ADV,DEF,REL,ESC verdict
+```
 
 ## Hooks not firing
 

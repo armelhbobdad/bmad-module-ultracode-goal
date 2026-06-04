@@ -120,6 +120,24 @@ UCG runs six stages in order, each routing by the testable conditions stated in 
 5. **Gate** — `gate_eval.py` reads TEA's verdict and routes: advance / defer / reloop / escalate.
 6. **Finalize** — Auto Memory capture, optional retrospective, decision-log audit, run report.
 
+The run is a straight line until the gate, which branches — and a `reloop` sends the story back through Execute within budget, while an unresolved blocker stops the run rather than guessing:
+
+```mermaid
+flowchart TD
+    I["Stage 1 Ingest and Scope"] --> P{"Stage 2 Preflight hard gate"}
+    P -->|"red blocker"| STOP["STOP / blocked"]
+    P -->|"budget 0, green"| D["Stage 3 Define Done"]
+    D --> X["Stage 4 Execute"]
+    X --> G{"Stage 5 gate_eval.py reads TEA verdict"}
+    G -->|"advance, PASS or WAIVED"| F["Stage 6 Finalize"]
+    G -->|"defer, CONCERNS"| L["Ledger then advance"]
+    L --> F
+    G -->|"reloop, FAIL or signal downgrade"| X
+    G -->|"escalate, NOT_EVALUATED or budget out"| STOP
+    classDef gate fill:#6366F1,stroke:#4F46E5,color:#fff
+    class P,G gate
+```
+
 Three enforcement layers keep the autonomy honest:
 
 - **Hooks are the invariants** — `PreToolUse` guards (no commit on a protected branch; no commit before tests ran for the story) live in `settings.local.json`, where the runtime enforces them, not in memory.

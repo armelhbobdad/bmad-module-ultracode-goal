@@ -1,4 +1,7 @@
-# Gate Model
+---
+title: Gate Model
+description: How gate_eval.py turns TEA's gate-decision.json into a fail-closed advance, defer, reloop, or escalate verdict.
+---
 
 Completion in UltraCode Goal is decided by a deterministic artifact read, not by judgment. `scripts/gate_eval.py` reads TEA's `gate-decision.json` and returns a routing verdict the skill executes. This page documents the verdict mapping, the production AND, the thresholds, the fail-closed contract, and why the `/goal` evaluator alone is insufficient — all traced to [`../skills/ultracode-goal/scripts/gate_eval.py`](../skills/ultracode-goal/scripts/gate_eval.py).
 
@@ -11,6 +14,27 @@ The script resolves the gate artifact from the trace output directory:
 3. If neither file is present, or the run carries no gate fields, `gate_status` is `NOT_EVALUATED`.
 
 The script never re-derives TEA's thresholds; it reads `gate_status` as given by the trace workflow.
+
+How the script resolves an artifact into a `gate_status`:
+
+```mermaid
+flowchart TD
+    A["Scan trace-output for a trace report"] --> B{"Frontmatter names a slim gate file?"}
+    B -->|"yes"| C["Use the hinted path"]
+    B -->|"no"| D["Default to gate-decision.json"]
+    C --> E{"Slim file present?"}
+    D --> E
+    E -->|"yes"| F["Read gate_status from slim file"]
+    E -->|"no"| G{"e2e-trace-summary.json present?"}
+    G -->|"yes, has gate fields"| H["Lift gate_status from summary"]
+    G -->|"yes, no gate fields"| I["gate_status = NOT_EVALUATED"]
+    G -->|"no"| I
+    F --> Z["gate_status to verdict mapping"]
+    H --> Z
+    I --> Z
+    classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
+    class Z verdict
+```
 
 ## Verdict mapping
 
@@ -32,6 +56,24 @@ Under `--profile production`, an otherwise-`advance` verdict is additionally AND
 
 - **NFR** (`nfr-assessment.md`): the audit's Overall Status must not be `FAIL`.
 - **Test review** (`test-review.md`): the Quality Score must be `>= 80` **and** the Recommendation must not be `Block`.
+
+How the AND folds the two signals in, with every unreadable path counting as a failure:
+
+```mermaid
+flowchart TD
+    V{"Verdict is advance?"} -->|"no, defer/reloop/escalate"| K["Unchanged"]
+    V -->|"yes"| N{"NFR Overall Status"}
+    N -->|"FAIL"| F["Signal failed"]
+    N -->|"file missing or unparsable"| F
+    N -->|"parsed and not FAIL"| R{"Test review"}
+    R -->|"score lt 80 or Block"| F
+    R -->|"score unparsable, file missing"| F
+    R -->|"score gte 80 and not Block"| P["Both signals passed"]
+    F --> D["Downgrade advance to reloop"]
+    P --> A["Stay advance"]
+    classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
+    class A,D,K verdict
+```
 
 Under `--profile light` none of this applies — the trace gate is the whole decision.
 
