@@ -43,20 +43,52 @@ class UI {
       logoLines = ['  U C G'];
     }
 
-    const w = 72;
+    const indent = '  ';
+    // eslint-disable-next-line no-control-regex -- stripping ANSI escape codes for visual width calculation
+    const visibleWidth = (s) => s.replaceAll(/\u001B\[\d+(?:;\d+)*m/g, '').length;
+
+    // Plain text for every box row, measured before styling, so the frame is
+    // sized to its content and can never be broken by an over-long line.
+    const titleText = 'UltraCode Goal  ◎  Autonomous Epic Conductor';
+    const taglineText = 'Run a BMAD Epic autonomously to a machine-checked Definition-of-Done.';
+    const versionText = `v${version}  ·  MIT License  ·  Open Source`;
+
+    // Inner box width: hug the widest row, capped to the terminal (and to 76
+    // so the full frame stays within an 80-column window).
+    const cols = process.stdout.columns || 80;
+    const logoWidth = Math.max(...logoLines.map((l) => l.trimEnd().length));
+    const wMin = logoWidth + indent.length + 2; // the logo cannot wrap
+    const wMax = Math.max(wMin, Math.min(76, cols - 4));
+    const longest = Math.max(logoWidth, titleText.length, taglineText.length, versionText.length);
+    const w = Math.min(longest + indent.length + 2, wMax);
+    const usable = w - 2 - indent.length;
+
+    // Word-wrap plain text to the usable row width (kicks in on narrow terminals).
+    const wrap = (text, width) => {
+      const lines = [];
+      let line = '';
+      for (const word of text.split(' ')) {
+        if (line && line.length + 1 + word.length > width) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = line ? line + ' ' + word : word;
+        }
+      }
+      if (line) lines.push(line);
+      return lines;
+    };
+
     const frame = brand.dark;
     const top = frame('  ╔' + '═'.repeat(w) + '╗');
     const mid = frame('  ╟' + '─'.repeat(w) + '╢');
     const bottom = frame('  ╚' + '═'.repeat(w) + '╝');
-    const rule = frame('  ' + '━'.repeat(w));
+    const rule = frame('  ' + '━'.repeat(w + 2)); // matches the box's outer width
     const row = (content) => {
-      // eslint-disable-next-line no-control-regex -- stripping ANSI escape codes for visual width calculation
-      const stripped = content.replaceAll(/\u001B\[\d+(?:;\d+)*m/g, '');
-      const pad = Math.max(0, w - stripped.length - 2);
+      const pad = Math.max(0, w - visibleWidth(content) - 2);
       return frame('  ║ ') + content + ' '.repeat(pad) + frame(' ║');
     };
     const empty = row('');
-    const indent = '  ';
 
     console.log();
     console.log(top);
@@ -66,17 +98,28 @@ class UI {
     }
     console.log(empty);
     console.log(mid);
-    console.log(row(indent + chalk.white.bold('UltraCode Goal') + '  ' + brand.spark('◎') + '  ' + chalk.dim('Autonomous Epic Conductor')));
-    console.log(row(indent + chalk.dim('Run a BMAD Epic autonomously to a machine-checked Definition-of-Done.')));
-    console.log(row(indent + chalk.dim(`v${version}  ·  MIT License  ·  Open Source`)));
+    if (titleText.length <= usable) {
+      console.log(
+        row(indent + chalk.white.bold('UltraCode Goal') + '  ' + brand.spark('◎') + '  ' + chalk.dim('Autonomous Epic Conductor')),
+      );
+    } else {
+      console.log(row(indent + chalk.white.bold('UltraCode Goal') + '  ' + brand.spark('◎')));
+      console.log(row(indent + chalk.dim('Autonomous Epic Conductor')));
+    }
+    for (const line of wrap(taglineText, usable)) {
+      console.log(row(indent + chalk.dim(line)));
+    }
+    for (const line of wrap(versionText, usable)) {
+      console.log(row(indent + chalk.dim(line)));
+    }
     console.log(bottom);
     console.log();
     console.log(rule);
     console.log();
     const resource = (label, url) => '  ' + chalk.dim(label.padEnd(10)) + brand.indigo(url);
-    console.log(resource('Docs', 'https://github.com/armelhbobdad/bmad-module-ultracode-goal/tree/main/docs'));
+    console.log(resource('Docs', 'https://armelhbobdad.github.io/bmad-module-ultracode-goal/'));
     console.log(resource('GitHub', 'https://github.com/armelhbobdad/bmad-module-ultracode-goal'));
-    console.log(resource('Support', 'https://ko-fi.com/armelhbobdad'));
+    console.log(resource('Support', 'https://buymeacoffee.com/armelhbobdad'));
     console.log();
     console.log(rule);
     console.log();
@@ -345,7 +388,7 @@ class UI {
     note(noteBody, noteTitle);
 
     outro(
-      `${brand.spark('◎')}  Skill: ${chalk.white('ultracode-goal')} ${chalk.dim('(Autonomous Epic Conductor)')}\n${brand.dark('⚡')} Docs: ${brand.indigo('https://github.com/armelhbobdad/bmad-module-ultracode-goal/tree/main/docs')}\n${brand.light('▶')}  Launch an Epic:  ${activateLine}`,
+      `${brand.spark('◎')}  Skill: ${chalk.white('ultracode-goal')} ${chalk.dim('(Autonomous Epic Conductor)')}\n${brand.dark('⚡')} Docs: ${brand.indigo('https://armelhbobdad.github.io/bmad-module-ultracode-goal/')}\n${brand.light('▶')}  Launch an Epic:  ${activateLine}`,
     );
   }
 }

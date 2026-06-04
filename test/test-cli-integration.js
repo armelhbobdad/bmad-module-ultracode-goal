@@ -583,6 +583,51 @@ async function testGitignoreEntries() {
 // Runner
 // ============================================================
 
+/**
+ * Banner geometry: the installer box must render with a single, consistent
+ * right edge, the horizontal rules must match the box's outer width, and the
+ * box must fit the terminal at every width (regression: the tagline row used
+ * to overflow the frame because over-long content padded to zero silently).
+ */
+async function testBannerGeometry() {
+  console.log(`\n${colors.cyan}Banner geometry...${colors.reset}`);
+  // eslint-disable-next-line no-control-regex -- stripping ANSI escape codes for width checks
+  const strip = (s) => s.replaceAll(/\u001B\[\d+(?:;\d+)*m/g, '');
+  const uiPath = require.resolve('../tools/cli/lib/ui.js');
+
+  for (const cols of [80, 100, 60, 40]) {
+    delete require.cache[uiPath];
+    const originalColumns = process.stdout.columns;
+    const originalLog = console.log;
+    const originalWrite = process.stdout.write;
+    const lines = [];
+    process.stdout.columns = cols;
+    console.log = (...args) => lines.push(args.join(' '));
+    process.stdout.write = () => true; // swallow the clack intro frame
+    try {
+      const { UI } = require(uiPath);
+      new UI().displayBanner();
+    } finally {
+      console.log = originalLog;
+      process.stdout.write = originalWrite;
+      process.stdout.columns = originalColumns;
+    }
+
+    const plain = lines.map(strip);
+    const boxLines = plain.filter((l) => /[╔╟╚║╝]/.test(l));
+    const edges = new Set(boxLines.map((l) => l.trimEnd().length));
+    const edge = [...edges][0];
+    const rules = plain.filter((l) => /━/.test(l));
+
+    assert(edges.size === 1, `banner box has one consistent right edge at ${cols} cols`, `edges: ${[...edges].join(', ')}`);
+    assert(edge <= cols, `banner box fits a ${cols}-col terminal`, `edge ${edge} > ${cols}`);
+    assert(
+      rules.every((l) => l.trimEnd().length === edge),
+      `horizontal rules match the box width at ${cols} cols`,
+    );
+  }
+}
+
 async function runTests() {
   console.log(`${colors.cyan}========================================`);
   console.log('UCG CLI Integration Tests');
@@ -595,6 +640,7 @@ async function runTests() {
   await testManifestAccuracy();
   await testFreshInstallWithoutLearning();
   await testGitignoreEntries();
+  await testBannerGeometry();
 
   console.log(`${colors.cyan}========================================`);
   console.log('Test Results:');
