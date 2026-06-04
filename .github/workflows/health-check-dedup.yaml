@@ -1,0 +1,91 @@
+name: Health-Check Dedup
+
+# Server-side dedup for workflow health-check issues.
+# When a new issue carrying the `health-check` label is opened, this Action:
+#   1. Extracts the fingerprint from any `fp-XXXXXXX` label on the issue.
+#   2. Searches for an earlier OPEN issue with the same fingerprint.
+#   3. If one exists (and has a lower issue number — tiebreak for races):
+#      - Posts a short "duplicate of #N" comment on the new issue.
+#      - Adds the `duplicate` label and closes the new issue.
+#      - Posts a 👍 reaction on the canonical issue to preserve the signal-count.
+#   4. If no prior open issue exists, does nothing — the new issue becomes canonical.
+#
+# This is a safety net. The client-side dedup in
+# skills/ultracode-goal/references/health-check.md handles the common case;
+# this Action catches races and manual-filing cases.
+
+"on":
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  issues: write
+
+jobs:
+  dedup:
+    if: contains(github.event.issue.labels.*.name, 'health-check')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dedup by fingerprint label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const fpLabel = (issue.labels || [])
+              .map(l => l.name)
+              .find(n => /^fp-[0-9a-f]{7}$/.test(n));
+
+            if (!fpLabel) {
+              core.info(`Issue #${issue.number} has no fp-* label; skipping dedup.`);
+              return;
+            }
+
+            core.info(`Searching for earlier open issues with label ${fpLabel}...`);
+            const { data: matches } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: `health-check,${fpLabel}`,
+              per_page: 100,
+            });
+
+            // Canonical = lowest-numbered open issue with this fingerprint (excluding self).
+            const canonical = matches
+              .filter(m => m.number !== issue.number)
+              .sort((a, b) => a.number - b.number)[0];
+
+            if (!canonical) {
+              core.info(`No prior open issue for ${fpLabel}; #${issue.number} is canonical.`);
+              return;
+            }
+
+            core.info(`Deduping #${issue.number} → canonical #${canonical.number}`);
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `Auto-deduped: same fingerprint \`${fpLabel}\` as #${canonical.number}. Closing as duplicate. Your report still counts — a 👍 reaction has been added to the canonical issue to preserve the signal.`,
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: ['duplicate'],
+            });
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              state: 'closed',
+              state_reason: 'not_planned',
+            });
+
+            await github.rest.reactions.createForIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: canonical.number,
+              content: '+1',
+            });
