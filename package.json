@@ -32,6 +32,9 @@
     "bmad-module-ultracode-goal": "tools/ucg-npx-wrapper.js"
   },
   "scripts": {
+    "docs:build": "node tools/build-docs.js",
+    "docs:dev": "npm run --prefix website docs:dev",
+    "docs:preview": "npm run --prefix website preview",
     "format:check": "prettier --check \"**/*.{js,cjs,mjs,json,yaml}\"",
     "format:fix": "prettier --write \"**/*.{js,cjs,mjs,json,yaml}\"",
     "lint": "eslint . --ext .js,.cjs,.mjs,.yaml --max-warnings=0",
