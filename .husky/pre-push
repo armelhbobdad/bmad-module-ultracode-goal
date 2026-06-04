@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+
+# Validate everything before commits leave the machine
+npm test

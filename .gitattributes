@@ -1,0 +1,16 @@
+# Normalize all text files to LF in the repo and on checkout, regardless of
+# the contributor's platform or core.autocrlf setting. UCG runs on Linux,
+# macOS, and Windows (Git Bash / WSL2); LF-everywhere keeps prettier
+# clean and avoids spurious diffs from line-ending churn.
+* text=auto eol=lf
+
+# Binary blobs — never touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tgz binary
