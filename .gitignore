@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+*.tgz
 pnpm-lock.yaml
 bun.lock
 deno.lock
