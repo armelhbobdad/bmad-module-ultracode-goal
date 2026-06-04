@@ -35,7 +35,8 @@ on_epic_complete = ""
 # --- Health check (workflow self-improvement; opt-out + autonomy-safe) ---
 # The terminal Finalize step reflects on the run and can file genuine workflow
 # friction as fingerprint-deduped GitHub issues. Honesty-by-default: zero
-# findings is the expected, healthy outcome. See docs/health-check.md.
+# findings is the expected, healthy outcome.
+# See https://armelhbobdad.github.io/bmad-module-ultracode-goal/health-check/
 health_check_enabled = true
 health_check_repo = "armelhbobdad/bmad-module-ultracode-goal"
 health_check_seen_cache = "$HOME/.ultracode-goal/health-check-seen.json"

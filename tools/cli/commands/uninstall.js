@@ -10,6 +10,24 @@ const fs = require('fs-extra');
 const { confirm, isCancel, spinner, log, outro } = require('@clack/prompts');
 const { readManifest, MANIFEST_DIR, MANIFEST_FILE } = require('../lib/manifest');
 const { removeAllUcgSkills } = require('../lib/ide-skills');
+const { removeHelpEntries, parseCsv } = require('../lib/help-catalog');
+
+/**
+ * Module codes whose help-catalog rows should be removed. Prefer the
+ * manifest's record; fall back to reading the installed source CSV
+ * (pre-help-catalog manifests don't carry the field).
+ */
+async function resolveHelpCatalogCodes(projectDir, manifest) {
+  if (manifest.help_catalog && Array.isArray(manifest.help_catalog.module_codes)) {
+    return manifest.help_catalog.module_codes;
+  }
+  const installedCsv = path.join(projectDir, manifest.ucg_folder, 'ultracode-goal', 'assets', 'module-help.csv');
+  if (await fs.pathExists(installedCsv)) {
+    const rows = parseCsv(await fs.readFile(installedCsv, 'utf8')).slice(1);
+    return [...new Set(rows.map((r) => (r[0] || '').trim()).filter(Boolean))];
+  }
+  return [];
+}
 
 /**
  * Count files that still exist on disk from manifest lists.
@@ -54,6 +72,12 @@ async function displayRemovalPlan(projectDir, manifest) {
     } else {
       lines.push(`${chalk.red('×')} ${cat.label} ${chalk.dim(`(${existCount} files)`)}`);
     }
+  }
+
+  // Help-catalog rows (shared files — only this module's rows are removed)
+  const helpTargets = manifest.help_catalog?.targets;
+  if (Array.isArray(helpTargets) && helpTargets.length > 0) {
+    lines.push(`${chalk.red('×')} BMad help catalog rows ${chalk.dim(`(${helpTargets.join(', ')})`)}`);
   }
 
   // Manifest itself
@@ -145,6 +169,18 @@ module.exports = {
           await fs.remove(learnDir);
         }
         s.stop('Learning material removed');
+      }
+
+      // Remove this module's rows from the BMad help catalog(s).
+      // Resolved before the UCG module dir is deleted — the fallback reads
+      // the installed assets/module-help.csv from that dir.
+      s.start('Removing help catalog rows...');
+      const helpCodes = await resolveHelpCatalogCodes(projectDir, manifest);
+      const helpTouched = helpCodes.length > 0 ? await removeHelpEntries(projectDir, helpCodes) : [];
+      if (helpTouched.length > 0) {
+        s.stop(`Help catalog cleaned (${helpTouched.join(', ')})`);
+      } else {
+        s.stop('No help catalog rows found');
       }
 
       // Remove UCG module directory

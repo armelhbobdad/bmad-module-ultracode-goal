@@ -47,13 +47,22 @@ function assert(condition, testName, errorMessage = '') {
 
 const STAGE_REFERENCES = ['ingest-and-scope.md', 'preflight.md', 'define-done.md', 'execute.md', 'gate.md', 'finalize.md'];
 
-const SCRIPTS = ['gate_eval.py', 'preflight_check.py', path.join('hooks', 'guard_pretooluse.py'), path.join('hooks', 'budget_stop.py')];
+const SCRIPTS = [
+  'gate_eval.py',
+  'preflight_check.py',
+  'merge-config.py',
+  'merge-help-csv.py',
+  path.join('hooks', 'guard_pretooluse.py'),
+  path.join('hooks', 'budget_stop.py'),
+];
 
 async function testModuleYaml() {
   console.log(`${colors.yellow}Test Suite 1: module.yaml Structure${colors.reset}\n`);
 
-  const moduleYamlPath = path.join(SKILLS_DIR, 'module.yaml');
-  assert(await fs.pathExists(moduleYamlPath), 'skills/module.yaml exists');
+  // BMad standalone-module layout: module.yaml lives inside the skill's assets/
+  const moduleYamlPath = path.join(SKILL_DIR, 'assets', 'module.yaml');
+  assert(await fs.pathExists(moduleYamlPath), 'skills/ultracode-goal/assets/module.yaml exists');
+  assert(!(await fs.pathExists(path.join(SKILLS_DIR, 'module.yaml'))), 'no stale module.yaml at skills/ root');
 
   try {
     const moduleYaml = yaml.load(await fs.readFile(moduleYamlPath, 'utf8'));
@@ -140,8 +149,64 @@ async function testScripts() {
   console.log('');
 }
 
+async function testStandaloneModuleAssets() {
+  console.log(`${colors.yellow}Test Suite 4: Standalone Module Assets${colors.reset}\n`);
+
+  const moduleYaml = yaml.load(await fs.readFile(path.join(SKILL_DIR, 'assets', 'module.yaml'), 'utf8'));
+
+  // module-setup.md — self-registration flow for non-npx installs
+  const setupPath = path.join(SKILL_DIR, 'assets', 'module-setup.md');
+  assert(await fs.pathExists(setupPath), 'assets/module-setup.md exists');
+  if (await fs.pathExists(setupPath)) {
+    const setupContent = await fs.readFile(setupPath, 'utf8');
+    assert(!setupContent.trimStart().startsWith('---'), 'module-setup.md has no frontmatter (WF-01/WF-02)');
+    assert(
+      setupContent.includes('merge-config.py') && setupContent.includes('merge-help-csv.py'),
+      'module-setup.md runs both merge scripts',
+    );
+  }
+
+  // module-help.csv — the capability rows registered into the help catalog
+  const helpCsvPath = path.join(SKILL_DIR, 'assets', 'module-help.csv');
+  assert(await fs.pathExists(helpCsvPath), 'assets/module-help.csv exists');
+  if (await fs.pathExists(helpCsvPath)) {
+    const csvText = await fs.readFile(helpCsvPath, 'utf8');
+    const lines = csvText.trim().split('\n');
+    assert(
+      lines[0] === 'module,skill,display-name,menu-code,description,action,args,phase,after,before,required,output-location,outputs',
+      'module-help.csv carries the 13-column standalone-module header',
+      lines[0],
+    );
+    const dataLines = lines.slice(1);
+    assert(dataLines.length > 0, 'module-help.csv registers at least one capability');
+    assert(
+      dataLines.every((l) => l.startsWith(`${moduleYaml.name},`)),
+      "every row's module column matches module.yaml name (anti-zombie key, single-sourced)",
+    );
+    assert(!dataLines.some((l) => l.includes(',_meta,')), 'no authored _meta row (the installer assembles it from module.yaml docs_llms)');
+    assert(
+      dataLines.some((l) => l.includes(',ultracode-goal,')),
+      'the ultracode-goal capability row is registered',
+    );
+    assert(
+      typeof moduleYaml.docs_llms === 'string' && /^https:\/\//.test(moduleYaml.docs_llms),
+      'module.yaml declares docs_llms for the assembled _meta row',
+    );
+
+    // Single-sourcing (F3): the catalog description derives from module.yaml header + subheader
+    assert(csvText.includes(moduleYaml.header), 'capability description carries module.yaml header verbatim');
+    assert(csvText.toLowerCase().includes(moduleYaml.subheader.toLowerCase()), 'capability description carries module.yaml subheader');
+
+    // Menu codes unique within the module
+    const menuCodes = dataLines.map((l) => l.split(',')[3]).filter((code) => code && code.length > 0);
+    assert(new Set(menuCodes).size === menuCodes.length, 'menu codes are unique within the module');
+  }
+
+  console.log('');
+}
+
 async function testMarketplaceManifest() {
-  console.log(`${colors.yellow}Test Suite 4: Plugin Marketplace Manifest${colors.reset}\n`);
+  console.log(`${colors.yellow}Test Suite 5: Plugin Marketplace Manifest${colors.reset}\n`);
 
   const marketplacePath = path.join(REPO_ROOT, '.claude-plugin', 'marketplace.json');
   assert(await fs.pathExists(marketplacePath), '.claude-plugin/marketplace.json exists');
@@ -184,6 +249,7 @@ async function runTests() {
   await testModuleYaml();
   await testSkillStructure();
   await testScripts();
+  await testStandaloneModuleAssets();
   await testMarketplaceManifest();
 
   console.log(`${colors.cyan}========================================`);
