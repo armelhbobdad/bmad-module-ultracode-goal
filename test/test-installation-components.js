@@ -50,8 +50,8 @@ const STAGE_REFERENCES = ['ingest-and-scope.md', 'preflight.md', 'define-done.md
 const SCRIPTS = [
   'gate_eval.py',
   'preflight_check.py',
-  'merge-config.py',
-  'merge-help-csv.py',
+  'merge_config.py',
+  'merge_help_csv.py',
   path.join('hooks', 'guard_pretooluse.py'),
   path.join('hooks', 'budget_stop.py'),
 ];
@@ -161,7 +161,7 @@ async function testStandaloneModuleAssets() {
     const setupContent = await fs.readFile(setupPath, 'utf8');
     assert(!setupContent.trimStart().startsWith('---'), 'module-setup.md has no frontmatter (WF-01/WF-02)');
     assert(
-      setupContent.includes('merge-config.py') && setupContent.includes('merge-help-csv.py'),
+      setupContent.includes('merge_config.py') && setupContent.includes('merge_help_csv.py'),
       'module-setup.md runs both merge scripts',
     );
   }

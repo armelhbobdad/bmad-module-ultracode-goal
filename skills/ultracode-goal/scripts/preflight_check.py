@@ -36,6 +36,17 @@ Version gates (from the grounded constraints in .decision-log.md):
 Output: JSON to stdout. Exit 0 whenever a payload is produced (a non-green
 preflight is a valid result, not an error). Exit 2 is reserved for invocation
 errors where no useful payload can be produced.
+
+Rollup mode (`--rollup`): a separate, cheaper read used by Stage 1
+(references/ingest-and-scope.md, "Resolve the Epic and its artifacts" step 1).
+It parses ONLY sprint-status.yaml and emits a compact per-Epic story-status
+summary so the LLM selects the target Epic from a small structured summary
+instead of parsing raw YAML. None of the mechanical preflight checks run in
+this mode; `--epic`, `--tea-config`, and `--protected-branch` are not required.
+Absence of sprint-status.yaml is a reportable fact (sprint_status_present:
+false, epics: []), not an error — rollup still exits 0.
+
+  uv run preflight_check.py --rollup --project-root <path> --impl-artifacts <path>
 """
 
 from __future__ import annotations
@@ -85,6 +96,12 @@ TEA_FLAG_KEYS = (
 
 # Default protected branches when the caller doesn't override (mirrors customize.toml).
 DEFAULT_PROTECTED = ("main", "master")
+
+# The story-status vocabulary BMad's sprint-planning writes into
+# sprint-status.yaml (see its sprint-status-template.yaml STATUS DEFINITIONS).
+# Order here is the order counts are reported in the rollup; "done" first so the
+# in-scope decision (not-yet-done) reads off the leading count.
+STORY_STATUSES = ("done", "in-progress", "ready-for-dev", "review", "backlog")
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
@@ -201,8 +218,8 @@ def _test_artifacts_dirs(artifacts_root: Path) -> dict:
     return {name: (artifacts_root / name).is_dir() for name in TEA_ARTIFACT_DIRS}
 
 
-def _sprint_status_present(project_root: Path, impl_artifacts: Path) -> bool:
-    """sprint-status.yaml controls test-design's System/Epic prompt (must exist to auto-run).
+def _locate_sprint_status(project_root: Path, impl_artifacts: Path) -> Path | None:
+    """Return the path to sprint-status.yaml, or None if it is not found.
 
     BMad writes it under the output tree; search the common locations rather
     than hardcoding one path that may drift between installs.
@@ -213,14 +230,116 @@ def _sprint_status_present(project_root: Path, impl_artifacts: Path) -> bool:
     ]
     for path in candidates:
         if path.is_file():
-            return True
+            return path
     # Fall back to a bounded glob under the output tree.
     output = project_root / "_bmad-output"
     if output.is_dir():
         for hit in output.rglob("sprint-status.yaml"):
             if hit.is_file():
-                return True
-    return False
+                return hit
+    return None
+
+
+def _sprint_status_present(project_root: Path, impl_artifacts: Path) -> bool:
+    """sprint-status.yaml controls test-design's System/Epic prompt (must exist to auto-run)."""
+    return _locate_sprint_status(project_root, impl_artifacts) is not None
+
+
+def _parse_development_status(text: str) -> dict[str, str]:
+    """Hand-parse the flat `key: status` scalars under `development_status:`.
+
+    Mirrors how this script already reads YAML (flat scalar lines, stdlib-only).
+    sprint-status.yaml is a single `development_status:` map of one-key-per-line
+    `name: status` entries (story keys like `1-1-foo`, epic rows like `epic-1`,
+    retrospective and BUG rows). Trailing `# ...` comments and surrounding
+    quotes are stripped. Returns the map in file order.
+    """
+    entries: dict[str, str] = {}
+    in_block = False
+    for raw in text.splitlines():
+        # The map is one top-level key; detect entering/leaving its body by
+        # indentation rather than tracking nesting (the file is flat).
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not in_block:
+            if stripped.rstrip().rstrip(":") == "development_status" and stripped.endswith(":"):
+                in_block = True
+            continue
+        # Inside the block: a non-indented line ends it.
+        if raw[:1] not in (" ", "\t"):
+            break
+        if ":" not in stripped:
+            continue
+        key, _, value = stripped.partition(":")
+        key = key.strip().strip('"').strip("'")
+        # Drop trailing inline comment, then quotes/whitespace.
+        value = value.split("#", 1)[0].strip().strip('"').strip("'")
+        if key and value:
+            entries[key] = value
+    return entries
+
+
+def _epic_id_of(story_key: str) -> str | None:
+    """Epic id = the number prefix before the first separator (`-` or `.`).
+
+    `1-1-user-authentication` -> "1", `2.3` -> "2". Non-story rows that carry no
+    leading number (none in practice) map to None and are skipped by the caller.
+    """
+    match = re.match(r"^(\d+)", story_key)
+    return match.group(1) if match else None
+
+
+def _is_story_key(key: str) -> bool:
+    """True for per-story rows; False for epic/retrospective/bug bookkeeping rows.
+
+    Story keys begin with the epic number prefix (`1-1-...`, `2.3`). The
+    `epic-N`, `epic-N-retrospective`, and `BUG-...` rows are not stories and must
+    not be counted toward an Epic's story totals.
+    """
+    return _epic_id_of(key) is not None
+
+
+def build_rollup(project_root: Path, impl_artifacts: Path) -> dict:
+    """Compact per-Epic story-status summary parsed from sprint-status.yaml.
+
+    Stage 1 selects the target Epic from this summary and computes in-scope as
+    the stories whose status is not `done`. Absence of the file is reported, not
+    raised.
+    """
+    sprint_status = _locate_sprint_status(project_root, impl_artifacts)
+    if sprint_status is None:
+        return {"sprint_status_present": False, "epics": []}
+
+    text = sprint_status.read_text(encoding="utf-8", errors="replace")
+    entries = _parse_development_status(text)
+
+    # Group story rows by epic prefix, preserving first-seen epic order.
+    epics: dict[str, list[dict]] = {}
+    for key, status in entries.items():
+        if not _is_story_key(key):
+            continue
+        epic_id = _epic_id_of(key)
+        assert epic_id is not None  # _is_story_key guarantees this
+        epics.setdefault(epic_id, []).append({"id": key, "status": status})
+
+    rollup_epics: list[dict] = []
+    for epic_id, stories in epics.items():
+        counts = {name: 0 for name in STORY_STATUSES}
+        for story in stories:
+            if story["status"] in counts:
+                counts[story["status"]] += 1
+        rollup_epics.append(
+            {
+                "epic": epic_id,
+                "story_count": len(stories),
+                "counts": counts,
+                "stories": stories,
+                "all_done": all(s["status"] == "done" for s in stories),
+            }
+        )
+
+    return {"sprint_status_present": True, "epics": rollup_epics}
 
 
 def _project_context_count(project_root: Path) -> int:
@@ -357,11 +476,22 @@ def _resolve(path_arg: str, project_root: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Mechanical preflight for an UltraCode-Goal epic run."
+        description="Mechanical preflight for an UltraCode-Goal epic run "
+        "(use --rollup for the Stage 1 per-Epic story-status summary)."
     )
     parser.add_argument("--project-root", required=True)
-    parser.add_argument("--epic", required=True)
-    parser.add_argument("--tea-config", required=True)
+    parser.add_argument(
+        "--rollup",
+        action="store_true",
+        help="Emit only the per-Epic story-status summary parsed from "
+        "sprint-status.yaml (Stage 1 scope selection). When set, --epic, "
+        "--tea-config, and --protected-branch are not required and the "
+        "mechanical preflight checks do not run.",
+    )
+    # Required only in the normal (non-rollup) mode; validated manually below so
+    # rollup mode can omit them. --impl-artifacts is required in both modes.
+    parser.add_argument("--epic")
+    parser.add_argument("--tea-config")
     parser.add_argument("--impl-artifacts", required=True)
     parser.add_argument(
         "--protected-branch",
@@ -370,6 +500,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Protected branch name; repeatable. Defaults to main, master.",
     )
     args = parser.parse_args(argv)
+
+    # Preserve the normal-mode contract: --epic and --tea-config are required
+    # unless --rollup is in effect. parser.error() reproduces argparse's usage
+    # line + "error:" message and exits 2, exactly as required=True did.
+    if not args.rollup:
+        missing = [
+            name
+            for name, value in (("--epic", args.epic), ("--tea-config", args.tea_config))
+            if value is None
+        ]
+        if missing:
+            parser.error(
+                "the following arguments are required: %s" % ", ".join(missing)
+            )
 
     project_root = Path(args.project_root).expanduser()
     if not project_root.is_dir():
@@ -380,8 +524,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     project_root = project_root.resolve()
-    tea_config = _resolve(args.tea_config, project_root)
     impl_artifacts = _resolve(args.impl_artifacts, project_root)
+
+    if args.rollup:
+        rollup = build_rollup(project_root=project_root, impl_artifacts=impl_artifacts)
+        print(json.dumps(rollup, indent=2))
+        return 0
+
+    tea_config = _resolve(args.tea_config, project_root)
     protected = tuple(args.protected_branch) if args.protected_branch else DEFAULT_PROTECTED
 
     report = build_report(

@@ -37,8 +37,14 @@ on_epic_complete = ""
 # friction as fingerprint-deduped GitHub issues. Honesty-by-default: zero
 # findings is the expected, healthy outcome.
 # See https://armelhbobdad.github.io/bmad-module-ultracode-goal/health-check/
-health_check_enabled = true
+# Set health_check_repo = "" to disable the health check entirely — the repo
+# doubles as the on/off switch (no target, nothing to run); there is no
+# separate enabled toggle. (assets/module.yaml mirrors this default for the
+# installer catalog; this file is what the live run reads.)
 health_check_repo = "armelhbobdad/bmad-module-ultracode-goal"
+# Deliberately $HOME (shell/expanduser semantics, unlike the {project-root}
+# brace tokens above): the seen-cache is machine-global because dedup must
+# span projects — the same defect met in two repos is still one report.
 health_check_seen_cache = "$HOME/.ultracode-goal/health-check-seen.json"
 health_check_queue_path = "{project-root}/_bmad-output/ultracode-goal/improvement-queue"
 # In unattended/headless runs there is no human at the [Y]/[N]/[E] gate.

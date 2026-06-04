@@ -22,7 +22,8 @@ Hook contract (reads one JSON object on stdin):
   honor exit-code-2-blocks even when they ignore the JSON).
 
 This hook is invoked standalone from settings.local.json. It MUST stay fully
-self-contained: no sibling imports (mem_common.py et al. are NOT imported).
+self-contained: no sibling imports (the shared library lib/mem_common.py et al.
+are NOT imported).
 
 Config resolution (all optional, env wins so the conductor can inject per run):
   ULTRACODE_PROTECTED_BRANCHES  comma-separated; default "main,master"

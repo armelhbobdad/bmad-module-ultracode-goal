@@ -14,14 +14,21 @@ A run targets exactly one Epic, identified by its number/id. Find its artifacts 
 
 - **`sprint-status.yaml`** at `{workflow.implementation_artifacts}/sprint-status.yaml` — the authority on which Epics and stories exist and their status (`backlog` / `in-progress` / `ready-for-dev` / `review` / `done`). This is also the file whose mere presence steers TEA test-design to Epic-Level in Stage 2; note its path now, do not create it here.
 - **Epic + story files** under `{workflow.implementation_artifacts}` (the `story_location` BMAD writes to). Stories for an Epic share its number prefix.
-- **PRD and ADR / architecture** under `{planning_artifacts}` — the product and architecture decisions the Epic implements. Stage 2's semantic scan reads these to detect undecided questions; here you only confirm they exist and cover this Epic.
+- **PRD and ADR / architecture** under `{planning_artifacts}` — the product and architecture decisions the Epic implements. Stage 2's semantic scan hands these paths to a throwaway subagent to detect undecided questions; here you only confirm they exist and cover this Epic.
 
 Resolution order:
 
-1. If the operator named an Epic, take it. Otherwise read `sprint-status.yaml` and pick the obvious in-flight Epic (single `in-progress`, or the next `backlog` after the last `done`). If genuinely ambiguous, list the candidates with their status and ask. Headless: pick the lowest-numbered not-`done` Epic and log the choice plus the rejected candidates.
+1. Run the story-status rollup so intent is selected from a compact summary, not raw YAML:
+
+   ```
+   uv run {skill-root}/scripts/preflight_check.py --rollup --project-root {project-root} --impl-artifacts {workflow.implementation_artifacts}
+   ```
+
+   It emits one line per Epic — id, story count, per-status counts, and `all_done` — and the story list per Epic. If the operator named an Epic, take it. Otherwise pick the obvious in-flight Epic from the rollup (single `in-progress`, or the next `backlog` after the last `done`). If genuinely ambiguous, list the candidates with their status and ask. Headless: pick the lowest-numbered not-`done` Epic and log the choice plus the rejected candidates. The pick stays judgment; the rollup only replaces the YAML parse.
 2. Confirm the Epic has a body (acceptance-bearing stories or an Epic file). A title-only Epic with no stories is not blocking here — Stage 2 generates missing stories/ACs via `bmad-create-story`. Note it so Stage 2 expects remediation.
-3. **Already-done short-circuit.** If every in-scope story for the resolved Epic is already `done`, do not carry a no-op Epic into preflight: surface "this Epic is already complete — re-run anyway?" and proceed only on a yes. Headless: emit the blocked JSON (per SKILL.md Headless) with `reason` "epic already complete".
-4. If `sprint-status.yaml` is absent or `{planning_artifacts}` has no PRD/ADR for this Epic, that is not a hard stop at this stage — record the gap; Stage 2 preflight reports it mechanically and the semantic scan judges whether the missing planning artifact is a true RED (undecided product/architecture) or a benign absence.
+3. **In-scope = not-yet-`done`.** The run's in-scope stories are the resolved Epic's stories whose rollup status is not `done`. A partially-done Epic — say stories 1–3 hand-finished before this run was ever invoked — carries only its remaining stories into preflight; log the done ones as `skipped-already-done` so Execute never re-drives them (the resume cursor only covers re-invocations that have a prior run folder; this rule covers the fresh invocation that doesn't).
+4. **Already-done short-circuit.** If *every* story for the resolved Epic is already `done`, do not carry a no-op Epic into preflight: surface "this Epic is already complete — re-run anyway?" and proceed only on a yes (an explicit yes re-scopes all stories deliberately). Headless: emit the blocked JSON (per SKILL.md Headless) with `reason` "epic already complete".
+5. If `sprint-status.yaml` is absent (the rollup says so and emits no Epics) or `{planning_artifacts}` has no PRD/ADR for this Epic, that is not a hard stop at this stage — record the gap; Stage 2 preflight reports it mechanically and the semantic scan judges whether the missing planning artifact is a true RED (undecided product/architecture) or a benign absence.
 
 Do not open story or planning files for deep reading here — note their paths so Stage 2 and the TEA stages scan them. Reading them now bloats context ahead of delegation.
 
@@ -29,7 +36,7 @@ Do not open story or planning files for deep reading here — note their paths s
 
 Profile defaults to **production** — the full TEA chain (test-design + atdd + automate + test-review + nfr + trace + ci) wired as gates. `--light` downscopes to the trace gate only. Headless is always production unless `--light` was passed explicitly.
 
-Surface the default and let the operator downscope: "Production (full TEA gates) unless you want `--light` (trace gate only)." One soft-gate touch — "Anything else on scope before I preflight?" — then move on. Don't re-derive the profile later; Stages 3 and 5 read what you lock here.
+Surface the default with its cost up front, so the choice is made at this cheap stage rather than discovered at the expensive one: "Production (full TEA chain per story — the thorough, slower default) unless you want `--light` (trace gate only — faster and cheaper, with proportionally lighter evidence)." One soft-gate touch — "Anything else on scope before I preflight?" — then move on. Don't re-derive the profile later; Stages 3 and 5 read what you lock here.
 
 Also note execution mode for the log: **sequential** `/goal` spine (default) or `--parallel` (experimental worktree fan-out). It does not change scope, but the log should carry it so the run is reconstructable after compaction.
 
@@ -39,7 +46,9 @@ This is the operator's last chance to drop a pre-launch hint before they walk aw
 
 ## Cross-Session Recall (optional)
 
-Resolve `{workflow.cross_session_recall}`. If it is `"off"`, **or** the claude-mem MCP tools are not available in this session, run only the latch so `.mem-state.json` exists and the PreToolUse hook gates uniformly, then **skip the rest of this section entirely — do not call ToolSearch, do not retry, do not search**:
+Resolve `{workflow.cross_session_recall}`. **Mint the run id first — both paths below pass one.** The convention is `epic-<id>-<UTC yyyymmddThhmmssZ>` (e.g. `epic-7-20260604T172512Z`): minted once here, reused verbatim at every `<run-id>` call-site for the rest of the run — the latch commands below and the Finalize outbox build, which derives `mem-outbox.<run-id>.jsonl` from it. Second-resolution UTC keeps two runs of the same Epic from ever sharing an outbox file.
+
+If recall is `"off"`, **or** the claude-mem MCP tools are not available in this session, run only the latch so `.mem-state.json` exists and the PreToolUse hook gates uniformly, then **skip the rest of this section entirely — do not call ToolSearch, do not retry, do not search**:
 
 ```
 uv run {skill-root}/scripts/mem_recall.py latch --impl-artifacts {workflow.implementation_artifacts} --run-id <run-id> --recall off --claude-mem-absent

@@ -6,13 +6,12 @@ This is the completion authority. The `/goal` evaluator only sees the transcript
 
 ## Backfill the gate evidence (production only)
 
-The gate reads artifacts TEA produces. In **production**, before running the gate, generate the evidence in order so the gate has something current to read:
+The gate reads artifacts TEA produces. In **production**, before running the gate, make the evidence current. **The only ordering constraint is `bmad-testarch-automate` → `bmad-testarch-trace`** — trace reads the coverage automate backfills, so that pair runs in series:
 
-1. `bmad-testarch-automate` — backfill coverage for code that landed during Execute.
+1. `bmad-testarch-automate` — backfill coverage for code that landed during Execute, **then**
 2. `bmad-testarch-trace` — (re)build the traceability matrix and write the gate decision.
-3. `bmad-testarch-nfr` — audit NFR evidence; produces `nfr-assessment.md`.
 
-`bmad-testarch-test-review` runs in Execute per story; if you do not have a current `test-review.md` for the story, run it now too. In **`--light`**, skip all of the above and run only `bmad-testarch-trace`, then the gate with `--profile light` (trace gate only — no NFR/review AND).
+`bmad-testarch-nfr` (produces `nfr-assessment.md`) and `bmad-testarch-test-review` are independent — of each other *and* of the automate→trace chain — so run them in any order, or concurrently with it; `gate_eval.py` consumes all three artifacts without caring how they were produced. (`bmad-testarch-test-review` normally runs in Execute per story — run it here only if you lack a current `test-review.md` for the story.) In **`--light`**, skip all of the above and run only `bmad-testarch-trace`, then the gate with `--profile light` (trace gate only — no NFR/review AND).
 
 ## Run the gate
 

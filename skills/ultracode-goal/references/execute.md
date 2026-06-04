@@ -88,3 +88,5 @@ As the spine advances — each time you move to a new story, log a gate verdict,
 ```
 
 This is the file the Stage 2 launch briefing points the operator at ("where to watch"); Stage 6 (finalize) records the terminal state into it when the run closes.
+
+**Attended runs also get a ticker.** Each time you write the heartbeat, print one line into the transcript — `epic-7 ▸ story 3/6 — last verdict: advance` — so the watching human sees motion without opening a JSON file. Skip the ticker in headless (`-H`): the file is the interface there, and transcript prose has no reader.

@@ -5,10 +5,12 @@
 # ///
 """Shared primitives for ultracode-goal Cross-Session Recall (D12).
 
-This module is imported by mem_recall.py and mem_observation.py (and their
-tests). The PreToolUse hook (guard_pretooluse.py) deliberately does NOT import
-this module — it stays self-contained so the gating path has zero shared
-surface with the advisory path.
+This is the shared internal library — NOT a CLI entrypoint (no argparse, no
+main). It lives under scripts/lib/ (out of the CLI-entrypoint scope) and is
+imported as ``from lib import mem_common as mc`` by mem_recall.py and
+mem_observation.py (and their tests). The PreToolUse hook (guard_pretooluse.py)
+deliberately does NOT import this module — it stays self-contained so the
+gating path has zero shared surface with the advisory path.
 
 Cross-Session Recall leverages the third-party claude-mem plugin in an
 advisory-only capacity: it NEVER sits in the gate/completion path, it is

@@ -43,7 +43,7 @@ Read `{workflow.implementation_artifacts}/.mem-state.json`. Act only on its latc
    uv run {skill-root}/scripts/mem_observation.py drain --impl-artifacts {workflow.implementation_artifacts}
    ```
 
-2. **Build this run's payload** — epic, run-id, gate-status, verdict, project, the deferred-work path, any root causes by taxonomy class, and the mechanical `recurred` yes/no for each Stage 1 advisory consumed:
+2. **Build this run's payload** — epic, run-id (the one minted at Stage 1, `epic-<id>-<UTC yyyymmddThhmmssZ>`, reused verbatim — the outbox filename derives from it), gate-status, verdict, project, the deferred-work path, any root causes by taxonomy class, and the mechanical `recurred` yes/no for each Stage 1 advisory consumed:
 
    ```
    uv run {skill-root}/scripts/mem_observation.py build --impl-artifacts {workflow.implementation_artifacts} --epic <id> --run-id <run-id> --gate-status <status> --verdict <advance|blocked> --project <name> --deferred {workflow.deferred_work_path} [--root-cause class=<taxonomy>,path=<artifact>]… [--advisory sig=<s>,recurred=<yes|no|unknown>]…

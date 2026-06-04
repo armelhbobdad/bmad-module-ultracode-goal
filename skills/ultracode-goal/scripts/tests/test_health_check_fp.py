@@ -269,5 +269,171 @@ def test_corrupt_cache_record_succeeds_and_recovers(tmp_path):
     assert data[fp]["action"] == "created"
 
 
+# --- version: probe ladder --------------------------------------------------
+
+
+def _version(project_root: Path, skill_root: Path) -> subprocess.CompletedProcess[str]:
+    return _run(
+        "version",
+        "--project-root",
+        str(project_root),
+        "--skill-root",
+        str(skill_root),
+    )
+
+
+def test_version_nothing_found_is_null_na(tmp_path):
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    proj.mkdir()
+    skill.mkdir()
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"version": None, "source": "N/A"}
+
+
+def test_version_bmad_ucg_version_wins(tmp_path):
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    (proj / "_bmad" / "ucg").mkdir(parents=True)
+    (proj / "_bmad" / "ucg" / "VERSION").write_text("1.2.3\n", encoding="utf-8")
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload == {"version": "1.2.3", "source": "_bmad/ucg/VERSION"}
+
+
+def test_version_skill_root_version_wins_when_bmad_absent(tmp_path):
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    proj.mkdir()
+    skill.mkdir()
+    (skill / "VERSION").write_text("  0.9.0  ", encoding="utf-8")
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["version"] == "0.9.0"
+    assert payload["source"] == f"{skill}/VERSION"
+
+
+def test_version_marketplace_wins_when_version_files_absent(tmp_path):
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    (proj / ".claude-plugin").mkdir(parents=True)
+    skill.mkdir()
+    (proj / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"plugins": [{"version": "2.0.0"}]}), encoding="utf-8"
+    )
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"version": "2.0.0", "source": "marketplace.json"}
+
+
+def test_version_package_json_is_last_rung(tmp_path):
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    proj.mkdir()
+    skill.mkdir()
+    (proj / "package.json").write_text(
+        json.dumps({"version": "3.1.4"}), encoding="utf-8"
+    )
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"version": "3.1.4", "source": "package.json"}
+
+
+def test_version_first_hit_wins_precedence(tmp_path):
+    """Every rung is populated; the earliest (bmad VERSION) must win."""
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    (proj / "_bmad" / "ucg").mkdir(parents=True)
+    (proj / ".claude-plugin").mkdir(parents=True)
+    skill.mkdir()
+    (proj / "_bmad" / "ucg" / "VERSION").write_text("first", encoding="utf-8")
+    (skill / "VERSION").write_text("second", encoding="utf-8")
+    (proj / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"plugins": [{"version": "third"}]}), encoding="utf-8"
+    )
+    (proj / "package.json").write_text(
+        json.dumps({"version": "fourth"}), encoding="utf-8"
+    )
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"version": "first", "source": "_bmad/ucg/VERSION"}
+
+
+def test_version_skill_precedes_marketplace_and_package(tmp_path):
+    """skill-root VERSION outranks both JSON rungs when bmad VERSION is absent."""
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    (proj / ".claude-plugin").mkdir(parents=True)
+    skill.mkdir()
+    (skill / "VERSION").write_text("skill-wins", encoding="utf-8")
+    (proj / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"plugins": [{"version": "mp"}]}), encoding="utf-8"
+    )
+    (proj / "package.json").write_text(json.dumps({"version": "pkg"}), encoding="utf-8")
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["version"] == "skill-wins"
+    assert payload["source"] == f"{skill}/VERSION"
+
+
+def test_version_malformed_marketplace_falls_through_to_package(tmp_path):
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    (proj / ".claude-plugin").mkdir(parents=True)
+    skill.mkdir()
+    (proj / ".claude-plugin" / "marketplace.json").write_text(
+        "{ this is not valid json {{{", encoding="utf-8"
+    )
+    (proj / "package.json").write_text(json.dumps({"version": "5.5.5"}), encoding="utf-8")
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"version": "5.5.5", "source": "package.json"}
+
+
+def test_version_marketplace_missing_key_falls_through(tmp_path):
+    """marketplace.json present but missing plugins[0].version -> next rung."""
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    (proj / ".claude-plugin").mkdir(parents=True)
+    skill.mkdir()
+    (proj / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"plugins": [{"name": "x"}]}), encoding="utf-8"
+    )
+    (proj / "package.json").write_text(json.dumps({"version": "6.0.0"}), encoding="utf-8")
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"version": "6.0.0", "source": "package.json"}
+
+
+def test_version_empty_version_file_falls_through(tmp_path):
+    """An empty/whitespace VERSION file is not a hit; later rungs win."""
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    (proj / "_bmad" / "ucg").mkdir(parents=True)
+    skill.mkdir()
+    (proj / "_bmad" / "ucg" / "VERSION").write_text("   \n  ", encoding="utf-8")
+    (skill / "VERSION").write_text("7.7.7", encoding="utf-8")
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["version"] == "7.7.7"
+    assert payload["source"] == f"{skill}/VERSION"
+
+
+def test_version_malformed_package_json_with_nothing_else_is_null(tmp_path):
+    proj = tmp_path / "proj"
+    skill = tmp_path / "skill"
+    proj.mkdir()
+    skill.mkdir()
+    (proj / "package.json").write_text("not json at all }{", encoding="utf-8")
+    proc = _version(proj, skill)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"version": None, "source": "N/A"}
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

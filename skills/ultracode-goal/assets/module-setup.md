@@ -43,14 +43,14 @@ Show defaults in brackets and present all values together so the user can respon
 Write a temp JSON file with the collected answers structured as `{"core": {...}, "module": {}}` (omit `core` if it already exists). Then run the merge scripts from the skill root:
 
 ```bash
-uv run ./scripts/merge-config.py --config-path "{project-root}/_bmad/config.yaml" --user-config-path "{project-root}/_bmad/config.user.yaml" --module-yaml ./assets/module.yaml --answers {temp-file}
-uv run ./scripts/merge-help-csv.py --target "{project-root}/_bmad/module-help.csv" --source ./assets/module-help.csv --module-yaml ./assets/module.yaml --module-code ultracode-goal
+uv run ./scripts/merge_config.py --config-path "{project-root}/_bmad/config.yaml" --user-config-path "{project-root}/_bmad/config.user.yaml" --module-yaml ./assets/module.yaml --answers {temp-file}
+uv run ./scripts/merge_help_csv.py --target "{project-root}/_bmad/module-help.csv" --source ./assets/module-help.csv --module-yaml ./assets/module.yaml --module-code ultracode-goal
 ```
 
 **Additionally**, if `{project-root}/_bmad/_config/bmad-help.csv` exists (the assembled catalog that the installed `bmad-help` skill loads), merge into it too so the module is immediately routable:
 
 ```bash
-uv run ./scripts/merge-help-csv.py --target "{project-root}/_bmad/_config/bmad-help.csv" --source ./assets/module-help.csv --module-yaml ./assets/module.yaml --module-code ultracode-goal
+uv run ./scripts/merge_help_csv.py --target "{project-root}/_bmad/_config/bmad-help.csv" --source ./assets/module-help.csv --module-yaml ./assets/module.yaml --module-code ultracode-goal
 ```
 
 `--module-yaml` makes the script synthesize the module's `_meta` docs row (from `name` + `docs_llms`) alongside the capability rows — the identical catalog state the npx installer produces.
@@ -59,7 +59,7 @@ The merge is positional and keeps the target's own header line, so the source's 
 
 All scripts output JSON to stdout with results. If any exits non-zero, surface the error and stop.
 
-Run `uv run ./scripts/merge-config.py --help` or `uv run ./scripts/merge-help-csv.py --help` for full usage.
+Run `uv run ./scripts/merge_config.py --help` or `uv run ./scripts/merge_help_csv.py --help` for full usage.
 
 ## Create Output Directories
 
