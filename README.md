@@ -13,7 +13,7 @@
 [![BMAD Module](https://img.shields.io/badge/BMAD-module-blue)](https://github.com/bmad-code-org/BMAD-METHOD)
 [![Python Version](https://img.shields.io/badge/python-%3E%3D3.10-blue?logo=python&logoColor=white)](https://www.python.org)
 [![uv](https://img.shields.io/badge/uv-package%20manager-blueviolet?logo=uv)](https://docs.astral.sh/uv/)
-[![Docs](https://img.shields.io/badge/docs-online-green)](./docs/index.md)
+[![Docs](https://img.shields.io/badge/docs-online-green)](https://armelhbobdad.github.io/bmad-module-ultracode-goal/)
 [![GitHub stars](https://img.shields.io/github/stars/armelhbobdad/bmad-module-ultracode-goal?style=social)](https://github.com/armelhbobdad/bmad-module-ultracode-goal/stargazers)
 
 **Built for [Claude Code](https://www.anthropic.com/claude-code) — and only Claude Code.** UCG composes `/goal`, Auto Mode, Auto Memory, and runtime hooks, which exist nowhere else. Other editors can hold the skill files; the autonomous run itself requires Claude Code.
