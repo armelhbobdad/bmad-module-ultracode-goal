@@ -120,6 +120,7 @@ export default defineConfig({
             { label: 'Architecture', slug: 'architecture' },
             { label: 'Gate Model', slug: 'gate-model' },
             { label: 'Health Check', slug: 'health-check' },
+            { label: 'Cross-Session Recall', slug: 'cross-session-recall' },
             { label: 'Troubleshooting', slug: 'troubleshooting' },
           ],
         },

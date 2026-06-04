@@ -45,3 +45,8 @@ health_check_queue_path = "{project-root}/_bmad-output/ultracode-goal/improvemen
 # true = additionally live-submit `bug`-severity findings unattended (still
 #        deduped + seen-cache-guarded). friction/gap never auto-submit.
 health_check_autosubmit = false
+
+# --- Cross-Session Recall (optional; consults prior runs via claude-mem) ---
+# Advisory only, never gates. Requires the third-party claude-mem plugin;
+# silently inactive without it. "on" = use claude-mem when present | "off" = never touch it.
+cross_session_recall = "off"
