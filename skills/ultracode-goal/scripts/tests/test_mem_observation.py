@@ -15,6 +15,7 @@ Run: uv run --with pytest pytest test_mem_observation.py -v
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -60,9 +61,13 @@ def _init_repo(repo: Path) -> None:
 
 
 def _run(*args: str, stdin: str | None = None):
+    # PYTHONIOENCODING=cp1252 simulates the hostile Windows console default on
+    # every platform; the script must pin its own streams to UTF-8 (regression
+    # guard for the windows-latest UnicodeEncodeError CI failure).
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
-        capture_output=True, text=True, input=stdin,
+        capture_output=True, text=True, encoding="utf-8", input=stdin,
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
     )
 
 

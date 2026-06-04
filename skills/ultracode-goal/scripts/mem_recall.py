@@ -48,6 +48,19 @@ from pathlib import Path
 import mem_common as mc
 
 
+def _force_utf8_stdio() -> None:
+    """Pin stdin/stdout/stderr to UTF-8.
+
+    Windows consoles default to a legacy codepage (cp1252), which cannot
+    encode the multibyte content this script legitimately emits (titles pass
+    through with ensure_ascii=False) — json output would crash with
+    UnicodeEncodeError. The probe/output contract is UTF-8 everywhere.
+    """
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Probe loading
 # ---------------------------------------------------------------------------
@@ -475,6 +488,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="Cross-Session Recall latch + filter for ultracode-goal."
     )

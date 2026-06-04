@@ -193,6 +193,18 @@ def _outbox_path(impl: Path, run_id: str) -> Path:
     return impl / f"mem-outbox.{run_id}.jsonl"
 
 
+def _force_utf8_stdio() -> None:
+    """Pin stdin/stdout/stderr to UTF-8.
+
+    Windows consoles default to a legacy codepage (cp1252) that cannot encode
+    the multibyte content build/spill legitimately carry (epic titles, root
+    causes); the payload contract is UTF-8 on every stream.
+    """
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
+
 def cmd_spill(args: argparse.Namespace) -> int:
     raw = sys.stdin.read()
     try:
@@ -365,6 +377,7 @@ def cmd_drain(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="Cross-Session Recall observation builder + outbox for ultracode-goal."
     )

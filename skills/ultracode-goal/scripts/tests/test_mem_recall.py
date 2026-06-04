@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -80,12 +81,18 @@ def _init_repo(repo: Path, remote: str | None = "https://github.com/acme/widget.
 
 
 def _run(*args: str, cwd: Path | None = None, stdin: str | None = None):
+    # PYTHONIOENCODING=cp1252 simulates the hostile Windows console default on
+    # every platform; the script must pin its own streams to UTF-8 (regression
+    # guard for the windows-latest UnicodeEncodeError CI failure). The parent
+    # decodes as the UTF-8 the output contract promises.
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         input=stdin,
         cwd=str(cwd) if cwd else None,
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
     )
 
 
