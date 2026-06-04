@@ -61,13 +61,15 @@ On [npmjs.com](https://www.npmjs.com/) → package settings → Trusted Publishe
 
 The workflow upgrades npm to ≥ 11.5.1 (the OIDC trusted-publishing floor) and pins `NPM_TOKEN: ""` on both publish steps so a stale runner-env token can never be picked up silently. Note: the very first publish of a brand-new package may need to be performed manually (`npm publish` with a granular token) before Trusted Publisher can be attached to the package — check current npm rules when cutting `0.1.0`.
 
-### 5. Auto-merge repo setting
+### 5. Repo settings: auto-merge + Actions PR creation
 
 ```bash
 gh api --method PATCH /repos/armelhbobdad/bmad-module-ultracode-goal -f allow_auto_merge=true
+gh api --method PUT /repos/armelhbobdad/bmad-module-ultracode-goal/actions/permissions/workflow \
+  -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true
 ```
 
-Without it, `gh pr merge --auto` in the workflow fails.
+Without `allow_auto_merge`, `gh pr merge --auto` in the workflow fails. Without `can_approve_pull_request_reviews` ("Allow GitHub Actions to create and approve pull requests" in Settings → Actions → General — **off by default**), the `Open bot PR` step fails with `GraphQL: GitHub Actions is not permitted to create or approve pull requests`. The workflow-level `permissions: pull-requests: write` declaration is necessary but NOT sufficient — this repo-level toggle gates it independently.
 
 ### 6. Health-check labels
 
