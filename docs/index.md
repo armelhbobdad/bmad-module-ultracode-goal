@@ -2,7 +2,7 @@
 
 Run a BMAD Epic autonomously to a machine-checked Definition-of-Done.
 
-`bmad-module-ultracode-goal` is a BMAD module that delivers a single Epic end to end without a human in the loop — but only behind a hard preflight gate and a deterministic completion gate. It does not replace the BMAD epic toolbox or the Test Architect (TEA); it conducts them. The skill preflights the Epic to a remediated green light, turns acceptance criteria into executable red-phase tests with TEA, drives every in-scope story to a green commit on an isolated Epic branch, and advances only when `gate_eval.py` reads TEA's `gate-decision.json` as PASS — never on the model's own say-so, and never on the `/goal` transcript evaluator alone. The output is a delivered, gate-passed Epic, a run report, and a deferred-work ledger of anything safely parked for later.
+`bmad-module-ultracode-goal` is a BMAD module **for Claude Code** — it composes `/goal`, Auto Mode, Auto Memory, and runtime hooks, so the autonomous run executes nowhere else. It delivers a single Epic end to end without a human in the loop — but only behind a hard preflight gate and a deterministic completion gate. It does not replace the BMAD epic toolbox or the Test Architect (TEA); it conducts them. The skill preflights the Epic to a remediated green light, turns acceptance criteria into executable red-phase tests with TEA, drives every in-scope story to a green commit on an isolated Epic branch, and advances only when `gate_eval.py` reads TEA's `gate-decision.json` as PASS — never on the model's own say-so, and never on the `/goal` transcript evaluator alone. The output is a delivered, gate-passed Epic, a run report, and a deferred-work ledger of anything safely parked for later.
 
 ## Documentation
 
