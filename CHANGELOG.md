@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.1.1-alpha.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v0.1.0...v0.1.1-alpha.0) (2026-06-04)
 ## [0.1.0] - 2026-06-03
 
 ### Added
