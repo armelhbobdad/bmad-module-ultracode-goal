@@ -164,6 +164,19 @@ uv run skills/ultracode-goal/scripts/gate_eval.py \
 
 The JSON it prints is the same object UCG routes on — `verdict`, `gate_status`, and the `reasons` trail that explains how it got there. Nothing is hidden behind the model.
 
+## Optional: Cross-Session Recall
+
+If you run claude-mem, this executor consults your past runs in this codebase before it scopes a new Epic and before its preflight gate — so it surfaces what bit you here last time instead of starting amnesiac. You stay in the driver's seat; it informs, it doesn't auto-decide.
+
+Optional. Powered by claude-mem if installed; a silent no-op if not. It is advisory only — never in the gate path — and off by default. Enable it in `_bmad/custom/ultracode-goal.toml`:
+
+```toml
+[workflow]
+cross_session_recall = "on"
+```
+
+See [Cross-Session Recall](./docs/cross-session-recall.md) for the touchpoints, the trust model, and the OFF-coherence disclosure.
+
 ## Help UCG Improve
 
 Every run that reaches Finalize ends with a self-improvement check. When it finds a defect in its own stage references, it can file a GitHub issue — deduplicated by a deterministic fingerprint so re-reporting is safe — with your approval. Headless runs queue findings to a machine-local cache instead of filing live. The fingerprint is install-mode-invariant, so the same defect maps to the same issue whether it surfaced in a dev checkout or an installed tree. **Please let runs finish through Finalize**, or [open an issue](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose) directly. If UCG saved you an afternoon of babysitting, a ⭐ helps others find it.
@@ -187,6 +200,7 @@ The docs are organized into three buckets — **Why** (start here), **Try** (do 
 - **[Architecture](./docs/architecture.md)** — the conductor model, enforcement layers in depth, and `customize.toml` resolution.
 - **[Gate Model](./docs/gate-model.md)** — how `gate_eval.py` maps `gate_status` to a verdict, and the production AND-signals.
 - **[Health Check](./docs/health-check.md)** — the terminal self-improvement loop: what it sends, privacy, and how to disable it.
+- **[Cross-Session Recall](./docs/cross-session-recall.md)** — the optional claude-mem integration: touchpoints, trust model, and how to enable it.
 - **[Troubleshooting](./docs/troubleshooting.md)** — real failure modes and their remediations.
 
 ## Acknowledgements

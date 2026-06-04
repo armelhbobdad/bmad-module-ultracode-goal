@@ -13,7 +13,7 @@ The split matters: a team standard buried in machine-local memory never reaches 
 
 ## Optional retrospective (`--retro`)
 
-Interactive runs **offer** the retrospective at Epic close (skip it by default if the user declines); headless runs it **only when `--retro` was passed**. When run, `bmad-retrospective` covers the Epic, and its lessons feed back through the capture step above — durable conclusions go to memory or CLAUDE.md by the same machine-local-vs-team split. It is additive, not required to close the run.
+Interactive runs **offer** the retrospective at Epic close (skip it by default if the user declines); headless runs it **only when `--retro` was passed**. When run, `bmad-retrospective` covers the Epic, and its lessons feed back through the capture step above — durable conclusions go to memory or CLAUDE.md by the same machine-local-vs-team split. It is additive, not required to close the run. A retrospective re-uses the Stage 1 filtered recall (its recurrence counts) — it never makes a fresh MCP call.
 
 ## Decision-log audit
 
@@ -29,6 +29,31 @@ Produce a report (write it as a peer of `.decision-log.md` in the run folder, e.
 - Budget consumed vs `{workflow.max_turns_per_story}` / `{workflow.story_token_budget}`.
 - Learnings captured and where they went (memory vs CLAUDE.md).
 - A pointer to the deferred-work ledger and its open-item count.
+- Cross-Session Recall: consulted / wrote / skipped, plus the outbox tombstone count when the drain ran.
+
+## Cross-Session Recall write (optional)
+
+Read `{workflow.implementation_artifacts}/.mem-state.json`. Act only on its latched state.
+
+**Present + `schema_ok` + recall `on`** — write this run's summary, draining first so nothing parked in a prior crash is lost:
+
+1. **Drain the outbox** — replay each spilled payload with **one** `save_observation` attempt apiece:
+
+   ```
+   uv run {skill-root}/scripts/mem_observation.py drain --impl-artifacts {workflow.implementation_artifacts}
+   ```
+
+2. **Build this run's payload** — epic, run-id, gate-status, verdict, project, the deferred-work path, any root causes by taxonomy class, and the mechanical `recurred` yes/no for each Stage 1 advisory consumed:
+
+   ```
+   uv run {skill-root}/scripts/mem_observation.py build --impl-artifacts {workflow.implementation_artifacts} --epic <id> --run-id <run-id> --gate-status <status> --verdict <advance|blocked> --project <name> --deferred {workflow.deferred_work_path} [--root-cause class=<taxonomy>,path=<artifact>]… [--advisory sig=<s>,recurred=<yes|no|unknown>]…
+   ```
+
+3. **One `save_observation`** with that payload. On any MCP error, do **not** retry — pipe the payload to `mem_observation.py spill`, log `WARN mem-write-deferred` to `.decision-log.md`, and continue. The run report always lands; the memory write is best-effort.
+
+**Present but recall `off`** — print the one-line notice and write nothing: *claude-mem detected — Cross-Session Recall is off; this run consulted no memory and wrote none. Enable with `cross_session_recall = "on"`.*
+
+**Always, both paths** — **remove** `{workflow.implementation_artifacts}/.mem-state.json` as part of close-out. No active run means the hook stops gating claude-mem; an orphaned latch would deny the user's own usage between runs.
 
 ## Record the terminal run-status
 

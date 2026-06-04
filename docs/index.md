@@ -62,4 +62,5 @@ The docs split into three buckets — **Why** (start here), **Try** (do stuff), 
 - [Architecture](./architecture.md) — the conductor model, the enforcement layers in depth, and customization resolution.
 - [Gate Model](./gate-model.md) — how `gate_eval.py` maps `gate_status` to a verdict, the thresholds, and the fail-closed contract.
 - [Health Check](./health-check.md) — the terminal self-improvement reflection: what it sends, the privacy model, and how to disable it.
+- [Cross-Session Recall](./cross-session-recall.md) — the optional claude-mem integration and its trust model.
 - [Troubleshooting](./troubleshooting.md) — real failure modes and their remediations.

@@ -48,6 +48,8 @@ The script counts mechanical facts; it cannot read a PRD and tell that a product
 
 Any such item is **RED** — it cannot be auto-remediated, because the fix is a human decision, and an unattended run guessing it produces confidently wrong work. A purely cosmetic gap is not RED. Record each RED finding with its source and the exact decision needed.
 
+When Stage 1 Cross-Session Recall surfaced prior-failure advisories (recurrence counts or failure-class records touching this Epic's stories), fold them into this scan as **hypotheses to check** — attributed and advisory. They tell you where prior runs broke; they are never themselves RED and never block launch. Re-use the Stage 1 filtered output; do not make a fresh MCP call here.
+
 ## 4. Hard gate
 
 **Launch only when ALL hold:**
@@ -81,6 +83,7 @@ Do these in order; each must be asserted, not assumed:
     - `ULTRACODE_MAX_TURNS={workflow.max_turns_per_story}`
     - `ULTRACODE_TOKEN_BUDGET={workflow.story_token_budget}`
     - `ULTRACODE_EPIC_BRANCH_PREFIX={workflow.epic_branch_prefix}`
+  - The same PreToolUse guard now also enforces the Cross-Session Recall latch from `{workflow.implementation_artifacts}/.mem-state.json` — the merged hook reads it automatically, fail-closed; no new env var to inject.
 - **Allowlist.** Pre-populate the tool allowlist with `{workflow.allowlist_commands}` so the unattended run (and any fan-out subagents, which inherit the allowlist) can run tests/lint/build/commit without a permission prompt that no one is there to approve.
 
 ### Launch briefing (interactive only)

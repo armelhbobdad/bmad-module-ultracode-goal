@@ -1,0 +1,40 @@
+[
+  {
+    "id": 15288,
+    "memory_session_id": "cc76d242-ae6b-405d-9f31-d73c7d8d88cc",
+    "project": "bmad-module-ultracode-goal",
+    "text": null,
+    "type": "bugfix",
+    "title": "Pull request #7 created for installer banner geometry fix",
+    "subtitle": "PR documents broken frame issue, adaptive layout solution, URL updates, and regression test coverage",
+    "facts": "[\"Created PR #7 at https://github.com/armelhbobdad/bmad-module-ultracode-goal/pull/7\",\"PR title: \\\"fix(cli): keep the installer banner frame intact at any terminal width\\\"\",\"PR documents original issue: 71-character tagline overflowed 70-column usable width, silent padding failure pushed border out of frame\",\"PR documents secondary issue: horizontal rules rendered 2 columns short of box right edge\",\"PR explains solution: content-aware sizing measuring plain text before styling, capped at 76 columns for 80-column terminal fit\",\"PR documents adaptive features: word-wrap for tagline/version on narrow terminals, title row split when composite doesn't fit\",\"PR notes URL updates: Docs to armelhbobdad.github.io/bmad-module-ultracode-goal, Support from Ko-fi to Buy Me a Coffee\",\"PR describes regression coverage: 12 new assertions in test-cli-integration.js at 80/100/60/40 columns validating edge consistency, rule alignment, terminal fit\",\"PR confirms all test suites passing: test:cli, test:install, eslint, prettier\"]",
+    "narrative": "Created pull request #7 to merge the installer banner geometry fix from fix/installer-banner-geometry branch. The PR description provides comprehensive documentation of the issue, solution, and test coverage.",
+    "concepts": "[\"what-changed\",\"problem-solution\",\"how-it-works\"]",
+    "files_read": "[]",
+    "files_modified": "[]",
+    "prompt_number": 10,
+    "discovery_tokens": 1444,
+    "created_at": "2026-06-04T13:52:42.478Z",
+    "created_at_epoch": 1780581162478,
+    "content_hash": null
+  },
+  {
+    "id": 15287,
+    "memory_session_id": "cc76d242-ae6b-405d-9f31-d73c7d8d88cc",
+    "project": "bmad-module-ultracode-goal",
+    "text": null,
+    "type": "bugfix",
+    "title": "Banner geometry fix committed and pushed to fix/installer-banner-geometry branch",
+    "subtitle": "Commit 502b690 implements adaptive layout, URL updates, and regression test; pushed to origin",
+    "facts": "[\"Dropped stash d0408a1bc073695b4ce0f30b06c98c3dae26bbf4 after verifying duplicate content\",\"Created commit 502b690 with message \\\"fix(cli): keep the installer banner frame intact at any terminal width\\\"\",\"Commit includes 101 insertions and 12 deletions across 2 files (test/test-cli-integration.js, tools/cli/lib/ui.js)\",\"Branch fix/installer-banner-geometry pushed to origin with upstream tracking configured\",\"Co-authored by Claude Opus 4.8 (1M context)\"]",
+    "narrative": "Committed and pushed the complete banner geometry fix to the fix/installer-banner-geometry branch. After dropping the duplicate stash (d0408a1b), created commit 502b690 with a comprehensive conventional commit message documenting the entire fix scope.",
+    "concepts": "[\"what-changed\",\"problem-solution\",\"how-it-works\"]",
+    "files_read": "[]",
+    "files_modified": "[\"tools/cli/lib/ui.js\",\"test/test-cli-integration.js\"]",
+    "prompt_number": 10,
+    "discovery_tokens": 1093,
+    "created_at": "2026-06-04T13:52:20.860Z",
+    "created_at_epoch": 1780581140860,
+    "content_hash": null
+  }
+]

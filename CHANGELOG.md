@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- **Cross-Session Recall** (optional): when [claude-mem](https://github.com/thedotmack/claude-mem) is installed and cross_session_recall is set to on, the executor consults prior runs of the same repo during Ingest and Preflight and records one structured outcome at Finalize — advisory only, hook-latched, never part of the gate. No effect when claude-mem is absent. Off by default.
+
 ## [0.1.1-alpha.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v0.1.0...v0.1.1-alpha.0) (2026-06-04)
 ## [0.1.0] - 2026-06-03
 
