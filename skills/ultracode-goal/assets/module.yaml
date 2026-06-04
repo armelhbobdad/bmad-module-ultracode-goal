@@ -11,7 +11,11 @@ default_selected: false
 docs_llms: "https://armelhbobdad.github.io/bmad-module-ultracode-goal/llms.txt"
 
 # Repository that receives workflow health-check findings (fingerprint-deduped).
-# Override per project in _bmad/custom/ultracode-goal.toml if you fork the module.
+# Empty = health check off (the repo doubles as the on/off switch).
+# MIRROR, not source: the canonical default lives in customize.toml
+# [workflow].health_check_repo — that is what the live run reads; this entry
+# only seeds the installer catalog. If you fork the module, change both.
+# Per-project overrides go in _bmad/custom/ultracode-goal.toml as usual.
 health_check_repo:
   prompt: false
   default: "armelhbobdad/bmad-module-ultracode-goal"

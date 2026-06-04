@@ -30,6 +30,8 @@ Load config from `{project-root}/_bmad/config.yaml` and `config.user.yaml` (root
 
 **Run modes.** Profile defaults to **production** (full TEA gates); `--light` runs the trace gate only. Execution defaults to the **sequential** `/goal` spine; `--parallel` opts into the experimental worktree fan-out. `-H` is headless. `--yes` skips Stage 1's open-floor invite and the launch confirm (the launch briefing still prints) — it **never** skips the hard preflight gate. `--retro` runs the close-out retrospective: interactive runs offer it at Epic close anyway, but headless runs it only when `--retro` was passed.
 
+**Quick launch** (copy-paste, swap in your Epic id): `ultracode goal epic-7` — attended, production, sequential. `ultracode goal epic-7 --light --yes` — the expert one-liner: trace-only gate, no conversational stops. `ultracode goal epic-7 -H --retro` — headless automation with the close-out retrospective.
+
 **Resume.** The workspace is this skill's run folder holding `.decision-log.md`. If one exists for the Epic, surface it with its last session date and offer to resume — the log recovers full state regardless of compaction. Otherwise create it at intent and append a session heading. On resume, re-enter Execute at the first story whose last logged gate verdict is not advance; advanced stories are not re-run; re-assert (do not rebuild) the Epic branch, hooks, and allowlist before continuing.
 
 ## Non-negotiables
@@ -52,7 +54,8 @@ These exist because the documented mechanics make the intuitive shortcut wrong. 
 | 3 | Define Done | TEA test-design + per-story ATDD → executable acceptance tests | `references/define-done.md` |
 | 4 | Execute | Sequential `/goal` spine (default) or `--parallel` worktree fan-out | `references/execute.md` |
 | 5 | Gate | `gate_eval.py` verdict → advance / defer / reloop / escalate | `references/gate.md` |
-| 6 | Finalize | Auto Memory capture, optional retrospective, decision-log audit, report, workflow health check | `references/finalize.md` |
+| 6 | Finalize | Auto Memory capture, optional retrospective, decision-log audit, report | `references/finalize.md` |
+| 7 | Health Check | Terminal self-improvement audit — Finalize's close-out loads it; capture real workflow friction | `references/health-check.md` |
 
 Run the stages in order; each routes by the testable conditions stated in its file. The decision log is canonical memory — record scope, the preflight verdict, every gate outcome, and every deferral as you go.
 

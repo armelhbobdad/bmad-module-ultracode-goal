@@ -9,7 +9,7 @@ The npx installer (`npx bmad-module-ultracode-goal install`) performs its own re
 
 ## Overview
 
-Registers this standalone module into a project. Module identity (name, code) comes from `./assets/module.yaml` (resolved from the skill root). Writes three files:
+Registers this standalone module into a project. Module identity (name, code) comes from `assets/module.yaml` (a bare path, resolved from the skill root per SKILL.md Conventions). Writes three files:
 
 - **`{project-root}/_bmad/config.yaml`** — shared project config: core settings at root (e.g. `output_folder`, `document_output_language`) plus an `ultracode-goal` section. User-only keys (`user_name`, `communication_language`) are **never** written here.
 - **`{project-root}/_bmad/config.user.yaml`** — personal settings intended to be gitignored: `user_name` and `communication_language` live exclusively here.
@@ -21,14 +21,14 @@ Both merge scripts use an anti-zombie pattern — existing entries for this modu
 
 ## Check Existing Config
 
-1. Read `./assets/module.yaml` for module metadata (the `code` field, `ultracode-goal`, is the module identifier)
+1. Read `assets/module.yaml` for module metadata (the `code` field, `ultracode-goal`, is the module identifier)
 2. Check if `{project-root}/_bmad/config.yaml` exists — if an `ultracode-goal` section is already present, inform the user this is an update (re-registration)
 
 If the user provides arguments (e.g. `accept all defaults`, `--headless`, or inline values like `user name is Armel`), map any provided values to config keys, use defaults for the rest, and skip interactive prompting. Still display the full confirmation summary at the end.
 
 ## Collect Configuration
 
-UltraCode Goal has **no promptable module variables** — runtime knobs (budgets, branch prefix, allowlist, health check, Cross-Session Recall) live in the skill's `customize.toml` and are overridden per project in `_bmad/custom/ultracode-goal.toml`, not in `_bmad/config.yaml`.
+UltraCode Goal has **no promptable module variables** — runtime knobs (budgets, branch prefix, allowlist, health check, Cross-Session Recall) live in the skill's `customize.toml` and are overridden per project in `{project-root}/_bmad/custom/ultracode-goal.toml`, not in `{project-root}/_bmad/config.yaml`.
 
 Only collect core config, and only if no core keys exist yet in `config.yaml` or `config.user.yaml`:
 
@@ -40,17 +40,17 @@ Show defaults in brackets and present all values together so the user can respon
 
 ## Write Files
 
-Write a temp JSON file with the collected answers structured as `{"core": {...}, "module": {}}` (omit `core` if it already exists). Then run the merge scripts from the skill root:
+Write a temp JSON file with the collected answers structured as `{"core": {...}, "module": {}}` (omit `core` if it already exists). Then run the merge scripts, qualified with `{skill-root}` so they resolve regardless of cwd:
 
 ```bash
-uv run ./scripts/merge-config.py --config-path "{project-root}/_bmad/config.yaml" --user-config-path "{project-root}/_bmad/config.user.yaml" --module-yaml ./assets/module.yaml --answers {temp-file}
-uv run ./scripts/merge-help-csv.py --target "{project-root}/_bmad/module-help.csv" --source ./assets/module-help.csv --module-yaml ./assets/module.yaml --module-code ultracode-goal
+uv run {skill-root}/scripts/merge_config.py --config-path "{project-root}/_bmad/config.yaml" --user-config-path "{project-root}/_bmad/config.user.yaml" --module-yaml {skill-root}/assets/module.yaml --answers {temp-file}
+uv run {skill-root}/scripts/merge_help_csv.py --target "{project-root}/_bmad/module-help.csv" --source {skill-root}/assets/module-help.csv --module-yaml {skill-root}/assets/module.yaml --module-code ultracode-goal
 ```
 
 **Additionally**, if `{project-root}/_bmad/_config/bmad-help.csv` exists (the assembled catalog that the installed `bmad-help` skill loads), merge into it too so the module is immediately routable:
 
 ```bash
-uv run ./scripts/merge-help-csv.py --target "{project-root}/_bmad/_config/bmad-help.csv" --source ./assets/module-help.csv --module-yaml ./assets/module.yaml --module-code ultracode-goal
+uv run {skill-root}/scripts/merge_help_csv.py --target "{project-root}/_bmad/_config/bmad-help.csv" --source {skill-root}/assets/module-help.csv --module-yaml {skill-root}/assets/module.yaml --module-code ultracode-goal
 ```
 
 `--module-yaml` makes the script synthesize the module's `_meta` docs row (from `name` + `docs_llms`) alongside the capability rows — the identical catalog state the npx installer produces.
@@ -59,7 +59,7 @@ The merge is positional and keeps the target's own header line, so the source's 
 
 All scripts output JSON to stdout with results. If any exits non-zero, surface the error and stop.
 
-Run `uv run ./scripts/merge-config.py --help` or `uv run ./scripts/merge-help-csv.py --help` for full usage.
+Run `uv run {skill-root}/scripts/merge_config.py --help` or `uv run {skill-root}/scripts/merge_help_csv.py --help` for full usage.
 
 ## Create Output Directories
 
@@ -69,7 +69,7 @@ After writing config, create any configured output directories that do not yet e
 
 Use the script JSON output to display what was written — core values set, user settings written to `config.user.yaml` (`user_keys` in the result), help rows added per target (`rows_added` / `rows_removed`), fresh install vs update.
 
-Then display the `module_greeting` from `./assets/module.yaml` to the user.
+Then display the `module_greeting` from `assets/module.yaml` to the user.
 
 ## Return to Skill
 

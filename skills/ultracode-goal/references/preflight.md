@@ -35,20 +35,35 @@ Clear each remediable blocker, then **re-run the check** so the budget reflects 
 - **TEA mode**: force **Create** mode for every TEA workflow this run. Resume/Validate/Edit are interactive and will halt an unattended run. Set/confirm whatever the TEA config exposes (`tea_execution_mode`) so no workflow resumes a prior session.
 - **Secrets / credentials** a story needs (test env keys, API tokens): **interactive** — prompt **once**, now, and capture them out of git. **Headless** — do not prompt; an unresolvable secret becomes a RED blocker (step 4), never a deferred question.
 
+**Ordering: only framework → ci is load-bearing** (the CI scaffold halts without a framework, as its bullet states). Every other remediation above is mutually independent — run them in any order, or concurrently; do not serialize them defensively.
+
+**Remediation halt catch-all.** If a remediation sub-skill itself fails or blocks on interactive input, do not re-invoke it blind and do not answer its prompt — record a **RED** blocker naming the sub-skill and the exact input or decision it needed, and let the hard gate (step 4) stop the run. This mirrors Execute's sub-skill halt catch-all; a bare re-report of "budget still N" with no cause is not an account.
+
 Log each remediation to `.decision-log.md` as you do it. After remediating, run the script from step 1 again and read the new `budget`.
 
 ## 3. Semantic intervention scan (the part the script cannot do)
 
-The script counts mechanical facts; it cannot read a PRD and tell that a product decision is still open, or read an ADR and tell that an architecture choice is unresolved. Do that now. Scan the Epic's stories, PRD, and ADR/architecture (paths noted in Stage 1) for **undecided product or architecture decisions** that an autonomous run would have to *guess*:
+The script counts mechanical facts; it cannot read a PRD and tell that a product decision is still open, or read an ADR and tell that an architecture choice is unresolved. That judgment happens now — but **not in your context**. The artifacts this scan reads are the same multi-thousand-token corpus the run is about to delegate to sub-skills; reading them here would make the conductor carry it through the entire unattended Execute phase (Stage 1's "do not open story or planning files for deep reading" rule exists for exactly this trap).
+
+**Delegate the read to one throwaway subagent.** Spawn a single subagent with the artifact paths noted in Stage 1 (the Epic's stories, PRD, ADR/architecture) and — when Stage 1 Cross-Session Recall produced advisories — the typed `records`/`recurrence` output of the Stage 1 filter, as prior-failure **hypotheses to check** (attributed and advisory; re-use that filtered output, never a fresh MCP call). Instruct it to read the corpus and hunt **undecided product or architecture decisions** that an autonomous run would have to *guess*:
 
 - open questions, "TBD" / "TODO: decide" / "to be determined" / "(?)" placeholders on a load-bearing requirement,
 - contradictions between PRD and ADR,
 - acceptance criteria that presuppose a decision no artifact actually makes,
 - a story whose "done" is undefinable from the artifacts.
 
-Any such item is **RED** — it cannot be auto-remediated, because the fix is a human decision, and an unattended run guessing it produces confidently wrong work. A purely cosmetic gap is not RED. Record each RED finding with its source and the exact decision needed.
+The subagent must return **ONLY this object — no prose, no document quotes beyond the one-line evidence fields**, so you hold the findings while the corpus stays in its discarded context:
 
-When Stage 1 Cross-Session Recall surfaced prior-failure advisories (recurrence counts or failure-class records touching this Epic's stories), fold them into this scan as **hypotheses to check** — attributed and advisory. They tell you where prior runs broke; they are never themselves RED and never block launch. Re-use the Stage 1 filtered output; do not make a fresh MCP call here.
+```json
+{"reds": [{"source": "<artifact path:line>",
+           "kind": "undecided-product|undecided-architecture|contradiction|undefinable-done",
+           "decision_needed": "<the exact decision a human must make>",
+           "evidence": "<one quoted line>"}],
+ "concerns": [{"source": "<artifact path:line>", "note": "<cosmetic / non-blocking gap, one line>"}],
+ "advisories_checked": [{"sig": "<advisory id>", "status": "recurred|not-observed|unknown"}]}
+```
+
+Every `reds` entry is **RED** — it cannot be auto-remediated, because the fix is a human decision, and an unattended run guessing it produces confidently wrong work. A purely cosmetic gap belongs in `concerns`, never RED; recall-derived hypotheses are attributed under `advisories_checked` and are never themselves RED and never block launch. Record each RED finding with its source and the exact decision needed in `.decision-log.md`.
 
 ## 4. Hard gate
 

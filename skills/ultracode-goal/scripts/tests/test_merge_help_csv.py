@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest"]
 # ///
-"""Tests for merge-help-csv.py.
+"""Tests for merge_help_csv.py.
 
 Run: uv run --with pytest pytest scripts/tests/test_merge_help_csv.py -v
 
@@ -22,7 +22,7 @@ import sys
 from io import StringIO
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[1] / "merge-help-csv.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "merge_help_csv.py"
 
 SOURCE_HEADER = (
     "module,skill,display-name,menu-code,description,action,args,phase,"

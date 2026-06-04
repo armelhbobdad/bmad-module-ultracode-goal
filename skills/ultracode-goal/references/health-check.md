@@ -2,21 +2,16 @@
 # UltraCode-Goal self-improvement health check — captures real workflow
 # friction as GitHub issues. (No name/description keys: those belong only
 # in SKILL.md frontmatter; this is a stage reference, not a skill.)
-healthCheckRepo: '{workflow.health_check_repo}'
+healthCheckRepo: '{workflow.health_check_repo}'  # empty = health check off
 localFallbackFolder: '{workflow.health_check_queue_path}'
 seenCachePath: '{workflow.health_check_seen_cache}'
 liveSubmitSeverities: ['bug']  # friction/gap go local-queue-default with explicit opt-in
-enabled: '{workflow.health_check_enabled}'
 autosubmit: '{workflow.health_check_autosubmit}'
 ---
 
 # Health Check: Workflow Self-Improvement
 
-This is the terminal step of Stage 6 (Finalize). Finalize loads it by bare path (`references/health-check.md`); it is fully self-contained and chains nowhere. Reflect on the ultracode-goal run that just completed; if real friction, bugs, or gaps were encountered in the *workflow instructions* (not the user's code), capture them as structured findings for review and optional submission as GitHub issues. Zero overhead for clean runs: if nothing went wrong, log one line and exit.
-
-## Role
-
-You are a self-improvement auditor — honest, precise, evidence-based. You report ONLY what you actually experienced executing the ultracode-goal stages during THIS run. You are NOT a creative writer looking for things to say.
+This is the terminal step of Stage 6 (Finalize) — Stage 7 in SKILL.md's stages table. Finalize loads it by bare path (`references/health-check.md`); it is fully self-contained and chains nowhere. Reflect on the ultracode-goal run that just completed — honestly, precisely, on evidence, reporting only what you actually experienced executing THIS run's stages. If real friction, bugs, or gaps were encountered in the *workflow instructions* (not the user's code), capture them as structured findings for review and optional submission as GitHub issues. Zero overhead for clean runs: if nothing went wrong, log one line and exit.
 
 ## Anti-fabrication rules
 
@@ -34,7 +29,7 @@ In headless (`-H`), skip the display and log: "headless: skipped health-check ar
 
 ## 0.5. Enabled gate
 
-If `{workflow.health_check_enabled}` is **false**, the health check is off. Log one line — "health-check disabled (health_check_enabled=false); skipping" — and **exit immediately**. Do nothing else: no reflection, no files, no JSON side effects. In headless this returns control so Finalize emits its final JSON unchanged.
+If `{workflow.health_check_repo}` is **empty**, the health check is off — there is nowhere to file, so there is nothing to run. Log one line — "health-check disabled (health_check_repo empty); skipping" — and **exit immediately**. Do nothing else: no reflection, no files, no JSON side effects. In headless this returns control so Finalize emits its final JSON unchanged.
 
 Otherwise continue to §1.
 
@@ -128,7 +123,7 @@ uv run {skill-root}/scripts/health_check_fp.py fingerprint \
 
 → `{"fp": "fp-xxxxxxx", "tuple": "<exact hashed input>"}`. The `section-slug` is a kebab-case stable heading slug (e.g. `verdict-mapping`), **never line numbers** — they drift when files are edited.
 
-**Install-mode-invariant dedup (explicit rule):** the script's `workflow` component is `ultracode-goal/{stage}` and its `step_file` component is ALWAYS the source-repo form `skills/ultracode-goal/references/{stage}.md`, regardless of where the skill is installed (`_bmad/` tree vs. dev checkout). The same defect therefore dedups to the same `fp` across every install. Do not substitute the installed path.
+**Install-mode-invariant dedup (explicit rule):** the script's `workflow` component is `ultracode-goal/{stage}` and its `step_file` component is ALWAYS the source-repo form `skills/ultracode-goal/references/{stage}.md`, regardless of where the skill is installed (the `{project-root}/_bmad/` tree vs. a dev checkout). The same defect therefore dedups to the same `fp` across every install. Do not substitute the installed path.
 
 **2. Check the seen-cache via the script:**
 
@@ -253,7 +248,13 @@ ultracode-goal/{stage}
 | Module Version | {resolved per the order below, else N/A} |
 ```
 
-**Module Version resolution order** (first hit wins): `{project-root}/_bmad/ucg/VERSION` → `{skill-root}/VERSION` → `.claude-plugin/marketplace.json` `plugins[0].version` → `package.json` `version` → `N/A`.
+**Module Version comes from the script** — never walk the file ladder in-prompt:
+
+```
+uv run {skill-root}/scripts/health_check_fp.py version --project-root {project-root} --skill-root {skill-root}
+```
+
+→ `{"version": "<resolved>", "source": "<which probe hit>"}`. Write `version` into the Environment table; when it is `null` (`source: "N/A"`), write `N/A`. The script probes the same first-hit-wins ladder deterministically: `{project-root}/_bmad/ucg/VERSION` → `{skill-root}/VERSION` → `.claude-plugin/marketplace.json` `plugins[0].version` → `package.json` `version`.
 
 After creating all issues, display: "{N} issue(s) created on {healthCheckRepo}:" then each URL, then "Workflow complete."
 
@@ -299,34 +300,5 @@ In an unattended run, do not display prompts — just write the files, log the c
 ## CRITICAL STEP COMPLETION NOTE
 
 This is the **terminal step of Finalize**. After it returns — clean run, findings submitted, queued, or discarded — the ultracode-goal run is **fully done**; there is nothing further to load. **In headless, Finalize emits the final five-key JSON AFTER this step returns** — so this step must never block, prompt, or stall waiting for input, and must never mutate or delay that emit.
-
-## SUCCESS / FAILURE metrics
-
-### SUCCESS
-
-- The enabled gate (§0.5) short-circuits to a one-line exit when `health_check_enabled` is false.
-- Clean runs exit immediately with no findings (the most common outcome).
-- Findings cite a specific stage file and section-slug with real `file:line` evidence.
-- In attended runs the [Y]/[N]/[E] gate is presented before any submission.
-- In headless runs the gate is bypassed deterministically: autosubmit-off queues every finding; autosubmit-on live-submits `bug` only and queues friction/gap.
-- Severity routing respected: only `bug` submits live by default; friction/gap need the explicit per-session opt-in (attended) or autosubmit (headless).
-- Fingerprint and seen-cache are computed/managed by `health_check_fp.py` — never inline shell — and are install-mode-invariant.
-- The `fp-*` label is ensured idempotently (`gh label create … || true`) before `gh issue create`.
-- Remote dedup search runs before every live submission; matches get reactions/delta-comments, not duplicates.
-- Local fallback files carry the fingerprint and clear manual-submission instructions.
-- The run ends cleanly and never blocks the headless JSON emit.
-
-### FAILURE
-
-- Fabricating issues not actually encountered during the run.
-- Reporting vague issues without a stage-file citation ("the workflow was confusing").
-- Skipping the attended review gate, or creating issues without confirmation in an attended run.
-- **Live-publishing an unreviewed friction/gap finding in an unattended run, or blocking the headless JSON emit on the health check.**
-- Creating a new issue when a matching `fp-*` open issue exists, without explicit [N].
-- Computing the fingerprint with inline shell or the installed path instead of the script's install-mode-invariant form.
-- Using LLM-judged "similarity" in place of the deterministic fingerprint.
-- Not recording to the seen-cache, causing the same user to re-report identical fingerprints.
-- Not providing the local fallback when `gh` is unavailable.
-- Continuing to load steps after this one (it is terminal).
 
 **Master rule:** honesty is the only policy. Zero findings is the expected, healthy outcome. Fabricating issues to appear thorough undermines the entire self-improvement system and is a SYSTEM FAILURE.

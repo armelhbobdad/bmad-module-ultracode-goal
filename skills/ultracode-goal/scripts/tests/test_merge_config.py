@@ -3,11 +3,11 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest"]
 # ///
-"""Tests for merge-config.py.
+"""Tests for merge_config.py.
 
 Run: uv run --with pytest pytest scripts/tests/test_merge_config.py -v
 
-merge-config.py declares a pyyaml PEP 723 dependency, so it is exercised via
+merge_config.py declares a pyyaml PEP 723 dependency, so it is exercised via
 `uv run` (which resolves it) rather than the bare test interpreter. Covers
 the fresh module-section write with the core/user split, and the anti-zombie
 section replacement on re-registration.
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "merge-config.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "merge_config.py"
 MODULE_YAML = Path(__file__).resolve().parents[2] / "assets" / "module.yaml"
 
 pytestmark = pytest.mark.skipif(shutil.which("uv") is None, reason="uv not on PATH")

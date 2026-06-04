@@ -45,7 +45,7 @@ import json
 import sys
 from pathlib import Path
 
-import mem_common as mc
+from lib import mem_common as mc
 
 
 def _force_utf8_stdio() -> None:

@@ -29,9 +29,20 @@ Subcommands:
   record --fp FP --cache PATH --issue-url URL --action A --date YYYY-MM-DD
       Validate FP + action. Create parent dirs. Merge-write (preserve other fps),
       atomic via temp file + os.replace. Emit {"written": true, "fp": FP}.
+  version --project-root PATH --skill-root PATH
+      Resolve the module version off a deterministic first-hit-wins probe ladder
+      and emit {"version": "<resolved>", "source": "<which probe hit>"} — or
+      {"version": null, "source": "N/A"} when nothing hits. A probe that exists
+      but is unreadable/malformed (bad JSON, missing key, empty string) falls
+      through to the next rung — it never crashes. The ladder is:
+        1. <project-root>/_bmad/ucg/VERSION   (plain text)  -> "_bmad/ucg/VERSION"
+        2. <skill-root>/VERSION               (plain text)  -> "{skill-root}/VERSION"
+        3. <project-root>/.claude-plugin/marketplace.json    JSON plugins[0].version
+                                                            -> "marketplace.json"
+        4. <project-root>/package.json         JSON version  -> "package.json"
 
-Output: JSON to stdout. Errors are JSON to stdout with exit code 1. A successful
-payload exits 0.
+Output: JSON to stdout. Errors are JSON to stdout with exit code 1 (operational
+failure); argparse usage errors exit 2. A successful payload exits 0.
 """
 
 from __future__ import annotations
@@ -163,6 +174,75 @@ def cmd_record(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_plain_version(path: Path) -> str | None:
+    """Read a plain-text VERSION file. Missing/unreadable/empty -> None."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except (FileNotFoundError, OSError):
+        return None
+    stripped = text.strip()
+    return stripped or None
+
+
+def _read_json_version(path: Path, *keys) -> str | None:
+    """Read a JSON file and walk `keys` (str=dict key, int=list index).
+
+    Missing file, malformed JSON, a missing/typed-wrong key, or an empty/
+    non-string resolved value all yield None so the caller falls through.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except (FileNotFoundError, OSError):
+        return None
+    try:
+        node = json.loads(text)
+    except ValueError:
+        return None
+    for key in keys:
+        if isinstance(key, int):
+            if not isinstance(node, list) or not (-len(node) <= key < len(node)):
+                return None
+            node = node[key]
+        else:
+            if not isinstance(node, dict) or key not in node:
+                return None
+            node = node[key]
+    if not isinstance(node, str):
+        return None
+    stripped = node.strip()
+    return stripped or None
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).expanduser()
+    skill_root = Path(args.skill_root).expanduser()
+
+    # First-hit-wins probe ladder. Each rung that exists-but-is-malformed
+    # returns None and falls through to the next.
+    ladder = (
+        (_read_plain_version(project_root / "_bmad" / "ucg" / "VERSION"), "_bmad/ucg/VERSION"),
+        (_read_plain_version(skill_root / "VERSION"), f"{skill_root}/VERSION"),
+        (
+            _read_json_version(
+                project_root / ".claude-plugin" / "marketplace.json",
+                "plugins",
+                0,
+                "version",
+            ),
+            "marketplace.json",
+        ),
+        (_read_json_version(project_root / "package.json", "version"), "package.json"),
+    )
+
+    for version, source in ladder:
+        if version is not None:
+            print(json.dumps({"version": version, "source": source}))
+            return 0
+
+    print(json.dumps({"version": None, "source": "N/A"}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Fingerprint + seen-cache plumbing for the ultracode-goal health check."
@@ -188,9 +268,14 @@ def main(argv: list[str] | None = None) -> int:
     rec_parser.add_argument("--date", required=True)
     rec_parser.set_defaults(func=cmd_record)
 
+    ver_parser = sub.add_parser("version", help="Resolve the module version off the probe ladder.")
+    ver_parser.add_argument("--project-root", required=True, dest="project_root")
+    ver_parser.add_argument("--skill-root", required=True, dest="skill_root")
+    ver_parser.set_defaults(func=cmd_version)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

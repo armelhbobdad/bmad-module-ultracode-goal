@@ -31,9 +31,9 @@ The boundary below shows the disable path, everything computed on your machine, 
 
 ```mermaid
 flowchart TD
-    Start["Reaches Finalize"] --> Enabled{"health_check_enabled true"}
-    Enabled -->|"false"| Off["Log one line and exit. Nothing computed, nothing sent"]
-    Enabled -->|"true"| Reflect["Reflect on this run. Grade bug, friction, gap"]
+    Start["Reaches Finalize"] --> Enabled{"health_check_repo set"}
+    Enabled -->|"empty"| Off["Log one line and exit. Nothing computed, nothing sent"]
+    Enabled -->|"set"| Reflect["Reflect on this run. Grade bug, friction, gap"]
     Reflect --> Clean{"Any findings"}
     Clean -->|"no"| Done["Clean run. Exit in one line"]
     Clean -->|"yes"| Gate{"Approved to submit"}
@@ -69,7 +69,7 @@ The gate that admits anything to the right of the boundary is the `[Y]` approval
 
 Headless runs do not have a human at the gate, so by default they **queue findings locally and never live-submit**. Two config knobs (set in `{project-root}/_bmad/custom/ultracode-goal.toml`) change this:
 
-- `health_check_enabled = false` — disables the health check entirely.
+- `health_check_repo = ""` — disables the health check entirely (the target repo doubles as the on/off switch; no target, nothing to run).
 - `health_check_autosubmit = true` — opts **bug-severity** findings into live submission on unattended runs. `friction` and `gap` findings are **never** auto-submitted; they always queue regardless of this setting.
 
 The local queue lives at the configured `health_check_queue_path` (by default `{project-root}/_bmad-output/ultracode-goal/improvement-queue/`); each finding is written one file per finding, named `hc-ultracode-goal-{stage}-{YYYYMMDD-HHmmss}.md`.

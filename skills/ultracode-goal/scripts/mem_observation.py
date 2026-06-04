@@ -43,7 +43,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import mem_common as mc
+from lib import mem_common as mc
 
 _DEAD_LETTER = "mem-outbox.dead.jsonl"
 _MAX_ATTEMPTS = 3
