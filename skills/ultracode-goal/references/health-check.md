@@ -123,7 +123,7 @@ uv run {skill-root}/scripts/health_check_fp.py fingerprint \
 
 → `{"fp": "fp-xxxxxxx", "tuple": "<exact hashed input>"}`. The `section-slug` is a kebab-case stable heading slug (e.g. `verdict-mapping`), **never line numbers** — they drift when files are edited.
 
-**Install-mode-invariant dedup (explicit rule):** the script's `workflow` component is `ultracode-goal/{stage}` and its `step_file` component is ALWAYS the source-repo form `skills/ultracode-goal/references/{stage}.md`, regardless of where the skill is installed (`_bmad/` tree vs. dev checkout). The same defect therefore dedups to the same `fp` across every install. Do not substitute the installed path.
+**Install-mode-invariant dedup (explicit rule):** the script's `workflow` component is `ultracode-goal/{stage}` and its `step_file` component is ALWAYS the source-repo form `skills/ultracode-goal/references/{stage}.md`, regardless of where the skill is installed (the `{project-root}/_bmad/` tree vs. a dev checkout). The same defect therefore dedups to the same `fp` across every install. Do not substitute the installed path.
 
 **2. Check the seen-cache via the script:**
 

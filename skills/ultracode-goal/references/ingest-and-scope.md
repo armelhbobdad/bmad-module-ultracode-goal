@@ -6,7 +6,7 @@ The operator is the expert on intent; you are the expert on what the artifacts s
 
 ## First-touch reality check
 
-Before resolving anything, confirm this is even a BMAD project. If the `_bmad/` config **and** `sprint-status.yaml` **and** any Epic are **all** absent, this does not look like a BMAD project — say so plainly, point at `bmad-bmb-setup` (to scaffold the module) and `bmad-sprint-planning` (to generate the sprint plan), and **stop**. Never carry a wrong-repo invocation into preflight. In headless (`-H`), emit the blocked JSON (per SKILL.md Headless) with `reason` "not a BMAD project". This is the only absence that hard-stops at Stage 1; once any one of the three is present, proceed and let the resolution rules below judge the rest.
+Before resolving anything, confirm this is even a BMAD project. If the `{project-root}/_bmad/` config **and** `sprint-status.yaml` **and** any Epic are **all** absent, this does not look like a BMAD project — say so plainly, point at `bmad-bmb-setup` (to scaffold the module) and `bmad-sprint-planning` (to generate the sprint plan), and **stop**. Never carry a wrong-repo invocation into preflight. In headless (`-H`), emit the blocked JSON (per SKILL.md Headless) with `reason` "not a BMAD project". This is the only absence that hard-stops at Stage 1; once any one of the three is present, proceed and let the resolution rules below judge the rest.
 
 ## Resolve the Epic and its artifacts
 
