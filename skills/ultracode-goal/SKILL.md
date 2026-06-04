@@ -51,7 +51,7 @@ These exist because the documented mechanics make the intuitive shortcut wrong. 
 | 3 | Define Done | TEA test-design + per-story ATDD → executable acceptance tests | `references/define-done.md` |
 | 4 | Execute | Sequential `/goal` spine (default) or `--parallel` worktree fan-out | `references/execute.md` |
 | 5 | Gate | `gate_eval.py` verdict → advance / defer / reloop / escalate | `references/gate.md` |
-| 6 | Finalize | Auto Memory capture, optional retrospective, decision-log audit, report | `references/finalize.md` |
+| 6 | Finalize | Auto Memory capture, optional retrospective, decision-log audit, report, workflow health check | `references/finalize.md` |
 
 Run the stages in order; each routes by the testable conditions stated in its file. The decision log is canonical memory — record scope, the preflight verdict, every gate outcome, and every deferral as you go.
 
@@ -71,3 +71,5 @@ With `-H`, run non-interactively: infer scope, default to **production** (unless
 ```
 
 An automator parses one schema regardless of where the run stopped; a blocked-before-report exit returns `report` and `deferred_work` as `null` rather than omitting them.
+
+Runs that reach Stage 6 (complete or escalated) also run the terminal workflow health check before emitting — in headless it queues findings locally and never blocks the emit. Runs that block at Stage 1 or Stage 2 do not: there is no executed workflow surface to audit, and inventing findings there would be fabrication.

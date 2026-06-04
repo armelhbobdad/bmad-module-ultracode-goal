@@ -48,7 +48,7 @@ If the resolved `{workflow.on_epic_complete}` is non-empty, follow it as the fin
 
 ## Headless output
 
-In headless (`-H`), emit the final JSON and stop. `status` is `complete` when the Epic-level gate advanced, or `blocked` when a story escalated. This is the **same five-key shape every headless exit point honors** (Stage 1 first-touch / already-done blocks, Stage 2 preflight block, and this Stage 6 final emit): all five keys are **always present**, with `report` and `deferred_work` set to `null` when not produced, and `reason` carrying a one-line cause only when `blocked` (`null` otherwise). An early `blocked` exit that produced no report still emits `"report": null` — never a missing key — so a caller parsing the documented shape never raises a KeyError:
+In headless (`-H`), compose the final JSON, run the Workflow health check (below) in its unattended queue-only mode, then emit the JSON and stop. `status` is `complete` when the Epic-level gate advanced, or `blocked` when a story escalated. This is the **same five-key shape every headless exit point honors** (Stage 1 first-touch / already-done blocks, Stage 2 preflight block, and this Stage 6 final emit): all five keys are **always present**, with `report` and `deferred_work` set to `null` when not produced, and `reason` carrying a one-line cause only when `blocked` (`null` otherwise). An early `blocked` exit that produced no report still emits `"report": null` — never a missing key — so a caller parsing the documented shape never raises a KeyError:
 
 ```json
 {"status": "complete|blocked",
@@ -58,3 +58,7 @@ In headless (`-H`), emit the final JSON and stop. `status` is `complete` when th
  "deferred_work": "<path to {workflow.deferred_work_path}, or null>",
  "reason": "<one line when blocked, else null>"}
 ```
+
+## Workflow health check (terminal)
+
+After the run-status is settled and (in headless) the JSON is composed but **before** the final emit/exit, load `references/health-check.md`, read it fully, and execute it. This is the true terminal step for every run that reached Stage 6 — both a `complete` run and a `blocked` (escalated) run, since the workflow drove real work either way and genuine friction is observable. In headless it runs in its unattended queue-only mode and **never blocks the emit**; see that file's routing rules. Do not perform any other action between this section and executing the health check.

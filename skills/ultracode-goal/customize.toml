@@ -31,3 +31,17 @@ allowlist_commands = ["git status", "git add -A", "git commit", "npm test", "npm
 
 # --- Hook fired at epic completion (prompt or shell command); empty = none ---
 on_epic_complete = ""
+
+# --- Health check (workflow self-improvement; opt-out + autonomy-safe) ---
+# The terminal Finalize step reflects on the run and can file genuine workflow
+# friction as fingerprint-deduped GitHub issues. Honesty-by-default: zero
+# findings is the expected, healthy outcome. See docs/health-check.md.
+health_check_enabled = true
+health_check_repo = "armelhbobdad/bmad-module-ultracode-goal"
+health_check_seen_cache = "$HOME/.ultracode-goal/health-check-seen.json"
+health_check_queue_path = "{project-root}/_bmad-output/ultracode-goal/improvement-queue"
+# In unattended/headless runs there is no human at the [Y]/[N]/[E] gate.
+# false (default) = queue findings locally, NEVER live-submit without a human.
+# true = additionally live-submit `bug`-severity findings unattended (still
+#        deduped + seen-cache-guarded). friction/gap never auto-submit.
+health_check_autosubmit = false

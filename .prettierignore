@@ -1,0 +1,21 @@
+# Contributor Covenant (external standard)
+CODE_OF_CONDUCT.md
+
+# BMAD runtime folders (user-specific, not in repo)
+_bmad/
+_bmad*/
+
+# Build output
+build/
+
+# Temp reference files
+temp/
+
+# Dotfile directories (tool-specific runtime data)
+.*
+
+# Skill quality-analysis artifacts (local-only, gitignored)
+skills/**/.analysis/
+
+# Workflow-script dialect (top-level await + return) — not standard JS
+skills/**/assets/*.workflow.js

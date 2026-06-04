@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "bmad-module-ultracode-goal",
+  "version": "0.1.0",
+  "description": "BMAD module — Run a BMAD Epic autonomously to a machine-checked, TEA-gated Definition-of-Done.",
+  "keywords": [
+    "bmad",
+    "bmad-method",
+    "bmad-module",
+    "agent-skills",
+    "agentskills",
+    "agents",
+    "skills",
+    "autonomous",
+    "epic",
+    "goal-mode",
+    "auto-mode",
+    "auto-memory",
+    "quality-gates",
+    "tea",
+    "test-architect",
+    "definition-of-done"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/armelhbobdad/bmad-module-ultracode-goal.git"
+  },
+  "license": "MIT",
+  "author": "armelhbobdad",
+  "main": "tools/cli/ucg-cli.js",
+  "bin": {
+    "bmad-module-ultracode-goal": "tools/ucg-npx-wrapper.js"
+  },
+  "scripts": {
+    "format:check": "prettier --check \"**/*.{js,cjs,mjs,json,yaml}\"",
+    "format:fix": "prettier --write \"**/*.{js,cjs,mjs,json,yaml}\"",
+    "lint": "eslint . --ext .js,.cjs,.mjs,.yaml --max-warnings=0",
+    "lint:fix": "eslint . --ext .js,.cjs,.mjs,.yaml --fix",
+    "lint:md": "markdownlint-cli2 \"**/*.md\"",
+    "prepare": "husky || exit 0",
+    "quality": "npm run format:check && npm run lint && npm run lint:md && npm run test:install && npm run test:cli && npm run test:python && npm run validate:skills && npm run validate:refs",
+    "test": "npm run test:install && npm run test:cli && npm run test:python && npm run validate:skills && npm run validate:refs && npm run lint && npm run lint:md && npm run format:check",
+    "test:cli": "node test/test-cli-integration.js",
+    "test:install": "node test/test-installation-components.js",
+    "test:python": "uv run --with pytest pytest skills/ultracode-goal/scripts/tests/ -v",
+    "ucg:install": "node tools/cli/ucg-cli.js install",
+    "ucg:status": "node tools/cli/ucg-cli.js status",
+    "ucg:uninstall": "node tools/cli/ucg-cli.js uninstall",
+    "ucg:update": "node tools/cli/ucg-cli.js update",
+    "validate:refs": "node tools/validate-file-refs.js --strict",
+    "validate:skills": "node tools/validate-skills.js --strict"
+  },
+  "lint-staged": {
+    "*.{js,cjs,mjs}": [
+      "npm run lint:fix",
+      "npm run format:fix"
+    ],
+    "*.yaml": [
+      "eslint --fix",
+      "npm run format:fix"
+    ],
+    "*.json": [
+      "npm run format:fix"
+    ],
+    "*.md": [
+      "markdownlint-cli2"
+    ]
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.1.0",
+    "chalk": "^4.1.2",
+    "commander": "^14.0.0",
+    "figlet": "^1.8.0",
+    "fs-extra": "^11.3.0",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.33.0",
+    "conventional-changelog-cli": "^5.0.0",
+    "csv-parse": "^6.1.0",
+    "eslint": "^9.33.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-n": "^17.21.3",
+    "eslint-plugin-unicorn": "^60.0.0",
+    "eslint-plugin-yml": "^1.18.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.1.1",
+    "markdownlint-cli2": "^0.19.1",
+    "prettier": "^3.7.4",
+    "prettier-plugin-packagejson": "^2.5.19",
+    "yaml": "^2.7.0",
+    "yaml-eslint-parser": "^1.2.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

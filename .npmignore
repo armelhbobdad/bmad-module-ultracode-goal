@@ -1,0 +1,62 @@
+# Git
+.git
+.gitignore
+.github
+
+# Documentation (root-level .md files except README)
+/*.md
+!/README.md
+
+# BMAD framework and IDE config (not part of the module)
+_bmad/
+_bmad-output/
+.claude/
+.cursor/
+
+# Development tools and config
+test/
+*.test.js
+eslint.config.mjs
+prettier.config.mjs
+.markdownlint-cli2.yaml
+.prettierignore
+.eslintrc.*
+.prettierrc.*
+.husky/
+.npmrc
+
+# Dev-only validation tools (not needed at runtime)
+tools/validate-skills.js
+tools/validate-file-refs.js
+
+# Skill dev/test artifacts (not needed at runtime)
+skills/**/.analysis/
+skills/**/.decision-log.md
+skills/**/scripts/tests/
+skills/**/__pycache__/
+skills/**/.pytest_cache/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Output and temp
+temp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Misc
+*.log
+.env
+.env.*
