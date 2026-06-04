@@ -1,4 +1,7 @@
-# Architecture
+---
+title: Architecture
+description: How UltraCode Goal works as a conductor over BMAD, TEA, and Claude Code primitives — the three enforcement layers, file layout, and customization resolution.
+---
 
 UltraCode Goal is a conductor. It orchestrates the installed BMAD epic toolbox and the TEA gates, composing Claude Code primitives — `/goal`, Auto Mode, Auto Memory, hooks, git/worktree isolation — and replaces none of them. This page covers the conductor model, the three enforcement layers in depth, the file layout, customization resolution, and why the hooks live where they do.
 
@@ -12,6 +15,38 @@ The skill owns no implementation logic of its own for building features or runni
 
 Because it is a conductor, the truth of "is this done" lives in the artifacts its delegates produce, not in the conductor's own reasoning. That is the whole design: the model arranges the work, but a script reads the verdict.
 
+The conductor sits between three sets of things it does not own — the BMAD epic toolbox it orchestrates, the TEA gates it sequences, and the Claude Code primitives it composes:
+
+```mermaid
+flowchart TD
+    UCG["UltraCode Goal conductor - owns order, gates, enforcement"]
+    subgraph toolbox["BMAD epic toolbox"]
+        SP["sprint-planning"]
+        CS["create-story"]
+        DS["dev-story"]
+        CR["code-review"]
+        CC["correct-course"]
+    end
+    subgraph tea["TEA gates"]
+        TD["test-design"]
+        ATDD["atdd"]
+        TR["trace writes gate-decision.json"]
+        NFR["nfr"]
+    end
+    subgraph cc["Claude Code primitives"]
+        GOAL["/goal loop"]
+        AUTO["Auto Mode"]
+        MEM["Auto Memory"]
+        HOOKS["PreToolUse + Stop hooks"]
+        GIT["git branch + worktrees"]
+    end
+    UCG -->|"delegates building"| toolbox
+    UCG -->|"sequences"| tea
+    UCG -->|"composes"| cc
+    classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
+    class UCG accent
+```
+
 ## The three enforcement layers
 
 These are the module's non-negotiables. Each exists because the documented mechanics make the intuitive shortcut wrong (see [why](why-ultracode-goal.md)).
@@ -19,6 +54,23 @@ These are the module's non-negotiables. Each exists because the documented mecha
 ### 1. Deterministic gate truth
 
 `scripts/gate_eval.py` reads TEA's `gate-decision.json` and maps its gate status to a routing verdict. It never re-derives TEA's thresholds and never reads the transcript. The `/goal` evaluator that drives execution can only see what the run surfaces — it cannot open the gate file — so it is structurally incapable of being the completion authority. The script is. See the [gate model](gate-model.md) for the full mapping, thresholds, and the fail-closed contract.
+
+The mapping is fixed, and in production two extra signals can only downgrade an `advance`, never lift a lower verdict:
+
+```mermaid
+flowchart TD
+    READ["gate_eval.py reads gate-decision.json"]
+    READ --> ST{"gate_status"}
+    ST -->|"PASS or WAIVED"| ADV["advance"]
+    ST -->|"CONCERNS"| DEF["defer - park to ledger, keep moving"]
+    ST -->|"FAIL"| REL["reloop - correct-course, re-run in budget"]
+    ST -->|"NOT_EVALUATED"| ESC["escalate - stop"]
+    ADV --> PROD{"production profile"}
+    PROD -->|"nfr FAIL, review under 80, Block, or unreadable signal"| REL
+    PROD -->|"both signals read and pass"| ADVOK["advance confirmed"]
+    classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
+    class ADV,DEF,REL,ESC,ADVOK verdict
+```
 
 ### 2. Hooks as invariants
 
@@ -71,6 +123,24 @@ Configuration resolves in three layers, base → team → user, via `resolve_cus
 3. **User** — `{project-root}/_bmad/custom/ultracode-goal.user.toml`.
 
 Merge semantics: **scalars override**, **tables deep-merge**, **arrays append**. At activation the skill runs `resolve_customization.py --skill {skill-root} --key workflow`; if that fails, it resolves the three files itself in the same order. The shipped base layer defines the run's knobs — the TEA/artifact paths (`tea_config_path`, `trace_output_dir`, `implementation_artifacts`, `deferred_work_path`), the git guardrails (`epic_branch_prefix`, `protected_branches`), the budgets (`max_turns_per_story`, `story_token_budget`), the experimental `parallel_max_concurrency`, the `allowlist_commands`, and the `on_epic_complete` hook. Teams and users override without editing the shipped file. Remember that a budget or branch override only reaches the *enforcement* layer because preflight threads it into the hook env (see layer 2 above).
+
+The three TOML layers merge once, but a branch or budget value then travels two ways — the conductor reads it directly, while the hooks only see it if preflight re-injects it as env:
+
+```mermaid
+flowchart LR
+    BASE["Base - customize.toml"]
+    TEAM["Team - ultracode-goal.toml"]
+    USER["User - ultracode-goal.user.toml"]
+    BASE --> RES["resolve_customization.py merges base then team then user"]
+    TEAM --> RES
+    USER --> RES
+    RES --> WF["resolved workflow block"]
+    WF -->|"conductor reads scalars directly"| COND["conductor stages"]
+    WF -->|"preflight injects ULTRACODE_* env"| HOOKS["PreToolUse + Stop hooks"]
+    HOOKS -. "no env injected, falls back to defaults" .-> DROP["override no-ops at enforcement"]
+    classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
+    class WF accent
+```
 
 ## Why the hooks live in settings.local.json (decision D6)
 

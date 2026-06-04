@@ -14,6 +14,8 @@ export default [
       'test/fixtures/**',
       '_bmad/**',
       '_bmad*/**',
+      // Documentation website (Astro project with its own toolchain)
+      'website/**',
       // Build output
       'build/**',
       // Gitignored patterns

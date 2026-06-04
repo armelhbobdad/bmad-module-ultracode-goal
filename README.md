@@ -13,7 +13,7 @@
 [![BMAD Module](https://img.shields.io/badge/BMAD-module-blue)](https://github.com/bmad-code-org/BMAD-METHOD)
 [![Python Version](https://img.shields.io/badge/python-%3E%3D3.10-blue?logo=python&logoColor=white)](https://www.python.org)
 [![uv](https://img.shields.io/badge/uv-package%20manager-blueviolet?logo=uv)](https://docs.astral.sh/uv/)
-[![Docs](https://img.shields.io/badge/docs-online-green)](./docs/index.md)
+[![Docs](https://img.shields.io/badge/docs-online-green)](https://armelhbobdad.github.io/bmad-module-ultracode-goal/)
 [![GitHub stars](https://img.shields.io/github/stars/armelhbobdad/bmad-module-ultracode-goal?style=social)](https://github.com/armelhbobdad/bmad-module-ultracode-goal/stargazers)
 
 **Built for [Claude Code](https://www.anthropic.com/claude-code) — and only Claude Code.** UCG composes `/goal`, Auto Mode, Auto Memory, and runtime hooks, which exist nowhere else. Other editors can hold the skill files; the autonomous run itself requires Claude Code.
@@ -119,6 +119,24 @@ UCG runs six stages in order, each routing by the testable conditions stated in 
 4. **Execute** — the sequential `/goal` spine (default) or the `--parallel` worktree fan-out.
 5. **Gate** — `gate_eval.py` reads TEA's verdict and routes: advance / defer / reloop / escalate.
 6. **Finalize** — Auto Memory capture, optional retrospective, decision-log audit, run report.
+
+The run is a straight line until the gate, which branches — and a `reloop` sends the story back through Execute within budget, while an unresolved blocker stops the run rather than guessing:
+
+```mermaid
+flowchart TD
+    I["Stage 1 Ingest and Scope"] --> P{"Stage 2 Preflight hard gate"}
+    P -->|"red blocker"| STOP["STOP / blocked"]
+    P -->|"budget 0, green"| D["Stage 3 Define Done"]
+    D --> X["Stage 4 Execute"]
+    X --> G{"Stage 5 gate_eval.py reads TEA verdict"}
+    G -->|"advance, PASS or WAIVED"| F["Stage 6 Finalize"]
+    G -->|"defer, CONCERNS"| L["Ledger then advance"]
+    L --> F
+    G -->|"reloop, FAIL or signal downgrade"| X
+    G -->|"escalate, NOT_EVALUATED or budget out"| STOP
+    classDef gate fill:#6366F1,stroke:#4F46E5,color:#fff
+    class P,G gate
+```
 
 Three enforcement layers keep the autonomy honest:
 

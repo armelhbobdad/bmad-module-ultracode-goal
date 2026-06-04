@@ -1,4 +1,7 @@
-# How It Works
+---
+title: How It Works
+description: A faithful walkthrough of UltraCode Goal's six stages, the testable conditions that route between them, and the headless contract.
+---
 
 UltraCode Goal runs an Epic through six stages, in order. Each stage routes to the next by testable conditions stated in its reference file under [`../skills/ultracode-goal/references/`](../skills/ultracode-goal/references/). This page narrates the stages faithfully, the conditions that move between them, and the headless contract. For the design behind it, see [architecture](architecture.md); for the gate specifically, see the [gate model](gate-model.md).
 
@@ -12,6 +15,46 @@ UltraCode Goal runs an Epic through six stages, in order. Each stage routes to t
 | 4 | Execute | every story committed at green, or a turn-bound escalation |
 | 5 | Gate | the `gate_eval.py` verdict: advance / defer / reloop / escalate |
 | 6 | Finalize | terminal — report, ledger, memory capture |
+
+The stages run in order, but the edges are conditional — each one only advances on a testable condition, and two of them loop backward on failure. This shows the real routing, including the preflight remediation loop and the gate re-loop:
+
+```mermaid
+flowchart TD
+    S1["Stage 1 Ingest and Scope"]
+    NotBmad["STOP — not a BMAD project"]
+    S2["Stage 2 Preflight"]
+    Remediate["Auto-remediate then re-run check"]
+    Blocked["STOP or blocked — RED or budget gt 0"]
+    S3["Stage 3 Define Done"]
+    S4["Stage 4 Execute"]
+    S5["Stage 5 Gate via gate_eval.py"]
+    Correct["bmad-correct-course"]
+    S6["Stage 6 Finalize"]
+
+    S1 -->|"config + sprint + epic all absent"| NotBmad
+    S1 -->|"one resolved epic id"| S2
+    S2 -->|"remediable blocker"| Remediate
+    Remediate --> S2
+    S2 -->|"RED found or budget gt 0"| Blocked
+    S2 -->|"budget == 0 and no RED and ultracode plus Auto Mode on"| S3
+    S3 -->|"ATDD hard-halt on vague ACs"| S3
+    S3 -->|"every story has red-phase atdd-checklist"| S4
+    S4 -->|"every story committed at green"| S5
+    S4 -->|"turn-bound escalation"| S5
+    S5 -->|"advance or defer"| S6
+    S5 -->|"reloop — gate FAIL within budget"| Correct
+    Correct --> S4
+    S5 -->|"escalate — NOT_EVALUATED or budget exhausted"| S6
+
+    classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
+    classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
+    classDef stop fill:#9CA3AF,stroke:#6B7280,color:#fff
+    class S5 verdict
+    class S2 accent
+    class NotBmad,Blocked stop
+```
+
+A `defer` verdict appends non-blocking items to the ledger and advances anyway; an `escalate` ends the run as `blocked` at Stage 6 rather than `complete`. The reloop edge re-runs the story only while turn and token budget remain — once exhausted, a FAIL becomes an escalate.
 
 ### Stage 1 — Ingest & Scope
 
@@ -40,6 +83,29 @@ Drive each in-scope story from its red-phase tests to a green, committed state. 
 ### Stage 5 — Gate
 
 Decide whether a story (or, after the last story, the Epic) advances — by a deterministic artifact read. In production, the skill first backfills the evidence in order — `bmad-testarch-automate`, `bmad-testarch-trace` (which writes the gate decision), `bmad-testarch-nfr` — then runs `gate_eval.py`. The script reads TEA's `gate-decision.json` and returns a verdict the skill executes: `advance` (move to the next story), `defer` (append non-blocking items to the ledger and advance anyway), `reloop` (run `bmad-correct-course`, re-run the story within the remaining budget), or `escalate` (stop). The invariant: **a P0/critical FAIL never defers** — it re-loops within budget or escalates. See the [gate model](gate-model.md) and [`references/gate.md`](../skills/ultracode-goal/references/gate.md).
+
+This is how the verdict is read deterministically — the conductor never grades the work itself, it runs the script and routes on what comes back:
+
+```mermaid
+sequenceDiagram
+    participant C as Conductor
+    participant TEA as TEA trace
+    participant G as gate_eval.py
+    participant F as gate-decision.json
+    C->>TEA: bmad-testarch-trace writes gate decision
+    C->>G: run gate_eval.py --trace-output DIR
+    G->>F: resolve and read slim file
+    alt slim file absent
+        G->>F: fall back to e2e-trace-summary.json
+    end
+    F-->>G: gate_status
+    Note over G: PASS or WAIVED to advance, CONCERNS to defer, FAIL to reloop, NOT_EVALUATED to escalate
+    Note over G: production only — NFR FAIL or review lt 80 or Block downgrades advance to reloop
+    G-->>C: verdict + reasons JSON
+    C->>C: route the verdict advance / defer / reloop / escalate
+```
+
+The production AND fails closed: a missing or unparseable `nfr-assessment.md` or `test-review.md` is treated as a failing signal, so an otherwise-`advance` story downgrades to `reloop` rather than advancing on evidence the script could not read.
 
 ### Stage 6 — Finalize
 

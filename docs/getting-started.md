@@ -1,4 +1,7 @@
-# Getting Started
+---
+title: Getting Started
+description: Install UltraCode Goal, point it at a BMAD Epic, and walk the first autonomous run from install through preflight, gate, and run report.
+---
 
 Install UltraCode Goal into a BMAD project, point it at an Epic, and let it run that Epic to a gate-passed Definition-of-Done. This page covers prerequisites, install, the first-run walkthrough, and the run-mode flags.
 
@@ -35,6 +38,32 @@ Invoke the skill with one of its trigger phrases — "run an epic autonomously",
 3. **The launch briefing.** On an attended run, before the first unattended action the skill prints a one-screen briefing: what is about to run, the worst-case turn envelope, the autonomy line ("from here I will not ask you anything"), the kill switch (Ctrl-C, or delete the Epic branch — `/rewind` will not help), and where to watch (the run's `.decision-log.md` and `run-status.json`). One soft confirm crosses the line.
 
 From there the run is autonomous: it defines done with TEA, executes each story to a green commit, gates each one deterministically, and finalizes with a run report and the deferred-work ledger. See [how it works](how-it-works.md) for the full stage-by-stage narration.
+
+The whole first run, from install to run report, with the two points where it can refuse to launch and the verdict that decides each story:
+
+```mermaid
+flowchart TD
+    I["npx install"] --> A["Activate skill via trigger phrase"]
+    A --> N["Stage 1: name the Epic"]
+    N --> BMAD{"BMAD project?"}
+    BMAD -->|"no"| STOP1["Stop: point at setup skills"]
+    BMAD -->|"yes"| PF["Stage 2: preflight check then auto-remediate ambers"]
+    PF --> GATE{"Budget 0 and no red blocker?"}
+    GATE -->|"no"| STOP2["Stop: write blockers to decision log"]
+    GATE -->|"yes"| BRIEF["Arm branch, hooks, allowlist; launch briefing; one soft confirm"]
+    BRIEF --> RUN["Autonomous run: define done, execute each story to a green commit"]
+    RUN --> EVAL["Stage 5: gate_eval.py reads TEA gate-decision.json"]
+    EVAL --> V{"verdict"}
+    V -->|"advance"| NEXT["Next story, or finalize when last"]
+    V -->|"defer"| NEXT
+    V -->|"reloop"| RUN
+    V -->|"escalate"| STOP3["Stop: surface the blocker"]
+    NEXT --> RPT["Stage 6: run report and deferred-work ledger"]
+    class STOP1,STOP2,STOP3 stop
+    class RPT verdict
+    classDef stop fill:#9CA3AF,stroke:#6B7280,color:#fff
+    classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
+```
 
 ## Run-mode flags
 

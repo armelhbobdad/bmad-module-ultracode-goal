@@ -1,0 +1,82 @@
+---
+import { getSiteUrl } from '../lib/site-url.js';
+
+const SITE_URL = getSiteUrl();
+const fullDocsUrl = `${SITE_URL}/llms-full.txt`;
+---
+
+<div class="ai-banner">
+  <span class="banner-full">🤖 Consolidated, AI-readable UCG docs: <a href={fullDocsUrl}>llms-full.txt</a>. Fetch this plain text file for complete context.</span>
+  <span class="banner-short">🤖 AI-readable docs: <a href={fullDocsUrl}>llms-full.txt</a></span>
+</div>
+
+<style>
+  .ai-banner {
+    width: 100vw; /* Full viewport width */
+    margin-left: calc(-50vw + 50%); /* Center and break out of container */
+    height: var(--ai-banner-height, 2.75rem);
+    /* Theme-aware strip: indigo-tinted paper in light mode, deep indigo in dark */
+    background: var(--ucg-banner-bg, #e0e7ff); /* indigo-100 */
+    color: var(--ucg-banner-text, #3730a3); /* indigo-800 */
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    border-bottom: 1px solid var(--ucg-banner-border, rgba(79, 70, 229, 0.2));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    font-family: system-ui, sans-serif;
+  }
+
+  :global(:root[data-theme='dark']) .ai-banner {
+    --ucg-banner-bg: #1e1b4b; /* indigo-950 — deep, calm strip */
+    --ucg-banner-text: rgb(199, 210, 254); /* indigo-200 */
+    --ucg-banner-border: rgba(99, 102, 241, 0.25);
+  }
+
+  /* Truncate text on narrow screens */
+  .ai-banner span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  /* Swap to the short copy under 40rem so the link label never truncates away */
+  .banner-short {
+    display: none;
+  }
+  @media (max-width: 40rem) {
+    .banner-full {
+      display: none;
+    }
+    .banner-short {
+      display: inline;
+    }
+  }
+  .ai-banner a {
+    color: var(--ucg-banner-link, #4f46e5); /* indigo-600 on light */
+    text-decoration: none;
+    font-weight: 600;
+  }
+  :global(:root[data-theme='dark']) .ai-banner {
+    --ucg-banner-link: #a5b4fc; /* indigo-300 spark */
+  }
+  .ai-banner a:hover {
+    text-decoration: underline;
+  }
+
+  /* Match navbar padding at breakpoints */
+  @media (min-width: 50rem) {
+    .ai-banner {
+      padding-left: 2.5rem;
+      padding-right: 2.5rem;
+    }
+  }
+
+  @media (min-width: 72rem) {
+    .ai-banner {
+      padding-left: 3rem;
+      padding-right: 3rem;
+    }
+  }
+</style>

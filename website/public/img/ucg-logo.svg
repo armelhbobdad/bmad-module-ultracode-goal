@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="480" height="480" role="img" aria-labelledby="ucgTitle ucgDesc">
+  <title id="ucgTitle">UltraCode Goal</title>
+  <desc id="ucgDesc">Six stage nodes orbit a hexagonal gate; an autonomous conductor circles them, and the centre verdict reads PASS.</desc>
+  <defs>
+    <linearGradient id="gateGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#4F46E5"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#6366F1" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#6366F1" stop-opacity="0"/>
+    </radialGradient>
+    <path id="orbit" d="M 240 70 A 170 170 0 1 1 239.99 70.0003" fill="none"/>
+  </defs>
+
+  <!-- ambient glow -->
+  <circle cx="240" cy="240" r="232" fill="url(#glow)"/>
+
+  <!-- outer gate frame (hexagon) -->
+  <polygon points="240,15 434.9,127.5 434.9,352.5 240,465 45.1,352.5 45.1,127.5"
+           fill="none" stroke="url(#gateGrad)" stroke-width="10" stroke-linejoin="round" opacity="0.9"/>
+
+  <!-- orbit ring -->
+  <circle cx="240" cy="240" r="170" fill="none" stroke="#818CF8" stroke-opacity="0.35"
+          stroke-width="3" stroke-dasharray="2 12" stroke-linecap="round"/>
+
+  <!-- six stage nodes (Ingest, Preflight, Define Done, Execute, Gate, Finalize) -->
+  <g fill="#818CF8">
+    <circle cx="240" cy="70" r="11" opacity="0.5">
+      <animate attributeName="opacity" values="0.5;1;0.5;0.5" keyTimes="0;0.06;0.14;1" dur="9s" begin="0s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="387.2" cy="155" r="11" opacity="0.5">
+      <animate attributeName="opacity" values="0.5;1;0.5;0.5" keyTimes="0;0.06;0.14;1" dur="9s" begin="1.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="387.2" cy="325" r="11" opacity="0.5">
+      <animate attributeName="opacity" values="0.5;1;0.5;0.5" keyTimes="0;0.06;0.14;1" dur="9s" begin="3s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="240" cy="410" r="11" opacity="0.5">
+      <animate attributeName="opacity" values="0.5;1;0.5;0.5" keyTimes="0;0.06;0.14;1" dur="9s" begin="4.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="92.8" cy="325" r="11" opacity="0.5">
+      <animate attributeName="opacity" values="0.5;1;0.5;0.5" keyTimes="0;0.06;0.14;1" dur="9s" begin="6s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="92.8" cy="155" r="11" opacity="0.5">
+      <animate attributeName="opacity" values="0.5;1;0.5;0.5" keyTimes="0;0.06;0.14;1" dur="9s" begin="7.5s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- the autonomous conductor, circling the stages -->
+  <g>
+    <circle r="8" fill="#A5B4FC">
+      <animateMotion dur="9s" repeatCount="indefinite">
+        <mpath href="#orbit"/>
+      </animateMotion>
+    </circle>
+    <circle r="14" fill="none" stroke="#A5B4FC" stroke-opacity="0.45" stroke-width="2">
+      <animateMotion dur="9s" repeatCount="indefinite">
+        <mpath href="#orbit"/>
+      </animateMotion>
+    </circle>
+  </g>
+
+  <!-- inner gate -->
+  <polygon points="240,122 342.2,181 342.2,299 240,358 137.8,299 137.8,181"
+           fill="url(#gateGrad)" stroke="#4F46E5" stroke-width="4" stroke-linejoin="round"/>
+
+  <!-- the machine-checked verdict -->
+  <path d="M 193 248 L 226 281 L 291 203" fill="none" stroke="#FFFFFF"
+        stroke-width="20" stroke-linecap="round" stroke-linejoin="round"
+        stroke-dasharray="170" stroke-dashoffset="170">
+    <animate attributeName="stroke-dashoffset" from="170" to="0" dur="0.9s" begin="0.5s" fill="freeze"/>
+  </path>
+</svg>

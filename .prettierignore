@@ -5,6 +5,9 @@ CODE_OF_CONDUCT.md
 _bmad/
 _bmad*/
 
+# Documentation website (Astro project with its own toolchain)
+website/
+
 # Build output
 build/
 

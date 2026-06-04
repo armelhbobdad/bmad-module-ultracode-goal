@@ -1,25 +1,65 @@
-# UltraCode Goal
+---
+title: UltraCode Goal (UCG)
+description: Run a BMAD Epic autonomously to a machine-checked Definition-of-Done. Completion is a fact on disk — gate_eval.py reads PASS, never the model's say-so.
+template: splash
+hero:
+  title: UltraCode Goal
+  tagline: Run a BMAD Epic autonomously to a machine-checked Definition-of-Done.
+  image:
+    file: ./assets/ucg-logo.svg
+    alt: Six stage nodes orbit a hexagonal gate; the centre verdict reads PASS.
+  actions:
+    - text: Why UltraCode Goal?
+      link: ./why-ultracode-goal/
+      icon: right-arrow
+      variant: primary
+    - text: Install
+      link: ./getting-started/
+      icon: right-arrow
+      variant: secondary
+---
 
-Run a BMAD Epic autonomously to a machine-checked Definition-of-Done.
+## The problem
 
-`bmad-module-ultracode-goal` is a BMAD module **for Claude Code** — it composes `/goal`, Auto Mode, Auto Memory, and runtime hooks, so the autonomous run executes nowhere else. It delivers a single Epic end to end without a human in the loop — but only behind a hard preflight gate and a deterministic completion gate. It does not replace the BMAD epic toolbox or the Test Architect (TEA); it conducts them. The skill preflights the Epic to a remediated green light, turns acceptance criteria into executable red-phase tests with TEA, drives every in-scope story to a green commit on an isolated Epic branch, and advances only when `gate_eval.py` reads TEA's `gate-decision.json` as PASS — never on the model's own say-so, and never on the `/goal` transcript evaluator alone. The output is a delivered, gate-passed Epic, a run report, and a deferred-work ledger of anything safely parked for later.
+You hand an agent an epic and tell it to build until done. It runs, it commits, it declares victory. At review time you learn that "done" meant the model felt done — a story it wrote *about* the work, not a verdict *on* the work.
 
-## Documentation
+Autonomous runs that look done are not done. The thing deciding completion only ever sees the transcript; it cannot open the gate file written to disk. A model grading its own output is the weakest possible signal for a release gate, and by default it is the only signal you get.
 
-### Why
+## The fix
 
-- [Why UltraCode Goal](why-ultracode-goal.md) — the problem (autonomous runs that "look done" aren't), the three enforcement layers, and when not to use it.
+UltraCode Goal does not trust the transcript. It hard-gates the epic *before* launch and reads completion from a file *after* the work — three enforcement layers between "the agent stopped" and "the epic shipped":
 
-### Try
+- **A preflight gate that fails closed.** The run launches only when `preflight_check.py` returns green *after* its remediation pass, with the intervention budget at zero. A red blocker stops the run; it does not become a question for later.
+- **TEA red-phase tests as the Definition-of-Done.** The Test Architect turns each story's acceptance criteria into executable, failing tests *first*, so "done" is a measurable transition from red to green — not prose.
+- **A deterministic gate verdict.** A story advances only when `gate_eval.py` reads `PASS` from TEA's `gate-decision.json`. It never re-derives the thresholds and never asks the model. The verdict JSON is the truth, and you can read it yourself.
 
-- [Getting Started](getting-started.md) — prerequisites, install, the first-run walkthrough, and the flags table.
-- [How It Works](how-it-works.md) — the six stages narrated, the conditions that route between them, and the headless emit shape.
-- [Parallel Mode](parallel-mode.md) — the experimental `--parallel` worktree fan-out and its known limits.
+<div class="verdict-sample"><span class="verdict-sample__label">The completion verdict</span><code class="verdict-sample__chip">gate-decision.json → PASS</code><span class="verdict-sample__check" aria-label="machine-checked">✓</span></div>
 
-### Reference
+If the gate file is missing or unparseable, the contract counts it as a *failing* signal — prose drift degrades to a conservative re-loop, never a silent false-advance.
 
-- [Architecture](architecture.md) — the conductor model, the three enforcement layers in depth, the file layout, and customization resolution.
-- [Gate Model](gate-model.md) — how `gate_eval.py` maps TEA's gate status to a verdict, the thresholds, and the fail-closed contract.
-- [Health Check](health-check.md) — the terminal self-improvement reflection: what it sends, the privacy model, and how to disable it.
-- [Troubleshooting](troubleshooting.md) — real failure modes and their remediations.
-- [Stability](_internal/STABILITY.md) — the 0.x public-contract posture: what is covered by SemVer and what is `@internal`.
+<p class="cta-pill"><a href="./getting-started/">Install and run your first epic →</a></p>
+
+## What you get
+
+Completion stops being a feeling in the transcript and becomes a fact on disk. Every green story is one git commit on an isolated epic branch — rollback you can actually trust, not a checkpoint that misses Bash changes. The run ends with a delivered, gate-passed epic, a run report, and a deferred-work ledger of anything safely parked for later.
+
+## Read the rest
+
+The docs split into three buckets — **Why** (start here), **Try** (do stuff), and **Reference** (look things up).
+
+**Why**
+
+- [Why UltraCode Goal](./why-ultracode-goal.md) — the problem in depth, the three enforcement layers, and when not to use it.
+
+**Try**
+
+- [Getting Started](./getting-started.md) — prerequisites, install, the flags, and your first autonomous run.
+- [How It Works](./how-it-works.md) — the six stages, their routing conditions, and the headless emit shape.
+- [Parallel Mode](./parallel-mode.md) — the experimental worktree fan-out and its known limits.
+
+**Reference**
+
+- [Architecture](./architecture.md) — the conductor model, the enforcement layers in depth, and customization resolution.
+- [Gate Model](./gate-model.md) — how `gate_eval.py` maps `gate_status` to a verdict, the thresholds, and the fail-closed contract.
+- [Health Check](./health-check.md) — the terminal self-improvement reflection: what it sends, the privacy model, and how to disable it.
+- [Troubleshooting](./troubleshooting.md) — real failure modes and their remediations.
