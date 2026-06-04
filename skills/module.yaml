@@ -1,0 +1,12 @@
+code: ultracode-goal
+name: "UCG: UltraCode Goal — Autonomous Epic Execution"
+header: "Run a BMAD Epic autonomously to a deterministic, TEA-gated Definition-of-Done"
+subheader: "Preflight to a remediated green light, define done as executable tests, advance only on a machine-checked gate verdict"
+description: "Orchestrates the BMAD epic toolbox + TEA quality gates + Claude Code primitives (/goal, Auto Mode, Auto Memory, hooks, worktree isolation) to deliver an Epic unattended. Completion is decided by a deterministic gate_eval.py reading TEA's gate-decision.json — never the model's own judgment."
+default_selected: false
+
+# Repository that receives workflow health-check findings (fingerprint-deduped).
+# Override per project in _bmad/custom/ultracode-goal.toml if you fork the module.
+health_check_repo:
+  prompt: false
+  default: "armelhbobdad/bmad-module-ultracode-goal"
