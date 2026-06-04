@@ -8,6 +8,7 @@ const fs = require('fs-extra');
 const { spinner } = require('@clack/prompts');
 const yaml = require('js-yaml');
 const { installSkillsToIdes } = require('./ide-skills');
+const { registerHelpEntries } = require('./help-catalog');
 const { writeManifest } = require('./manifest');
 
 // Dev-only artifacts never shipped into a user's project
@@ -112,13 +113,27 @@ class Installer {
       }
     }
 
-    // Step 6: Write installation manifest
+    // Step 6: Register capabilities into the BMad help catalog so bmad-help
+    // can route to the module (anti-zombie upsert — idempotent on update)
+    let helpCatalog = null;
+    s.start('Registering with the BMad help catalog...');
+    try {
+      const skillAssets = path.join(this.srcDir, 'ultracode-goal', 'assets');
+      helpCatalog = await registerHelpEntries(projectDir, path.join(skillAssets, 'module-help.csv'), path.join(skillAssets, 'module.yaml'));
+      s.stop(`Help catalog updated (${helpCatalog.targets.join(', ')})`);
+    } catch (error) {
+      s.stop('Failed to register with the BMad help catalog');
+      throw error;
+    }
+
+    // Step 7: Write installation manifest
     s.start('Writing manifest...');
     try {
       const packageJson = require('../../../package.json');
       await writeManifest(projectDir, config, {
         version: packageJson.version,
         ideDirectories,
+        helpCatalog,
       });
       s.stop('Installation manifest saved');
     } catch (error) {
@@ -143,16 +158,21 @@ class Installer {
       return true;
     };
 
-    // Copy skill directories — each is a self-contained skill
+    // Copy skill directories — each is a self-contained skill.
+    // skills/reports/ is the BMad Builder's report output folder (a sibling
+    // of the skills, not skill content) — never ship it.
     const srcEntries = await fs.readdir(this.srcDir, { withFileTypes: true });
     for (const entry of srcEntries) {
-      if (entry.isDirectory()) {
+      if (entry.isDirectory() && entry.name !== 'reports') {
         await fs.copy(path.join(this.srcDir, entry.name), path.join(ucgDir, entry.name), { filter: copyFilter });
       }
     }
 
-    // Copy the module manifest
-    const moduleYaml = path.join(this.srcDir, 'module.yaml');
+    // Copy the module manifest. Source of truth lives inside the skill
+    // (skills/ultracode-goal/assets/module.yaml — the BMad standalone-module
+    // layout); a root-level copy is kept in the installed tree so existing
+    // consumers of {ucgFolder}/module.yaml keep working.
+    const moduleYaml = path.join(this.srcDir, 'ultracode-goal', 'assets', 'module.yaml');
     if (await fs.pathExists(moduleYaml)) {
       await fs.copy(moduleYaml, path.join(ucgDir, 'module.yaml'));
     }

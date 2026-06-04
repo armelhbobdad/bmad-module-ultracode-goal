@@ -122,9 +122,19 @@ async function testFreshInstall() {
     assert(!(await fs.pathExists(path.join(skillDir, '.analysis'))), '.analysis not shipped');
     assert(!(await fs.pathExists(path.join(skillDir, '.decision-log.md'))), '.decision-log.md not shipped');
     assert(!(await fs.pathExists(path.join(skillDir, 'scripts', '__pycache__'))), '__pycache__ not shipped');
+    assert(!(await fs.pathExists(path.join(ucgDir, 'reports'))), 'skills/reports/ (builder reports) not shipped');
 
     // Verify module.yaml and VERSION
     assert(await fs.pathExists(path.join(ucgDir, 'module.yaml')), 'module.yaml copied');
+    assert(await fs.pathExists(path.join(skillDir, 'assets', 'module.yaml')), 'standalone module.yaml travels inside the skill assets/');
+
+    // Verify help-catalog registration (bmad-help routing)
+    const catalogPath = path.join(projectDir, '_bmad/_config/bmad-help.csv');
+    assert(await fs.pathExists(catalogPath), 'bmad-help.csv created');
+    const catalogText = await fs.readFile(catalogPath, 'utf8');
+    assert(catalogText.includes('UltraCode Goal,ultracode-goal,'), 'catalog has the ultracode-goal capability row');
+    assert(catalogText.includes('UltraCode Goal,_meta,'), 'catalog has the module _meta row');
+    assert(!(await fs.pathExists(path.join(projectDir, '_bmad/module-help.csv'))), 'module-help.csv not created when absent');
     const versionPath = path.join(ucgDir, 'VERSION');
     assert(await fs.pathExists(versionPath), 'VERSION file written');
     const versionContent = (await fs.readFile(versionPath, 'utf8')).trim();
@@ -234,6 +244,91 @@ async function testUpdatePreservesConfig() {
   console.log('');
 }
 
+async function testHelpCatalogRegistration() {
+  console.log(`${colors.yellow}Test Suite 2b: Help Catalog Registration${colors.reset}\n`);
+
+  const projectDir = await makeTempDir('help-catalog');
+
+  // The assembled catalog header as the BMAD installer writes it
+  const catalogHeader =
+    'module,skill,display-name,menu-code,description,action,args,phase,preceded-by,followed-by,required,output-location,outputs';
+  const foreignRow =
+    'BMad Builder,bmad-module-builder,Validate Module,VM,"Check that a module\'s structure is complete.",validate-module,,anytime,,,false,bmad_builder_reports,validation report';
+
+  try {
+    const { Installer } = require('../tools/cli/lib/installer');
+    const { removeHelpEntries } = require('../tools/cli/lib/help-catalog');
+    const installer = new Installer();
+
+    // Seed a pre-existing BMad project: assembled catalog + module-help.csv
+    const catalogPath = path.join(projectDir, '_bmad/_config/bmad-help.csv');
+    await fs.ensureDir(path.dirname(catalogPath));
+    await fs.writeFile(catalogPath, `${catalogHeader}\n${foreignRow}\n`, 'utf8');
+    const moduleHelpPath = path.join(projectDir, '_bmad/module-help.csv');
+    await fs.writeFile(moduleHelpPath, `${catalogHeader}\n${foreignRow}\n`, 'utf8');
+
+    const config = {
+      projectDir,
+      ucgFolder: '_bmad/ucg',
+      project_name: 'help-catalog-test',
+      ides: [],
+      install_learning: false,
+      _action: 'fresh',
+    };
+
+    let restore = suppressConsole();
+    await installer.install(config);
+    restore();
+
+    let catalogText = await fs.readFile(catalogPath, 'utf8');
+    assert(catalogText.startsWith(catalogHeader), 'existing catalog header (preceded-by/followed-by) preserved');
+    assert(catalogText.includes('BMad Builder,'), 'foreign module rows preserved');
+    assert(catalogText.includes('UltraCode Goal,ultracode-goal,'), 'UCG capability row appended');
+
+    const moduleHelpText = await fs.readFile(moduleHelpPath, 'utf8');
+    assert(moduleHelpText.includes('UltraCode Goal,'), 'pre-existing module-help.csv also updated');
+    assert(moduleHelpText.includes('BMad Builder,'), 'module-help.csv foreign rows preserved');
+
+    // Re-install: anti-zombie keeps exactly one row set (no duplicates)
+    restore = suppressConsole();
+    await installer.install({ ...config, _action: 'update' });
+    restore();
+
+    catalogText = await fs.readFile(catalogPath, 'utf8');
+    const ucgRowCount = catalogText.split('\n').filter((l) => l.startsWith('UltraCode Goal,')).length;
+    assert(ucgRowCount === 2, 'reinstall keeps exactly one row set (_meta + capability)', `found ${ucgRowCount}`);
+
+    // Uninstall path: UCG rows removed, foreign rows survive
+    const touched = await removeHelpEntries(projectDir, ['UltraCode Goal']);
+    assert(touched.length === 2, 'uninstall touches both catalog targets', touched.join(', '));
+    catalogText = await fs.readFile(catalogPath, 'utf8');
+    assert(!catalogText.includes('UltraCode Goal,'), 'UCG rows removed from catalog on uninstall');
+    assert(catalogText.includes('BMad Builder,'), 'foreign rows survive uninstall');
+
+    // A catalog this module created alone (only UCG rows) is deleted outright
+    const soloDir = await makeTempDir('help-catalog-solo');
+    try {
+      restore = suppressConsole();
+      await installer.install({ ...config, projectDir: soloDir });
+      restore();
+      const soloCatalog = path.join(soloDir, '_bmad/_config/bmad-help.csv');
+      assert(await fs.pathExists(soloCatalog), 'solo install creates the catalog');
+      // A stray trailing blank line (hand-edited catalog) must not defeat deletion
+      await fs.appendFile(soloCatalog, '\n', 'utf8');
+      await removeHelpEntries(soloDir, ['UltraCode Goal']);
+      assert(!(await fs.pathExists(soloCatalog)), 'header-only catalog deleted on uninstall (despite blank line)');
+    } finally {
+      await fs.remove(soloDir);
+    }
+  } catch (error) {
+    assert(false, 'help catalog registration completes without error', error.message);
+  } finally {
+    await fs.remove(projectDir);
+  }
+
+  console.log('');
+}
+
 async function testUninstallCleansUp() {
   console.log(`${colors.yellow}Test Suite 3: Uninstall Cleanup${colors.reset}\n`);
 
@@ -270,6 +365,10 @@ async function testUninstallCleansUp() {
 
     // Simulate uninstall: remove all tracked files (mirrors uninstall.js logic without interactive prompt)
     restore = suppressConsole();
+
+    // Remove this module's help-catalog rows (mirrors uninstall.js)
+    const { removeHelpEntries } = require('../tools/cli/lib/help-catalog');
+    await removeHelpEntries(projectDir, manifest.help_catalog?.module_codes || []);
 
     // Remove IDE skill directories (directory-level cleanup, not file-by-file)
     for (const dir of manifest.directories || []) {
@@ -438,6 +537,17 @@ async function testManifestAccuracy() {
     assert(Array.isArray(manifest.directories), 'manifest has directories array');
     assert(manifest.directories.includes('_bmad/ucg'), 'directories includes UCG folder');
     assert(manifest.directories.includes('_ucg-learn'), 'directories includes learning material');
+
+    // Verify help-catalog registration record
+    assert(manifest.help_catalog !== null && typeof manifest.help_catalog === 'object', 'manifest records help_catalog');
+    assert(
+      Array.isArray(manifest.help_catalog.module_codes) && manifest.help_catalog.module_codes.includes('UltraCode Goal'),
+      'help_catalog records the module code',
+    );
+    assert(
+      Array.isArray(manifest.help_catalog.targets) && manifest.help_catalog.targets.length > 0,
+      'help_catalog records the touched targets',
+    );
   } catch (error) {
     assert(false, 'manifest accuracy test completes without error', error.message);
   } finally {
@@ -635,6 +745,7 @@ async function runTests() {
 
   await testFreshInstall();
   await testUpdatePreservesConfig();
+  await testHelpCatalogRegistration();
   await testUninstallCleansUp();
   await testIdeSkillInstallation();
   await testManifestAccuracy();

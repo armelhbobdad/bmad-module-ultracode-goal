@@ -35,6 +35,7 @@ skills/**/.decision-log.md
 skills/**/scripts/tests/
 skills/**/__pycache__/
 skills/**/.pytest_cache/
+skills/reports/
 
 # Python bytecode
 __pycache__/

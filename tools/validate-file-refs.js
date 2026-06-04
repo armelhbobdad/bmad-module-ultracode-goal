@@ -98,7 +98,9 @@ function escapeTableCell(str) {
 const INSTALL_ONLY_PATHS = ['_config/', '_memory/', 'agents/', 'scripts/', 'custom/', 'tea/', 'bmm/'];
 
 // Files that are generated at install time and don't exist in the source tree
-const INSTALL_GENERATED_FILES = ['config.yaml', 'config.user.yaml', 'VERSION', 'package.json'];
+// (module-help.csv / bmad-help.csv are help-catalog targets written into the
+// project by the installer or by assets/module-setup.md self-registration)
+const INSTALL_GENERATED_FILES = ['config.yaml', 'config.user.yaml', 'VERSION', 'package.json', 'module-help.csv', 'bmad-help.csv'];
 
 // Variables that indicate a path is not statically resolvable
 const UNRESOLVABLE_VARS = [

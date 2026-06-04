@@ -66,6 +66,9 @@ async function writeManifest(projectDir, config, options = {}) {
     ucg_folder: ucgFolder,
     ides: config.ides || [],
     directories: [ucgFolder, ...ideDirectories, ...(learnFiles.length > 0 ? ['_ucg-learn'] : [])],
+    // Help-catalog rows registered for bmad-help routing (removed row-wise on
+    // uninstall — the catalog files are shared, never deleted wholesale here)
+    help_catalog: options.helpCatalog || null,
     files: {
       ucg: ucgFiles,
       ide_skills: ideSkillFiles,
