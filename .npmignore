@@ -60,3 +60,6 @@ node_modules/
 *.log
 .env
 .env.*
+
+# Browser-automation session artifacts (screenshots, snapshots)
+.playwright-mcp/
