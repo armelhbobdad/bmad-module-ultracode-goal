@@ -139,6 +139,49 @@ _SOURCE_CITATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A vacuous AC asserts a condition that holds no matter what the code does — a
+# tautology (assert True / 1 == 1 / x == x), a "passes regardless of"/"always
+# passes" claim, or an assertion with no observable subject. It is the first
+# Epic-11 JUDGMENT floor class: the kernel can DETECT the tautological SHAPE but
+# cannot decide what the AC SHOULD assert instead, so it is NEVER auto-remediable
+# (Story 1.2 floor AC1; INV-5). Keys on the vacuous SHAPE, never on mere presence
+# of an assertion (the vacuous_ac_sound twin carries a real deterministic AC and
+# must not fire).
+_VACUOUS_AC_RE = re.compile(
+    r"\bassert\s+True\b|"
+    r"\bassert\s+1\s*==\s*1\b|"
+    r"\bassert\s+(\w+)\s*==\s*\1\b|"
+    r"passes?\s+(?:no\s+matter|regardless\s+of|whatever|always)\b|"
+    r"\balways\s+passes\b|"
+    r"\bno\s+matter\s+what\s+the\s+code\b|"
+    r"\btautolog",
+    re.IGNORECASE,
+)
+
+# A citation token: an AC/trace row pointing at a verification artifact, a story,
+# or an FR/NFR id that must be DECLARED somewhere in the resolved set. Captures
+# the dangling reference token for the orphaned-index finding detail. Keys on an
+# explicit `traces:`/`Covers:`/`verifies:` index row so a plain prose mention is
+# not a citation (the orphaned_index_resolved twin declares the cited id and must
+# not fire).
+_INDEX_CITATION_RE = re.compile(
+    r"(?:traces?|covers?|verifies|verified\s+by|index)\s*[:\-]\s*"
+    r"([\w][\w./:-]*(?:\s*,\s*[\w][\w./:-]*)*)",
+    re.IGNORECASE,
+)
+
+# A reference token that LOOKS like a story / FR / verification id worth resolving
+# against the declared set (story keys, FR/NFR ids, test::node pointers). A bare
+# English word is not an index token.
+_INDEX_TOKEN_RE = re.compile(
+    r"^(?:(?:FR|NFR|ADR|AD|INV|R)-?\d+|"
+    r"\d+-\d+[\w-]*|"
+    r"[\w./-]+::[\w-]+|"
+    r"[\w./-]+\.py(?:::[\w-]+)?|"
+    r"STORY-[\w-]+|VER-[\w-]+)$",
+    re.IGNORECASE,
+)
+
 # A check-shaped condition that signals a detectable-but-unclassified anomaly the
 # kernel must NOT silently pass (AD-1 no-dark-pass catch-all). A story / AC line
 # may opt a fixture into this lane with an explicit, machine-detectable marker
@@ -147,6 +190,16 @@ _UNCLASSIFIED_SIGNAL_RE = re.compile(r"UCG-UNCLASSIFIED-SIGNAL", re.IGNORECASE)
 
 # The reserved catch-all sentinel kind (Story 1.2 floor AC6 reuses this).
 UNCLASSIFIED_KIND = "unclassified_signal"
+
+# The two Epic-11 JUDGMENT-floor classes that are NEVER machine-clearable
+# (INV-5): a vacuous AC the kernel cannot rewrite, and an invented NFR threshold
+# the kernel cannot source. This is the human-authored frozen classification (the
+# preflight_check.py:411-457 `remediable` literal convention, here as a
+# never-remediable allow-list): these kinds are emitted ONLY as judgment
+# candidates and carry NO `remediable=True` path anywhere in this file. Authored
+# as single-quoted string literals so the Story 1.2 AC5b source-grep pins the
+# floor classification and a mutation re-tagging either as remediable is caught.
+NEVER_REMEDIABLE_JUDGMENT_KINDS = frozenset({'vacuous_ac', 'invented_nfr_threshold'})
 
 
 def _safe_read_text(path: Path) -> str | None:
@@ -341,6 +394,69 @@ def _ac_is_machine_checkable(block: str) -> bool:
     return bool(_MACHINE_CHECKABLE_RE.search(block))
 
 
+# --- declared-id index (orphaned-index resolution) ---------------------------
+
+# An id DECLARED by a story/test/PRD: an FR/NFR id, a story key, a test::node,
+# a .py test file, or an explicit STORY-/VER- token. The orphaned-index check
+# resolves every CITED index token against this declared set; a citation with no
+# declaration is the dangling never-green reference.
+_FR_DECL_RE = re.compile(r"\b((?:FR|NFR|ADR|AD|INV|R)-?\d+)\b", re.IGNORECASE)
+_VER_DECL_RE = re.compile(
+    r"\b([\w./-]+::[\w-]+|[\w./-]+\.py(?:::[\w-]+)?|STORY-[\w-]+|VER-[\w-]+)\b",
+    re.IGNORECASE,
+)
+
+
+def _norm_id(token: str) -> str:
+    """Canonicalize an id token for set membership (case + dash-insensitive)."""
+    return token.strip().lower().replace("-", "").rstrip(".")
+
+
+def _collect_declared_ids(
+    story_bodies: dict[str, str], story_keys: list[str], prd_text: str | None
+) -> set[str]:
+    """The set of ids any story / test / PRD in the resolved set DECLARES.
+
+    Sources: the not-done story keys themselves, every story-key-shaped filename
+    stem, every FR/NFR/ADR id mentioned anywhere in a story or the PRD, and every
+    test::node / .py / STORY- / VER- pointer named in a story body. The
+    orphaned-index check resolves citations against THIS set (the
+    orphaned_index_resolved twin declares its cited id here and so does not fire).
+    """
+    declared: set[str] = set()
+    for key in story_keys:
+        declared.add(_norm_id(key))
+    for rel, body in story_bodies.items():
+        # The story file stem (e.g. 1-2-floor) is a declared story id.
+        stem = Path(rel).stem
+        declared.add(_norm_id(stem))
+        for match in _FR_DECL_RE.finditer(body):
+            declared.add(_norm_id(match.group(1)))
+        for match in _VER_DECL_RE.finditer(body):
+            declared.add(_norm_id(match.group(1)))
+    if prd_text:
+        for match in _FR_DECL_RE.finditer(prd_text):
+            declared.add(_norm_id(match.group(1)))
+    return declared
+
+
+def _cited_index_tokens(block: str) -> list[str]:
+    """The index-citation tokens an AC/trace row declares it TRACES/COVERS.
+
+    Only an explicit `traces:`/`covers:`/`verifies:`/`index:` row counts (not a
+    prose mention), and only tokens shaped like a story/FR/verification id are
+    returned (a bare English word is dropped). Keeps the check keyed on a real
+    dangling INDEX reference, not on every citation.
+    """
+    tokens: list[str] = []
+    for match in _INDEX_CITATION_RE.finditer(block):
+        for raw in match.group(1).split(","):
+            tok = raw.strip()
+            if tok and _INDEX_TOKEN_RE.match(tok):
+                tokens.append(tok)
+    return tokens
+
+
 # --- TEA artifact location ---------------------------------------------------
 
 
@@ -480,6 +596,20 @@ def build_verdict(
     ac_anti_vacuous_twins = 0
     stories_with_gate_tag = 0
     nfr_thresholds_unsourced = 0
+    orphaned_indices = 0
+
+    # Pre-pass: read every story body once and build the DECLARED-id set the
+    # orphaned-index check resolves citations against (story keys, story-file
+    # stems, FR/NFR ids, test::node pointers in any story + the PRD). A citation
+    # to an id absent from this set is the dangling never-green reference (Story
+    # 1.2 floor AC3). Unreadable bodies are handled in the main loop below.
+    story_bodies: dict[str, str] = {}
+    for story_path in story_paths:
+        body = _safe_read_text(story_path)
+        if body is not None:
+            story_bodies[_rel(story_path, project_root)] = body
+    prd_text = _safe_read_text(prd_path) if prd_path is not None else None
+    declared_ids = _collect_declared_ids(story_bodies, story_keys, prd_text)
 
     for story_path in story_paths:
         body = _safe_read_text(story_path)
@@ -562,6 +692,67 @@ def build_verdict(
                         }
                     )
 
+            # Vacuous AC (Epic-11 floor class 1): an assertion that holds no
+            # matter what the code does (a tautology / "passes regardless"). The
+            # kernel detects the vacuous SHAPE but cannot decide what the AC
+            # SHOULD assert instead -> JUDGMENT, NEVER auto-remediable (AD-1 /
+            # INV-5). Emitted ONLY as a judgment_candidate (frozen: no remediable
+            # path for this kind anywhere in this file).
+            for vac_line_no, vac_line in enumerate(block.splitlines(), start=line_no):
+                if _VACUOUS_AC_RE.search(vac_line):
+                    judgment_candidates.append(
+                        {
+                            "source": "%s:%d" % (rel, vac_line_no),
+                            "kind": "vacuous_ac",
+                            "why_machine_cannot_decide": "Acceptance criterion "
+                            "asserts a tautology that passes regardless of the "
+                            "code under test; the kernel cannot decide what the "
+                            "AC should assert instead.",
+                        }
+                    )
+
+            # Orphaned never-green index (Epic-11 floor class 3): an AC/trace row
+            # CITES a verification/story/FR id that no story or test in the
+            # resolved set DECLARES, so it can never go green. A regenerable
+            # story/AC is a MECHANICAL gap (remediable: True via bmad-create-story,
+            # AD-1); an un-regenerable reference defaults to JUDGMENT (fail-closed,
+            # INV-4). The dangling token is carried verbatim in the detail.
+            for orph_line_no, orph_line in enumerate(block.splitlines(), start=line_no):
+                for token in _cited_index_tokens(orph_line):
+                    if _norm_id(token) in declared_ids:
+                        continue
+                    orphaned_indices += 1
+                    osrc = "%s:%d" % (rel, orph_line_no)
+                    # A story/AC reference (an N-M story key) is regenerable from
+                    # canonical scaffold -> MECHANICAL move; any other dangling
+                    # index reference is un-regenerable -> JUDGMENT (default).
+                    regenerable = bool(re.match(r"^\d+-\d+", token))
+                    if regenerable:
+                        mechanical_gaps.append(
+                            {
+                                "id": "orphaned_index:%s" % osrc,
+                                "kind": "orphaned_index",
+                                "severity": "high",
+                                "detail": "AC/trace row cites a story/AC id no "
+                                "story or test declares: %s" % token,
+                                # A missing-but-regenerable story/AC stub is
+                                # machine-derivable (bmad-create-story, AD-1).
+                                "remediable": True,
+                                "source": osrc,
+                            }
+                        )
+                    else:
+                        judgment_candidates.append(
+                            {
+                                "source": osrc,
+                                "kind": "orphaned_index",
+                                "why_machine_cannot_decide": "AC/trace row cites "
+                                "a verification/FR id no story or test declares "
+                                "(%s); the kernel cannot decide what it should "
+                                "resolve to." % token,
+                            }
+                        )
+
             # No-dark-pass catch-all: a detectable check-shaped signal the kernel
             # has no human-authored classification for defaults to JUDGMENT
             # (AD-1, INV-6/INV-4).
@@ -633,7 +824,7 @@ def build_verdict(
         "ac_machine_checkable_ratio": ac_machine_checkable_ratio,
         "ac_with_named_verification": ac_with_named_verification,
         "ac_anti_vacuous_twins": ac_anti_vacuous_twins,
-        "orphaned_indices": 0,
+        "orphaned_indices": orphaned_indices,
         "tea_artifacts_in_source": tea_artifacts_in_source,
         "nfr_thresholds_unsourced": nfr_thresholds_unsourced,
         "gate_ability_tag_coverage": gate_ability_tag_coverage,
