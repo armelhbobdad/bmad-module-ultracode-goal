@@ -1,0 +1,4 @@
+---
+name: ucg-formalize
+description: A standalone /ucg-formalize <epic> readiness verdict. Use when an operator runs /ucg-formalize.
+---
