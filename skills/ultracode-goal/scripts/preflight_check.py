@@ -16,7 +16,8 @@ mechanically true right now.
 What counts as a mechanical blocker (each adds 1 to `budget`):
   - the Claude Code primitives needed for an unattended run are below the
     minimum versions the run depends on (`/goal`, dynamic workflows, auto memory),
-  - the test framework is not scaffolded (no playwright/cypress/jest config),
+  - no test framework is detected (no playwright/cypress/jest/vitest config,
+    no pytest config/conftest.py, and no real package.json `test` script),
   - the working tree is dirty (a per-green-story commit needs a clean base),
   - the current branch is a protected branch (the epic must run on its own branch).
 
@@ -63,7 +64,10 @@ MIN_GOAL = (2, 1, 139)
 MIN_WORKFLOWS = (2, 1, 154)
 MIN_AUTOMEMORY = (2, 1, 59)
 
-# Filenames that signal a scaffolded test framework (playwright / cypress / jest).
+# Root-level config filenames that signal a scaffolded JS/browser test framework
+# (playwright / cypress / jest / vitest). Pytest and npm-driven harnesses are
+# detected separately in _detect_framework — a config file is only one of the
+# shapes a real test framework takes.
 FRAMEWORK_MARKERS = (
     "playwright.config.ts",
     "playwright.config.js",
@@ -205,12 +209,80 @@ def _tea_artifacts_root(project_root: Path, tea_flags: dict) -> Path:
     return project_root / "_bmad-output" / "test-artifacts"
 
 
-def _framework_present(project_root: Path) -> bool:
-    """A framework config at the project root signals a scaffolded test framework."""
+# The npm-init placeholder `test` script ("...no test specified..."); not a real harness.
+_NPM_TEST_PLACEHOLDER = "no test specified"
+
+
+def _safe_read_text(path: Path) -> str:
+    """Read a file as UTF-8, returning "" on any OS error (missing, unreadable)."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _pytest_present(project_root: Path) -> bool:
+    """True when the project root carries a pytest config, conftest, or [pytest] table."""
+    if (project_root / "pytest.ini").is_file():
+        return True
+    if (project_root / "conftest.py").is_file():
+        return True
+    tox = project_root / "tox.ini"
+    if tox.is_file() and "[pytest]" in _safe_read_text(tox):
+        return True
+    setup_cfg = project_root / "setup.cfg"
+    if setup_cfg.is_file() and "[tool:pytest]" in _safe_read_text(setup_cfg):
+        return True
+    pyproject = project_root / "pyproject.toml"
+    if pyproject.is_file() and "[tool.pytest" in _safe_read_text(pyproject):
+        return True
+    return False
+
+
+def _npm_test_script(project_root: Path) -> bool:
+    """True when package.json has a real `test` script (not the npm-init placeholder)."""
+    pkg = project_root / "package.json"
+    if not pkg.is_file():
+        return False
+    try:
+        data = json.loads(pkg.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    scripts = data.get("scripts")
+    script = scripts.get("test") if isinstance(scripts, dict) else None
+    if not isinstance(script, str) or not script.strip():
+        return False
+    return _NPM_TEST_PLACEHOLDER not in script
+
+
+def _detect_framework(project_root: Path) -> str | None:
+    """Identify the project's test harness, returning its kind or None.
+
+    Returns "js-config" (a scaffolded playwright/cypress/jest/vitest config),
+    "pytest" (a pytest config or root conftest), or "npm-test" (a package.json
+    with a real `test` script) — whichever is found first, in that order — and
+    None when no harness is recognized.
+
+    Detection is deliberately broad. The gate asks "does this project have a
+    test framework the unattended run can target?", and a pytest or npm-driven
+    harness answers yes just as a browser-E2E config does. A pure-Python or
+    CLI/markdown module has no playwright.config, so flagging it
+    "framework absent" was a false-positive no remediation could honestly
+    clear — the blocker could only be satisfied by scaffolding an
+    inappropriate browser harness. (Note: this answers *presence*, not
+    *fitness* — TEA's ATDD/automate flow still assumes a browser/E2E stack;
+    that fitness gap is tracked separately.)
+    """
     for marker in FRAMEWORK_MARKERS:
         if (project_root / marker).is_file():
-            return True
-    return False
+            return "js-config"
+    if _pytest_present(project_root):
+        return "pytest"
+    if _npm_test_script(project_root):
+        return "npm-test"
+    return None
 
 
 def _test_artifacts_dirs(artifacts_root: Path) -> dict:
@@ -365,7 +437,8 @@ def build_report(
     tea_flags = _read_toml_or_yaml_flags(tea_config)
     artifacts_root = _tea_artifacts_root(project_root, tea_flags)
 
-    framework_present = _framework_present(project_root)
+    framework_kind = _detect_framework(project_root)
+    framework_present = framework_kind is not None
     test_artifacts_dirs = _test_artifacts_dirs(artifacts_root)
     sprint_status_present = _sprint_status_present(project_root, impl_artifacts)
     project_context_count = _project_context_count(project_root)
@@ -378,6 +451,7 @@ def build_report(
         "git_branch": git_branch,
         "git_clean": git_clean,
         "framework_present": framework_present,
+        "framework_kind": framework_kind,
         "test_artifacts_dirs": test_artifacts_dirs,
         "sprint_status_present": sprint_status_present,
         "project_context_count": project_context_count,
@@ -418,8 +492,10 @@ def build_report(
                 "id": "framework_present",
                 "kind": "framework",
                 "severity": "medium",
-                "detail": "No test framework config found at project root "
-                "(playwright/cypress/jest/vitest). ATDD halts without one.",
+                "detail": "No test framework detected at project root "
+                "(looked for a playwright/cypress/jest/vitest config, a pytest "
+                "config or conftest.py, or a package.json `test` script). "
+                "ATDD halts without one.",
                 # Remediation pass scaffolds via bmad-testarch-framework.
                 "remediable": True,
             }
