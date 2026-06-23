@@ -22,3 +22,7 @@ skills/**/.analysis/
 
 # Workflow-script dialect (top-level await + return) — not standard JS
 skills/**/assets/*.workflow.js
+
+# Test fixtures — hand-crafted artifact sets (some deliberately malformed) that
+# must stay byte-exact for the fail-closed / deterministic kernel tests.
+skills/**/scripts/tests/fixtures/
