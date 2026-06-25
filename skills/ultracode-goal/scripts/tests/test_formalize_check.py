@@ -8,7 +8,7 @@
 Covers the six acceptance criteria against the six fixtures under
 tests/fixtures/formalize/: exact schema + exit-0-on-payload (and exit-2 on
 an invocation error), fail-closed on unreadable artifacts, per-item budget with
-no ratio cutoff (plus the grep static guard), the no-dark-pass
+no ratio cutoff (plus the static guard), the no-dark-pass
 unclassified-signal -> JUDGMENT catch-all, Stage-1 resolution + stdlib-only
 (plus the ast.walk + PEP-723 guards), and self-explaining + deterministic
 output.
@@ -230,19 +230,16 @@ def test_budget_is_per_item_count_no_cutoff():
             assert isinstance(gap["remediable"], bool)
 
     # Static guard: no ratio-vs-cutoff comparison / float-threshold constant
-    # exists in the script. The grep returning a match (exit 0) FAILS.
-    grep = subprocess.run(
-        [
-            "grep",
-            "-nE",
-            r"([<>]=?|==)\s*0?\.[0-9]|ratio\s*[<>]",
-            str(SCRIPT),
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert grep.returncode == 1, (
-        "the no-cutoff grep guard found a ratio cutoff in formalize_check.py:\n" + grep.stdout
+    # exists in the script. Scanned with Python's re (not a shelled-out grep) so
+    # the guard is deterministic across platforms; any match FAILS.
+    cutoff_re = re.compile(r"([<>]=?|==)\s*0?\.[0-9]|ratio\s*[<>]")
+    cutoff_hits = [
+        f"{lineno}:{line}"
+        for lineno, line in enumerate(SCRIPT.read_text(encoding="utf-8").splitlines(), 1)
+        if cutoff_re.search(line)
+    ]
+    assert not cutoff_hits, (
+        "the no-cutoff guard found a ratio cutoff in formalize_check.py:\n" + "\n".join(cutoff_hits)
     )
 
 

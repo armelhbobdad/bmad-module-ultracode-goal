@@ -1381,7 +1381,10 @@ function parseTomlViaPython(tomlPath) {
 function serializeTomlViaPython(obj) {
   const { spawnSync } = require('node:child_process');
   const code = ['import json, sys, tomli_w', 'data = json.load(sys.stdin)', 'sys.stdout.write(tomli_w.dumps(data))'].join('\n');
-  const proc = spawnSync('uv', ['run', '--with', 'tomli-w', 'python3', '-c', code], {
+  // `python` (not `python3`): uv's ephemeral env exposes `python`, and on
+  // Windows there is no `python3` in it — `python3` would fall through to a
+  // different interpreter that lacks the `--with tomli-w` package.
+  const proc = spawnSync('uv', ['run', '--with', 'tomli-w', 'python', '-c', code], {
     encoding: 'utf8',
     input: JSON.stringify(obj),
   });
