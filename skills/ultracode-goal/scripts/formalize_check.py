@@ -496,7 +496,7 @@ def _tea_trace_output_root(tea_config: Path, project_root: Path) -> Path | None:
 
 
 def _leaked_tea_artifacts(
-    impl_artifacts: Path, trace_root: Path | None, project_root: Path
+    impl_artifacts: Path, trace_root: Path | None
 ) -> list[Path]:
     """TEA-shaped artifacts found under the impl/source tree (the wrong root).
 
@@ -792,7 +792,7 @@ def build_verdict(
 
     # --- TEA leak check (location classification, reader-only) ---
     trace_root = _tea_trace_output_root(tea_config, project_root)
-    leaked = _leaked_tea_artifacts(impl_artifacts, trace_root, project_root)
+    leaked = _leaked_tea_artifacts(impl_artifacts, trace_root)
     tea_artifacts_in_source = len(leaked)
     for path in leaked:
         rel = _rel(path, project_root)
