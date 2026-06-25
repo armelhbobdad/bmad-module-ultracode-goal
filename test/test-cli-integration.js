@@ -1321,6 +1321,483 @@ async function testStep6bDeclineNoOp() {
 }
 
 // ============================================================
+// Test Suite 8c: Anti-zombie reinstall integration test (Story 1.10)
+// ============================================================
+//
+// Drives the REAL installer reinstall PATH end-to-end — installer.install()
+// with _action='update', which runs `fs.remove(ucgDir)` (installer.js:50, skill
+// tree only) then copySrcFiles then the gated Step-6b UCG-awareness merge —
+// N>=3 times against a temp project, and asserts the injected persistent_facts
+// content stays byte-stable in the un-wiped _bmad/custom/ overlay (FR-9/NFR-4/
+// R7/INV-10). DISTINCT from Suite 8's AC5 (a single byte-identical reinstall)
+// and from the merge_customization.py UNIT idempotency test (story 1.5): this
+// proves the FR-9 fs.remove-then-recopy flow does not zombie-duplicate, refresh
+// a stale [ucg].version, or clobber human content across N installer runs.
+//
+// Framework note: there is no Vitest in this repo (the story spec's
+// "Vitest/Node" file is corrected); this is a plain node Suite wired into the
+// existing `npm run test:cli`, using the same assert()/suppressConsole()/temp-
+// project/seedEngine/seedSkills helpers as Suite 8.
+
+const REINSTALL_FRAGMENTS_DIR = path.join(REPO_ROOT, 'skills', 'ultracode-goal', 'assets', 'ucg-awareness');
+// The per-directive id marker carried by every UCG-stamped persistent_facts
+// string, e.g. "[ucg:bmad-prd-01]" — same shape as merge_customization.py's
+// UCG_MARKER. Count/strip/match assertions key off THIS marker + the [ucg]
+// stamp, never off a per-item version (which AD-2 does not define).
+const UCG_ITEM_MARKER = /\[ucg:[a-z0-9-]+-\d+\]/;
+
+/**
+ * Parse a TOML file via python3's stdlib tomllib and return the JS object.
+ * Fail-CLOSED (INV-4 / fail-loud, mirrors gate_eval.py:201-203 posture): a
+ * non-zero exit, an unreadable/garbled file, or unparseable JSON THROWS — never
+ * silently returns {} — so an absent/garbled overlay can never make a byte-
+ * stability assertion trivially true.
+ */
+function parseTomlViaPython(tomlPath) {
+  const { spawnSync } = require('node:child_process');
+  const code = [
+    'import tomllib, json, sys',
+    'p = sys.argv[1]',
+    'with open(p, "rb") as fh:',
+    '    data = tomllib.load(fh)',
+    'sys.stdout.write(json.dumps(data))',
+  ].join('\n');
+  const proc = spawnSync('python3', ['-c', code, tomlPath], { encoding: 'utf8' });
+  if (proc.status !== 0) {
+    throw new Error(`parseTomlViaPython failed (status=${proc.status}) for ${tomlPath}: ${(proc.stderr || '').trim()}`);
+  }
+  try {
+    return JSON.parse(proc.stdout);
+  } catch (error) {
+    throw new Error(`parseTomlViaPython got unparseable JSON for ${tomlPath}: ${error.message}`);
+  }
+}
+
+/**
+ * Serialize a JS object to TOML text via tomli-w (the same writer
+ * merge_customization.py uses), so fixtures round-trip byte-cleanly through
+ * tomllib. Runs `uv run --with tomli-w` (uv is the merge tool's own runner).
+ * Throws on any non-zero exit (fail-loud fixture setup, not a silent skip).
+ */
+function serializeTomlViaPython(obj) {
+  const { spawnSync } = require('node:child_process');
+  const code = ['import json, sys, tomli_w', 'data = json.load(sys.stdin)', 'sys.stdout.write(tomli_w.dumps(data))'].join('\n');
+  const proc = spawnSync('uv', ['run', '--with', 'tomli-w', 'python3', '-c', code], {
+    encoding: 'utf8',
+    input: JSON.stringify(obj),
+  });
+  if (proc.status !== 0) {
+    throw new Error(`serializeTomlViaPython failed (status=${proc.status}): ${(proc.stderr || '').trim()}`);
+  }
+  return proc.stdout;
+}
+
+/** workflow.persistent_facts as an array (fail-closed: throws if not an array). */
+function persistentFacts(parsed) {
+  const facts = parsed?.workflow?.persistent_facts;
+  if (!Array.isArray(facts)) {
+    throw new TypeError(`expected workflow.persistent_facts array, got ${JSON.stringify(facts)}`);
+  }
+  return facts;
+}
+
+/** The UCG-stamped subset: persistent_facts strings carrying a [ucg:<id>] marker. */
+function stampedItems(facts) {
+  return facts.filter((f) => typeof f === 'string' && UCG_ITEM_MARKER.test(f));
+}
+
+/** The non-UCG (human-owned) subset: facts with NO [ucg:<id>] marker. */
+function nonStampedItems(facts) {
+  return facts.filter((f) => typeof f !== 'string' || !UCG_ITEM_MARKER.test(f));
+}
+
+/** Count UCG-stamped persistent_facts items. */
+function countStampedItems(facts) {
+  return stampedItems(facts).length;
+}
+
+/** Read the shipped fragment's items + block-level [ucg].version (source of truth). */
+function readFragment(skill) {
+  const parsed = parseTomlViaPython(path.join(REINSTALL_FRAGMENTS_DIR, `${skill}.toml`));
+  const items = Array.isArray(parsed.persistent_facts) ? parsed.persistent_facts : [];
+  const version = parsed.ucg?.version;
+  return { items, version, count: items.length };
+}
+
+/** sha256 of a file's raw bytes. */
+async function sha256File(filePath) {
+  const crypto = require('node:crypto');
+  return crypto
+    .createHash('sha256')
+    .update(await fs.readFile(filePath))
+    .digest('hex');
+}
+
+function jsonEqual(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Twins are guarded negative paths: skip-by-default, opt in via env flag so
+// each assertion is proven to FLAG a hollow implementation (the predicate is
+// discriminating, not vacuously satisfied by a no-op installer). They mutate an
+// in-memory copy of the REAL post-install parse to model a hollow merge, then
+// assert the AC's predicate catches the mutant.
+const TWINS_ENABLED = process.env.UCG_REINSTALL_TWINS === '1';
+
+async function twin(name, fn) {
+  if (!TWINS_ENABLED) {
+    console.log(`${colors.dim}  ↳ twin skipped (set UCG_REINSTALL_TWINS=1): ${name}${colors.reset}`);
+    return;
+  }
+  await fn();
+}
+
+async function testReinstallAntiZombie() {
+  console.log(`${colors.yellow}Test Suite 8c: Anti-zombie reinstall (Story 1.10)${colors.reset}\n`);
+
+  const { Installer } = require('../tools/cli/lib/installer');
+  const SKILL = 'bmad-prd'; // a targeted Epic-1 planning fragment with a real overlay
+  const N = 3; // N>=3 consecutive installer-driven reinstalls
+  const fragment = readFragment(SKILL);
+
+  // Guard: the fragment itself must ship a non-empty stamped set, else every
+  // count/deep-equal assertion below would be vacuously satisfiable.
+  assert(fragment.count >= 1, 'PRE: shipped fragment ships >=1 stamped item', `count=${fragment.count}`);
+  assert(typeof fragment.version === 'string' && fragment.version.length > 0, 'PRE: fragment carries a block-level [ucg].version');
+
+  // --- AC1: byte-stable SHA-256 across N installer reinstalls --------------
+  {
+    const projectDir = await makeTempDir('s8c-bytestable');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, [SKILL]); // at least one present planning workflow
+      const installer = new Installer();
+      const customToml = path.join(projectDir, '_bmad', 'custom', `${SKILL}.toml`);
+      const baseConfig = {
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'reinstall-bytestable',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+      };
+
+      // Run 1 (fresh) seeds the overlay; runs 2..N drive the update reinstall
+      // path (fs.remove(ucgDir) at installer.js:50, then Step-6b merge).
+      const hashes = [];
+      for (let run = 1; run <= N; run++) {
+        const restore = suppressConsole();
+        const result = await installer.install({ ...baseConfig, _action: run === 1 ? 'fresh' : 'update' });
+        restore();
+        assert(result.success === true, `AC1: installer run ${run} returns success`);
+        assert(await fs.pathExists(customToml), `AC1: _bmad/custom/${SKILL}.toml present after run ${run} (overlay never wiped)`);
+        hashes.push(await sha256File(customToml));
+      }
+
+      // The merge target is the un-wiped overlay: byte-identical run 2..N.
+      assert(
+        hashes[1] === hashes[2],
+        `AC1: sha256(${SKILL}.toml) byte-identical run 2 === run ${N}`,
+        `run2=${hashes[1]} runN=${hashes[2]}`,
+      );
+      assert(
+        hashes.slice(1).every((h) => h === hashes[1]),
+        'AC1: every reinstall run 2..N is byte-identical (anti-zombie convergence)',
+        `hashes=${JSON.stringify(hashes)}`,
+      );
+
+      // Anti-vacuous: prove the installer actually WROTE a non-empty overlay
+      // (not a no-op installer that never touches persistent_facts at all).
+      const facts = persistentFacts(parseTomlViaPython(customToml));
+      assert(countStampedItems(facts) >= 1, 'AC1: overlay carries >=1 stamped item (installer is not a no-op writer)');
+
+      // Twin: a hand-injected duplicate stamped item before a run, OR an
+      // append-without-strip merge, makes hashes diverge / item count grow.
+      // Modeled in-memory: an append-without-strip hollow merge would yield a
+      // distinct byte image (more items) -> a DIFFERENT hash; the AC1 equality
+      // assertion would then fail. Proven by detecting the mutant.
+      await twin('AC1 append-without-strip diverges hashes', () => {
+        const crypto = require('node:crypto');
+        const realBytes = JSON.stringify(facts);
+        const hollowBytes = JSON.stringify([...facts, ...stampedItems(facts)]); // append, no strip
+        const realHash = crypto.createHash('sha256').update(realBytes).digest('hex');
+        const hollowHash = crypto.createHash('sha256').update(hollowBytes).digest('hex');
+        assert(realHash !== hollowHash, 'AC1-twin: append-without-strip yields a DIFFERENT image -> AC1 equality would fail');
+        assert(
+          countStampedItems([...facts, ...stampedItems(facts)]) > fragment.count,
+          'AC1-twin: append-without-strip grows the stamped count past the fragment count',
+        );
+      });
+    } catch (error) {
+      assert(false, 'AC1 byte-stable reinstall completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- AC2: stamped item count == fragment count (1x, never Nx/2x) ---------
+  {
+    const projectDir = await makeTempDir('s8c-count');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, [SKILL]);
+      const installer = new Installer();
+      const customToml = path.join(projectDir, '_bmad', 'custom', `${SKILL}.toml`);
+      const baseConfig = {
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'reinstall-count',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+      };
+
+      for (let run = 1; run <= N; run++) {
+        const restore = suppressConsole();
+        await installer.install({ ...baseConfig, _action: run === 1 ? 'fresh' : 'update' });
+        restore();
+        const parsed = parseTomlViaPython(customToml);
+        const facts = persistentFacts(parsed);
+        const count = countStampedItems(facts);
+        assert(
+          count === fragment.count,
+          `AC2 (no append-duplication across N installs): stamped count === fragment count after run ${run}`,
+          `count=${count} fragment=${fragment.count}`,
+        );
+        // Owned by the [ucg] block: managed=true, block='ucg-awareness'.
+        assert(
+          parsed.ucg?.managed === true && parsed.ucg?.block === 'ucg-awareness',
+          `AC2: [ucg] block owns the stamped set after run ${run}`,
+        );
+      }
+
+      // Twin: pre-seed TWO identical stamped items (a prior zombie) BEFORE a
+      // run; the strip-then-reappend collapses them to exactly 1x. An append-
+      // only hollow merge would stay >=2 and fail. We prove BOTH halves:
+      //   (a) the real installer collapses a pre-seeded zombie to 1x;
+      //   (b) an append-only mutant of the same input stays >2 (predicate catches it).
+      await twin('AC2 pre-seeded zombie collapses to 1x; append-only mutant stays >=2', async () => {
+        const zombieDir = await makeTempDir('s8c-count-zombie');
+        try {
+          await seedEngine(zombieDir);
+          await seedSkills(zombieDir, [SKILL]);
+          const zInstaller = new Installer();
+          const zToml = path.join(zombieDir, '_bmad', 'custom', `${SKILL}.toml`);
+          // Fresh install to seed the overlay.
+          let r = suppressConsole();
+          await zInstaller.install({ ...baseConfig, projectDir: zombieDir, _action: 'fresh' });
+          r();
+          // Hand-inject a DUPLICATE of the first stamped item (simulate a zombie).
+          const seeded = parseTomlViaPython(zToml);
+          const dupItem = stampedItems(persistentFacts(seeded))[0];
+          seeded.workflow.persistent_facts.push(dupItem);
+          await fs.writeFile(zToml, serializeTomlViaPython(seeded), 'utf8');
+          const preCount = countStampedItems(persistentFacts(parseTomlViaPython(zToml)));
+          assert(
+            preCount > fragment.count,
+            'AC2-twin: pre-seeded overlay has a zombie duplicate (> fragment count)',
+            `preCount=${preCount}`,
+          );
+          // The append-only HOLLOW predicate would leave it >fragment; assert that.
+          const hollowAppendOnly = [...persistentFacts(parseTomlViaPython(zToml)), ...fragment.items];
+          assert(
+            countStampedItems(hollowAppendOnly) > fragment.count,
+            'AC2-twin: an append-only (no-strip) merge keeps the zombie -> count stays >1x (predicate catches it)',
+          );
+          // The REAL installer reinstall collapses it back to exactly 1x.
+          r = suppressConsole();
+          await zInstaller.install({ ...baseConfig, projectDir: zombieDir, _action: 'update' });
+          r();
+          const postCount = countStampedItems(persistentFacts(parseTomlViaPython(zToml)));
+          assert(
+            postCount === fragment.count,
+            'AC2-twin: real installer collapses the pre-seeded zombie back to exactly 1x',
+            `postCount=${postCount}`,
+          );
+        } finally {
+          await fs.remove(zombieDir);
+        }
+      });
+    } catch (error) {
+      assert(false, 'AC2 stamped-count completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- AC3: stale block-level [ucg].version is refreshed in place ----------
+  {
+    const projectDir = await makeTempDir('s8c-stale');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, [SKILL]);
+      const installer = new Installer();
+      const customToml = path.join(projectDir, '_bmad', 'custom', `${SKILL}.toml`);
+      const baseConfig = {
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'reinstall-stale',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+      };
+
+      // Seed the overlay with a UCG block whose block-level [ucg].version is
+      // STALE plus matching stamped items AND a prior-build stamped item whose
+      // marker (bmad-prd-99) the current fragment no longer ships — so an
+      // over-narrow strip would zombie it.
+      const STALE = '0.0.0-stale';
+      const staleItem = 'Stale prior-build UCG fact no longer shipped. [ucg:bmad-prd-99]';
+      const seedDoc = {
+        workflow: {
+          persistent_facts: [...fragment.items.slice(0, 1), staleItem],
+        },
+        ucg: {
+          managed: true,
+          version: STALE,
+          block: 'ucg-awareness',
+          installed_at: '2020-01-01T00:00:00Z',
+        },
+      };
+      await fs.ensureDir(path.dirname(customToml));
+      await fs.writeFile(customToml, serializeTomlViaPython(seedDoc), 'utf8');
+
+      // Drive the update reinstall path.
+      const restore = suppressConsole();
+      const result = await installer.install({ ...baseConfig, _action: 'update' });
+      restore();
+      assert(result.success === true, 'AC3: installer reinstall over a stale block returns success');
+
+      const parsed = parseTomlViaPython(customToml);
+      const facts = persistentFacts(parsed);
+      const rawText = await fs.readFile(customToml, 'utf8');
+
+      // (a) [ucg].version refreshed to current; the stale scalar is gone.
+      assert(
+        parsed.ucg?.version === fragment.version,
+        'AC3 (stale version block is refreshed not duplicated)(a): [ucg].version === current fragment version',
+        `got=${parsed.ucg?.version} want=${fragment.version}`,
+      );
+      assert(!rawText.includes(STALE), `AC3(a): the literal '${STALE}' scalar is absent from the resolved overlay`);
+
+      // (b) the stamped-item subset (by marker) deep-equals the fragment items.
+      assert(
+        jsonEqual(stampedItems(facts), fragment.items),
+        'AC3(b): stamped-item subset deep-equals the current fragment items',
+        `got=${JSON.stringify(stampedItems(facts))}`,
+      );
+      assert(
+        !stampedItems(facts).some((s) => s.includes('[ucg:bmad-prd-99]')),
+        'AC3(b): the stale cross-build marked item (bmad-prd-99) was stripped (no zombie)',
+      );
+
+      // (c) total stamped count === fragment count (no stale+current pile-up).
+      assert(
+        countStampedItems(facts) === fragment.count,
+        'AC3(c): total stamped count === fragment count (1x, no pile-up)',
+        `count=${countStampedItems(facts)} fragment=${fragment.count}`,
+      );
+
+      // Twin A: version-stamp NOT refreshed (write new items, leave [ucg].version
+      // stale) -> assertion (a) fails. Twin B: over-narrow same-marker-only strip
+      // leaves cross-build items -> count = 2x, assertion (c) fails.
+      await twin('AC3 un-refreshed version stamp / over-narrow strip are caught', () => {
+        // Twin A: hollow merge refreshes items but zombies the version scalar.
+        const hollowA = { ...parsed, ucg: { ...parsed.ucg, version: STALE } };
+        assert(hollowA.ucg.version !== fragment.version, 'AC3-twinA: un-refreshed [ucg].version (still stale) -> assertion (a) would fail');
+
+        // Twin B: over-narrow strip keeps the prior-build marked item alongside
+        // the fresh ones -> stamped count = fragment + 1 (>1x).
+        const hollowB = [...fragment.items, staleItem];
+        assert(
+          countStampedItems(hollowB) > fragment.count,
+          'AC3-twinB: over-narrow same-marker-only strip zombies cross-build item -> count >1x, assertion (c) would fail',
+        );
+      });
+    } catch (error) {
+      assert(false, 'AC3 stale-version refresh completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- AC4: human / non-UCG content byte-stable across N reinstalls --------
+  {
+    const projectDir = await makeTempDir('s8c-human');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, [SKILL]);
+      const installer = new Installer();
+      const customToml = path.join(projectDir, '_bmad', 'custom', `${SKILL}.toml`);
+      const baseConfig = {
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'reinstall-human',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+      };
+
+      // Seed a human non-UCG persistent_facts item (no marker) + a human scalar
+      // BEFORE the first reinstall, alongside one stamped item so a real merge
+      // touches the array.
+      const HUMAN_ITEM = 'Human-authored guardrail with no UCG marker; must survive byte-identical.';
+      const HUMAN_SCALAR = 'do-not-touch-me';
+      const seedDoc = {
+        workflow: {
+          persistent_facts: [HUMAN_ITEM, ...fragment.items.slice(0, 1)],
+        },
+        human_scalar: HUMAN_SCALAR,
+        ucg: {
+          managed: true,
+          version: fragment.version,
+          block: 'ucg-awareness',
+          installed_at: '2026-06-25T00:00:00Z',
+        },
+      };
+      await fs.ensureDir(path.dirname(customToml));
+      await fs.writeFile(customToml, serializeTomlViaPython(seedDoc), 'utf8');
+
+      for (let run = 1; run <= N; run++) {
+        const restore = suppressConsole();
+        await installer.install({ ...baseConfig, _action: 'update' });
+        restore();
+        const parsed = parseTomlViaPython(customToml);
+        const facts = persistentFacts(parsed);
+        // The human non-stamped subset is byte/value-stable (deep-equal).
+        assert(
+          jsonEqual(nonStampedItems(facts), [HUMAN_ITEM]),
+          `AC4 (human content byte-stable across N installs): non-stamped item preserved after run ${run}`,
+          `got=${JSON.stringify(nonStampedItems(facts))}`,
+        );
+        assert(parsed.human_scalar === HUMAN_SCALAR, `AC4: human scalar preserved after run ${run}`, `got=${parsed.human_scalar}`);
+      }
+
+      // Twin: a drop-and-rewrite-all merge (rewrites the whole array) drops or
+      // reorders the human item -> deep-equal breaks. Modeled: a hollow merge
+      // that writes ONLY the fragment items (dropping human content) fails the
+      // AC4 predicate.
+      await twin('AC4 drop-and-rewrite-all clobbers human content', () => {
+        const facts = persistentFacts(parseTomlViaPython(customToml));
+        const hollowRewriteAll = [...fragment.items]; // drops the human item entirely
+        assert(
+          !jsonEqual(nonStampedItems(hollowRewriteAll), [HUMAN_ITEM]),
+          'AC4-twin: drop-and-rewrite-all loses the human item -> AC4 deep-equal would fail (predicate catches it)',
+        );
+        // sanity: the real merge kept it (the predicate is satisfiable, not always-false)
+        assert(jsonEqual(nonStampedItems(facts), [HUMAN_ITEM]), 'AC4-twin: control — the real merge DID preserve the human item');
+      });
+    } catch (error) {
+      assert(false, 'AC4 human-content preservation completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  console.log('');
+}
+
+// ============================================================
 // Runner
 // ============================================================
 
@@ -1384,6 +1861,7 @@ async function runTests() {
   await testGitignoreEntries();
   await testStep6bUcgAwareness();
   await testStep6bDeclineNoOp();
+  await testReinstallAntiZombie();
   await testBannerGeometry();
 
   console.log(`${colors.cyan}========================================`);
