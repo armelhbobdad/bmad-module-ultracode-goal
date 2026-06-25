@@ -16,7 +16,7 @@ Qualify the script path with `{skill-root}` (per SKILL.md Conventions a bare `sc
 {green: bool, budget: int,
  blockers: [{id, kind, severity, detail, remediable: bool}],
  checks: {cc_version, goal_ok, workflows_ok, automemory_ok, git_branch, git_clean,
-          framework_present, test_artifacts_dirs, sprint_status_present,
+          framework_present, framework_kind, test_artifacts_dirs, sprint_status_present,
           project_context_count, tea_flags}}
 ```
 
@@ -26,7 +26,7 @@ Qualify the script path with `{skill-root}` (per SKILL.md Conventions a bare `sc
 
 Clear each remediable blocker, then **re-run the check** so the budget reflects the fixes. Remediate:
 
-- **Test framework absent** (`framework_present: false`): scaffold it via `bmad-testarch-framework` (Playwright/Cypress per `tea_flags`). ATDD in Stage 3 hard-halts without a configured framework — this must exist before launch.
+- **Test framework absent** (`framework_present: false`): the script already counts a pytest config / root `conftest.py` or a real `package.json` `test` script as a present framework (`framework_kind` is then `pytest` / `npm-test`, or `js-config` for a Playwright/Cypress/Jest/Vitest config), so a non-browser project does **not** trip this blocker. When it *does* fire (no harness of any kind recognized), scaffold one **appropriate to the stack**: for a web/E2E project, `bmad-testarch-framework` (Playwright/Cypress per `tea_flags`); for a **pytest or npm-script** project, stand up that harness directly (a `pytest.ini` / `conftest.py`, or a real `test` script) rather than an inapplicable browser framework — then re-run the check so `framework_present` flips true. ATDD in Stage 3 hard-halts without a configured framework — this must exist before launch. **Fitness caveat:** TEA's ATDD/automate chain still assumes a browser/E2E stack, so on a non-web module the framework is *present* but not *fit*; run such a module under `--light` (trace-only gate, no browser ATDD — see define-done.md's `--light` note and gate.md).
 - **CI quality pipeline absent** (production profile only): if no CI quality pipeline exists yet, scaffold it via `bmad-testarch-ci` **after** the framework exists — `bmad-testarch-ci` halts if the framework is absent, so the strict order is framework → ci. This is one-time infra (force **Create** mode); the pipeline embeds TEA's coverage thresholds so the gate also lives durably in CI, while the per-epic loop gate remains `gate_eval.py` in Stage 5. Skip under `--light`.
 - **Missing acceptance criteria / story** for an in-scope story: generate via `bmad-create-story` so each story carries clear, testable ACs. TEA atdd and trace both need them; a story without ACs has nothing to trace and will stall.
 - **Test-artifacts dirs absent** (`test_artifacts_dirs` incomplete): pre-create the trace/test-design/test-review output dirs (`{workflow.trace_output_dir}` and its siblings under the TEA `test_artifacts` root) so TEA writes land deterministically and `gate_eval.py` finds them in Stage 5.
