@@ -602,17 +602,23 @@ def build_verdict(
     # orphaned-index check resolves citations against (story keys, story-file
     # stems, FR/NFR ids, test::node pointers in any story + the PRD). A citation
     # to an id absent from this set is the dangling never-green reference (Story
-    # 1.2 floor AC3). Unreadable bodies are handled in the main loop below.
-    story_bodies: dict[str, str] = {}
-    for story_path in story_paths:
-        body = _safe_read_text(story_path)
-        if body is not None:
-            story_bodies[_rel(story_path, project_root)] = body
+    # 1.2 floor AC3). The main loop and whole-story catch-all below REUSE these
+    # reads (story_reads), so a story's declared ids and its readability verdict
+    # always come from the SAME read — closing the TOCTOU window where the
+    # pre-pass could see a file a later read cannot and over-populate declared_ids.
+    story_reads: dict[Path, str | None] = {
+        story_path: _safe_read_text(story_path) for story_path in story_paths
+    }
+    story_bodies: dict[str, str] = {
+        _rel(story_path, project_root): body
+        for story_path, body in story_reads.items()
+        if body is not None
+    }
     prd_text = _safe_read_text(prd_path) if prd_path is not None else None
     declared_ids = _collect_declared_ids(story_bodies, story_keys, prd_text)
 
     for story_path in story_paths:
-        body = _safe_read_text(story_path)
+        body = story_reads[story_path]
         rel = _rel(story_path, project_root)
         if body is None:
             mechanical_gaps.append(
@@ -770,7 +776,7 @@ def build_verdict(
 
     # --- whole-story-level catch-all + gate-tag absence (reporting + judgment) ---
     for story_path in story_paths:
-        body = _safe_read_text(story_path)
+        body = story_reads[story_path]
         if body is None:
             continue
         rel = _rel(story_path, project_root)

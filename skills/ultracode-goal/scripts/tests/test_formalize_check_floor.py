@@ -141,7 +141,10 @@ def test_vacuous_ac_sound_is_not_flagged():
     # DEFECT, not on the presence of any AC.
     out = _verdict("vacuous_ac_sound")
     assert [c for c in out["judgment_candidates"] if c["kind"] == "vacuous_ac"] == []
-    assert out["verdict"] != "blocked"
+    # The sound twin carries named-verification + an anti-vacuous twin, so it is
+    # fully READY — assert == "ready" (not merely != "blocked"), so a mutation that
+    # introduced a NEW medium gap (verdict "remediable") cannot false-green this.
+    assert out["verdict"] == "ready"
 
 
 # --- AC2: leaked_tea_artifact -> MECHANICAL move ----------------------------

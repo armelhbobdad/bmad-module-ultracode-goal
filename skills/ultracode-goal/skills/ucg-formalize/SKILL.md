@@ -141,7 +141,7 @@ The `status=blocked` row enumerates all three triggers and they are all load-bea
   as neutral or passing. formalize's `blocked` is a deliberate strengthening over
   gate_eval's reloop.
 
-`reason` (in the blocked envelope) carries the first / most-severe JUDGMENT line.
+`reason` (in the blocked envelope) carries the first blocker by a DETERMINISTIC order — JUDGMENT candidates before non-remediable mechanical gaps, each in `source` (`path:line`) order — so two runs over the same kernel verdict select the same `reason` (NFR-1 determinism covers the envelope's `reason`, not only `status`).
 
 ## Headless
 
