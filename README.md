@@ -18,6 +18,8 @@
 
 **Built for [Claude Code](https://www.anthropic.com/claude-code) — and only Claude Code.** UCG composes `/goal`, Auto Mode, Auto Memory, and runtime hooks, which exist nowhere else. Other editors can hold the skill files; the autonomous run itself requires Claude Code.
 
+**What still ships everywhere — and what doesn't.** The shift-left planning customization is provider-portable BMAD content: it installs and shapes your planning workflows on any editor, and the install never refuses. The standalone `/ucg-formalize` readiness gate installs everywhere too — but the FR-7 preflight enforcement that fires it automatically at run start is a Claude Code-only capability. Off Claude Code, `/ucg-formalize` is a manual, on-demand verdict you invoke yourself rather than one wired into the run, so the readiness check still exists but is no longer automatic. The readiness verdict definition and its five-key headless envelope are byte-identical across providers — only the automatic invocation is what Claude Code adds. UCG never claims a readiness check runs by itself on an editor that cannot run it.
+
 _UCG is a standalone [BMAD](https://github.com/bmad-code-org/BMAD-METHOD) module that delivers a BMAD Epic end to end without a babysitter. It preflights to a remediated green light, turns acceptance criteria into executable tests with the Test Architect (TEA), and advances a story only when a deterministic script reads `PASS` from TEA's gate artifact — not when the model decides it feels done._
 
 **If UCG shipped an epic while you slept, give it a ⭐ — it helps others find this tool.**
