@@ -22,6 +22,20 @@ Qualify the script path with `{skill-root}` (per SKILL.md Conventions a bare `sc
 
 `budget` is the count of mechanical blockers. The script does **not** decide semantic intervention — that is your job in step 3. Treat `green: true` from the script as *necessary but not sufficient*.
 
+## 1b. Run the formalize readiness check
+
+Step 1's `preflight_check.py` counts mechanical facts; it cannot read the planning corpus and decide whether the Epic is *formally ready*. That FR-5 readiness verdict is produced here — immediately after the mechanical check of step 1 and before the remediation pass of step 2 — by the same single kernel the standalone `/ucg-formalize` entry point runs, so one readiness definition serves both entry points (INV-9):
+
+```
+uv run {skill-root}/scripts/formalize_check.py --epic <id> --project-root {project-root} --planning-artifacts {planning_artifacts} --impl-artifacts {workflow.implementation_artifacts} --tea-config {workflow.tea_config_path}
+```
+
+Qualify the path with `{skill-root}` for the same cwd-safety reason step 1 does (a bare `scripts/…` resolves from the skill root, not the project cwd the conductor runs from). Story 1.3's `ucg-formalize` SKILL.md names the identical kernel path, so the two callers cannot drift to divergent scripts.
+
+The verdict is computed from the **resolved artifact set on disk** — the real PRD / architecture / epic / story content the FR-5 resolver locates — regardless of whether any customization shaping applied; the gate reads the artifact on disk, not the shaping (INV-3). The kernel is **fail-closed**: an unreadable or absent artifact is a *failing signal*, never neutral (INV-4, mirroring `gate_eval.py`'s `nfr_status is None → failing`). The run is unconditional on that resolved corpus — it is the verify side that must hold even when shaping legitimately did not land.
+
+This step only *produces* the verdict. Its mechanical gaps, judgment candidates, and reds are read downstream by steps 2–4 (sibling stories); nothing is folded in here.
+
 ## 2. Auto-remediation pass
 
 Clear each remediable blocker, then **re-run the check** so the budget reflects the fixes. Remediate:
