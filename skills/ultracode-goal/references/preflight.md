@@ -87,8 +87,9 @@ Every `reds` entry is **RED** — it cannot be auto-remediated, because the fix 
 **Launch only when ALL hold:**
 
 - post-remediation script `budget == 0` (every mechanical blocker cleared),
-- the semantic scan found **no RED** (no undecided product/architecture, no unresolvable secret),
-- **ultracode** session effort and **Auto Mode** are on (gated to Opus/Sonnet 4.6+; required for unattended xhigh + auto-workflow execution).
+- the semantic scan **and the formalize subagent** found **no RED** — the two reds streams unioned (no undecided product/architecture, no unresolvable secret, no confirmed formalize red),
+- **ultracode** session effort and **Auto Mode** are on (gated to Opus/Sonnet 4.6+; required for unattended xhigh + auto-workflow execution),
+- the post-remediation formalize_check.py verdict is `ready` — i.e. `mechanical_budget == 0` AND the formalize subagent found no RED — re-using the step-1b kernel's verdict after the step-2 fold-in and step-3 seed (not a fresh gate-time check); this clause holds on verdict `ready` and only `ready`, so any other verdict (`blocked`, an un-cleared `remediable`, or an unreadable / absent / unparseable / missing verdict) FAILS the gate under the "If any fails … STOP" disposition below.
 
 If any fails: write the blockers — mechanical and semantic — to `.decision-log.md` with what each needs to clear, and **STOP**. Do not launch a partially-ready run; a single guessed architecture decision corrupts the whole Epic. In **headless**, instead emit the blocked JSON in the canonical five-key shape (every key always present; `report` and `deferred_work` are `null` because the run blocked before producing them):
 
