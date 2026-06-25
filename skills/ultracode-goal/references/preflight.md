@@ -67,6 +67,8 @@ The script counts mechanical facts; it cannot read a PRD and tell that a product
 - acceptance criteria that presuppose a decision no artifact actually makes,
 - a story whose "done" is undefinable from the artifacts.
 
+**Second hypothesis stream — seed the formalize candidates.** Pass that SAME single throwaway subagent a second set of targeted hypotheses alongside the recall advisories: `formalize_check.py`'s `judgment_candidates[]` (from step 1b) as a **`source:line` list** — the references only, never the inlined artifact bodies — so the subagent confirms machine-flagged candidates *instead of scanning blind*. The kernel only *flags*; the throwaway subagent *decides* — it must **confirm-or-clear** each seeded `judgment_candidate` into `reds` or `concerns`, never recording one as a RED unprompted. Fail-closed (INV-4): a `judgment_candidate` the subagent can neither confirm nor clear **defaults to RED** (JUDGMENT), mirroring `gate_eval.py`'s `nfr_status is None → failing`. This adds zero net subagent and zero net conductor context — the same single spawn, the same discarded-context discipline, and the same three-key return object below.
+
 The subagent must return **ONLY this object — no prose, no document quotes beyond the one-line evidence fields**, so you hold the findings while the corpus stays in its discarded context:
 
 ```json
