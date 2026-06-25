@@ -4,8 +4,9 @@
  */
 
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const fs = require('fs-extra');
-const { spinner } = require('@clack/prompts');
+const { spinner, log } = require('@clack/prompts');
 const yaml = require('js-yaml');
 const { installSkillsToIdes } = require('./ide-skills');
 const { registerHelpEntries } = require('./help-catalog');
@@ -13,6 +14,23 @@ const { writeManifest } = require('./manifest');
 
 // Dev-only artifacts never shipped into a user's project
 const DEV_ARTIFACTS = new Set(['.analysis', '.decision-log.md', '__pycache__', '.pytest_cache', '.DS_Store', 'Thumbs.db']);
+
+// The four planning-workflow fragments Step 6b enrolls. Each maps to a
+// real BMAD skill whose presence is probed before merging, and to a fragment
+// under skills/ultracode-goal/assets/ucg-awareness/{skill}.toml.
+// The TEA and dev/review-cycle fragments are
+// deliberately NOT enrolled here.
+const STEP6B_PLANNING_FRAGMENTS = ['bmad-prd', 'bmad-architecture', 'bmad-create-epics-and-stories', 'bmad-create-story'];
+
+// Single canonical cross-provider portability gap line.
+// Exported so the integration test asserts against this exact string — keep it a clean,
+// honest sentence that matches /Claude.?Code.*only/i and contains NONE of the
+// forbidden cross-provider auto-enforcement phrases. The note is non-blocking:
+// the portable fragments + the standalone /ucg-formalize gate install on every
+// provider; only the preflight HOOK auto-runs on Claude Code, and elsewhere
+// /ucg-formalize is a manual on-demand verdict.
+const PORTABILITY_GAP_LINE =
+  'Automatic preflight gating at run start is a Claude Code-only capability; on other providers /ucg-formalize stays available as a manual, on-demand verdict you invoke yourself, while the portable shaping fragments and the standalone gate still install everywhere.';
 
 class Installer {
   constructor() {
@@ -126,6 +144,85 @@ class Installer {
       throw error;
     }
 
+    // Step 6b: Wire UCG-awareness shaping into the present BMAD planning
+    // workflows (opt-in). UNLIKE every other step, this one DEGRADES
+    // rather than throws: any per-fragment failure, an absent
+    // resolve engine, or a schema-mismatch warns and continues — install()
+    // still returns success and Step 7 still writes the manifest.
+    if (config.enable_ucg_awareness === true) {
+      s.start('Wiring UCG-awareness into planning workflows...');
+      const warnings = [];
+      const warn = (msg) => {
+        warnings.push(msg);
+        log.warn(msg);
+      };
+      try {
+        // Cross-provider honesty: emit the single
+        // portability gap line when the target IDE set excludes Claude Code.
+        // Never a refusal, never a duplicate — exactly one print.
+        const ides = Array.isArray(config.ides) ? config.ides : [];
+        if (!ides.includes('claude-code')) {
+          warn(PORTABILITY_GAP_LINE);
+        }
+
+        // The merge engine deep_merge is imported by
+        // merge_customization.py from {projectDir}/_bmad/scripts/resolve_customization.py.
+        // If it is absent/older, no-op Step 6b entirely (verify-only degrade):
+        // write nothing, warn once. The standalone /ucg-formalize gate +
+        // formalize_check.py remain installed.
+        const enginePath = path.join(projectDir, '_bmad', 'scripts', 'resolve_customization.py');
+        if (await fs.pathExists(enginePath)) {
+          const fragmentsDir = path.join(this.srcDir, 'ultracode-goal', 'assets', 'ucg-awareness');
+          let merged = 0;
+          let skippedAbsent = 0;
+          for (const skill of STEP6B_PLANNING_FRAGMENTS) {
+            // Present-skill probe: the true signal is the BMAD skills tree, NOT
+            // whether _bmad/custom/{skill}.toml already exists (architecture
+            // Corrections line 146). Probe the resolved skills root.
+            if (!(await this.isSkillPresent(projectDir, skill))) {
+              skippedAbsent++;
+              continue;
+            }
+            const fragmentPath = path.join(fragmentsDir, `${skill}.toml`);
+            if (!(await fs.pathExists(fragmentPath))) {
+              // A deferred fragment was never authored — skip silently
+              // (skip-absent also covers never-authored fragments).
+              continue;
+            }
+            const targetPath = path.join(projectDir, '_bmad', 'custom', `${skill}.toml`);
+            try {
+              const outcome = this.runStep6bMerge(targetPath, fragmentPath);
+              if (outcome.skipped === 'schema-mismatch') {
+                warn(
+                  `UCG-awareness shaping for ${skill}: target customization does not expose the ` +
+                    `workflow.persistent_facts channel — drift detected, skipped (no write).`,
+                );
+              } else if (outcome.status === 'conflict') {
+                merged++;
+                warn(`UCG-awareness shaping for ${skill}: hand-edited rows left in place (${outcome.conflicts.join(', ')}).`);
+              } else {
+                merged++;
+              }
+            } catch (mergeError) {
+              // Per-fragment failure DEGRADES — warn and continue, never abort.
+              warn(`UCG-awareness shaping for ${skill} failed: ${mergeError.message}`);
+            }
+          }
+          s.stop(`UCG-awareness shaping complete (${merged} merged, ${skippedAbsent} skipped — absent)`);
+        } else {
+          warn(
+            'UCG-awareness shaping skipped: BMAD customization engine (_bmad/scripts/resolve_customization.py) ' +
+              'not found — degrading to verify-only. The standalone /ucg-formalize gate is still installed.',
+          );
+          s.stop('UCG-awareness shaping skipped (verify-only)');
+        }
+      } catch (error) {
+        // Belt-and-braces: Step 6b NEVER rethrows (degrade-not-throw).
+        s.stop('UCG-awareness shaping degraded');
+        warn(`UCG-awareness shaping degraded: ${error.message}`);
+      }
+    }
+
     // Step 7: Write installation manifest
     s.start('Writing manifest...');
     try {
@@ -142,6 +239,82 @@ class Installer {
     }
 
     return { success: true, ucgDir, projectDir };
+  }
+
+  /**
+   * Probe whether a real BMAD skill is present in the project's skills tree.
+   * The architecture Corrections row (line 146) warns: present-in-project !=
+   * overlay-exists; the true signal is the BMAD skills tree. So we look for the
+   * actual skill directory under any installed IDE skills root, never at
+   * _bmad/custom/{skill}.toml.
+   *
+   * @param {string} projectDir - Project root
+   * @param {string} skill - BMAD skill directory name (e.g. bmad-prd)
+   * @returns {Promise<boolean>}
+   */
+  async isSkillPresent(projectDir, skill) {
+    const roots = [
+      path.join(projectDir, '.claude', 'skills'),
+      path.join(projectDir, '.cursor', 'skills'),
+      path.join(projectDir, '.opencode', 'skills'),
+      path.join(projectDir, 'bmad', 'skills'),
+      path.join(projectDir, '_bmad', 'skills'),
+    ];
+    for (const root of roots) {
+      if (await fs.pathExists(path.join(root, skill))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Spawn merge_customization.py for one present fragment and parse its JSON
+   * result. Mirrors the invocation:
+   *   merge_customization.py --target _bmad/custom/{skill}.toml --fragment {fragment}
+   * Run via `uv run --script` so its PEP-723 block auto-provisions tomli-w.
+   *
+   * Exit-code lanes (the merge family, NOT gate_eval): 0 = success/skip/
+   * conflict, 1 = validation, 2 = missing engine. A non-zero exit or an
+   * unparseable payload throws — the Step-6b try-catch degrades it to a warning.
+   *
+   * @param {string} targetPath - Absolute path to _bmad/custom/{skill}.toml
+   * @param {string} fragmentPath - Absolute path to the fragment TOML
+   * @returns {{status:string, skipped:(string|null), conflicts:string[], rows_added:number, rows_removed:number}}
+   */
+  runStep6bMerge(targetPath, fragmentPath) {
+    const script = path.join(this.srcDir, 'ultracode-goal', 'scripts', 'merge_customization.py');
+    const result = spawnSync('uv', ['run', '--script', script, '--target', targetPath, '--fragment', fragmentPath], {
+      encoding: 'utf8',
+    });
+
+    if (result.error) {
+      throw new Error(`failed to spawn merge tool: ${result.error.message}`);
+    }
+    // Exit 2 = missing engine dependency; 1 = validation error. Both are
+    // failures the caller degrades. Exit 0 = success/skip/conflict (JSON on
+    // stdout).
+    if (result.status === 2) {
+      throw new Error('merge engine (resolve_customization.py) missing');
+    }
+    if (result.status === 1) {
+      throw new Error(`merge validation error: ${(result.stderr || '').trim()}`);
+    }
+    if (result.status !== 0) {
+      throw new Error(`merge tool exited ${result.status}: ${(result.stderr || '').trim()}`);
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(`unparseable merge output: ${(result.stdout || '').trim().slice(0, 200)}`);
+    }
+    return {
+      status: payload.status,
+      skipped: payload.skipped ?? null,
+      conflicts: Array.isArray(payload.conflicts) ? payload.conflicts : [],
+      rows_added: payload.rows_added ?? 0,
+      rows_removed: payload.rows_removed ?? 0,
+    };
   }
 
   /**
@@ -243,4 +416,4 @@ class Installer {
   }
 }
 
-module.exports = { Installer };
+module.exports = { Installer, PORTABILITY_GAP_LINE, STEP6B_PLANNING_FRAGMENTS };

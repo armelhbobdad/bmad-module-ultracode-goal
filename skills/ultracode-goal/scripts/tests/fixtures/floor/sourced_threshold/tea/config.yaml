@@ -1,0 +1,3 @@
+test_artifacts: "{project-root}/tea"
+trace_output: "{project-root}/tea/traceability"
+risk_threshold: p1

@@ -267,11 +267,23 @@ class UI {
       return { cancelled: true };
     }
 
+    // UCG-awareness shaping opt-in (off by default: advisory, never forced). When true, installer Step 6b additively merges the
+    // UCG-awareness fragments into the present BMAD planning workflows.
+    const enable_ucg_awareness = await confirm({
+      message: 'Wire UCG-awareness shaping into your BMAD planning workflows?',
+      initialValue: false,
+    });
+    if (isCancel(enable_ucg_awareness)) {
+      cancel('Installation cancelled.');
+      return { cancelled: true };
+    }
+
     return {
       projectDir,
       project_name,
       ides,
       install_learning,
+      enable_ucg_awareness,
       ucgFolder,
       _detection: detection,
       _action: action,

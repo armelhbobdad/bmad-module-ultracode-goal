@@ -1,0 +1,22 @@
+# UCG awareness fragment for bmad-architecture.
+# Authored additive guardrail facts landing in the one universal sanctioned
+# append channel (persistent_facts). The gate, not this shaping, is the
+# load-bearing guarantee. Idempotent strip-then-reappend is the
+# merge_customization.py merge step's concern, matched by the per-directive
+# [ucg:{skill}-NN] id marker each entry carries.
+
+persistent_facts = [
+  "Author every load-bearing architecture decision as an AD-n decision record carrying all three of an explicit Binds (what downstream work it constrains), a Prevents (the incompatible alternative it rules out), and a Rule (the one-line invariant a builder must follow); a rationale-only note without Binds/Prevents/Rule is not yet an AD. [ucg:bmad-architecture-01]",
+  "Mark a load-bearing decision [ADOPTED] only once it is genuinely settled; an AD that is still being weighed is not adopted and belongs under Deferred until resolved. [ucg:bmad-architecture-02]",
+  "Record anything not yet decided under a Deferred section with an explicit revisit trigger (the concrete condition or event that forces the decision); never leave a load-bearing fork as a silent TBD, TODO-decide, or '(?)' in the spine. [ucg:bmad-architecture-03]",
+  "Before UCG or preflight is run, resolve every open architecture question as an ADR (an AD with Binds/Prevents/Rule) or as an explicit Deferred-with-revisit entry; leaving an unresolved, untagged fork that an in-scope story depends on is the gap the readiness gate is there to catch. [ucg:bmad-architecture-04]",
+  "Any quantitative figure an architecture decision relies on (a budget, limit, timeout, capacity, or NFR threshold) must cite its source — a PRD requirement id, an inherited AD, or a named benchmark; if the real number is genuinely unknown, record it as Deferred-with-revisit rather than inventing or guessing a value. [ucg:bmad-architecture-05]",
+  "Keep AD ids stable and never silently weaken or override an inherited binding parent AD; if you must revisit one, restate its id and call out the change explicitly as a new AD rather than quietly renumbering or relaxing it. [ucg:bmad-architecture-06]",
+  "Do not leave a structural dimension the architecture altitude owns wholly silent: any load-bearing fork an autonomous build could otherwise resolve incompatibly must surface as either an AD-n or a Deferred-with-revisit entry. [ucg:bmad-architecture-07]",
+]
+
+[ucg]
+managed = true
+version = "0.3.0"
+block = "ucg-awareness"
+installed_at = "2026-06-25T00:00:00Z"

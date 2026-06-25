@@ -296,7 +296,8 @@ async function testHelpCatalogRegistration() {
 
     catalogText = await fs.readFile(catalogPath, 'utf8');
     const ucgRowCount = catalogText.split('\n').filter((l) => l.startsWith('UltraCode Goal,')).length;
-    assert(ucgRowCount === 2, 'reinstall keeps exactly one row set (_meta + capability)', `found ${ucgRowCount}`);
+    // _meta + 2 capability rows (ultracode-goal + ucg-formalize); anti-zombie keeps the set stable across reinstall (not 6).
+    assert(ucgRowCount === 3, 'reinstall is anti-zombie: _meta + 2 capability rows, no duplication', `found ${ucgRowCount}`);
 
     // Uninstall path: UCG rows removed, foreign rows survive
     const touched = await removeHelpEntries(projectDir, ['UltraCode Goal']);
@@ -690,6 +691,1104 @@ async function testGitignoreEntries() {
 }
 
 // ============================================================
+// Test Suite 8: Step 6b — UCG-awareness shaping
+// ============================================================
+
+const REPO_ROOT = path.resolve(__dirname, '..');
+// Vendored under skills/.../tests/fixtures/engine/ so the suite stays hermetic
+// in CI (the real _bmad/ tree is gitignored and absent on a clean checkout).
+const REAL_ENGINE = path.join(REPO_ROOT, 'skills', 'ultracode-goal', 'scripts', 'tests', 'fixtures', 'engine', 'resolve_customization.py');
+
+// The enumerated forbidden cross-provider-auto-enforcement-claim set, defined
+// as a literal constant. The
+// machine half asserts the honesty line matches the POSITIVE shape exactly once
+// AND matches ZERO of these alternations — printing any forbidden literal flips
+// .test() to true and fails the suite (non-vacuous).
+const STEP6B_FORBIDDEN_ENFORCEMENT =
+  /(auto.?enforc|automatic(ally)? enforc|preflight (is )?enforced|enforced (on|across) (cursor|all providers|every provider)|cross-?provider auto|enforce.{0,20}(cursor|all providers|every provider))/i;
+const CLAUDE_CODE_ONLY = /Claude.?Code.*only/i;
+
+/**
+ * Copy the real deep_merge engine into a temp project so merge_customization.py
+ * resolves it exactly as it will at install time (mirrors REAL_ENGINE in
+ * skills/.../tests/test_merge_customization.py).
+ */
+async function seedEngine(projectDir) {
+  const dest = path.join(projectDir, '_bmad', 'scripts', 'resolve_customization.py');
+  await fs.ensureDir(path.dirname(dest));
+  await fs.copy(REAL_ENGINE, dest);
+}
+
+/** Seed present BMAD skills by creating .claude/skills/{skill}/ dirs. */
+async function seedSkills(projectDir, skills) {
+  for (const skill of skills) {
+    await fs.ensureDir(path.join(projectDir, '.claude', 'skills', skill));
+  }
+}
+
+/**
+ * Spy on clack's log.warn AND note/outro so emitted warning + note strings are
+ * captured into one joined string BEFORE suppressConsole() reassigns stdout
+ * (suppressConsole swallows stdout, so reading stdout won't work). Returns
+ * {joined(), restore()}.
+ */
+function spyClackSinks() {
+  const clack = require('@clack/prompts');
+  const captured = [];
+  const origWarn = clack.log.warn;
+  const origInfo = clack.log.info;
+  const origNote = clack.note;
+  const origOutro = clack.outro;
+  clack.log.warn = (msg) => captured.push(String(msg));
+  clack.log.info = (msg) => captured.push(String(msg));
+  clack.note = (body, title) => captured.push(String(body) + '\n' + String(title));
+  clack.outro = (msg) => captured.push(String(msg));
+  return {
+    captured,
+    joined: () => captured.join('\n'),
+    restore: () => {
+      clack.log.warn = origWarn;
+      clack.log.info = origInfo;
+      clack.note = origNote;
+      clack.outro = origOutro;
+    },
+  };
+}
+
+const PLANNING_SKILLS = ['bmad-prd', 'bmad-architecture', 'bmad-create-epics-and-stories', 'bmad-create-story'];
+
+async function testStep6bUcgAwareness() {
+  console.log(`${colors.yellow}Test Suite 8: Step 6b — UCG-awareness shaping${colors.reset}\n`);
+
+  const { Installer, PORTABILITY_GAP_LINE } = require('../tools/cli/lib/installer');
+  const { promptInstall } = require('../tools/cli/lib/ui');
+
+  // --- ui.js promptInstall surfaces exactly one new opt-in -------------
+  // (a) the confirm wiring: grep-style assertions on the source.
+  {
+    const uiSrc = await fs.readFile(path.join(REPO_ROOT, 'tools/cli/lib/ui.js'), 'utf8');
+    const enableCount = (uiSrc.match(/enable_ucg_awareness/g) || []).length;
+    assert(enableCount >= 1, 'ui.js references enable_ucg_awareness', `count=${enableCount}`);
+    // the new confirm carries initialValue: false (off-by-default twin)
+    assert(/initialValue:\s*false/.test(uiSrc), 'a confirm with initialValue: false exists (off-by-default)');
+    // it is threaded onto the returned config object
+    assert(/return\s*{[\s\S]*enable_ucg_awareness[\s\S]*}/.test(uiSrc), 'enable_ucg_awareness threaded onto returned config');
+  }
+
+  // (b) opt-out is a true no-op: install({enable_ucg_awareness:false}) writes
+  //     no _bmad/custom/*.toml even with engine + skills present. Anti-vacuous
+  //     twin: deleting the gate (always-write) would create the file here.
+  {
+    const projectDir = await makeTempDir('s6b-optout');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, PLANNING_SKILLS);
+      const installer = new Installer();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'optout',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: false,
+        _action: 'fresh',
+      });
+      restore();
+      assert(result.success === true, 'opt-out install returns success');
+      const customDir = path.join(projectDir, '_bmad', 'custom');
+      const wrote = (await fs.pathExists(customDir)) ? await fs.readdir(customDir) : [];
+      const tomls = wrote.filter((f) => f.endsWith('.toml'));
+      assert(tomls.length === 0, 'Twin: opt-out writes NO _bmad/custom/*.toml', `found ${tomls.join(', ')}`);
+    } catch (error) {
+      assert(false, 'opt-out no-op completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // (c) promptInstall returns the boolean from the confirm mock, and the
+  //     update path leaves it falsy. ui.js DESTRUCTURES @clack/prompts at load;
+  //     clack's exports are non-configurable bindings (reassignment is a silent
+  //     no-op), so we replace the CACHED clack module exports with a writable
+  //     copy BEFORE re-requiring ui.js, and run in a fresh temp cwd so the
+  //     existing-install select() branch is skipped.
+  {
+    const clackPath = require.resolve('@clack/prompts');
+    const uiPath = require.resolve('../tools/cli/lib/ui');
+    const realClack = require('@clack/prompts');
+    const origCwd = process.cwd();
+    const promptDir = await makeTempDir('s6b-promptinstall');
+    const restore = suppressConsole();
+
+    let confirmAnswers = [];
+    let confirmIdx = 0;
+    // A writable stand-in for the clack module: copy every real export, then
+    // override the interactive ones. ui.js's `require('@clack/prompts')` will
+    // receive this object once we swap it into require.cache.
+    const stubClack = {
+      ...realClack,
+      text: async () => 'p',
+      multiselect: async () => ['claude-code'],
+      select: async () => 'fresh',
+      confirm: async () => confirmAnswers[confirmIdx++],
+      intro: () => {},
+      outro: () => {},
+      note: () => {},
+      log: { ...realClack.log, info: () => {}, warn: () => {} },
+    };
+    const realClackCacheExports = require.cache[clackPath].exports;
+
+    try {
+      require.cache[clackPath].exports = stubClack;
+      process.chdir(promptDir);
+      delete require.cache[uiPath];
+      const ui = require(uiPath); // re-require so the destructure binds stubs
+      const u = new ui.UI();
+      u.displayBanner = () => {};
+
+      // [install_learning=true, enable_ucg_awareness=true]
+      confirmAnswers = [true, true];
+      confirmIdx = 0;
+      const cfgTrue = await u.promptInstall();
+      assert(cfgTrue.enable_ucg_awareness === true, 'confirm()=true -> config.enable_ucg_awareness === true');
+
+      // [install_learning=true, enable_ucg_awareness=false]
+      confirmAnswers = [true, false];
+      confirmIdx = 0;
+      const cfgFalse = await u.promptInstall();
+      assert(cfgFalse.enable_ucg_awareness === false, 'confirm()=false -> config.enable_ucg_awareness === false');
+    } catch (error) {
+      assert(false, 'promptInstall confirm wiring completes without error', error.message + '\n' + error.stack);
+    } finally {
+      process.chdir(origCwd);
+      require.cache[clackPath].exports = realClackCacheExports;
+      restore();
+      delete require.cache[uiPath]; // restore the unstubbed ui module for later suites
+      await fs.remove(promptDir);
+    }
+  }
+
+  // --- present-only enumeration -> stamped overlays --------------------
+  // Anti-vacuous twin: a fifth non-planning skill (bmad-dev-story) present is
+  // NOT enrolled (only the four planning targets), and an absent planning skill
+  // (bmad-create-story) is skipped.
+  {
+    const projectDir = await makeTempDir('s6b-present-only');
+    try {
+      await seedEngine(projectDir);
+      // present: bmad-prd, bmad-architecture (+ a non-planning bmad-dev-story);
+      // absent: bmad-create-story, bmad-create-epics-and-stories.
+      await seedSkills(projectDir, ['bmad-prd', 'bmad-architecture', 'bmad-dev-story']);
+      const installer = new Installer();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'present-only',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      assert(result.success === true, 'install returns success');
+
+      const customDir = path.join(projectDir, '_bmad', 'custom');
+      const prdPath = path.join(customDir, 'bmad-prd.toml');
+      const archPath = path.join(customDir, 'bmad-architecture.toml');
+      assert(await fs.pathExists(prdPath), 'bmad-prd.toml written (present skill)');
+      assert(await fs.pathExists(archPath), 'bmad-architecture.toml written (present skill)');
+
+      const prdText = await fs.readFile(prdPath, 'utf8');
+      assert(prdText.includes('block = "ucg-awareness"'), 'bmad-prd.toml carries [ucg] block = "ucg-awareness"');
+      assert(/\[ucg:bmad-prd-\d+\]/.test(prdText), 'bmad-prd.toml carries a persistent_facts entry');
+      const archText = await fs.readFile(archPath, 'utf8');
+      assert(archText.includes('block = "ucg-awareness"'), 'bmad-architecture.toml carries block = "ucg-awareness"');
+      assert(/persistent_facts/.test(archText), 'bmad-architecture.toml carries persistent_facts');
+
+      assert(!(await fs.pathExists(path.join(customDir, 'bmad-create-story.toml'))), 'absent bmad-create-story skipped (no overlay)');
+      assert(
+        !(await fs.pathExists(path.join(customDir, 'bmad-dev-story.toml'))),
+        'Twin: non-planning bmad-dev-story NOT enrolled (only the four planning targets)',
+      );
+    } catch (error) {
+      assert(false, 'present-only enumeration completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- degrade-not-throw (one fragment throws, another succeeds) -------
+  // Stub runStep6bMerge so bmad-prd throws and bmad-architecture succeeds.
+  // Anti-vacuous twin is documented below: without the try-catch the throw
+  // propagates and install() rejects + no manifest.
+  {
+    const projectDir = await makeTempDir('s6b-degrade');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, ['bmad-prd', 'bmad-architecture']);
+      const installer = new Installer();
+
+      // Capture warnings via the clack log.warn spy.
+      const spy = spyClackSinks();
+      const origRunner = installer.runStep6bMerge.bind(installer);
+      installer.runStep6bMerge = (targetPath, fragmentPath) => {
+        if (targetPath.includes('bmad-prd')) {
+          throw new Error('simulated bmad-prd merge failure');
+        }
+        return origRunner(targetPath, fragmentPath); // bmad-architecture really merges
+      };
+
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'degrade',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      spy.restore();
+
+      assert(result.success === true, 'install resolves success:true despite a per-fragment failure');
+      const manifestPath = path.join(projectDir, '_bmad/_config/ucg-manifest.yaml');
+      assert(await fs.pathExists(manifestPath), 'manifest (Step 7) still written after degrade');
+      assert(
+        await fs.pathExists(path.join(projectDir, '_bmad', 'custom', 'bmad-architecture.toml')),
+        'the other fragment (bmad-architecture) still merged',
+      );
+      const prdWarnings = spy.captured.filter((m) => /bmad-prd/.test(m) && /fail/i.test(m));
+      assert(prdWarnings.length === 1, 'exactly one warning recorded for bmad-prd', `found ${prdWarnings.length}`);
+    } catch (error) {
+      assert(false, 'degrade-not-throw completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- absent resolve_customization.py -> verify-only no-op ---------
+  // No engine seeded; assert no _bmad/custom/*.toml, exactly one warning,
+  // success true, AND the standalone path intact (formalize_check.py + skill).
+  {
+    const projectDir = await makeTempDir('s6b-absent-resolve');
+    try {
+      await seedSkills(projectDir, PLANNING_SKILLS); // skills present, but NO engine
+      const installer = new Installer();
+      const spy = spyClackSinks();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'absent-resolve',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      spy.restore();
+
+      assert(result.success === true, 'install returns success with absent engine');
+      const customDir = path.join(projectDir, '_bmad', 'custom');
+      const wrote = (await fs.pathExists(customDir)) ? await fs.readdir(customDir) : [];
+      const tomls = wrote.filter((f) => f.endsWith('.toml'));
+      assert(tomls.length === 0, 'NO _bmad/custom/*.toml written (no dark write)', `found ${tomls.join(', ')}`);
+      const engineWarns = spy.captured.filter((m) => /resolve_customization\.py|customization engine/i.test(m));
+      assert(engineWarns.length === 1, 'exactly one absent-engine warning', `found ${engineWarns.length}`);
+
+      // Anti-vacuous twin: standalone verify-only path intact.
+      const ucgSkill = path.join(projectDir, '_bmad/ucg/ultracode-goal');
+      assert(
+        await fs.pathExists(path.join(ucgSkill, 'scripts', 'formalize_check.py')),
+        'Twin: formalize_check.py present (verify-only still works)',
+      );
+      assert(
+        await fs.pathExists(path.join(ucgSkill, 'skills', 'ucg-formalize', 'SKILL.md')),
+        'Twin: /ucg-formalize skill present in installed tree',
+      );
+    } catch (error) {
+      assert(false, 'absent-resolve completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- schema-mismatch -> one drift-warning, run still succeeds -----
+  {
+    const projectDir = await makeTempDir('s6b-schema-mismatch');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, ['bmad-prd', 'bmad-architecture']);
+      const installer = new Installer();
+      const spy = spyClackSinks();
+      const origRunner = installer.runStep6bMerge.bind(installer);
+      installer.runStep6bMerge = (targetPath, fragmentPath) => {
+        if (targetPath.includes('bmad-prd')) {
+          return { status: 'skipped', skipped: 'schema-mismatch', conflicts: [], rows_added: 0, rows_removed: 0 };
+        }
+        return origRunner(targetPath, fragmentPath);
+      };
+
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'schema-mismatch',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      spy.restore();
+
+      assert(result.success === true, 'install returns success on schema-mismatch');
+      const driftWarns = spy.captured.filter((m) => /bmad-prd/.test(m) && /drift|schema|persistent_facts/i.test(m));
+      assert(driftWarns.length === 1, 'exactly one drift-warning for bmad-prd', `found ${driftWarns.length}`);
+      assert(
+        !(await fs.pathExists(path.join(projectDir, '_bmad', 'custom', 'bmad-prd.toml'))),
+        'schema-mismatch wrote nothing for bmad-prd',
+      );
+      assert(
+        await fs.pathExists(path.join(projectDir, '_bmad', 'custom', 'bmad-architecture.toml')),
+        'the other fragment still merged after the mismatch',
+      );
+    } catch (error) {
+      assert(false, 'schema-mismatch completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- idempotent reinstall (byte-identical) + update non-wipe ---------
+  {
+    const crypto = require('node:crypto');
+    const projectDir = await makeTempDir('s6b-idempotent');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, ['bmad-prd', 'bmad-architecture']);
+      const installer = new Installer();
+      const config = {
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'idempotent',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      };
+      const prdPath = path.join(projectDir, '_bmad', 'custom', 'bmad-prd.toml');
+      const sha = async () =>
+        crypto
+          .createHash('sha256')
+          .update(await fs.readFile(prdPath))
+          .digest('hex');
+
+      let restore = suppressConsole();
+      await installer.install({ ...config });
+      restore();
+      const hash1 = await sha();
+
+      restore = suppressConsole();
+      await installer.install({ ...config });
+      restore();
+      const hash2 = await sha();
+      assert(hash1 === hash2, 'reinstall leaves bmad-prd.toml byte-identical');
+
+      // single [ucg] block (no append-duplication zombie)
+      const text2 = await fs.readFile(prdPath, 'utf8');
+      const ucgBlocks = (text2.match(/^\[ucg\]\s*$/gm) || []).length;
+      assert(ucgBlocks === 1, 'exactly one [ucg] block after reinstall (no zombie)', `found ${ucgBlocks}`);
+
+      // Anti-vacuous twin: mutating the overlay content changes the hash.
+      await fs.appendFile(prdPath, '\n# tampered\n', 'utf8');
+      const hashMut = await sha();
+      assert(hashMut !== hash1, 'Twin: mutated content yields a DIFFERENT hash (comparison reads real bytes)');
+
+      // update-action install does not delete _bmad/custom/ user state.
+      restore = suppressConsole();
+      await installer.install({ projectDir, ucgFolder: '_bmad/ucg', _action: 'update' });
+      restore();
+      assert(await fs.pathExists(prdPath), 'update-action install preserves _bmad/custom/bmad-prd.toml');
+    } catch (error) {
+      assert(false, 'idempotent reinstall completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- cross-provider honesty (operator-benchmark machine half) --------
+  {
+    const projectDir = await makeTempDir('s6b-honesty');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, PLANNING_SKILLS);
+      const installer = new Installer();
+
+      // Spy BEFORE suppressConsole reassigns stdout — capture notes + warnings.
+      const spy = spyClackSinks();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'honesty',
+        ides: ['cursor'], // excludes claude-code -> portability note fires
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      spy.restore();
+
+      const joined = spy.joined();
+      const claudeCodeOnlyLines = joined.split('\n').filter((l) => CLAUDE_CODE_ONLY.test(l)).length;
+      assert(claudeCodeOnlyLines === 1, 'exactly one /Claude.?Code.*only/i line emitted', `found ${claudeCodeOnlyLines}`);
+      assert(
+        STEP6B_FORBIDDEN_ENFORCEMENT.test(joined) === false,
+        'ZERO forbidden cross-provider auto-enforcement phrases',
+        `matched: ${JSON.stringify(joined.match(STEP6B_FORBIDDEN_ENFORCEMENT))}`,
+      );
+      // the exported constant is the line printed (and itself clean)
+      assert(CLAUDE_CODE_ONLY.test(PORTABILITY_GAP_LINE), 'PORTABILITY_GAP_LINE matches the positive shape');
+      assert(STEP6B_FORBIDDEN_ENFORCEMENT.test(PORTABILITY_GAP_LINE) === false, 'PORTABILITY_GAP_LINE matches none of the forbidden set');
+
+      // the four overlays still wrote for present skills (never no-install)
+      const customDir = path.join(projectDir, '_bmad', 'custom');
+      for (const skill of PLANNING_SKILLS) {
+        assert(await fs.pathExists(path.join(customDir, `${skill}.toml`)), `${skill}.toml still wrote on a non-Claude-Code provider`);
+      }
+      assert(result.success === true, 'install returns success on a non-Claude-Code provider');
+
+      // Anti-vacuous twin: a forbidden literal flips the negative guard true.
+      const tamperedJoined = joined + '\npreflight enforced on cursor across all providers';
+      assert(
+        STEP6B_FORBIDDEN_ENFORCEMENT.test(tamperedJoined) === true,
+        'Twin: a forbidden literal flips STEP6B_FORBIDDEN_ENFORCEMENT.test to true',
+      );
+      // positive count fails on empty output (non-vacuous)
+      assert(''.split('\n').filter((l) => CLAUDE_CODE_ONLY.test(l)).length === 0, 'Twin: count===1 fails on empty output');
+    } catch (error) {
+      assert(false, 'cross-provider honesty completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  console.log('');
+}
+
+// ============================================================
+// Test Suite 8b: Step 6b decline no-op
+// ============================================================
+//
+// The decline path writes nothing: enable_ucg_awareness=false skips Step 6b
+// entirely, so merge_customization.py is never spawned and the _bmad/custom/
+// file inventory + bytes equal the pre-install set exactly. The positive
+// control (=true) proves the no-op is caused by the decline GATE, not an inert
+// step. And /ucg-formalize (formalize_check.py) stays invocable after decline
+// (verify-without-shape).
+
+/** Snapshot {filename -> sha256(bytes)} of _bmad/custom/*.toml (empty if dir absent). */
+async function snapshotCustomToml(projectDir) {
+  const crypto = require('node:crypto');
+  const customDir = path.join(projectDir, '_bmad', 'custom');
+  if (!(await fs.pathExists(customDir))) return {};
+  const out = {};
+  for (const name of await fs.readdir(customDir)) {
+    if (!name.endsWith('.toml')) continue;
+    const bytes = await fs.readFile(path.join(customDir, name));
+    out[name] = crypto.createHash('sha256').update(bytes).digest('hex');
+  }
+  return out;
+}
+
+/** grep-style count of literal `[ucg]` stamp headers under _bmad/custom/. */
+async function countUcgStamps(projectDir) {
+  const customDir = path.join(projectDir, '_bmad', 'custom');
+  if (!(await fs.pathExists(customDir))) return 0;
+  let count = 0;
+  for (const name of await fs.readdir(customDir)) {
+    if (!name.endsWith('.toml')) continue;
+    const text = await fs.readFile(path.join(customDir, name), 'utf8');
+    count += (text.match(/^\[ucg\]\s*$/gm) || []).length;
+  }
+  return count;
+}
+
+async function testStep6bDeclineNoOp() {
+  console.log(`${colors.yellow}Test Suite 8b: Step 6b decline no-op${colors.reset}\n`);
+
+  const { Installer } = require('../tools/cli/lib/installer');
+  const { spawnSync } = require('node:child_process');
+
+  // --- enable_ucg_awareness=false writes NOTHING under _bmad/custom/ ----
+  {
+    const projectDir = await makeTempDir('s8b-decline');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, PLANNING_SKILLS);
+
+      // Pre-install custom-toml inventory (engine + skills present, no UCG yet).
+      const before = await snapshotCustomToml(projectDir);
+
+      const installer = new Installer();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'decline-noop',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: false,
+        _action: 'fresh',
+      });
+      restore();
+      assert(result.success === true, 'declined install returns success');
+
+      // Inventory + bytes equal the pre-install set exactly (no UCG file/byte).
+      const after = await snapshotCustomToml(projectDir);
+      assert(
+        JSON.stringify(before) === JSON.stringify(after),
+        '_bmad/custom/*.toml inventory + bytes unchanged by a declined install',
+        `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+      );
+      // Zero [ucg] stamps anywhere under _bmad/custom/ (grep -rc '\[ucg\]' == 0).
+      assert((await countUcgStamps(projectDir)) === 0, 'zero [ucg] stamps under _bmad/custom/ after decline');
+
+      // /ucg-formalize (formalize_check.py) is still invocable after a
+      // decline — the standalone gate path is unaffected (verify-without-shape).
+      const formalize = path.join(projectDir, '_bmad', 'ucg', 'ultracode-goal', 'scripts', 'formalize_check.py');
+      assert(await fs.pathExists(formalize), 'formalize_check.py installed (standalone gate present after decline)');
+      const proc = spawnSync('uv', ['run', '--script', formalize, '--help'], { encoding: 'utf8' });
+      assert(
+        proc.status === 0 && /usage:\s*formalize_check\.py/i.test(proc.stdout),
+        'formalize_check.py runs (--help) after decline',
+        `status=${proc.status} stderr=${(proc.stderr || '').slice(0, 200)}`,
+      );
+    } catch (error) {
+      assert(false, 'decline no-op completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- positive-control twin: the SAME harness with =true DOES create at
+  //     least one _bmad/custom/{skill}.toml carrying an [ucg] stamp — proving
+  //     the no-op above is caused by the decline gate, not an inert Step 6b. ---
+  {
+    const projectDir = await makeTempDir('s8b-accept');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, PLANNING_SKILLS);
+
+      const installer = new Installer();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'accept-control',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      assert(result.success === true, 'Twin: accepted install returns success');
+
+      const after = await snapshotCustomToml(projectDir);
+      const wroteToml = Object.keys(after);
+      assert(
+        wroteToml.length > 0,
+        'Twin: accept (=true) DOES create at least one _bmad/custom/{skill}.toml',
+        `wrote=${wroteToml.join(', ')}`,
+      );
+      assert(
+        (await countUcgStamps(projectDir)) >= 1,
+        'Twin: at least one [ucg] stamp under _bmad/custom/ when accepted (gate, not inert step)',
+      );
+    } catch (error) {
+      assert(false, 'positive-control completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  console.log('');
+}
+
+// ============================================================
+// Test Suite 8c: Anti-zombie reinstall integration test
+// ============================================================
+//
+// Drives the REAL installer reinstall PATH end-to-end — installer.install()
+// with _action='update', which runs `fs.remove(ucgDir)` (installer.js:50, skill
+// tree only) then copySrcFiles then the gated Step-6b UCG-awareness merge —
+// N>=3 times against a temp project, and asserts the injected persistent_facts
+// content stays byte-stable in the un-wiped _bmad/custom/ overlay. DISTINCT
+// from Suite 8's single byte-identical reinstall and from the
+// merge_customization.py UNIT idempotency test: this proves the
+// fs.remove-then-recopy flow does not zombie-duplicate, refresh a stale
+// [ucg].version, or clobber human content across N installer runs.
+//
+// Framework note: there is no Vitest in this repo (the story spec's
+// "Vitest/Node" file is corrected); this is a plain node Suite wired into the
+// existing `npm run test:cli`, using the same assert()/suppressConsole()/temp-
+// project/seedEngine/seedSkills helpers as Suite 8.
+
+const REINSTALL_FRAGMENTS_DIR = path.join(REPO_ROOT, 'skills', 'ultracode-goal', 'assets', 'ucg-awareness');
+// The per-directive id marker carried by every UCG-stamped persistent_facts
+// string, e.g. "[ucg:bmad-prd-01]" — same shape as merge_customization.py's
+// UCG_MARKER. Count/strip/match assertions key off THIS marker + the [ucg]
+// stamp, never off a per-item version (which the overlay format does not define).
+const UCG_ITEM_MARKER = /\[ucg:[a-z0-9-]+-\d+\]/;
+
+/**
+ * Parse a TOML file via python3's stdlib tomllib and return the JS object.
+ * Fail-CLOSED (fail-loud, mirrors gate_eval.py:201-203 posture): a
+ * non-zero exit, an unreadable/garbled file, or unparseable JSON THROWS — never
+ * silently returns {} — so an absent/garbled overlay can never make a byte-
+ * stability assertion trivially true.
+ */
+function parseTomlViaPython(tomlPath) {
+  const { spawnSync } = require('node:child_process');
+  const code = [
+    'import tomllib, json, sys',
+    'p = sys.argv[1]',
+    'with open(p, "rb") as fh:',
+    '    data = tomllib.load(fh)',
+    'sys.stdout.write(json.dumps(data))',
+  ].join('\n');
+  const proc = spawnSync('python3', ['-c', code, tomlPath], { encoding: 'utf8' });
+  if (proc.status !== 0) {
+    throw new Error(`parseTomlViaPython failed (status=${proc.status}) for ${tomlPath}: ${(proc.stderr || '').trim()}`);
+  }
+  try {
+    return JSON.parse(proc.stdout);
+  } catch (error) {
+    throw new Error(`parseTomlViaPython got unparseable JSON for ${tomlPath}: ${error.message}`);
+  }
+}
+
+/**
+ * Serialize a JS object to TOML text via tomli-w (the same writer
+ * merge_customization.py uses), so fixtures round-trip byte-cleanly through
+ * tomllib. Runs `uv run --with tomli-w` (uv is the merge tool's own runner).
+ * Throws on any non-zero exit (fail-loud fixture setup, not a silent skip).
+ */
+function serializeTomlViaPython(obj) {
+  const { spawnSync } = require('node:child_process');
+  const code = ['import json, sys, tomli_w', 'data = json.load(sys.stdin)', 'sys.stdout.write(tomli_w.dumps(data))'].join('\n');
+  // `python` (not `python3`): uv's ephemeral env exposes `python`, and on
+  // Windows there is no `python3` in it — `python3` would fall through to a
+  // different interpreter that lacks the `--with tomli-w` package.
+  const proc = spawnSync('uv', ['run', '--with', 'tomli-w', 'python', '-c', code], {
+    encoding: 'utf8',
+    input: JSON.stringify(obj),
+  });
+  if (proc.status !== 0) {
+    throw new Error(`serializeTomlViaPython failed (status=${proc.status}): ${(proc.stderr || '').trim()}`);
+  }
+  return proc.stdout;
+}
+
+/** workflow.persistent_facts as an array (fail-closed: throws if not an array). */
+function persistentFacts(parsed) {
+  const facts = parsed?.workflow?.persistent_facts;
+  if (!Array.isArray(facts)) {
+    throw new TypeError(`expected workflow.persistent_facts array, got ${JSON.stringify(facts)}`);
+  }
+  return facts;
+}
+
+/** The UCG-stamped subset: persistent_facts strings carrying a [ucg:<id>] marker. */
+function stampedItems(facts) {
+  return facts.filter((f) => typeof f === 'string' && UCG_ITEM_MARKER.test(f));
+}
+
+/** The non-UCG (human-owned) subset: facts with NO [ucg:<id>] marker. */
+function nonStampedItems(facts) {
+  return facts.filter((f) => typeof f !== 'string' || !UCG_ITEM_MARKER.test(f));
+}
+
+/** Count UCG-stamped persistent_facts items. */
+function countStampedItems(facts) {
+  return stampedItems(facts).length;
+}
+
+/** Read the shipped fragment's items + block-level [ucg].version (source of truth). */
+function readFragment(skill) {
+  const parsed = parseTomlViaPython(path.join(REINSTALL_FRAGMENTS_DIR, `${skill}.toml`));
+  const items = Array.isArray(parsed.persistent_facts) ? parsed.persistent_facts : [];
+  const version = parsed.ucg?.version;
+  return { items, version, count: items.length };
+}
+
+/** sha256 of a file's raw bytes. */
+async function sha256File(filePath) {
+  const crypto = require('node:crypto');
+  return crypto
+    .createHash('sha256')
+    .update(await fs.readFile(filePath))
+    .digest('hex');
+}
+
+function jsonEqual(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Twins are guarded negative paths: skip-by-default, opt in via env flag so
+// each assertion is proven to FLAG a hollow implementation (the predicate is
+// discriminating, not vacuously satisfied by a no-op installer). They mutate an
+// in-memory copy of the REAL post-install parse to model a hollow merge, then
+// assert the assertion's predicate catches the mutant.
+const TWINS_ENABLED = process.env.UCG_REINSTALL_TWINS === '1';
+
+async function twin(name, fn) {
+  if (!TWINS_ENABLED) {
+    console.log(`${colors.dim}  ↳ twin skipped (set UCG_REINSTALL_TWINS=1): ${name}${colors.reset}`);
+    return;
+  }
+  await fn();
+}
+
+async function testReinstallAntiZombie() {
+  console.log(`${colors.yellow}Test Suite 8c: Anti-zombie reinstall${colors.reset}\n`);
+
+  const { Installer } = require('../tools/cli/lib/installer');
+  const SKILL = 'bmad-prd'; // a targeted planning fragment with a real overlay
+  const N = 3; // N>=3 consecutive installer-driven reinstalls
+  const fragment = readFragment(SKILL);
+
+  // Guard: the fragment itself must ship a non-empty stamped set, else every
+  // count/deep-equal assertion below would be vacuously satisfiable.
+  assert(fragment.count >= 1, 'PRE: shipped fragment ships >=1 stamped item', `count=${fragment.count}`);
+  assert(typeof fragment.version === 'string' && fragment.version.length > 0, 'PRE: fragment carries a block-level [ucg].version');
+
+  // --- byte-stable SHA-256 across N installer reinstalls --------------
+  {
+    const projectDir = await makeTempDir('s8c-bytestable');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, [SKILL]); // at least one present planning workflow
+      const installer = new Installer();
+      const customToml = path.join(projectDir, '_bmad', 'custom', `${SKILL}.toml`);
+      const baseConfig = {
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'reinstall-bytestable',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+      };
+
+      // Run 1 (fresh) seeds the overlay; runs 2..N drive the update reinstall
+      // path (fs.remove(ucgDir) at installer.js:50, then Step-6b merge).
+      const hashes = [];
+      for (let run = 1; run <= N; run++) {
+        const restore = suppressConsole();
+        const result = await installer.install({ ...baseConfig, _action: run === 1 ? 'fresh' : 'update' });
+        restore();
+        assert(result.success === true, `installer run ${run} returns success`);
+        assert(await fs.pathExists(customToml), `_bmad/custom/${SKILL}.toml present after run ${run} (overlay never wiped)`);
+        hashes.push(await sha256File(customToml));
+      }
+
+      // The merge target is the un-wiped overlay: byte-identical run 2..N.
+      assert(hashes[1] === hashes[2], `sha256(${SKILL}.toml) byte-identical run 2 === run ${N}`, `run2=${hashes[1]} runN=${hashes[2]}`);
+      assert(
+        hashes.slice(1).every((h) => h === hashes[1]),
+        'every reinstall run 2..N is byte-identical (anti-zombie convergence)',
+        `hashes=${JSON.stringify(hashes)}`,
+      );
+
+      // Anti-vacuous: prove the installer actually WROTE a non-empty overlay
+      // (not a no-op installer that never touches persistent_facts at all).
+      const facts = persistentFacts(parseTomlViaPython(customToml));
+      assert(countStampedItems(facts) >= 1, 'overlay carries >=1 stamped item (installer is not a no-op writer)');
+
+      // Twin: a hand-injected duplicate stamped item before a run, OR an
+      // append-without-strip merge, makes hashes diverge / item count grow.
+      // Modeled in-memory: an append-without-strip hollow merge would yield a
+      // distinct byte image (more items) -> a DIFFERENT hash; the byte-stability equality
+      // assertion would then fail. Proven by detecting the mutant.
+      await twin('append-without-strip diverges hashes', () => {
+        const crypto = require('node:crypto');
+        const realBytes = JSON.stringify(facts);
+        const hollowBytes = JSON.stringify([...facts, ...stampedItems(facts)]); // append, no strip
+        const realHash = crypto.createHash('sha256').update(realBytes).digest('hex');
+        const hollowHash = crypto.createHash('sha256').update(hollowBytes).digest('hex');
+        assert(realHash !== hollowHash, 'Twin: append-without-strip yields a DIFFERENT image -> byte-stability equality would fail');
+        assert(
+          countStampedItems([...facts, ...stampedItems(facts)]) > fragment.count,
+          'Twin: append-without-strip grows the stamped count past the fragment count',
+        );
+      });
+    } catch (error) {
+      assert(false, 'byte-stable reinstall completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- stamped item count == fragment count (1x, never Nx/2x) ---------
+  {
+    const projectDir = await makeTempDir('s8c-count');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, [SKILL]);
+      const installer = new Installer();
+      const customToml = path.join(projectDir, '_bmad', 'custom', `${SKILL}.toml`);
+      const baseConfig = {
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'reinstall-count',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+      };
+
+      for (let run = 1; run <= N; run++) {
+        const restore = suppressConsole();
+        await installer.install({ ...baseConfig, _action: run === 1 ? 'fresh' : 'update' });
+        restore();
+        const parsed = parseTomlViaPython(customToml);
+        const facts = persistentFacts(parsed);
+        const count = countStampedItems(facts);
+        assert(
+          count === fragment.count,
+          `no append-duplication across N installs: stamped count === fragment count after run ${run}`,
+          `count=${count} fragment=${fragment.count}`,
+        );
+        // Owned by the [ucg] block: managed=true, block='ucg-awareness'.
+        assert(parsed.ucg?.managed === true && parsed.ucg?.block === 'ucg-awareness', `[ucg] block owns the stamped set after run ${run}`);
+      }
+
+      // Twin: pre-seed TWO identical stamped items (a prior zombie) BEFORE a
+      // run; the strip-then-reappend collapses them to exactly 1x. An append-
+      // only hollow merge would stay >=2 and fail. We prove BOTH halves:
+      //   (a) the real installer collapses a pre-seeded zombie to 1x;
+      //   (b) an append-only mutant of the same input stays >2 (predicate catches it).
+      await twin('pre-seeded zombie collapses to 1x; append-only mutant stays >=2', async () => {
+        const zombieDir = await makeTempDir('s8c-count-zombie');
+        try {
+          await seedEngine(zombieDir);
+          await seedSkills(zombieDir, [SKILL]);
+          const zInstaller = new Installer();
+          const zToml = path.join(zombieDir, '_bmad', 'custom', `${SKILL}.toml`);
+          // Fresh install to seed the overlay.
+          let r = suppressConsole();
+          await zInstaller.install({ ...baseConfig, projectDir: zombieDir, _action: 'fresh' });
+          r();
+          // Hand-inject a DUPLICATE of the first stamped item (simulate a zombie).
+          const seeded = parseTomlViaPython(zToml);
+          const dupItem = stampedItems(persistentFacts(seeded))[0];
+          seeded.workflow.persistent_facts.push(dupItem);
+          await fs.writeFile(zToml, serializeTomlViaPython(seeded), 'utf8');
+          const preCount = countStampedItems(persistentFacts(parseTomlViaPython(zToml)));
+          assert(preCount > fragment.count, 'Twin: pre-seeded overlay has a zombie duplicate (> fragment count)', `preCount=${preCount}`);
+          // The append-only HOLLOW predicate would leave it >fragment; assert that.
+          const hollowAppendOnly = [...persistentFacts(parseTomlViaPython(zToml)), ...fragment.items];
+          assert(
+            countStampedItems(hollowAppendOnly) > fragment.count,
+            'Twin: an append-only (no-strip) merge keeps the zombie -> count stays >1x (predicate catches it)',
+          );
+          // The REAL installer reinstall collapses it back to exactly 1x.
+          r = suppressConsole();
+          await zInstaller.install({ ...baseConfig, projectDir: zombieDir, _action: 'update' });
+          r();
+          const postCount = countStampedItems(persistentFacts(parseTomlViaPython(zToml)));
+          assert(
+            postCount === fragment.count,
+            'Twin: real installer collapses the pre-seeded zombie back to exactly 1x',
+            `postCount=${postCount}`,
+          );
+        } finally {
+          await fs.remove(zombieDir);
+        }
+      });
+    } catch (error) {
+      assert(false, 'stamped-count completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- stale block-level [ucg].version is refreshed in place ----------
+  {
+    const projectDir = await makeTempDir('s8c-stale');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, [SKILL]);
+      const installer = new Installer();
+      const customToml = path.join(projectDir, '_bmad', 'custom', `${SKILL}.toml`);
+      const baseConfig = {
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'reinstall-stale',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+      };
+
+      // Seed the overlay with a UCG block whose block-level [ucg].version is
+      // STALE plus matching stamped items AND a prior-build stamped item whose
+      // marker (bmad-prd-99) the current fragment no longer ships — so an
+      // over-narrow strip would zombie it.
+      const STALE = '0.0.0-stale';
+      const staleItem = 'Stale prior-build UCG fact no longer shipped. [ucg:bmad-prd-99]';
+      const seedDoc = {
+        workflow: {
+          persistent_facts: [...fragment.items.slice(0, 1), staleItem],
+        },
+        ucg: {
+          managed: true,
+          version: STALE,
+          block: 'ucg-awareness',
+          installed_at: '2020-01-01T00:00:00Z',
+        },
+      };
+      await fs.ensureDir(path.dirname(customToml));
+      await fs.writeFile(customToml, serializeTomlViaPython(seedDoc), 'utf8');
+
+      // Drive the update reinstall path.
+      const restore = suppressConsole();
+      const result = await installer.install({ ...baseConfig, _action: 'update' });
+      restore();
+      assert(result.success === true, 'installer reinstall over a stale block returns success');
+
+      const parsed = parseTomlViaPython(customToml);
+      const facts = persistentFacts(parsed);
+      const rawText = await fs.readFile(customToml, 'utf8');
+
+      // (a) [ucg].version refreshed to current; the stale scalar is gone.
+      assert(
+        parsed.ucg?.version === fragment.version,
+        'stale version block is refreshed not duplicated (a): [ucg].version === current fragment version',
+        `got=${parsed.ucg?.version} want=${fragment.version}`,
+      );
+      assert(!rawText.includes(STALE), `(a): the literal '${STALE}' scalar is absent from the resolved overlay`);
+
+      // (b) the stamped-item subset (by marker) deep-equals the fragment items.
+      assert(
+        jsonEqual(stampedItems(facts), fragment.items),
+        '(b): stamped-item subset deep-equals the current fragment items',
+        `got=${JSON.stringify(stampedItems(facts))}`,
+      );
+      assert(
+        !stampedItems(facts).some((s) => s.includes('[ucg:bmad-prd-99]')),
+        '(b): the stale cross-build marked item (bmad-prd-99) was stripped (no zombie)',
+      );
+
+      // (c) total stamped count === fragment count (no stale+current pile-up).
+      assert(
+        countStampedItems(facts) === fragment.count,
+        '(c): total stamped count === fragment count (1x, no pile-up)',
+        `count=${countStampedItems(facts)} fragment=${fragment.count}`,
+      );
+
+      // Twin A: version-stamp NOT refreshed (write new items, leave [ucg].version
+      // stale) -> assertion (a) fails. Twin B: over-narrow same-marker-only strip
+      // leaves cross-build items -> count = 2x, assertion (c) fails.
+      await twin('un-refreshed version stamp / over-narrow strip are caught', () => {
+        // Twin A: hollow merge refreshes items but zombies the version scalar.
+        const hollowA = { ...parsed, ucg: { ...parsed.ucg, version: STALE } };
+        assert(hollowA.ucg.version !== fragment.version, 'Twin A: un-refreshed [ucg].version (still stale) -> assertion (a) would fail');
+
+        // Twin B: over-narrow strip keeps the prior-build marked item alongside
+        // the fresh ones -> stamped count = fragment + 1 (>1x).
+        const hollowB = [...fragment.items, staleItem];
+        assert(
+          countStampedItems(hollowB) > fragment.count,
+          'Twin B: over-narrow same-marker-only strip zombies cross-build item -> count >1x, assertion (c) would fail',
+        );
+      });
+    } catch (error) {
+      assert(false, 'stale-version refresh completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- human / non-UCG content byte-stable across N reinstalls --------
+  {
+    const projectDir = await makeTempDir('s8c-human');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, [SKILL]);
+      const installer = new Installer();
+      const customToml = path.join(projectDir, '_bmad', 'custom', `${SKILL}.toml`);
+      const baseConfig = {
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'reinstall-human',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+      };
+
+      // Seed a human non-UCG persistent_facts item (no marker) + a human scalar
+      // BEFORE the first reinstall, alongside one stamped item so a real merge
+      // touches the array.
+      const HUMAN_ITEM = 'Human-authored guardrail with no UCG marker; must survive byte-identical.';
+      const HUMAN_SCALAR = 'do-not-touch-me';
+      const seedDoc = {
+        workflow: {
+          persistent_facts: [HUMAN_ITEM, ...fragment.items.slice(0, 1)],
+        },
+        human_scalar: HUMAN_SCALAR,
+        ucg: {
+          managed: true,
+          version: fragment.version,
+          block: 'ucg-awareness',
+          installed_at: '2026-06-25T00:00:00Z',
+        },
+      };
+      await fs.ensureDir(path.dirname(customToml));
+      await fs.writeFile(customToml, serializeTomlViaPython(seedDoc), 'utf8');
+
+      for (let run = 1; run <= N; run++) {
+        const restore = suppressConsole();
+        await installer.install({ ...baseConfig, _action: 'update' });
+        restore();
+        const parsed = parseTomlViaPython(customToml);
+        const facts = persistentFacts(parsed);
+        // The human non-stamped subset is byte/value-stable (deep-equal).
+        assert(
+          jsonEqual(nonStampedItems(facts), [HUMAN_ITEM]),
+          `human content byte-stable across N installs: non-stamped item preserved after run ${run}`,
+          `got=${JSON.stringify(nonStampedItems(facts))}`,
+        );
+        assert(parsed.human_scalar === HUMAN_SCALAR, `human scalar preserved after run ${run}`, `got=${parsed.human_scalar}`);
+      }
+
+      // Twin: a drop-and-rewrite-all merge (rewrites the whole array) drops or
+      // reorders the human item -> deep-equal breaks. Modeled: a hollow merge
+      // that writes ONLY the fragment items (dropping human content) fails the
+      // deep-equal predicate.
+      await twin('drop-and-rewrite-all clobbers human content', () => {
+        const facts = persistentFacts(parseTomlViaPython(customToml));
+        const hollowRewriteAll = [...fragment.items]; // drops the human item entirely
+        assert(
+          !jsonEqual(nonStampedItems(hollowRewriteAll), [HUMAN_ITEM]),
+          'Twin: drop-and-rewrite-all loses the human item -> deep-equal would fail (predicate catches it)',
+        );
+        // sanity: the real merge kept it (the predicate is satisfiable, not always-false)
+        assert(jsonEqual(nonStampedItems(facts), [HUMAN_ITEM]), 'Twin: control — the real merge DID preserve the human item');
+      });
+    } catch (error) {
+      assert(false, 'human-content preservation completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  console.log('');
+}
+
+// ============================================================
 // Runner
 // ============================================================
 
@@ -751,6 +1850,9 @@ async function runTests() {
   await testManifestAccuracy();
   await testFreshInstallWithoutLearning();
   await testGitignoreEntries();
+  await testStep6bUcgAwareness();
+  await testStep6bDeclineNoOp();
+  await testReinstallAntiZombie();
   await testBannerGeometry();
 
   console.log(`${colors.cyan}========================================`);

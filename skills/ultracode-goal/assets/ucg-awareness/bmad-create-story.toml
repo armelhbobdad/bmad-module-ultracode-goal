@@ -1,0 +1,23 @@
+# UCG awareness fragment for bmad-create-story.
+# Authored additive guardrail facts landing in the one universal sanctioned
+# append channel (persistent_facts). The gate, not this shaping, is the
+# load-bearing guarantee. Idempotent strip-then-reappend is the
+# merge_customization.py merge step's concern, matched by the per-directive
+# [ucg:{skill}-NN] id marker each entry carries.
+
+persistent_facts = [
+  "Each story inherits its epic's AC contract verbatim: every acceptance criterion this story carries must arrive already machine-checkable, with a named verification method, a mandatory anti-vacuous twin, an explicit CI-deterministic-vs-operator split, and a gate-ability tag -- a story must never relax, paraphrase, or silently drop any AC clause its parent epic declared. [ucg:bmad-create-story-01]",
+  "A story must not introduce a vacuous AC: every criterion has to be falsifiable by its named verification (an assertion that could genuinely fail if the code were wrong), never a tautology that passes no matter what the implementation does. [ucg:bmad-create-story-02]",
+  "Every Task and Subtask carries an (AC: #) back-reference to the acceptance criterion it implements, and every AC is covered by at least one such Task -- no orphan Task without an AC and no AC without an implementing Task, so the work plan and the contract stay mutually traceable. [ucg:bmad-create-story-03]",
+  "Dev Notes cite only real, resolvable references: every source path must point at a file that exists and every architecture-decision citation must name a real AD id from the bound architecture artifact -- never an invented file, an invented AD id, or a guessed threshold value (invented context is forbidden). [ucg:bmad-create-story-04]",
+  "Beyond merely existing, a Dev-Notes citation only counts as resolved when its target can actually reach a passing state: the verification artifact, source path, or AD id a story points at must be one an existing story, test, file, or decision already declares as reachable -- this is the orphaned-index guard, blocking a reference to an index or never-green artifact that no implementing work could ever turn green. [ucg:bmad-create-story-05]",
+  "The story must have a definable 'done' derivable from its own artifacts alone: a reader must be able to determine completion purely from the ACs, their named verifications, and the Tasks, with no undecided question left for the implementer to settle -- if 'done' is not derivable, the story is not ready for ATDD handoff. [ucg:bmad-create-story-06]",
+  "A story must not pull a TEA test-design or test-architecture artifact into its own source or Dev Notes as if it were a deliverable input: TEA-owned artifacts stay on the TEA surface and are referenced, never copied into the story's authored body (no leaked TEA path). [ucg:bmad-create-story-07]",
+  "These are run-scoped guardrail facts that shape how a story is authored; they are narrower than per-AC machine directives and do not replace the gate. The formalize check and preflight, not this shaping, are the load-bearing guarantee -- so author each story to satisfy the contract by construction while leaving the verdict to the gate. [ucg:bmad-create-story-08]",
+]
+
+[ucg]
+managed = true
+version = "0.3.0"
+block = "ucg-awareness"
+installed_at = "2026-06-25T00:00:00Z"

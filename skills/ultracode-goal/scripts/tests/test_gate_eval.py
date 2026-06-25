@@ -26,12 +26,14 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[1] / "gate_eval.py"
 
 
-def run_gate(trace_output, profile="light", nfr=None, test_review=None):
+def run_gate(trace_output, profile="light", nfr=None, test_review=None, story=None):
     cmd = [sys.executable, str(SCRIPT), "--trace-output", str(trace_output), "--profile", profile]
     if nfr is not None:
         cmd += ["--nfr", str(nfr)]
     if test_review is not None:
         cmd += ["--test-review", str(test_review)]
+    if story is not None:
+        cmd += ["--story", str(story)]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
@@ -293,6 +295,124 @@ def test_light_profile_ignores_production_signals(tmp_path):
     result = run_gate(tmp_path, profile="light", nfr=nfr)
     assert result["verdict"] == "advance"
     assert result["nfr_status"] is None
+
+
+# --- --story selector in a shared multi-story trace dir (fp-910f0fd) ----------
+
+
+def write_named_slim(dir_path, name, gate_status, p0="MET", p1="MET", overall="MET"):
+    payload = {
+        "schema_version": "0.1.0",
+        "gate_status": gate_status,
+        "p0_status": p0,
+        "p1_status": p1,
+        "overall_status": overall,
+    }
+    (dir_path / name).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def write_trace_report(dir_path, name, gate_decision_file):
+    (dir_path / name).write_text(
+        "---\n"
+        "workflowType: 'testarch-trace'\n"
+        f"gateDecisionFile: {gate_decision_file}\n"
+        "---\n# trace report\n",
+        encoding="utf-8",
+    )
+
+
+def test_story_selector_picks_current_not_oldest_in_shared_dir(tmp_path):
+    # Two stories share one trace dir. The lexically-first (oldest) report is the
+    # FAILing story 11-1; the current story 11-6 PASSes.
+    write_trace_report(tmp_path, "trace-11-1.md", "gate-decision-11-1.json")
+    write_named_slim(tmp_path, "gate-decision-11-1.json", "FAIL", p0="NOT_MET")
+    write_trace_report(tmp_path, "trace-11-6.md", "gate-decision-11-6.json")
+    write_named_slim(tmp_path, "gate-decision-11-6.json", "PASS")
+
+    # Bug repro: with no --story the unscoped glob resolves the oldest (11-1).
+    unscoped = run_gate(tmp_path, profile="light")
+    assert unscoped["gate_status"] == "FAIL"
+
+    # Fix: --story scopes resolution to the current story's artifacts.
+    scoped = run_gate(tmp_path, profile="light", story="11-6")
+    assert scoped["gate_status"] == "PASS"
+    assert scoped["verdict"] == "advance"
+
+
+def test_story_selector_disambiguates_epic_from_story(tmp_path):
+    # Epic-level (11) and a story (11-6) coexist; end-anchored matching keeps them
+    # apart so --story 11 never resolves the 11-6 report and vice versa.
+    write_trace_report(tmp_path, "trace-11.md", "gate-decision-11.json")
+    write_named_slim(tmp_path, "gate-decision-11.json", "FAIL", p0="NOT_MET")
+    write_trace_report(tmp_path, "trace-11-6.md", "gate-decision-11-6.json")
+    write_named_slim(tmp_path, "gate-decision-11-6.json", "PASS")
+
+    assert run_gate(tmp_path, profile="light", story="11-6")["gate_status"] == "PASS"
+    assert run_gate(tmp_path, profile="light", story="11")["gate_status"] == "FAIL"
+
+
+def test_story_selector_epic_id_not_confused_with_child_story(tmp_path):
+    # The E-E collision: a single-component epic id (1) must resolve the epic
+    # report, NOT child story 1-1 whose LAST component also equals 1 — and
+    # trace-1-1.md sorts BEFORE trace-1.md, so an unscoped/suffix match would
+    # wrongly return the child's gate as the epic verdict (the false-verdict
+    # class this selector exists to prevent). Reachable in-repo: epic 1 / story 1-1.
+    write_trace_report(tmp_path, "trace-1-1.md", "gate-decision-1-1.json")
+    write_named_slim(tmp_path, "gate-decision-1-1.json", "FAIL", p0="NOT_MET")
+    write_trace_report(tmp_path, "trace-1.md", "gate-decision-1.json")
+    write_named_slim(tmp_path, "gate-decision-1.json", "PASS")
+    # Epic-level gate scoped to epic id 1 reads the epic's PASS, not 1-1's FAIL.
+    assert run_gate(tmp_path, profile="light", story="1")["gate_status"] == "PASS"
+    # The child story still resolves itself.
+    assert run_gate(tmp_path, profile="light", story="1-1")["gate_status"] == "FAIL"
+
+
+def test_story_selector_convention_slim_without_hint(tmp_path):
+    # No trace-report hint; the conventionally-named per-story slim file is used,
+    # and a decoy sibling story's slim file must NOT be picked.
+    write_named_slim(tmp_path, "gate-decision-9-1.json", "FAIL", p0="NOT_MET")
+    write_named_slim(tmp_path, "gate-decision-9-2.json", "PASS")
+    result = run_gate(tmp_path, profile="light", story="9-2")
+    assert result["gate_status"] == "PASS"
+    assert any("gate-decision-9-2.json" in r for r in result["reasons"])
+
+
+def test_story_selector_separator_insensitive(tmp_path):
+    # --story 7-3 resolves a dot-separated artifact name (7.3) and vice versa.
+    write_named_slim(tmp_path, "gate-decision-7.3.json", "PASS")
+    result = run_gate(tmp_path, profile="light", story="7-3")
+    assert result["gate_status"] == "PASS"
+
+
+def test_story_selector_falls_back_to_unscoped_when_no_match(tmp_path):
+    # A single-story dir with a non-story-named report still resolves when a
+    # caller passes --story that matches nothing here (graceful fallback).
+    (tmp_path / "traceability-matrix.md").write_text(
+        "---\nworkflowType: 'testarch-trace'\ngateDecisionFile: custom-gate.json\n---\n# report\n",
+        encoding="utf-8",
+    )
+    write_named_slim(tmp_path, "custom-gate.json", "PASS")
+    result = run_gate(tmp_path, profile="light", story="3-4")
+    assert result["gate_status"] == "PASS"
+    assert result["verdict"] == "advance"
+
+
+def test_story_selector_per_story_summary_fallback(tmp_path):
+    # No slim file; the per-story summary is preferred over a sibling story's.
+    write_summary(tmp_path, gate_status=None)  # shared, no gate fields
+    other = tmp_path / "e2e-trace-summary-5-1.json"
+    other.write_text(json.dumps({"gate_status": "FAIL"}), encoding="utf-8")
+    mine = tmp_path / "e2e-trace-summary-5-2.json"
+    mine.write_text(json.dumps({"gate_status": "PASS"}), encoding="utf-8")
+    result = run_gate(tmp_path, profile="light", story="5-2")
+    assert result["gate_status"] == "PASS"
+
+
+def test_no_story_flag_is_backward_compatible(tmp_path):
+    # The default (no --story) path is unchanged: slim gate-decision.json wins.
+    write_slim(tmp_path, "PASS")
+    result = run_gate(tmp_path, profile="light")
+    assert result["gate_status"] == "PASS"
 
 
 if __name__ == "__main__":

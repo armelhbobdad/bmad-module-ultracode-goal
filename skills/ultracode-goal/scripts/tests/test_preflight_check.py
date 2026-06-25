@@ -223,6 +223,70 @@ def test_missing_framework_is_a_remediable_blocker(project, monkeypatch):
     assert blocker["remediable"] is True
 
 
+def test_framework_kind_reports_js_config_for_playwright(project, monkeypatch):
+    # The green fixture scaffolds playwright.config.ts.
+    checks = _report(project, monkeypatch)["checks"]
+    assert checks["framework_present"] is True
+    assert checks["framework_kind"] == "js-config"
+
+
+def test_pytest_ini_counts_as_a_framework(project, monkeypatch):
+    (project / "playwright.config.ts").unlink()
+    (project / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    report = _report(project, monkeypatch)
+    assert report["checks"]["framework_present"] is True
+    assert report["checks"]["framework_kind"] == "pytest"
+    assert "framework_present" not in _blocker_ids(report)
+
+
+def test_root_conftest_counts_as_pytest(project, monkeypatch):
+    (project / "playwright.config.ts").unlink()
+    (project / "conftest.py").write_text("# fixtures\n", encoding="utf-8")
+    checks = _report(project, monkeypatch)["checks"]
+    assert checks["framework_present"] is True
+    assert checks["framework_kind"] == "pytest"
+
+
+def test_pyproject_pytest_table_counts_as_pytest(project, monkeypatch):
+    (project / "playwright.config.ts").unlink()
+    (project / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\naddopts = "-q"\n', encoding="utf-8"
+    )
+    assert _report(project, monkeypatch)["checks"]["framework_kind"] == "pytest"
+
+
+def test_real_npm_test_script_counts_as_a_framework(project, monkeypatch):
+    (project / "playwright.config.ts").unlink()
+    (project / "package.json").write_text(
+        json.dumps({"scripts": {"test": "uv run pytest && node test/cli.js"}}),
+        encoding="utf-8",
+    )
+    report = _report(project, monkeypatch)
+    assert report["checks"]["framework_present"] is True
+    assert report["checks"]["framework_kind"] == "npm-test"
+    assert "framework_present" not in _blocker_ids(report)
+
+
+def test_npm_init_placeholder_test_script_does_not_count(project, monkeypatch):
+    (project / "playwright.config.ts").unlink()
+    (project / "package.json").write_text(
+        json.dumps({"scripts": {"test": 'echo "Error: no test specified" && exit 1'}}),
+        encoding="utf-8",
+    )
+    report = _report(project, monkeypatch)
+    assert report["checks"]["framework_present"] is False
+    assert report["checks"]["framework_kind"] is None
+    assert "framework_present" in _blocker_ids(report)
+
+
+def test_no_harness_at_all_reports_kind_none(project, monkeypatch):
+    (project / "playwright.config.ts").unlink()
+    report = _report(project, monkeypatch)
+    assert report["checks"]["framework_present"] is False
+    assert report["checks"]["framework_kind"] is None
+    assert "framework_present" in _blocker_ids(report)
+
+
 # --- Git blockers -----------------------------------------------------------
 
 

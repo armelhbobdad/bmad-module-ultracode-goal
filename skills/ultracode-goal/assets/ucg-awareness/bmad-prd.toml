@@ -1,0 +1,21 @@
+# UCG awareness fragment for bmad-prd.
+# Authored additive guardrail facts landing in the one universal sanctioned
+# append channel (persistent_facts). The gate, not this shaping, is the
+# load-bearing guarantee. Idempotent strip-then-reappend is the
+# merge_customization.py merge step's concern, matched by the per-directive
+# [ucg:{skill}-NN] id marker each entry carries.
+
+persistent_facts = [
+  "Steer every NFR toward a machine-checkable budget: a named metric, a concrete numeric or boolean threshold, and the measurement method that decides pass/fail. Treat an NFR that states a quality goal without all three as not yet UCG-ready and flag it for the formalize/preflight gate. [ucg:bmad-prd-01]",
+  "Steer every NFR threshold number to cite a source -- a benchmark, an SLA, a prior measurement, or a bound ADR; when no real source exists, mark the threshold UNKNOWN and route it to a decision rather than inventing or guessing a number into the artifact. [ucg:bmad-prd-02]",
+  "Steer every requirement and every NFR to declare up front how its satisfaction will be verified by carrying a gate-ability tag from {ci-machine, partly-operator, decision-doc}. [ucg:bmad-prd-03]",
+  "Steer every functional requirement toward a stable, traceable id that downstream epics, stories, and ACs can cite; keep ids unique and avoid silent renumbering. [ucg:bmad-prd-04]",
+  "Steer every open product question that a load-bearing requirement depends on toward resolution as an ADR before a UCG or preflight run -- prefer an ADR over leaving a TBD, TODO-decide, or '(?)' on a load-bearing requirement, and keep requirements from contradicting a bound ADR. [ucg:bmad-prd-05]",
+  "These are run-scoped guardrail facts that improve any PRD run; they are narrower than per-requirement machine directives by design. The formalize/preflight gate, not this shaping, is the load-bearing guarantee that a requirement is UCG-ready -- a missing id, gate-ability tag, threshold source, or unresolved decision is steered away from here but still caught by the gate. [ucg:bmad-prd-06]",
+]
+
+[ucg]
+managed = true
+version = "0.3.0"
+block = "ucg-awareness"
+installed_at = "2026-06-25T00:00:00Z"

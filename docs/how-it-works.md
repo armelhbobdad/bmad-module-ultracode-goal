@@ -137,3 +137,7 @@ With `-H`, the run is non-interactive: infer scope, default to production (unles
 ```
 
 An automator parses one schema regardless of where the run stopped; a blocked-before-report exit returns `report` and `deferred_work` as `null` rather than omitting them.
+
+## Portability: what installs everywhere, and what Claude Code adds
+
+UCG installs on any editor and never refuses. The shift-left planning customization is provider-portable BMAD content — it shapes your planning workflows wherever it lands. The standalone `/ucg-formalize` readiness gate installs everywhere too. The one thing Claude Code adds is the preflight enforcement that runs that gate automatically at run start: that automatic invocation is a Claude Code-only capability. Off Claude Code, `/ucg-formalize` remains a manual, on-demand verdict you invoke yourself — the readiness check still exists, it is simply no longer fired for you by preflight. The readiness verdict definition and the five-key headless envelope above are byte-identical across providers; only the automatic invocation changes. UCG documents this gap plainly rather than implying a readiness check runs by itself where the runtime cannot run it.

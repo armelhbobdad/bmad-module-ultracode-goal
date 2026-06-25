@@ -141,7 +141,7 @@ function runStory(s, i) {
       reviewStep +
       `5. COMMIT AT GREEN: make exactly ONE commit on this worktree's branch capturing the story. The PreToolUse hook will deny the commit on a protected branch or without the tests-ran marker — that is expected enforcement, satisfy it rather than bypass it. Set committed=true only if the commit succeeded on green.\n` +
       `6. GATE THIS STORY — run EXACTLY:\n` +
-      `   uv run ${skillRoot}/scripts/gate_eval.py --trace-output ${traceOutput} --profile ${profile}` +
+      `   uv run ${skillRoot}/scripts/gate_eval.py --trace-output ${traceOutput} --story ${id} --profile ${profile}` +
       (isProduction ? ` --nfr <nfr-assessment.md> --test-review <test-review.md>` : ``) + `\n` +
       `   (in production, first run bmad-testarch-automate to backfill coverage, then bmad-testarch-trace, then bmad-testarch-nfr so the gate file exists before you read it). ` +
       `Return the script's verdict, gate_status, and reasons VERBATIM. Do not recompute TEA thresholds and do not override the verdict.\n\n` +
@@ -191,7 +191,7 @@ const epicGate = await agent(
     `Run the EPIC-LEVEL TEA quality gate over the consolidated epic` +
     (isProduction ? ` (run bmad-testarch-automate -> bmad-testarch-trace -> bmad-testarch-nfr first)` : ` (run bmad-testarch-trace first)`) +
     `, then run EXACTLY:\n` +
-    `  uv run ${skillRoot}/scripts/gate_eval.py --trace-output ${traceOutput} --profile ${profile}` +
+    `  uv run ${skillRoot}/scripts/gate_eval.py --trace-output ${traceOutput} --story ${epic} --profile ${profile}` +
     (isProduction ? ` --nfr <nfr-assessment.md> --test-review <test-review.md>` : ``) + `\n` +
     `Return the script's verdict, gate_status, and reasons VERBATIM. Do not recompute thresholds or override the verdict.\n` +
     `Per-story outcomes for context: ${JSON.stringify(perStory.map((r) => ({ story: r.story, verdict: r.verdict, gate_status: r.gate_status })))}\n\n` +
