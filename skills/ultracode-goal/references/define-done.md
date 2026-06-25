@@ -30,12 +30,14 @@ For every **in-scope** story, in sprint order:
 
    Force **Create** mode (not Resume/Validate/Edit) for the same unattended reason.
 
+**In `--light`:** run step 1 (`bmad-create-story`) but **skip step 2 (`bmad-testarch-atdd`)** — `--light` produces no executable red-phase acceptance tests. The story file and its acceptance criteria become the Definition-of-Done and the oracle `bmad-testarch-trace` resolves the Stage 5 gate against, mirroring gate.md's `--light` branch (which runs only `bmad-testarch-trace`). The per-Epic test-design above still runs in `--light`: trace needs its risk matrix and priorities regardless of profile. Sharpen the ACs here exactly as you would for production — under `--light` they are the *only* machine-checkable DoD a story gets, so vague ACs leave the trace gate nothing to resolve against.
+
 ## Exit condition (testable)
 
 Stage 3 is complete, and Stage 4 may begin, when **all three** hold:
 
 - The Epic has a `bmad-testarch-test-design` plan with a populated risk matrix, P0–P3 priorities assigned, and every in-scope NFR threshold either resolved or explicitly marked `UNKNOWN`/deferred.
 - **Every in-scope story** has a story file with clear acceptance criteria.
-- **Every in-scope story** has a generated `atdd-checklist-{story_key}.md` and red-phase (`test.skip`) acceptance tests on disk.
+- **Every in-scope story** has a generated `atdd-checklist-{story_key}.md` and red-phase (`test.skip`) acceptance tests on disk — **production only**. Under `--light` this is skipped by design; the story file's acceptance criteria stand as the trace oracle instead, and this bullet is satisfied by the clear-ACs bullet above.
 
-If any in-scope story is missing its atdd-checklist, this stage is not done — Execute has nothing executable to drive that story to. Record in `.decision-log.md`: the test-design verdict, each story's AC + checklist status, and any deferral appended to `{workflow.deferred_work_path}`.
+In production, if any in-scope story is missing its atdd-checklist, this stage is not done — Execute has nothing executable to drive that story to. (Under `--light` an absent atdd-checklist is expected, not a gap.) Record in `.decision-log.md`: the test-design verdict, each story's AC + checklist status (or the `--light` skip), and any deferral appended to `{workflow.deferred_work_path}`.
