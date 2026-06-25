@@ -690,6 +690,497 @@ async function testGitignoreEntries() {
 }
 
 // ============================================================
+// Test Suite 8: Step 6b — UCG-awareness shaping (Story 1.6)
+// ============================================================
+
+const REPO_ROOT = path.resolve(__dirname, '..');
+const REAL_ENGINE = path.join(REPO_ROOT, '_bmad', 'scripts', 'resolve_customization.py');
+
+// AC6 enumerated forbidden cross-provider-auto-enforcement-claim set. Defined
+// as the literal constant the AC pins (epics-and-stories Story 1.6 AC6). The
+// machine half asserts the honesty line matches the POSITIVE shape exactly once
+// AND matches ZERO of these alternations — printing any forbidden literal flips
+// .test() to true and fails the suite (non-vacuous).
+const STEP6B_FORBIDDEN_ENFORCEMENT =
+  /(auto.?enforc|automatic(ally)? enforc|preflight (is )?enforced|enforced (on|across) (cursor|all providers|every provider)|cross-?provider auto|enforce.{0,20}(cursor|all providers|every provider))/i;
+const CLAUDE_CODE_ONLY = /Claude.?Code.*only/i;
+
+/**
+ * Copy the real deep_merge engine into a temp project so merge_customization.py
+ * resolves it exactly as it will at install time (mirrors REAL_ENGINE in
+ * skills/.../tests/test_merge_customization.py).
+ */
+async function seedEngine(projectDir) {
+  const dest = path.join(projectDir, '_bmad', 'scripts', 'resolve_customization.py');
+  await fs.ensureDir(path.dirname(dest));
+  await fs.copy(REAL_ENGINE, dest);
+}
+
+/** Seed present BMAD skills by creating .claude/skills/{skill}/ dirs. */
+async function seedSkills(projectDir, skills) {
+  for (const skill of skills) {
+    await fs.ensureDir(path.join(projectDir, '.claude', 'skills', skill));
+  }
+}
+
+/**
+ * Spy on clack's log.warn AND note/outro so emitted warning + note strings are
+ * captured into one joined string BEFORE suppressConsole() reassigns stdout
+ * (suppressConsole swallows stdout, so reading stdout won't work). Returns
+ * {joined(), restore()}.
+ */
+function spyClackSinks() {
+  const clack = require('@clack/prompts');
+  const captured = [];
+  const origWarn = clack.log.warn;
+  const origInfo = clack.log.info;
+  const origNote = clack.note;
+  const origOutro = clack.outro;
+  clack.log.warn = (msg) => captured.push(String(msg));
+  clack.log.info = (msg) => captured.push(String(msg));
+  clack.note = (body, title) => captured.push(String(body) + '\n' + String(title));
+  clack.outro = (msg) => captured.push(String(msg));
+  return {
+    captured,
+    joined: () => captured.join('\n'),
+    restore: () => {
+      clack.log.warn = origWarn;
+      clack.log.info = origInfo;
+      clack.note = origNote;
+      clack.outro = origOutro;
+    },
+  };
+}
+
+const PLANNING_SKILLS = ['bmad-prd', 'bmad-architecture', 'bmad-create-epics-and-stories', 'bmad-create-story'];
+
+async function testStep6bUcgAwareness() {
+  console.log(`${colors.yellow}Test Suite 8: Step 6b — UCG-awareness shaping${colors.reset}\n`);
+
+  const { Installer, PORTABILITY_GAP_LINE } = require('../tools/cli/lib/installer');
+  const { promptInstall } = require('../tools/cli/lib/ui');
+
+  // --- AC1: ui.js promptInstall surfaces exactly one new opt-in -------------
+  // (a) the confirm wiring: grep-style assertions on the source.
+  {
+    const uiSrc = await fs.readFile(path.join(REPO_ROOT, 'tools/cli/lib/ui.js'), 'utf8');
+    const enableCount = (uiSrc.match(/enable_ucg_awareness/g) || []).length;
+    assert(enableCount >= 1, 'AC1: ui.js references enable_ucg_awareness', `count=${enableCount}`);
+    // the new confirm carries initialValue: false (off-by-default twin)
+    assert(/initialValue:\s*false/.test(uiSrc), 'AC1: a confirm with initialValue: false exists (off-by-default)');
+    // it is threaded onto the returned config object
+    assert(/return\s*{[\s\S]*enable_ucg_awareness[\s\S]*}/.test(uiSrc), 'AC1: enable_ucg_awareness threaded onto returned config');
+  }
+
+  // (b) opt-out is a true no-op: install({enable_ucg_awareness:false}) writes
+  //     no _bmad/custom/*.toml even with engine + skills present. Anti-vacuous
+  //     twin: deleting the gate (always-write) would create the file here.
+  {
+    const projectDir = await makeTempDir('s6b-optout');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, PLANNING_SKILLS);
+      const installer = new Installer();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'optout',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: false,
+        _action: 'fresh',
+      });
+      restore();
+      assert(result.success === true, 'AC1: opt-out install returns success');
+      const customDir = path.join(projectDir, '_bmad', 'custom');
+      const wrote = (await fs.pathExists(customDir)) ? await fs.readdir(customDir) : [];
+      const tomls = wrote.filter((f) => f.endsWith('.toml'));
+      assert(tomls.length === 0, 'AC1-twin: opt-out writes NO _bmad/custom/*.toml', `found ${tomls.join(', ')}`);
+    } catch (error) {
+      assert(false, 'AC1 opt-out no-op completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // (c) promptInstall returns the boolean from the confirm mock, and the
+  //     update path leaves it falsy. ui.js DESTRUCTURES @clack/prompts at load;
+  //     clack's exports are non-configurable bindings (reassignment is a silent
+  //     no-op), so we replace the CACHED clack module exports with a writable
+  //     copy BEFORE re-requiring ui.js, and run in a fresh temp cwd so the
+  //     existing-install select() branch is skipped.
+  {
+    const clackPath = require.resolve('@clack/prompts');
+    const uiPath = require.resolve('../tools/cli/lib/ui');
+    const realClack = require('@clack/prompts');
+    const origCwd = process.cwd();
+    const promptDir = await makeTempDir('s6b-promptinstall');
+    const restore = suppressConsole();
+
+    let confirmAnswers = [];
+    let confirmIdx = 0;
+    // A writable stand-in for the clack module: copy every real export, then
+    // override the interactive ones. ui.js's `require('@clack/prompts')` will
+    // receive this object once we swap it into require.cache.
+    const stubClack = {
+      ...realClack,
+      text: async () => 'p',
+      multiselect: async () => ['claude-code'],
+      select: async () => 'fresh',
+      confirm: async () => confirmAnswers[confirmIdx++],
+      intro: () => {},
+      outro: () => {},
+      note: () => {},
+      log: { ...realClack.log, info: () => {}, warn: () => {} },
+    };
+    const realClackCacheExports = require.cache[clackPath].exports;
+
+    try {
+      require.cache[clackPath].exports = stubClack;
+      process.chdir(promptDir);
+      delete require.cache[uiPath];
+      const ui = require(uiPath); // re-require so the destructure binds stubs
+      const u = new ui.UI();
+      u.displayBanner = () => {};
+
+      // [install_learning=true, enable_ucg_awareness=true]
+      confirmAnswers = [true, true];
+      confirmIdx = 0;
+      const cfgTrue = await u.promptInstall();
+      assert(cfgTrue.enable_ucg_awareness === true, 'AC1: confirm()=true -> config.enable_ucg_awareness === true');
+
+      // [install_learning=true, enable_ucg_awareness=false]
+      confirmAnswers = [true, false];
+      confirmIdx = 0;
+      const cfgFalse = await u.promptInstall();
+      assert(cfgFalse.enable_ucg_awareness === false, 'AC1: confirm()=false -> config.enable_ucg_awareness === false');
+    } catch (error) {
+      assert(false, 'AC1 promptInstall confirm wiring completes without error', error.message + '\n' + error.stack);
+    } finally {
+      process.chdir(origCwd);
+      require.cache[clackPath].exports = realClackCacheExports;
+      restore();
+      delete require.cache[uiPath]; // restore the unstubbed ui module for later suites
+      await fs.remove(promptDir);
+    }
+  }
+
+  // --- AC2: present-only enumeration -> stamped overlays --------------------
+  // Anti-vacuous twin: a fifth non-planning skill (bmad-dev-story) present is
+  // NOT enrolled (only the four Epic-1 targets), and an absent planning skill
+  // (bmad-create-story) is skipped.
+  {
+    const projectDir = await makeTempDir('s6b-present-only');
+    try {
+      await seedEngine(projectDir);
+      // present: bmad-prd, bmad-architecture (+ a non-planning bmad-dev-story);
+      // absent: bmad-create-story, bmad-create-epics-and-stories.
+      await seedSkills(projectDir, ['bmad-prd', 'bmad-architecture', 'bmad-dev-story']);
+      const installer = new Installer();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'present-only',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      assert(result.success === true, 'AC2: install returns success');
+
+      const customDir = path.join(projectDir, '_bmad', 'custom');
+      const prdPath = path.join(customDir, 'bmad-prd.toml');
+      const archPath = path.join(customDir, 'bmad-architecture.toml');
+      assert(await fs.pathExists(prdPath), 'AC2: bmad-prd.toml written (present skill)');
+      assert(await fs.pathExists(archPath), 'AC2: bmad-architecture.toml written (present skill)');
+
+      const prdText = await fs.readFile(prdPath, 'utf8');
+      assert(prdText.includes('block = "ucg-awareness"'), 'AC2: bmad-prd.toml carries [ucg] block = "ucg-awareness"');
+      assert(/\[ucg:bmad-prd-\d+\]/.test(prdText), 'AC2: bmad-prd.toml carries a persistent_facts entry');
+      const archText = await fs.readFile(archPath, 'utf8');
+      assert(archText.includes('block = "ucg-awareness"'), 'AC2: bmad-architecture.toml carries block = "ucg-awareness"');
+      assert(/persistent_facts/.test(archText), 'AC2: bmad-architecture.toml carries persistent_facts');
+
+      assert(!(await fs.pathExists(path.join(customDir, 'bmad-create-story.toml'))), 'AC2: absent bmad-create-story skipped (no overlay)');
+      assert(
+        !(await fs.pathExists(path.join(customDir, 'bmad-dev-story.toml'))),
+        'AC2-twin: non-planning bmad-dev-story NOT enrolled (only the four Epic-1 targets)',
+      );
+    } catch (error) {
+      assert(false, 'AC2 present-only enumeration completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- AC3: degrade-not-throw (one fragment throws, another succeeds) -------
+  // Stub runStep6bMerge so bmad-prd throws and bmad-architecture succeeds.
+  // Anti-vacuous twin is documented below: without the try-catch the throw
+  // propagates and install() rejects + no manifest.
+  {
+    const projectDir = await makeTempDir('s6b-degrade');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, ['bmad-prd', 'bmad-architecture']);
+      const installer = new Installer();
+
+      // Capture warnings via the clack log.warn spy.
+      const spy = spyClackSinks();
+      const origRunner = installer.runStep6bMerge.bind(installer);
+      installer.runStep6bMerge = (targetPath, fragmentPath) => {
+        if (targetPath.includes('bmad-prd')) {
+          throw new Error('simulated bmad-prd merge failure');
+        }
+        return origRunner(targetPath, fragmentPath); // bmad-architecture really merges
+      };
+
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'degrade',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      spy.restore();
+
+      assert(result.success === true, 'AC3: install resolves success:true despite a per-fragment failure');
+      const manifestPath = path.join(projectDir, '_bmad/_config/ucg-manifest.yaml');
+      assert(await fs.pathExists(manifestPath), 'AC3: manifest (Step 7) still written after degrade');
+      assert(
+        await fs.pathExists(path.join(projectDir, '_bmad', 'custom', 'bmad-architecture.toml')),
+        'AC3: the other fragment (bmad-architecture) still merged',
+      );
+      const prdWarnings = spy.captured.filter((m) => /bmad-prd/.test(m) && /fail/i.test(m));
+      assert(prdWarnings.length === 1, 'AC3: exactly one warning recorded for bmad-prd', `found ${prdWarnings.length}`);
+    } catch (error) {
+      assert(false, 'AC3 degrade-not-throw completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- AC4(a): absent resolve_customization.py -> verify-only no-op ---------
+  // No engine seeded; assert no _bmad/custom/*.toml, exactly one warning,
+  // success true, AND the standalone path intact (formalize_check.py + skill).
+  {
+    const projectDir = await makeTempDir('s6b-absent-resolve');
+    try {
+      await seedSkills(projectDir, PLANNING_SKILLS); // skills present, but NO engine
+      const installer = new Installer();
+      const spy = spyClackSinks();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'absent-resolve',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      spy.restore();
+
+      assert(result.success === true, 'AC4a: install returns success with absent engine');
+      const customDir = path.join(projectDir, '_bmad', 'custom');
+      const wrote = (await fs.pathExists(customDir)) ? await fs.readdir(customDir) : [];
+      const tomls = wrote.filter((f) => f.endsWith('.toml'));
+      assert(tomls.length === 0, 'AC4a: NO _bmad/custom/*.toml written (no dark write)', `found ${tomls.join(', ')}`);
+      const engineWarns = spy.captured.filter((m) => /resolve_customization\.py|customization engine/i.test(m));
+      assert(engineWarns.length === 1, 'AC4a: exactly one absent-engine warning', `found ${engineWarns.length}`);
+
+      // Anti-vacuous twin: standalone verify-only path intact.
+      const ucgSkill = path.join(projectDir, '_bmad/ucg/ultracode-goal');
+      assert(
+        await fs.pathExists(path.join(ucgSkill, 'scripts', 'formalize_check.py')),
+        'AC4a-twin: formalize_check.py present (verify-only still works)',
+      );
+      assert(
+        await fs.pathExists(path.join(ucgSkill, 'skills', 'ucg-formalize', 'SKILL.md')),
+        'AC4a-twin: /ucg-formalize skill present in installed tree',
+      );
+    } catch (error) {
+      assert(false, 'AC4a absent-resolve completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- AC4(b): schema-mismatch -> one drift-warning, run still succeeds -----
+  {
+    const projectDir = await makeTempDir('s6b-schema-mismatch');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, ['bmad-prd', 'bmad-architecture']);
+      const installer = new Installer();
+      const spy = spyClackSinks();
+      const origRunner = installer.runStep6bMerge.bind(installer);
+      installer.runStep6bMerge = (targetPath, fragmentPath) => {
+        if (targetPath.includes('bmad-prd')) {
+          return { status: 'skipped', skipped: 'schema-mismatch', conflicts: [], rows_added: 0, rows_removed: 0 };
+        }
+        return origRunner(targetPath, fragmentPath);
+      };
+
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'schema-mismatch',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      spy.restore();
+
+      assert(result.success === true, 'AC4b: install returns success on schema-mismatch');
+      const driftWarns = spy.captured.filter((m) => /bmad-prd/.test(m) && /drift|schema|persistent_facts/i.test(m));
+      assert(driftWarns.length === 1, 'AC4b: exactly one drift-warning for bmad-prd', `found ${driftWarns.length}`);
+      assert(
+        !(await fs.pathExists(path.join(projectDir, '_bmad', 'custom', 'bmad-prd.toml'))),
+        'AC4b: schema-mismatch wrote nothing for bmad-prd',
+      );
+      assert(
+        await fs.pathExists(path.join(projectDir, '_bmad', 'custom', 'bmad-architecture.toml')),
+        'AC4b: the other fragment still merged after the mismatch',
+      );
+    } catch (error) {
+      assert(false, 'AC4b schema-mismatch completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- AC5: idempotent reinstall (byte-identical) + update non-wipe ---------
+  {
+    const crypto = require('node:crypto');
+    const projectDir = await makeTempDir('s6b-idempotent');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, ['bmad-prd', 'bmad-architecture']);
+      const installer = new Installer();
+      const config = {
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'idempotent',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      };
+      const prdPath = path.join(projectDir, '_bmad', 'custom', 'bmad-prd.toml');
+      const sha = async () =>
+        crypto
+          .createHash('sha256')
+          .update(await fs.readFile(prdPath))
+          .digest('hex');
+
+      let restore = suppressConsole();
+      await installer.install({ ...config });
+      restore();
+      const hash1 = await sha();
+
+      restore = suppressConsole();
+      await installer.install({ ...config });
+      restore();
+      const hash2 = await sha();
+      assert(hash1 === hash2, 'AC5: reinstall leaves bmad-prd.toml byte-identical');
+
+      // single [ucg] block (no append-duplication zombie)
+      const text2 = await fs.readFile(prdPath, 'utf8');
+      const ucgBlocks = (text2.match(/^\[ucg\]\s*$/gm) || []).length;
+      assert(ucgBlocks === 1, 'AC5: exactly one [ucg] block after reinstall (no zombie)', `found ${ucgBlocks}`);
+
+      // Anti-vacuous twin: mutating the overlay content changes the hash.
+      await fs.appendFile(prdPath, '\n# tampered\n', 'utf8');
+      const hashMut = await sha();
+      assert(hashMut !== hash1, 'AC5-twin: mutated content yields a DIFFERENT hash (comparison reads real bytes)');
+
+      // update-action install does not delete _bmad/custom/ user state.
+      restore = suppressConsole();
+      await installer.install({ projectDir, ucgFolder: '_bmad/ucg', _action: 'update' });
+      restore();
+      assert(await fs.pathExists(prdPath), 'AC5: update-action install preserves _bmad/custom/bmad-prd.toml');
+    } catch (error) {
+      assert(false, 'AC5 idempotent reinstall completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- AC6: cross-provider honesty (operator-benchmark machine half) --------
+  {
+    const projectDir = await makeTempDir('s6b-honesty');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, PLANNING_SKILLS);
+      const installer = new Installer();
+
+      // Spy BEFORE suppressConsole reassigns stdout — capture notes + warnings.
+      const spy = spyClackSinks();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'honesty',
+        ides: ['cursor'], // excludes claude-code -> portability note fires
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      spy.restore();
+
+      const joined = spy.joined();
+      const claudeCodeOnlyLines = joined.split('\n').filter((l) => CLAUDE_CODE_ONLY.test(l)).length;
+      assert(claudeCodeOnlyLines === 1, 'AC6: exactly one /Claude.?Code.*only/i line emitted', `found ${claudeCodeOnlyLines}`);
+      assert(
+        STEP6B_FORBIDDEN_ENFORCEMENT.test(joined) === false,
+        'AC6: ZERO forbidden cross-provider auto-enforcement phrases',
+        `matched: ${JSON.stringify(joined.match(STEP6B_FORBIDDEN_ENFORCEMENT))}`,
+      );
+      // the exported constant is the line printed (and itself clean)
+      assert(CLAUDE_CODE_ONLY.test(PORTABILITY_GAP_LINE), 'AC6: PORTABILITY_GAP_LINE matches the positive shape');
+      assert(
+        STEP6B_FORBIDDEN_ENFORCEMENT.test(PORTABILITY_GAP_LINE) === false,
+        'AC6: PORTABILITY_GAP_LINE matches none of the forbidden set',
+      );
+
+      // the four overlays still wrote for present skills (never no-install)
+      const customDir = path.join(projectDir, '_bmad', 'custom');
+      for (const skill of PLANNING_SKILLS) {
+        assert(await fs.pathExists(path.join(customDir, `${skill}.toml`)), `AC6: ${skill}.toml still wrote on a non-Claude-Code provider`);
+      }
+      assert(result.success === true, 'AC6: install returns success on a non-Claude-Code provider');
+
+      // Anti-vacuous twin: a forbidden literal flips the negative guard true.
+      const tamperedJoined = joined + '\npreflight enforced on cursor across all providers';
+      assert(
+        STEP6B_FORBIDDEN_ENFORCEMENT.test(tamperedJoined) === true,
+        'AC6-twin: a forbidden literal flips STEP6B_FORBIDDEN_ENFORCEMENT.test to true',
+      );
+      // positive count fails on empty output (non-vacuous)
+      assert(''.split('\n').filter((l) => CLAUDE_CODE_ONLY.test(l)).length === 0, 'AC6-twin: count===1 fails on empty output');
+    } catch (error) {
+      assert(false, 'AC6 cross-provider honesty completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  console.log('');
+}
+
+// ============================================================
 // Runner
 // ============================================================
 
@@ -751,6 +1242,7 @@ async function runTests() {
   await testManifestAccuracy();
   await testFreshInstallWithoutLearning();
   await testGitignoreEntries();
+  await testStep6bUcgAwareness();
   await testBannerGeometry();
 
   console.log(`${colors.cyan}========================================`);
