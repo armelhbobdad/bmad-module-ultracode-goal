@@ -1,12 +1,12 @@
-# Operator benchmark: `/ucg-formalize -H` over the Epic-11 floor fixtures
+# Operator benchmark: `/ucg-formalize -H` over the permanent floor fixtures
 
-This is the AC6 **operator-benchmark** half of Story 1.3. The `ci-deterministic`
+This is the **operator-benchmark** half of the formalize gate. The `ci-deterministic`
 half (the kernel-JSON routing for every fixture) is asserted automatically by
 `test_ucg_formalize_envelope.py::test_judgment_fixtures_route_to_blocked`. What an
 operator must confirm here is the part a machine cannot: that the standalone
 `/ucg-formalize -H` flow — running the kernel, the ONE throwaway JUDGMENT subagent,
-the FR-6 mapping, and the five-key envelope end to end — routes each of the four
-Epic-11 JUDGMENT-floor classes to `status=blocked` with the matching class named in
+the verdict mapping, and the five-key envelope end to end — routes each of the four
+permanent JUDGMENT-floor classes to `status=blocked` with the matching class named in
 `reason`, routes a sound fixture to `status=complete`, and (the false-positive
 guard) flips the UNKNOWN-marker case back to `complete`.
 
@@ -21,7 +21,7 @@ two MECHANICAL floor classes (`leaked_tea_artifact`, `orphaned_index` regenerabl
 are remediable: the kernel routes them to remediate-then-re-run, and whether the END
 result blocks depends on the subagent's JUDGMENT read and on whether remediation
 clears them. That subagent read is exactly what the operator confirms here — a
-machine cannot grade it, which is why AC6 is `partly-operator`.
+machine cannot grade it, which is why this check is `partly-operator`.
 
 ## Fixtures (under `scripts/tests/fixtures/floor/`)
 
@@ -57,7 +57,7 @@ For each fixture directory `FX` and its Epic id `EID` from the table:
    - for `invented_threshold_unknown`: `status == "complete"` (the false-positive
      guard — the block was caused by the genuine unsourced number, not by blocking
      unconditionally).
-5. Confirm `.decision-log.md` recorded the verdict and any remediations (NFR-9).
+5. Confirm `.decision-log.md` recorded the verdict and any remediations.
 
 ## Sanity pre-check (deterministic kernel half)
 
@@ -90,6 +90,6 @@ Leave rows `PENDING` until actually run — do not pre-fill.
 
 ## Run record (2026-06-25, ultracode-goal run epic-1-…034122Z)
 
-**The operator-benchmark — the live throwaway JUDGMENT subagent read — was executed for the two JUDGMENT-floor classes and PASSED:** seeded with the kernel's `judgment_candidates[].source`, the subagent read each artifact and returned a confirmed red, so `/ucg-formalize` routes both to `status=blocked` with the class named in `reason`. The sound (`all_clean`) and UNKNOWN-negative cases route to `complete` (deterministic). The two MECHANICAL classes were verified at the kernel layer (`verdict=remediable`); their destructive mechanical remediation (file MOVE / story regenerate) was **not** executed against the committed fixtures to keep them byte-exact — the kernel verdict plus `test_judgment_fixtures_route_to_blocked` cover that half. **AC6 confirmed; ledger d1 resolved.**
+**The operator-benchmark — the live throwaway JUDGMENT subagent read — was executed for the two JUDGMENT-floor classes and PASSED:** seeded with the kernel's `judgment_candidates[].source`, the subagent read each artifact and returned a confirmed red, so `/ucg-formalize` routes both to `status=blocked` with the class named in `reason`. The sound (`all_clean`) and UNKNOWN-negative cases route to `complete` (deterministic). The two MECHANICAL classes were verified at the kernel layer (`verdict=remediable`); their destructive mechanical remediation (file MOVE / story regenerate) was **not** executed against the committed fixtures to keep them byte-exact — the kernel verdict plus `test_judgment_fixtures_route_to_blocked` cover that half. **Operator benchmark confirmed.**
 
-**Finding (story-spec, not code):** AC6's prose ("the four Epic-11 JUDGMENT-floor fixtures … return `status=blocked`") is loose — only two of the four are JUDGMENT classes that block; the other two are MECHANICAL and correctly remediate to `complete`. The delivered code does the right thing; the AC wording conflates "the four floor classes" with "the four JUDGMENT classes."
+**Finding (spec wording, not code):** The acceptance criterion's prose ("the four permanent JUDGMENT-floor fixtures … return `status=blocked`") is loose — only two of the four are JUDGMENT classes that block; the other two are MECHANICAL and correctly remediate to `complete`. The delivered code does the right thing; the acceptance-criterion wording conflates "the four floor classes" with "the four JUDGMENT classes."

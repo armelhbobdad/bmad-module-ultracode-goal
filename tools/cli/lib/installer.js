@@ -15,16 +15,15 @@ const { writeManifest } = require('./manifest');
 // Dev-only artifacts never shipped into a user's project
 const DEV_ARTIFACTS = new Set(['.analysis', '.decision-log.md', '__pycache__', '.pytest_cache', '.DS_Store', 'Thumbs.db']);
 
-// The four Epic-1 planning fragments Step 6b enrolls (FR-8). Each maps to a
+// The four planning-workflow fragments Step 6b enrolls. Each maps to a
 // real BMAD skill whose presence is probed before merging, and to a fragment
-// under skills/ultracode-goal/assets/ucg-awareness/{skill}.toml (story 1.4).
-// The TEA (Epic 2) and dev/review-cycle (Epic 3, AD-4 deferred) fragments are
+// under skills/ultracode-goal/assets/ucg-awareness/{skill}.toml.
+// The TEA and dev/review-cycle fragments are
 // deliberately NOT enrolled here.
 const STEP6B_PLANNING_FRAGMENTS = ['bmad-prd', 'bmad-architecture', 'bmad-create-epics-and-stories', 'bmad-create-story'];
 
-// Single canonical cross-provider portability gap line (AC6 / AD-8 / NFR-6).
-// Exported so the integration test asserts against this exact string. Story
-// 1.11 will canonicalize it further (docs + operator rubric) — keep it a clean,
+// Single canonical cross-provider portability gap line.
+// Exported so the integration test asserts against this exact string — keep it a clean,
 // honest sentence that matches /Claude.?Code.*only/i and contains NONE of the
 // forbidden cross-provider auto-enforcement phrases. The note is non-blocking:
 // the portable fragments + the standalone /ucg-formalize gate install on every
@@ -146,8 +145,8 @@ class Installer {
     }
 
     // Step 6b: Wire UCG-awareness shaping into the present BMAD planning
-    // workflows (opt-in, FR-1). UNLIKE every other step, this one DEGRADES
-    // rather than throws (AD-3/FR-12): any per-fragment failure, an absent
+    // workflows (opt-in). UNLIKE every other step, this one DEGRADES
+    // rather than throws: any per-fragment failure, an absent
     // resolve engine, or a schema-mismatch warns and continues — install()
     // still returns success and Step 7 still writes the manifest.
     if (config.enable_ucg_awareness === true) {
@@ -158,7 +157,7 @@ class Installer {
         log.warn(msg);
       };
       try {
-        // Cross-provider honesty (AC6 / AD-8 / NFR-6): emit the single
+        // Cross-provider honesty: emit the single
         // portability gap line when the target IDE set excludes Claude Code.
         // Never a refusal, never a duplicate — exactly one print.
         const ides = Array.isArray(config.ides) ? config.ides : [];
@@ -166,11 +165,11 @@ class Installer {
           warn(PORTABILITY_GAP_LINE);
         }
 
-        // FR-12 case-2: the merge engine deep_merge is imported by
+        // The merge engine deep_merge is imported by
         // merge_customization.py from {projectDir}/_bmad/scripts/resolve_customization.py.
         // If it is absent/older, no-op Step 6b entirely (verify-only degrade):
         // write nothing, warn once. The standalone /ucg-formalize gate +
-        // formalize_check.py remain installed (INV-3).
+        // formalize_check.py remain installed.
         const enginePath = path.join(projectDir, '_bmad', 'scripts', 'resolve_customization.py');
         if (await fs.pathExists(enginePath)) {
           const fragmentsDir = path.join(this.srcDir, 'ultracode-goal', 'assets', 'ucg-awareness');
@@ -186,8 +185,8 @@ class Installer {
             }
             const fragmentPath = path.join(fragmentsDir, `${skill}.toml`);
             if (!(await fs.pathExists(fragmentPath))) {
-              // A Phase-3-deferred fragment was never authored — skip silently
-              // (FR-1 skip-absent also covers never-authored fragments).
+              // A deferred fragment was never authored — skip silently
+              // (skip-absent also covers never-authored fragments).
               continue;
             }
             const targetPath = path.join(projectDir, '_bmad', 'custom', `${skill}.toml`);
@@ -218,7 +217,7 @@ class Installer {
           s.stop('UCG-awareness shaping skipped (verify-only)');
         }
       } catch (error) {
-        // Belt-and-braces: Step 6b NEVER rethrows (degrade-not-throw, AD-3).
+        // Belt-and-braces: Step 6b NEVER rethrows (degrade-not-throw).
         s.stop('UCG-awareness shaping degraded');
         warn(`UCG-awareness shaping degraded: ${error.message}`);
       }
@@ -269,7 +268,7 @@ class Installer {
 
   /**
    * Spawn merge_customization.py for one present fragment and parse its JSON
-   * result. Mirrors the FR-8 invocation:
+   * result. Mirrors the invocation:
    *   merge_customization.py --target _bmad/custom/{skill}.toml --fragment {fragment}
    * Run via `uv run --script` so its PEP-723 block auto-provisions tomli-w.
    *

@@ -3,21 +3,21 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest"]
 # ///
-"""Structural tests for the four UCG-awareness planning shaping fragments (story 1.4).
+"""Structural tests for the four UCG-awareness planning shaping fragments.
 
 The four fragments at assets/ucg-awareness/{bmad-prd,bmad-architecture,
 bmad-create-epics-and-stories,bmad-create-story}.toml are static, additive
 guardrail-fact artifacts. They land in the ONE universal sanctioned append
-channel the installed customize.toml schema exposes — persistent_facts (AD-9) —
+channel the installed customize.toml schema exposes — persistent_facts —
 each carrying a single [ucg] identity stamp and a per-directive id marker that
-story 1.5's merge_customization.py will strip-then-reappend on. These tests are
+merge_customization.py will strip-then-reappend on. These tests are
 stdlib-only (tomllib + glob + re, plus subprocess for the shim grep): they pin
 down the channel, the stamp, the live-surface-not-shims binding, additive-only
 content, and the signed decision-doc gate.
 
 Each structural assertion ships with an in-test anti-vacuous twin that authors a
 throwaway TOML (or mutated-doc) string and proves the assertion discriminates —
-that the check could genuinely go red, not merely count files (Dev Notes L251).
+that the check could genuinely go red, not merely count files.
 
 Run: uv run --with pytest pytest test_ucg_awareness_fragments.py -v
 """
@@ -53,8 +53,8 @@ SHIM_IDS = ("bmad-create-prd", "bmad-edit-prd")
 # Per-directive id marker every persistent_facts entry must carry.
 ID_MARKER = re.compile(r"\[ucg:[a-z0-9-]+-\d+\]")
 
-# Append channels the superseded PRD FR-2 named but the live schema lacks.
-# Authoring into any of these is the AC-1 anti-vacuous failure.
+# Append channels an earlier PRD draft named but the live schema lacks.
+# Authoring into any of these is the channel check's anti-vacuous failure.
 _APPEND_SUFFIX = re.compile(r"_append$")
 _FORBIDDEN_CHANNEL_SUBSTRINGS = ("rules_append", "guidance_append")
 
@@ -141,7 +141,7 @@ def _parse_decision_blocks(text: str) -> dict[str, dict]:
     return blocks
 
 
-# --- AC-1: channel is persistent_facts, nothing else ------------------------
+# --- channel is persistent_facts, nothing else ------------------------
 
 
 def test_four_fragments_land_only_in_persistent_facts():
@@ -171,7 +171,7 @@ def test_twin_named_append_channel_is_rejected():
     assert any(_is_forbidden_channel(k) for k in array_keys)
 
 
-# --- AC-2: stamp + per-directive unique ids ---------------------------------
+# --- stamp + per-directive unique ids ---------------------------------
 
 
 def test_stamp_and_per_directive_ids():
@@ -219,7 +219,7 @@ def test_twin_dup_id_and_missing_block_fail():
     assert "block" not in no_block["ucg"]
 
 
-# --- AC-3: live PRD surface, not the shims ----------------------------------
+# --- live PRD surface, not the shims ----------------------------------
 
 
 def test_binds_live_prd_surface_not_shims():
@@ -258,7 +258,7 @@ def test_twin_shim_named_fragment_fails(tmp_path):
     assert proc.returncode == 0  # a match -> the real test would FAIL on this
 
 
-# --- AC-4: additive string facts only ---------------------------------------
+# --- additive string facts only ---------------------------------------
 
 
 def test_entries_are_additive_string_facts():
@@ -284,7 +284,7 @@ def test_twin_scalar_override_or_non_string_item_fails():
     assert not all(isinstance(e, str) for e in non_string["persistent_facts"])
 
 
-# --- AC-5: signed, non-orphaned decision-doc gate ---------------------------
+# --- signed, non-orphaned decision-doc gate ---------------------------
 
 
 def test_shaping_decision_doc_present_and_signed():

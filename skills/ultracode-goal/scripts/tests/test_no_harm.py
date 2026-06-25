@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest", "tomli-w"]
 # ///
-"""No-harm test for the non-UCG path (story 1.9) — proves INV-8 / NFR-3.
+"""No-harm test for the non-UCG path.
 
 With the four planning shaping fragments merged into their
 ``_bmad/custom/{skill}.toml`` overlays but UCG itself NEVER invoked, a plain
@@ -14,17 +14,18 @@ never auto-fires a ``/ucg-formalize`` prompt or gate.
 CRITICAL NESTING FACT (load-bearing, audit fix): the live engine returns a
 table whose only top-level key is ``workflow``; ``persistent_facts`` AND every
 human-owned scalar (``prd_template`` etc.) live at ``resolved['workflow'][...]``.
-So AC1's all-keys-equal-except-``persistent_facts`` and strict-prefix checks MUST
+So the all-keys-equal-except-``persistent_facts`` and strict-prefix checks MUST
 run on ``resolved['workflow']`` — a top-level comprehension filters nothing and
 would let an out-of-channel scalar write under ``[workflow]`` slip through.
-AC3/AC4 instead compare the FULL resolved dict recursively (``resolved ==
-baseline``), which naturally walks into the nested workflow sub-table.
+The opt-out and schema-mismatch checks instead compare the FULL resolved dict
+recursively (``resolved == baseline``), which naturally walks into the nested
+workflow sub-table.
 
 Conventions mirror the sibling tests (PEP-723 header, ``SCRIPT =
 parents[1] / "merge_customization.py"``, subprocess + ``json.loads(stdout)``).
 The base customize.toml files under ``.claude/skills/`` are GITIGNORED, so the
-AC2 base greps are guarded skip-if-absent (CI-portable + honest). The AC1 base
-is a faithful in-test FIXTURE (not the gitignored live file) for the same
+base greps are guarded skip-if-absent (CI-portable + honest). The in-test base
+is a faithful FIXTURE (not the gitignored live file) for the same
 reason; the real tracked fragment is consumed live.
 
 Run: uv run --with pytest --with tomli-w pytest \
@@ -42,7 +43,7 @@ import tomllib
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "merge_customization.py"
-# The live engine a plain BMAD run resolves through (AD-2 / INV-2 import).
+# The live engine a plain BMAD run resolves through.
 REAL_ENGINE = Path(__file__).resolve().parents[4] / "_bmad" / "scripts" / "resolve_customization.py"
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets" / "ucg-awareness"
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -50,8 +51,8 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW_KEY = "workflow"
 CHANNEL = "persistent_facts"
 
-# The four Epic-1 planning targets (live PRD surface, never the deprecated
-# bmad-create-prd / bmad-edit-prd shims — AD-9 binding).
+# The four planning targets (live PRD surface, never the deprecated
+# bmad-create-prd / bmad-edit-prd shims).
 PLANNING_SKILLS = (
     "bmad-prd",
     "bmad-architecture",
@@ -77,7 +78,7 @@ UCG_MARKER = re.compile(r"\[ucg:([a-z0-9-]+-\d+)\]")
 
 
 def _import_deep_merge():
-    """Import deep_merge from the REAL engine (the exact AD-2/INV-2 contract)."""
+    """Import deep_merge from the REAL engine (the live import contract)."""
     spec = importlib.util.spec_from_file_location("_resolve_customization_no_harm", REAL_ENGINE)
     assert spec is not None and spec.loader is not None, REAL_ENGINE
     module = importlib.util.module_from_spec(spec)
@@ -165,7 +166,7 @@ def _fixture_base() -> dict:
     }
 
 
-# --- AC1 --------------------------------------------------------------------
+# --- resolve diff is persistent_facts append-only ---------------------------
 
 
 def test_resolve_diff_is_persistent_facts_append_only(tmp_path):
@@ -192,7 +193,7 @@ def test_resolve_diff_is_persistent_facts_append_only(tmp_path):
     wf_without = resolved_without[WORKFLOW_KEY]
 
     # Every workflow key byte-identical EXCEPT persistent_facts (additive-only,
-    # INV-1 sanctioned-channel: never a human scalar, never a new key).
+    # sanctioned-channel: never a human scalar, never a new key).
     except_pf_with = {k: v for k, v in wf_with.items() if k != CHANNEL}
     except_pf_without = {k: v for k, v in wf_without.items() if k != CHANNEL}
     assert except_pf_with == except_pf_without
@@ -238,7 +239,7 @@ def test_resolve_diff_is_persistent_facts_append_only(tmp_path):
     # misses out-of-channel scalar writes' isolation AND mis-flags additive ones.
 
 
-# --- AC2 --------------------------------------------------------------------
+# --- no formalize auto-fire surface -----------------------------------------
 
 
 def _autofire_in_execution_channel(text: str) -> bool:
@@ -319,7 +320,7 @@ def test_no_formalize_autofire_surface():
     assert not _autofire_in_execution_channel(inert)
 
 
-# --- AC3 --------------------------------------------------------------------
+# --- opt-out resolves to baseline -------------------------------------------
 
 
 def test_optout_resolves_to_baseline(tmp_path):
@@ -334,7 +335,7 @@ def test_optout_resolves_to_baseline(tmp_path):
     resolved_optout = resolve(base, optout_overlay)
 
     # FULL recursive dict equality (walks the entire nested workflow sub-table):
-    # a declined/uninstalled state is a true no-op (INV-8 / AD-3).
+    # a declined/uninstalled state is a true no-op.
     assert resolved_optout == baseline
 
     # Anti-vacuous twin: opt-IN (fragment actually merged) makes the FULL
@@ -351,14 +352,14 @@ def test_optout_resolves_to_baseline(tmp_path):
     assert resolved_optin[WORKFLOW_KEY][CHANNEL] != baseline[WORKFLOW_KEY][CHANNEL]
 
 
-# --- AC4 --------------------------------------------------------------------
+# --- schema-mismatch target is untouched ------------------------------------
 
 
 def test_schema_mismatch_target_is_untouched(tmp_path):
     custom = _engine_tree(tmp_path)
 
     # A synthetic target with a [workflow] table but NO persistent_facts key
-    # under it (the AD-3 / FR-12 drift case). It is non-empty so the probe's
+    # under it (the schema-drift case). It is non-empty so the probe's
     # schema-mismatch branch (not the fresh-seed branch) fires.
     target = custom / "bmad-prd.toml"
     mismatch_base = {WORKFLOW_KEY: {"prd_template": "x.md"}, "on_complete": ""}

@@ -1,8 +1,8 @@
-# UCG awareness fragment for bmad-create-epics-and-stories (story 1.4).
+# UCG awareness fragment for bmad-create-epics-and-stories.
 # Authored additive guardrail facts landing in the one universal sanctioned
-# append channel (persistent_facts) per AD-9. The gate (INV-3), not this
-# shaping, is the load-bearing guarantee. Idempotent strip-then-reappend is
-# story 1.5's merge_customization.py concern, matched by the per-directive
+# append channel (persistent_facts). The gate, not this shaping, is the
+# load-bearing guarantee. Idempotent strip-then-reappend is the
+# merge_customization.py merge step's concern, matched by the per-directive
 # [ucg:{skill}-NN] id marker each entry carries.
 
 persistent_facts = [
@@ -14,7 +14,7 @@ persistent_facts = [
   "Keep any TEA-produced verification artifact (test-design plan, trace matrix, test-review, nfr-assessment) cited by an AC located under the configured trace_output root; never point an AC at, or expect such an artifact to live in, the source or implementation tree. [ucg:bmad-create-epics-and-stories-06]",
   "Whenever an acceptance criterion states an NFR number (latency, size, count, rate, timeout), cite the source artifact the number comes from (PRD, architecture, ADR, or epic); if the threshold is genuinely not yet known, mark it UNKNOWN and route it to a risk or deferral rather than inventing a value. [ucg:bmad-create-epics-and-stories-07]",
   "Ensure every in-scope FR is covered by at least one story and that no AC presupposes a still-open question; route any unresolved open question to a 'resolve as an ADR before UCG/preflight goes RED' note rather than baking an undecided assumption into a story's done condition. [ucg:bmad-create-epics-and-stories-08]",
-  "These are run-scoped guardrail facts that shape authoring to be UCG-ready by construction; they are narrower than per-AC machine directives and are not the verdict. The formalize/preflight gate, not this shaping, is load-bearing (INV-3): a story is ready only when the gate says so, and a plain non-UCG run is unaffected or strictly improved by following them. [ucg:bmad-create-epics-and-stories-09]",
+  "These are run-scoped guardrail facts that shape authoring to be UCG-ready by construction; they are narrower than per-AC machine directives and are not the verdict. The formalize/preflight gate, not this shaping, is load-bearing: a story is ready only when the gate says so, and a plain non-UCG run is unaffected or strictly improved by following them. [ucg:bmad-create-epics-and-stories-09]",
 ]
 
 [ucg]

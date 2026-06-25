@@ -8,17 +8,17 @@ description: Opt-in standalone readiness verdict for one BMAD Epic via the `/ucg
 ## Overview
 
 `/ucg-formalize <epic>` is the **opt-in, operator-on-demand** readiness verdict for
-a single BMAD Epic. It is the thin FR-6 LLM layer over the FR-5 readiness kernel
-(`scripts/formalize_check.py`, authored in Story 1.1): it RUNS that one kernel,
+a single BMAD Epic. It is the thin LLM layer over the readiness kernel
+(`scripts/formalize_check.py`): it RUNS that one kernel,
 auto-remediates the machine-derivable MECHANICAL gaps, delegates the JUDGMENT
 candidates to exactly one throwaway subagent, maps the graduated kernel verdict
 (ready / remediable / blocked) into the canonical five-key headless envelope, and
 records every verdict and remediation to the run's `.decision-log.md`.
 
 This skill never recomputes the readiness verdict. The kernel is the one source of
-mechanical truth (INV-9 — one kernel, two entry points: this standalone command
-and the Epic-2 preflight clause both adapt the SAME kernel JSON through the SAME
-envelope, so the two can never drift). This layer only ADAPTS the kernel's rich
+mechanical truth (one shared kernel, two entry points: this standalone command and
+the autonomous run's preflight clause both adapt the SAME kernel JSON through the
+SAME envelope, so the two can never drift). This layer only ADAPTS the kernel's rich
 verdict; it does not re-derive `mechanical_budget`, and it never spins up a second
 readiness evaluator. It is opt-in and never auto-invoked — there is no auto-fire of
 a UCG prompt outside an explicit `/ucg-formalize` call.
@@ -36,18 +36,18 @@ These follow the parent `ultracode-goal` SKILL.md Conventions block.
   `{workflow.tea_config_path}` resolve from the parent module's resolved workflow
   block (the same scalars the autonomous run reads).
 - The decision log (`.decision-log.md`) is canonical memory: record the verdict and
-  every auto-remediation as you go (NFR-9).
+  every auto-remediation as you go.
 
 ## 1. Run the readiness kernel
 
-Resolve the Epic id `<id>` the operator named, then run the FR-5 kernel — qualified
+Resolve the Epic id `<id>` the operator named, then run the readiness kernel — qualified
 by `{skill-root}` so it resolves from any cwd:
 
 ```
 uv run {skill-root}/scripts/formalize_check.py --epic <id> --project-root {project-root} --planning-artifacts {planning_artifacts} --impl-artifacts {workflow.implementation_artifacts} --tea-config {workflow.tea_config_path}
 ```
 
-READ the kernel's FR-5 verdict JSON from stdout. It is the rich verdict — its shape
+READ the kernel's readiness verdict JSON from stdout. It is the rich verdict — its shape
 is `{ready, verdict, mechanical_budget, judgment_required, mechanical_gaps[], judgment_candidates[], checks{}}`.
 Do NOT recompute it: `mechanical_budget` is the kernel's per-item count, read off
 the JSON, never re-counted in this prose; the verdict is the kernel's, never
@@ -60,8 +60,7 @@ as a FAILING gap, never a neutral pass.
 ## 2. Mechanical auto-remediation pass
 
 Iterate the kernel's `mechanical_gaps[]` and apply the machine-derivable fix for
-each entry where `remediable: true`. The remediation per kind (the FR-6
-amber-analog, machine-derivable list, AD-1):
+each entry where `remediable: true`. The remediation per kind:
 
 - **`leaked_tea_artifact`** — MOVE the TEA artifact from the source/impl tree to the
   `trace_output` root and re-point any reference to it. A path move is
@@ -75,7 +74,7 @@ amber-analog, machine-derivable list, AD-1):
   canonical named-verification / anti-vacuous-twin / gate-ability scaffold derivable
   from the AC shape.
 
-Log each remediation to `.decision-log.md` as you apply it (NFR-9). Never
+Log each remediation to `.decision-log.md` as you apply it. Never
 auto-remediate a `judgment_candidate`, and never auto-remediate a
 `remediable: false` mechanical gap (an unreadable artifact cannot be fixed from its
 own unreadable content).
@@ -92,11 +91,11 @@ sub-skill and the exact input it needed, and let the verdict mapping route the r
 ## 3. Judgment subagent (exactly one)
 
 Spawn **EXACTLY ONE** throwaway subagent to read the JUDGMENT candidates — never two,
-never a second pass. The kernel flags judgment; the subagent decides it (AD-1). Seed
+never a second pass. The kernel flags judgment; the subagent decides it. Seed
 the subagent with the kernel's `judgment_candidates[].source` list as targeted
 hypotheses to confirm (it confirms the flagged sources, it does not scan blind), plus
-the artifact paths. The corpus stays in the subagent's discarded context (AD-5
-zero-net-context) — this layer holds only the returned findings.
+the artifact paths. The corpus stays in the subagent's discarded context
+(zero-net-context) — this layer holds only the returned findings.
 
 The subagent must return **ONLY this object** — the identical three-key contract the
 parent `references/preflight.md` semantic scan uses (the live three-key shape, NOT the
@@ -113,10 +112,10 @@ the one-line evidence fields:
 ```
 
 Any `reds` entry maps to `status=blocked`. Record each red with its source and the
-exact decision needed in `.decision-log.md` (NFR-9). A purely cosmetic gap belongs in
+exact decision needed in `.decision-log.md`. A purely cosmetic gap belongs in
 `concerns`, never red.
 
-## 4. Verdict mapping (FR-6)
+## 4. Verdict mapping
 
 Map the POST-remediation kernel verdict plus the subagent reds to the headless status
 by this deterministic decision-list. `status=complete` is reached ONLY when the
@@ -135,21 +134,21 @@ The `status=blocked` row enumerates all three triggers and they are all load-bea
   product/architecture decision or an unresolvable input.
 - **any non-remediable mechanical gap** — a `remediable: false` gap (e.g. an
   unreadable story file) that no machine fix can clear.
-- **any unreadable artifact** — fail-closed (NFR-2 / INV-4, mirroring
+- **any unreadable artifact** — fail-closed (mirroring
   `gate_eval.py:201-203` `nfr_status is None -> treated as failing`): an artifact the
   kernel could not read is a FAILING signal routed to `status=blocked`, NEVER treated
   as neutral or passing. formalize's `blocked` is a deliberate strengthening over
   gate_eval's reloop.
 
-`reason` (in the blocked envelope) carries the first blocker by a DETERMINISTIC order — JUDGMENT candidates before non-remediable mechanical gaps, each in `source` (`path:line`) order — so two runs over the same kernel verdict select the same `reason` (NFR-1 determinism covers the envelope's `reason`, not only `status`).
+`reason` (in the blocked envelope) carries the first blocker by a DETERMINISTIC order — JUDGMENT candidates before non-remediable mechanical gaps, each in `source` (`path:line`) order — so two runs over the same kernel verdict select the same `reason` (determinism covers the envelope's `reason`, not only `status`).
 
 ## Headless
 
 With `-H`, run non-interactively and emit exactly one object at the single exit point.
 This is the canonical five-ALWAYS-present-key envelope — byte-identical to the
-autonomous parent `SKILL.md` shape (AD-7, INV-9): `skill` is the constant
+autonomous parent `SKILL.md` shape: `skill` is the constant
 `ultracode-goal` (never `ucg-formalize`), `decision_log` is the always-present audit
-anchor, and the FR-5 script-layer keys (`verdict`, `mechanical_budget`) are NEVER
+anchor, and the script-layer keys (`verdict`, `mechanical_budget`) are NEVER
 leaked into the envelope.
 
 On the accept path (`status=complete`, post-remediation verdict ready) emit all five
@@ -177,6 +176,6 @@ producing them:
 ```
 
 An automator parses one schema regardless of the verdict; this is the SAME envelope
-the Epic-2 preflight clause emits for the same blocked input, so the two entry points
-cannot drift. Record the final verdict to `.decision-log.md` before emitting (NFR-9);
+the autonomous run's preflight clause emits for the same blocked input, so the two entry points
+cannot drift. Record the final verdict to `.decision-log.md` before emitting;
 the log carries the full blocker and remediation list.

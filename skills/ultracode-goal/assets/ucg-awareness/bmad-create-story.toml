@@ -1,8 +1,8 @@
-# UCG awareness fragment for bmad-create-story (story 1.4).
+# UCG awareness fragment for bmad-create-story.
 # Authored additive guardrail facts landing in the one universal sanctioned
-# append channel (persistent_facts) per AD-9. The gate (INV-3), not this
-# shaping, is the load-bearing guarantee. Idempotent strip-then-reappend is
-# story 1.5's merge_customization.py concern, matched by the per-directive
+# append channel (persistent_facts). The gate, not this shaping, is the
+# load-bearing guarantee. Idempotent strip-then-reappend is the
+# merge_customization.py merge step's concern, matched by the per-directive
 # [ucg:{skill}-NN] id marker each entry carries.
 
 persistent_facts = [
@@ -13,7 +13,7 @@ persistent_facts = [
   "Beyond merely existing, a Dev-Notes citation only counts as resolved when its target can actually reach a passing state: the verification artifact, source path, or AD id a story points at must be one an existing story, test, file, or decision already declares as reachable -- this is the orphaned-index guard, blocking a reference to an index or never-green artifact that no implementing work could ever turn green. [ucg:bmad-create-story-05]",
   "The story must have a definable 'done' derivable from its own artifacts alone: a reader must be able to determine completion purely from the ACs, their named verifications, and the Tasks, with no undecided question left for the implementer to settle -- if 'done' is not derivable, the story is not ready for ATDD handoff. [ucg:bmad-create-story-06]",
   "A story must not pull a TEA test-design or test-architecture artifact into its own source or Dev Notes as if it were a deliverable input: TEA-owned artifacts stay on the TEA surface and are referenced, never copied into the story's authored body (no leaked TEA path). [ucg:bmad-create-story-07]",
-  "These are run-scoped guardrail facts that shape how a story is authored; they are narrower than per-AC machine directives and do not replace the gate. The formalize check and preflight, not this shaping, are the load-bearing guarantee (INV-3) -- so author each story to satisfy the contract by construction while leaving the verdict to the gate. [ucg:bmad-create-story-08]",
+  "These are run-scoped guardrail facts that shape how a story is authored; they are narrower than per-AC machine directives and do not replace the gate. The formalize check and preflight, not this shaping, are the load-bearing guarantee -- so author each story to satisfy the contract by construction while leaving the verdict to the gate. [ucg:bmad-create-story-08]",
 ]
 
 [ucg]

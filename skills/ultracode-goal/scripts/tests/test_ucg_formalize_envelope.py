@@ -3,32 +3,32 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest"]
 # ///
-"""CI-deterministic tests for the standalone ucg-formalize SKILL.md (Story 1.3).
+"""CI-deterministic tests for the standalone ucg-formalize SKILL.md.
 
-The standalone `/ucg-formalize <epic>` skill is the thin FR-6 LLM layer over the
-Story-1.1 `formalize_check.py` kernel: it RUNS the kernel, adapts its rich FR-5
+The standalone `/ucg-formalize <epic>` skill is the thin LLM layer over the
+`formalize_check.py` kernel: it RUNS the kernel, adapts its rich readiness
 verdict into the canonical five-key headless envelope, delegates judgment to ONE
-throwaway subagent, and maps the graduated verdict per FR-6. These five tests pin
-the structural contract that makes INV-9 (one kernel, two entry points, cannot
-drift) hold:
+throwaway subagent, and maps the graduated verdict. These five tests pin
+the structural contract that makes the shared-kernel invariant (one kernel, two
+entry points, cannot drift) hold:
 
-  - test_standalone_envelope_keys_match_autonomous (AC3) — the SKILL's Headless
+  - test_standalone_envelope_keys_match_autonomous — the SKILL's Headless
     envelope blocks have the SAME key SET as the autonomous parent SKILL.md:68-75
     envelope (set-equality, never subset; an extra `verdict`/`mechanical_budget`
     key or a dropped `skill` is RED).
-  - test_verdict_mapping_table (AC4) — the FR-6 mapping encodes all three rows and
+  - test_verdict_mapping_table — the mapping encodes all three rows and
     the blocked row enumerates all three triggers (red, non-remediable mechanical,
     unreadable artifact); `status=blocked`/`status=complete` adapt, never
     `status=remediable`.
-  - test_subagent_contract_matches_preflight (AC5) — the subagent block parses to a
+  - test_subagent_contract_matches_preflight — the subagent block parses to a
     key set byte-identical to the three-key preflight.md:57-64 contract, and
     exactly one subagent spawn is described.
-  - test_two_entry_points_one_envelope (AC7) — the documented adaptation of one
-    canned blocked FR-5 verdict yields the SAME five-key envelope dict (sorted-keys
+  - test_two_entry_points_one_envelope — the documented adaptation of one
+    canned blocked kernel verdict yields the SAME five-key envelope dict (sorted-keys
     byte-identical) the autonomous SKILL.md shape prescribes.
-  - test_judgment_fixtures_route_to_blocked (AC6 deterministic half) — running the
-    real kernel over the Story-1.2 JUDGMENT-floor fixtures: each JUDGMENT-floor
-    defect yields a blocked-routing kernel verdict that the FR-6 mapping adapts to
+  - test_judgment_fixtures_route_to_blocked (deterministic half) — running the
+    real kernel over the JUDGMENT-floor fixtures: each JUDGMENT-floor
+    defect yields a blocked-routing kernel verdict that the mapping adapts to
     status=blocked, and a sound fixture adapts to status=complete (the operator
     benchmark in bench_ucg_formalize.md covers the subagent-read half).
 
@@ -166,7 +166,7 @@ def _headless_envelope_blocks() -> list[set[str]]:
     return [_depth1_keys(b) for b in blocks]
 
 
-# --- AC3: standalone envelope key set == autonomous envelope (set-equality) ---
+# --- standalone envelope key set == autonomous envelope (set-equality) ---
 
 
 def test_standalone_envelope_keys_match_autonomous():
@@ -195,14 +195,14 @@ def test_standalone_envelope_keys_match_autonomous():
             "standalone blocked envelope drifted from autonomous six-key set: %s" % k
         )
 
-    # The forbidden FR-5 script-layer keys never appear in any envelope block.
+    # The forbidden script-layer keys never appear in any envelope block.
     for k in envelope_keysets:
         assert "verdict" not in k and "mechanical_budget" not in k, (
-            "FR-5 script-layer key leaked into the headless envelope: %s" % k
+            "script-layer key leaked into the headless envelope: %s" % k
         )
 
 
-# --- AC4: FR-6 verdict-mapping table -----------------------------------------
+# --- verdict-mapping table -----------------------------------------
 
 
 def test_verdict_mapping_table():
@@ -219,7 +219,7 @@ def test_verdict_mapping_table():
     assert "status=complete" in section, "the ready row must adapt to status=complete"
 
     # The blocked row enumerates ALL THREE triggers, including the fail-closed
-    # unreadable-artifact clause (INV-4/NFR-2). Each must be present.
+    # unreadable-artifact clause. Each must be present.
     assert "any red" in low, "blocked row missing the RED trigger"
     assert "non-remediable" in low, "blocked row missing the non-remediable-mechanical trigger"
     assert ("could not read" in low) or ("unreadable" in low) or ("not read" in low), (
@@ -227,14 +227,14 @@ def test_verdict_mapping_table():
     )
     assert "status=blocked" in section, "the reject row must adapt to status=blocked"
 
-    # ANTI-VACUOUS TWIN (AC4): the mapping never emits the internal `remediable`
+    # ANTI-VACUOUS TWIN: the mapping never emits the internal `remediable`
     # state as a headless status — `remediable` is the loop state, never a terminal
     # headless emit value.
     assert "status=remediable" not in text, (
         "remediable is an internal loop state, never a headless emit value"
     )
 
-    # Mutant guard (AC4 twin, fail-closed): a copy of the mapping section with EVERY
+    # Mutant guard (fail-closed): a copy of the mapping section with EVERY
     # carrier of the unreadable-artifact clause deleted must NOT satisfy the trigger
     # assertion above — proving the test keys on the clause and a blocked row that
     # silently dropped the unreadable-artifact trigger would go RED.
@@ -247,7 +247,7 @@ def test_verdict_mapping_table():
     ), "deleting the unreadable-artifact clause must remove the fail-closed trigger"
 
 
-# --- AC5: subagent contract == three-key preflight.md:57-64 ------------------
+# --- subagent contract == three-key preflight.md:57-64 ------------------
 
 
 def test_subagent_contract_matches_preflight():
@@ -284,7 +284,7 @@ def test_subagent_contract_matches_preflight():
         r"(?i)never\s+two", text
     ), "the skill must not describe a second subagent"
 
-    # ANTI-VACUOUS TWIN (AC5): the superseded two-key {reds, concerns} mutant must
+    # ANTI-VACUOUS TWIN: the superseded two-key {reds, concerns} mutant must
     # NOT satisfy set-equality against the three-key preflight contract.
     mutant = (UCG_FIXTURES / "subagent_two_key_contract.txt").read_text(encoding="utf-8")
     mutant_blocks = [_depth1_keys(b) for b in _fenced_json_blocks(mutant) if "reds" in _depth1_keys(b)]
@@ -297,13 +297,13 @@ def test_subagent_contract_matches_preflight():
     )
 
 
-# --- AC7: two entry points, one envelope (sorted-keys byte-identical) --------
+# --- two entry points, one envelope (sorted-keys byte-identical) --------
 
 
 def _adapt_kernel_to_envelope(kernel_verdict: dict, *, decision_log: str, reason: str | None) -> dict:
     """The documented standalone adaptation (SKILL.md step 4 + Headless): map a
-    POST-remediation FR-5 kernel verdict into the canonical five-key envelope. This
-    is the SAME adapter the Epic-2 preflight clause calls — it lives in exactly one
+    POST-remediation kernel verdict into the canonical five-key envelope. This
+    is the SAME adapter the autonomous run's preflight clause calls — it lives in exactly one
     place so the two entry points cannot fork. `status=complete` ONLY when the
     kernel verdict is `ready`; otherwise (blocked / non-ready) `status=blocked`."""
     blocked = kernel_verdict.get("verdict") != "ready" or kernel_verdict.get("judgment_required")
@@ -365,7 +365,7 @@ def test_two_entry_points_one_envelope():
     )
     assert set(standalone) == BLOCKED_KEYS
 
-    # ANTI-VACUOUS TWIN (AC7): a forked adapter that sets skill=ucg-formalize or
+    # ANTI-VACUOUS TWIN: a forked adapter that sets skill=ucg-formalize or
     # drops decision_log must DIFFER from the autonomous envelope.
     forked_skill = dict(standalone, skill="ucg-formalize")
     assert json.dumps(forked_skill, sort_keys=True) != json.dumps(autonomous, sort_keys=True), (
@@ -377,7 +377,7 @@ def test_two_entry_points_one_envelope():
     )
 
 
-# --- AC6 (deterministic half): floor fixtures route through the FR-6 mapping --
+# --- floor fixtures route through the headless mapping (deterministic half) --
 
 
 EPIC_OF = {
@@ -417,7 +417,7 @@ def _run_kernel(fixture: str) -> dict:
 
 
 def _map_status(kernel: dict) -> str:
-    """Apply the FR-6 headless mapping to a (post-remediation) kernel verdict.
+    """Apply the headless mapping to a (post-remediation) kernel verdict.
     blocked -> status=blocked; ready -> status=complete; remediable is the loop
     state (here, with no remediation applied, treated as not-yet-complete)."""
     if kernel["verdict"] == "blocked" or kernel["judgment_required"]:
@@ -428,9 +428,9 @@ def _map_status(kernel: dict) -> str:
 
 
 def test_judgment_fixtures_route_to_blocked():
-    # The two Epic-11 JUDGMENT-floor classes (vacuous AC, invented NFR threshold)
+    # The two permanent JUDGMENT-floor classes (vacuous AC, invented NFR threshold)
     # are NEVER machine-clearable: the kernel emits them as judgment_candidates and
-    # the FR-6 mapping routes them to status=blocked with the JUDGMENT class named.
+    # the mapping routes them to status=blocked with the JUDGMENT class named.
     for fixture, expected_kind in (
         ("vacuous_ac", "vacuous_ac"),
         ("invented_threshold", "invented_nfr_threshold"),
@@ -466,7 +466,7 @@ def test_judgment_fixtures_route_to_blocked():
         assert kernel["verdict"] == "ready", (sound, kernel["verdict"])
         assert _map_status(kernel) == "complete", sound
 
-    # ANTI-VACUOUS TWIN (AC6 false-positive guard): the invented-threshold fixture
+    # ANTI-VACUOUS TWIN (false-positive guard): the invented-threshold fixture
     # with the unsourced number marked UNKNOWN flips blocked -> complete, proving the
     # block is caused by the genuine unsourced-number defect, not unconditional
     # blocking.
@@ -477,7 +477,7 @@ def test_judgment_fixtures_route_to_blocked():
     assert _map_status(unknown) == "complete"
 
 
-# --- AC1 twin: validate-skills reads the new skill (mutant exits 1) ----------
+# --- validate-skills reads the new skill (mutant exits 1) ----------
 
 
 def _validate_skills_exit(skill_dir: Path) -> tuple[int, str]:
@@ -494,7 +494,7 @@ def _validate_skills_exit(skill_dir: Path) -> tuple[int, str]:
     reason="node not available",
 )
 def test_real_skill_passes_validate_skills(tmp_path):
-    # AC1 positive (deterministic): the real nested skill passes --strict with zero
+    # Positive (deterministic): the real nested skill passes --strict with zero
     # HIGH+ findings for SKILL-01/02/03/07.
     rc, out = _validate_skills_exit(SKILL_MD.parent)
     assert rc == 0, out
@@ -508,7 +508,7 @@ def test_real_skill_passes_validate_skills(tmp_path):
     reason="node not available",
 )
 def test_name_deleted_skill_mutant_fails_validate_skills(tmp_path):
-    # AC1 anti-vacuous twin: materialize the name-deleted mutant as SKILL.md in a
+    # Anti-vacuous twin: materialize the name-deleted mutant as SKILL.md in a
     # temp dir and validate it. The validator must exit 1 with a SKILL-02 finding —
     # proving it actually reads this new skill path and is not silently skipping it.
     mutant = (UCG_FIXTURES / "skill_name_deleted.txt").read_text(encoding="utf-8")
@@ -527,7 +527,7 @@ def test_name_deleted_skill_mutant_fails_validate_skills(tmp_path):
     reason="node not available",
 )
 def test_empty_body_skill_mutant_fails_validate_skills(tmp_path):
-    # AC1 anti-vacuous twin (the empty-body half): a SKILL.md with valid frontmatter
+    # Anti-vacuous twin (the empty-body half): a SKILL.md with valid frontmatter
     # but NO body after the closing --- must exit 1 with a SKILL-07 finding.
     mutant = (UCG_FIXTURES / "skill_empty_body.txt").read_text(encoding="utf-8")
     skill_dir = tmp_path / "ucg-formalize"
@@ -540,18 +540,18 @@ def test_empty_body_skill_mutant_fails_validate_skills(tmp_path):
     assert "SKILL-07" in rules, ("expected SKILL-07 (no body), got", rules)
 
 
-# --- AC2 helper: kernel-invocation block carries the FR-5 signature -----------
+# --- helper: kernel-invocation block carries the kernel signature -----------
 
 
 def test_kernel_invocation_block_present():
-    # AC2 (deterministic): the SKILL instructs the {skill-root}-qualified FR-5
+    # Deterministic: the SKILL instructs the {skill-root}-qualified kernel
     # invocation with all five flags, and does NOT recompute the verdict.
     text = _skill_text()
     assert text.count("formalize_check.py") >= 1
     assert "{skill-root}/scripts/formalize_check.py" in text
     for flag in ("--epic", "--project-root", "--planning-artifacts", "--impl-artifacts", "--tea-config"):
-        assert flag in text, "missing FR-5 flag %s" % flag
-    # INV-9: no second kernel, and mechanical_budget is READ not recomputed.
+        assert flag in text, "missing kernel flag %s" % flag
+    # No second kernel, and mechanical_budget is READ not recomputed.
     assert "formalize_eval.py" not in text, "must not invoke a non-existent second kernel"
     assert re.search(r"(?i)never re-?count|read .*off the json|do not recompute", text), (
         "the skill must instruct reading the budget/verdict, not recomputing it"

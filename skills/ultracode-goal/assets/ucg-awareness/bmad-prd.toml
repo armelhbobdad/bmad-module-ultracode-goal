@@ -1,8 +1,8 @@
-# UCG awareness fragment for bmad-prd (story 1.4).
+# UCG awareness fragment for bmad-prd.
 # Authored additive guardrail facts landing in the one universal sanctioned
-# append channel (persistent_facts) per AD-9. The gate (INV-3), not this
-# shaping, is the load-bearing guarantee. Idempotent strip-then-reappend is
-# story 1.5's merge_customization.py concern, matched by the per-directive
+# append channel (persistent_facts). The gate, not this shaping, is the
+# load-bearing guarantee. Idempotent strip-then-reappend is the
+# merge_customization.py merge step's concern, matched by the per-directive
 # [ucg:{skill}-NN] id marker each entry carries.
 
 persistent_facts = [

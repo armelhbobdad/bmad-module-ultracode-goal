@@ -29,23 +29,23 @@ stay TOP-LEVEL of the overlay — that is UCG bookkeeping the live resolve never
 reads, and the tool finds its own stamp top-level.
 
 The runtime ``deep_merge`` engine is IMPORTED from
-``_bmad/scripts/resolve_customization.py`` (never reimplemented, INV-2). Because
+``_bmad/scripts/resolve_customization.py`` (never reimplemented). Because
 ``persistent_facts`` is a flat STRING array, that engine can only APPEND
 (``_merge_arrays`` keys-merges only dict items with ``code``/``id``); therefore
 idempotency, anti-zombie, uninstall and conflict are owned ENTIRELY by this
 tool's strip-then-reappend — ``deep_merge`` is the appender the strip
 compensates for, never the enforcer.
 
-FR-12 pre-merge shape probe (three branches):
+Pre-merge shape probe (three branches):
   - target absent or empty ``{}`` → FRESH install: seed ``[workflow]`` with
     ``persistent_facts`` and merge (NOT a schema-mismatch);
   - target non-empty but does not expose ``workflow.persistent_facts`` (no
     ``[workflow]`` table, or ``[workflow]`` present but no ``persistent_facts``
     key under it) → fail-loud ``schema-mismatch`` SKIP, write nothing — never a
-    dark write (AD-9);
+    dark write;
   - target exposes ``workflow.persistent_facts`` → merge.
 
-FR-11 conflict detection: a UCG-stamped row whose content-hash no longer
+Conflict detection: a UCG-stamped row whose content-hash no longer
 matches the manifest is LEFT in place and reported in ``conflicts``, never
 clobbered. Non-``[ucg:``-marked human rows are always preserved.
 
@@ -68,7 +68,7 @@ from pathlib import Path
 import tomli_w
 
 # The single universal sanctioned landing channel the live customize schema
-# exposes (AD-9), nested under the [workflow] table in every real target. The
+# exposes, nested under the [workflow] table in every real target. The
 # fragment declares persistent_facts top-level; the tool lands it at
 # workflow.persistent_facts so the live deep_merge actually resolves it.
 WORKFLOW_KEY = "workflow"
@@ -87,8 +87,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description=(
             "Stamp-scoped strip-then-reappend of a UCG-awareness fragment's "
-            "persistent_facts into a BMad customize target, with an FR-12 "
-            "shape probe and FR-11 conflict detection."
+            "persistent_facts into a BMad customize target, with a pre-merge "
+            "shape probe and conflict detection."
         )
     )
     parser.add_argument(
@@ -183,7 +183,7 @@ def _load_toml(path: Path) -> dict:
 def _resolve_deep_merge(target_path: Path, verbose: bool):
     """Guarded import of deep_merge from the engine at
     ``<project>/_bmad/scripts/resolve_customization.py`` relative to --target
-    (which lives under ``_bmad/custom/``). Never define it locally (INV-2).
+    (which lives under ``_bmad/custom/``). Never define it locally.
 
     Returns the imported callable, or None when the engine is absent — the
     caller then takes the documented exit-2 missing-dep path.
@@ -211,7 +211,7 @@ def main() -> None:
     verbose = args.verbose
     target_path = Path(args.target)
 
-    # --- Guarded engine import (AC-5 / INV-2). Even --remove honors the
+    # --- Guarded engine import. Even --remove honors the
     # contract: the merge family always proves the engine is present, so an
     # absent engine is the exit-2 missing-dep signal regardless of operation.
     deep_merge = _resolve_deep_merge(target_path, verbose)
@@ -252,12 +252,12 @@ def main() -> None:
         print(f"Error: unparseable fragment TOML {fragment_path}: {error}", file=sys.stderr)
         sys.exit(1)
 
-    # The fragment authors persistent_facts at TOP LEVEL (story-1.4 shape); the
+    # The fragment authors persistent_facts at TOP LEVEL; the
     # tool re-homes those items into the target's nested workflow channel.
     fragment_facts = fragment_data.get(CHANNEL, [])
     fragment_stamp = fragment_data.get(STAMP_KEY, {})
 
-    # --- FR-12 pre-merge shape probe (AD-9/AD-3), three branches:
+    # --- Pre-merge shape probe, three branches:
     #   1. absent/empty target  -> FRESH install: seed [workflow] and merge;
     #   2. non-empty but no workflow.persistent_facts -> schema-mismatch SKIP;
     #   3. exposes workflow.persistent_facts -> merge.
@@ -281,7 +281,7 @@ def main() -> None:
     if isinstance(prior_stamp, dict):
         prior_manifest = dict(prior_stamp.get(MANIFEST_KEY, {}) or {})
 
-    # --- FR-11 conflict detection: a stamped row whose content-hash no longer
+    # --- Conflict detection: a stamped row whose content-hash no longer
     # matches the manifest was hand-edited. Leave it in place (keep its id),
     # report the id, and do NOT re-append the fragment's version over it.
     conflicts: list[str] = []
@@ -290,7 +290,7 @@ def main() -> None:
             continue
         marker = _marker_id(item)
         if marker is None:
-            continue  # human row, never a conflict (INV-1)
+            continue  # human row, never a conflict
         recorded = prior_manifest.get(marker)
         if recorded is not None and recorded != _content_hash(item):
             conflicts.append(marker)
@@ -393,7 +393,7 @@ def _do_remove(target_path: Path, target_data: dict, target_existed: bool, verbo
     stay byte-identical, in==out), and an absent target is left absent (never
     created). 'Nothing to remove' is a clean success (exit 0, removed:0), per
     the merge exit-code lane (1=validation, 2=missing-dep only). A second
-    consecutive --remove is therefore also a no-op (AC3).
+    consecutive --remove is therefore also a no-op.
     """
     existing_facts = _get_channel(target_data)
     rows_before = sum(1 for item in existing_facts if isinstance(item, str) and _is_ucg_row(item))

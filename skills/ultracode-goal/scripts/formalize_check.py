@@ -7,29 +7,29 @@
 
 PLUMBING ONLY. This script resolves an Epic's planning/impl/TEA artifact set the
 way references/ingest-and-scope.md Stage 1 does, reads mechanical FACTS off the
-artifacts on disk, and emits the FR-5 readiness verdict JSON. It computes the
+artifacts on disk, and emits the readiness verdict JSON. It computes the
 ten-key `checks` fact map, counts per-finding `mechanical_gaps[]` (each carrying
 a HUMAN-AUTHORED `remediable` boolean literal frozen at the emission site, the
 preflight_check.py convention), flags `judgment_candidates[]`, and maps the pair
 to a verdict. It NEVER decides a judgment gap — that read belongs to the LLM at
-the SKILL/preflight layer (AD-7); this script only tells it what is mechanically
-true on disk (INV-3) so one readiness definition serves both the standalone
-command and the preflight clause (INV-9).
+the SKILL/preflight layer; this script only tells it what is mechanically
+true on disk so one readiness definition serves both the standalone
+command and the preflight clause.
 
 FAIL-CLOSED CONTRACT (deliberate — do not "relax", mirrors gate_eval.py's
-`nfr_status is None -> treated as failing` posture, INV-4/NFR-2): every artifact
+`nfr_status is None -> treated as failing` posture): every artifact
 open is wrapped; a missing / unparseable / ambiguous artifact records a FAILING
 gap (or a false `checks` value) and is NEVER treated as a neutral/null pass. Any
 signal the kernel can DETECT but has no human-authored classification for
-defaults to a JUDGMENT candidate (AD-1's no-dark-pass catch-all) — never a
+defaults to a JUDGMENT candidate (the no-dark-pass catch-all) — never a
 silent pass, never an auto-remediable mechanical gap.
 
 The two coverage ratios (`ac_machine_checkable_ratio`, `gate_ability_tag_coverage`)
 are REPORTING values only. `mechanical_budget` is a per-item COUNT
 (`len(mechanical_gaps)`), NEVER a ratio-vs-cutoff comparison — so NO numeric
-threshold constant exists anywhere in this file (AD-1).
+threshold constant exists anywhere in this file.
 
-Verdict mapping (FR-6):
+Verdict mapping:
     mechanical_budget == 0 and no judgment candidates        -> ready
     gaps all remediable and no judgment candidates            -> remediable
     any judgment candidate / any non-remediable mechanical
@@ -37,14 +37,14 @@ Verdict mapping (FR-6):
 
 Output: a single JSON object to stdout, serialized with sort_keys for
 byte-stable output and carrying NO timestamp/uuid (so a re-run over the same
-unchanged artifacts is byte-identical, NFR-1). Exit 0 whenever a payload is
+unchanged artifacts is byte-identical). Exit 0 whenever a payload is
 produced (a non-ready verdict is a valid result, not an error). Exit 2 is
 reserved for an invocation error where no useful payload can be produced (a
 missing/empty required flag), the gate_eval.py invocation lane.
 
-This is the KERNEL only. It emits the rich FR-5 verdict; the five-key headless
-envelope is NOT this script's surface (AD-7, Story 1.3). The four Epic-11 floor
-classes are seeded as fixtures in Story 1.2; this story builds the kernel they
+This is the KERNEL only. It emits the rich readiness verdict; the five-key headless
+envelope is NOT this script's surface. The four permanent floor
+classes are seeded as fixtures elsewhere; this script builds the kernel they
 run over.
 
     uv run formalize_check.py --epic <id> --project-root <p> \
@@ -65,7 +65,7 @@ from pathlib import Path
 STORY_STATUSES = ("done", "in-progress", "ready-for-dev", "review", "backlog")
 
 # Filenames (case-insensitive substrings) that mark a PRD / ADR-architecture doc
-# under the planning-artifacts root. Presence + parseability only (AD-6: reader,
+# under the planning-artifacts root. Presence + parseability only (reader,
 # never a second evaluator).
 PRD_MARKERS = ("prd",)
 ADR_MARKERS = ("architecture", "adr")
@@ -142,9 +142,9 @@ _SOURCE_CITATION_RE = re.compile(
 # A vacuous AC asserts a condition that holds no matter what the code does — a
 # tautology (assert True / 1 == 1 / x == x), a "passes regardless of"/"always
 # passes" claim, or an assertion with no observable subject. It is the first
-# Epic-11 JUDGMENT floor class: the kernel can DETECT the tautological SHAPE but
-# cannot decide what the AC SHOULD assert instead, so it is NEVER auto-remediable
-# (Story 1.2 floor AC1; INV-5). Keys on the vacuous SHAPE, never on mere presence
+# permanent JUDGMENT floor class: the kernel can DETECT the tautological SHAPE but
+# cannot decide what the AC SHOULD assert instead, so it is NEVER auto-remediable.
+# Keys on the vacuous SHAPE, never on mere presence
 # of an assertion (the vacuous_ac_sound twin carries a real deterministic AC and
 # must not fire).
 _VACUOUS_AC_RE = re.compile(
@@ -183,21 +183,21 @@ _INDEX_TOKEN_RE = re.compile(
 )
 
 # A check-shaped condition that signals a detectable-but-unclassified anomaly the
-# kernel must NOT silently pass (AD-1 no-dark-pass catch-all). A story / AC line
+# kernel must NOT silently pass (the no-dark-pass catch-all). A story / AC line
 # may opt a fixture into this lane with an explicit, machine-detectable marker
 # the kernel has no human-authored classification for.
 _UNCLASSIFIED_SIGNAL_RE = re.compile(r"UCG-UNCLASSIFIED-SIGNAL", re.IGNORECASE)
 
-# The reserved catch-all sentinel kind (Story 1.2 floor AC6 reuses this).
+# The reserved catch-all sentinel kind.
 UNCLASSIFIED_KIND = "unclassified_signal"
 
-# The two Epic-11 JUDGMENT-floor classes that are NEVER machine-clearable
-# (INV-5): a vacuous AC the kernel cannot rewrite, and an invented NFR threshold
+# The two permanent JUDGMENT-floor classes that are NEVER machine-clearable:
+# a vacuous AC the kernel cannot rewrite, and an invented NFR threshold
 # the kernel cannot source. This is the human-authored frozen classification (the
 # preflight_check.py:411-457 `remediable` literal convention, here as a
 # never-remediable allow-list): these kinds are emitted ONLY as judgment
 # candidates and carry NO `remediable=True` path anywhere in this file. Authored
-# as single-quoted string literals so the Story 1.2 AC5b source-grep pins the
+# as single-quoted string literals so the source-grep pins the
 # floor classification and a mutation re-tagging either as remediable is caught.
 NEVER_REMEDIABLE_JUDGMENT_KINDS = frozenset({'vacuous_ac', 'invented_nfr_threshold'})
 
@@ -308,7 +308,7 @@ def _find_marked_file(root: Path, markers: tuple[str, ...]) -> Path | None:
     """First markdown file under `root` whose name carries a marker substring.
 
     Deterministic: sorted traversal. Resolution honors the per-root flag — a
-    file under the WRONG root is never found (AC5 wrong_root twin).
+    file under the WRONG root is never found (the wrong_root twin).
     """
     if not root.is_dir():
         return None
@@ -501,7 +501,7 @@ def _leaked_tea_artifacts(
     """TEA-shaped artifacts found under the impl/source tree (the wrong root).
 
     A TEA artifact correctly placed under trace_root is NOT a leak; one under
-    impl-artifacts (and outside trace_root) is (Story 1.2 floor AC2 keys on the
+    impl-artifacts (and outside trace_root) is (the check keys on the
     WRONG LOCATION, not on mere presence of a TEA file).
     """
     if not impl_artifacts.is_dir():
@@ -601,8 +601,8 @@ def build_verdict(
     # Pre-pass: read every story body once and build the DECLARED-id set the
     # orphaned-index check resolves citations against (story keys, story-file
     # stems, FR/NFR ids, test::node pointers in any story + the PRD). A citation
-    # to an id absent from this set is the dangling never-green reference (Story
-    # 1.2 floor AC3). The main loop and whole-story catch-all below REUSE these
+    # to an id absent from this set is the dangling never-green reference. The
+    # main loop and whole-story catch-all below REUSE these
     # reads (story_reads), so a story's declared ids and its readability verdict
     # always come from the SAME read — closing the TOCTOU window where the
     # pre-pass could see a file a later read cannot and over-populate declared_ids.
@@ -664,7 +664,7 @@ def build_verdict(
                         "severity": "medium",
                         "detail": "AC has no named verification artifact: %s" % src,
                         # The canonical named-verification scaffold is machine-
-                        # derivable from the AC shape (AD-1 (a)).
+                        # derivable from the AC shape.
                         "remediable": True,
                         "source": src,
                     }
@@ -683,7 +683,7 @@ def build_verdict(
 
             # Unsourced NFR threshold: a bare number+unit with no citation on the
             # same AC line is a number whose benchmark the kernel CANNOT decide
-            # -> JUDGMENT (never auto-remediated; FR-5 / Story 1.2 floor AC4).
+            # -> JUDGMENT (never auto-remediated).
             for nfr_line_no, nfr_line in enumerate(block.splitlines(), start=line_no):
                 if _NFR_NUMBER_RE.search(nfr_line) and not _SOURCE_CITATION_RE.search(nfr_line):
                     nfr_thresholds_unsourced += 1
@@ -698,11 +698,11 @@ def build_verdict(
                         }
                     )
 
-            # Vacuous AC (Epic-11 floor class 1): an assertion that holds no
+            # Vacuous AC (permanent floor class 1): an assertion that holds no
             # matter what the code does (a tautology / "passes regardless"). The
             # kernel detects the vacuous SHAPE but cannot decide what the AC
-            # SHOULD assert instead -> JUDGMENT, NEVER auto-remediable (AD-1 /
-            # INV-5). Emitted ONLY as a judgment_candidate (frozen: no remediable
+            # SHOULD assert instead -> JUDGMENT, NEVER auto-remediable. Emitted
+            # ONLY as a judgment_candidate (frozen: no remediable
             # path for this kind anywhere in this file).
             for vac_line_no, vac_line in enumerate(block.splitlines(), start=line_no):
                 if _VACUOUS_AC_RE.search(vac_line):
@@ -717,12 +717,12 @@ def build_verdict(
                         }
                     )
 
-            # Orphaned never-green index (Epic-11 floor class 3): an AC/trace row
+            # Orphaned never-green index (permanent floor class 3): an AC/trace row
             # CITES a verification/story/FR id that no story or test in the
             # resolved set DECLARES, so it can never go green. A regenerable
-            # story/AC is a MECHANICAL gap (remediable: True via bmad-create-story,
-            # AD-1); an un-regenerable reference defaults to JUDGMENT (fail-closed,
-            # INV-4). The dangling token is carried verbatim in the detail.
+            # story/AC is a MECHANICAL gap (remediable: True via bmad-create-story);
+            # an un-regenerable reference defaults to JUDGMENT (fail-closed). The
+            # dangling token is carried verbatim in the detail.
             for orph_line_no, orph_line in enumerate(block.splitlines(), start=line_no):
                 for token in _cited_index_tokens(orph_line):
                     if _norm_id(token) in declared_ids:
@@ -742,7 +742,7 @@ def build_verdict(
                                 "detail": "AC/trace row cites a story/AC id no "
                                 "story or test declares: %s" % token,
                                 # A missing-but-regenerable story/AC stub is
-                                # machine-derivable (bmad-create-story, AD-1).
+                                # machine-derivable (bmad-create-story).
                                 "remediable": True,
                                 "source": osrc,
                             }
@@ -760,8 +760,7 @@ def build_verdict(
                         )
 
             # No-dark-pass catch-all: a detectable check-shaped signal the kernel
-            # has no human-authored classification for defaults to JUDGMENT
-            # (AD-1, INV-6/INV-4).
+            # has no human-authored classification for defaults to JUDGMENT.
             for sig_line_no, sig_line in enumerate(block.splitlines(), start=line_no):
                 if _UNCLASSIFIED_SIGNAL_RE.search(sig_line):
                     judgment_candidates.append(
@@ -809,7 +808,7 @@ def build_verdict(
                 "severity": "medium",
                 "detail": "TEA artifact under the source/impl tree instead of "
                 "the trace_output root: %s" % rel,
-                # A path MOVE is machine-derivable + meaning-preserving (AD-1).
+                # A path MOVE is machine-derivable + meaning-preserving.
                 "remediable": True,
                 "source": rel,
             }
@@ -862,7 +861,7 @@ def build_verdict(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Mechanical readiness kernel for the /ucg-formalize gate "
-        "(emits the FR-5 verdict JSON)."
+        "(emits the readiness verdict JSON)."
     )
     parser.add_argument("--epic")
     parser.add_argument("--project-root")

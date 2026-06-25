@@ -241,9 +241,9 @@ async function testPortabilityHonestyInstallOutput() {
   console.log(`${colors.yellow}Test Suite 6: Portability-Honesty Install Output${colors.reset}\n`);
 
   // Source of the canonical gap line + the installer source for static greps.
-  // (This is a static-fact suite: AC1's BEHAVIORAL "printed once at install on a
+  // (This is a static-fact suite: the BEHAVIORAL "printed once at install on a
   // non-Claude-Code target" — driving install() and counting the gap line in
-  // captured stdout — is covered by story 1.6's AC6 in test-cli-integration.js.
+  // captured stdout — is covered by the cross-provider honesty suite in test-cli-integration.js.
   // Here we pin the constant's shape and the single emit SITE statically.)
   const installerPath = path.join(REPO_ROOT, 'tools', 'cli', 'lib', 'installer.js');
   const { PORTABILITY_GAP_LINE } = require(installerPath);
@@ -252,10 +252,10 @@ async function testPortabilityHonestyInstallOutput() {
   const README_PATH = path.join(REPO_ROOT, 'README.md');
   const DOCS_PATH = path.join(REPO_ROOT, 'docs', 'how-it-works.md');
 
-  // ---- AC1: one canonical gap line, exactly one emit site -------------------
+  // ---- one canonical gap line, exactly one emit site -------------------
   assert(
     typeof PORTABILITY_GAP_LINE === 'string' && /Claude.?Code.*only/i.test(PORTABILITY_GAP_LINE),
-    'AC1: PORTABILITY_GAP_LINE is exported and names Claude Code as the only place enforcement is automatic',
+    'PORTABILITY_GAP_LINE is exported and names Claude Code as the only place enforcement is automatic',
     PORTABILITY_GAP_LINE,
   );
   // Count UNCOMMENTED emit sites: a `warn(PORTABILITY_GAP_LINE)` call that is
@@ -265,9 +265,9 @@ async function testPortabilityHonestyInstallOutput() {
   // because a commented line is excluded) — proving the test pins the exact
   // count, not mere textual presence.
   const emitCount = installerSrc.split('\n').filter((l) => /warn\(PORTABILITY_GAP_LINE\)/.test(l) && !/^\s*\/\//.test(l)).length;
-  assert(emitCount === 1, 'AC1: installer.js emits PORTABILITY_GAP_LINE from exactly one site', `emit sites = ${emitCount}`);
+  assert(emitCount === 1, 'installer.js emits PORTABILITY_GAP_LINE from exactly one site', `emit sites = ${emitCount}`);
 
-  // ---- AC2: honest copy, never over-claiming --------------------------------
+  // ---- honest copy, never over-claiming --------------------------------
   // Case-insensitive forbidden-claim denylist + the three required markers.
   const denylist = ['cross-provider enforcement', 'enforced everywhere', 'autonomous enforcement on any', 'auto-enforced on'];
   const hasAllMarkers = (text) => text.includes('Claude Code') && text.includes('/ucg-formalize') && /\b(manual|on-demand)\b/i.test(text);
@@ -290,19 +290,15 @@ async function testPortabilityHonestyInstallOutput() {
     ['docs/how-it-works.md portability paragraph', docsPara],
   ];
   for (const [label, text] of subjects) {
-    assert(text.length > 0, `AC2: ${label} is present (non-empty)`, label);
+    assert(text.length > 0, `${label} is present (non-empty)`, label);
     const hits = denyHits(text);
     // Twin: an over-claim like "autonomous enforcement works on any provider"
     // both trips the denylist AND drops the markers — either branch fails.
-    assert(hits.length === 0, `AC2: ${label} contains no forbidden cross-provider claim`, hits.join(' | '));
-    assert(
-      hasAllMarkers(text),
-      `AC2: ${label} carries all three required markers (Claude Code + /ucg-formalize + manual/on-demand)`,
-      label,
-    );
+    assert(hits.length === 0, `${label} contains no forbidden cross-provider claim`, hits.join(' | '));
+    assert(hasAllMarkers(text), `${label} carries all three required markers (Claude Code + /ucg-formalize + manual/on-demand)`, label);
   }
 
-  // ---- AC3: portable half ships, never no-install ---------------------------
+  // ---- portable half ships, never no-install ---------------------------
   // For each portable-half artifact that EXISTS in source, assert it is present
   // (skip-if-absent-in-source so the suite never orphans over a sibling-story
   // artifact). Asserting against the SOURCE tree: the installer copies the
@@ -318,13 +314,13 @@ async function testPortabilityHonestyInstallOutput() {
     const rel = path.relative(REPO_ROOT, artifactPath).replaceAll(path.sep, '/');
     // skip-if-absent-in-source: only assert presence for artifacts that exist.
     if (await fs.pathExists(artifactPath)) {
-      assert(true, `AC3: portable-half artifact present in source: ${rel}`);
+      assert(true, `portable-half artifact present in source: ${rel}`);
     } else {
       console.log(`${colors.dim}  (skip-if-absent-in-source) ${rel} not yet authored${colors.reset}`);
     }
   }
   // At least one ucg-awareness/*.toml persistent_facts fragment (these ship in
-  // source today — AD-9 — so this branch is always exercisable).
+  // source today — so this branch is always exercisable).
   const awarenessDir = path.join(SKILL_SRC, 'assets', 'ucg-awareness');
   let awarenessFragments = [];
   if (await fs.pathExists(awarenessDir)) {
@@ -332,14 +328,14 @@ async function testPortabilityHonestyInstallOutput() {
   }
   assert(
     awarenessFragments.length > 0,
-    'AC3: at least one ucg-awareness/{skill}.toml persistent_facts fragment ships in source',
+    'at least one ucg-awareness/{skill}.toml persistent_facts fragment ships in source',
     `found ${awarenessFragments.length}`,
   );
 
   // Static check: the delimited Step 6b region contains no provider-gated
   // early-return/throw refusal. Scope the negative grep to the Step 6b block.
   const step6bMatch = installerSrc.match(/Step 6b:[\s\S]*?(?=\n {4}\/\/ Step 7:)/);
-  assert(step6bMatch !== null, 'AC3: Step 6b region is delimited in installer.js', 'no Step 6b/Step 7 delimiters found');
+  assert(step6bMatch !== null, 'Step 6b region is delimited in installer.js', 'no Step 6b/Step 7 delimiters found');
   if (step6bMatch) {
     const step6b = step6bMatch[0];
     // Twin: an early-return that skips copying the fragments on non-Claude-Code
@@ -353,19 +349,19 @@ async function testPortabilityHonestyInstallOutput() {
     // return/throw. Scan line-by-line so the two tokens must co-occur in one
     // control-flow statement, not merely somewhere in the block.
     const providerGatedReturn = step6b.split('\n').some((l) => /\b(return|throw)\b/.test(l) && /\bclaude(-code)?\b/i.test(l));
-    assert(!refusalToken, 'AC3: Step 6b block contains no "unsupported"/"no-install" refusal token', 'refusal token found in Step 6b');
+    assert(!refusalToken, 'Step 6b block contains no "unsupported"/"no-install" refusal token', 'refusal token found in Step 6b');
     assert(
       !providerGatedReturn,
-      'AC3: Step 6b block has no provider-gated early-return/throw refusal',
+      'Step 6b block has no provider-gated early-return/throw refusal',
       'provider-name-guarded return/throw found in Step 6b',
     );
   }
 
-  // ---- AC4: provider-invariant verdict + envelope (no fork by this story) ----
+  // ---- provider-invariant verdict + envelope (no fork here) ----
   // (a) installer.js carries ZERO envelope literal and zero verdict-mapping copy
-  //     — this story emits the gap line, not a forked envelope. The envelope's
+  //     — this step emits the gap line, not a forked envelope. The envelope's
   //     identifying SHAPE is the co-occurrence of its structural keys
-  //     status + decision_log + report (AD-7's five keys are status / skill /
+  //     status + decision_log + report (the envelope's five keys are status / skill /
   //     decision_log / report / deferred_work). The detector fires on that
   //     structural co-occurrence rather than requiring all five, so a FORKED
   //     envelope literal that DROPS deferred_work off Claude Code is still
@@ -379,13 +375,13 @@ async function testPortabilityHonestyInstallOutput() {
   // installer.js, so installerHasEnvelopeShape becomes true and this fails.
   assert(
     !installerHasEnvelopeShape,
-    'AC4: installer.js contains ZERO envelope literal / verdict-mapping copy (no forked envelope, even one dropping deferred_work)',
+    'installer.js contains ZERO envelope literal / verdict-mapping copy (no forked envelope, even one dropping deferred_work)',
     'envelope-shaped key co-occurrence (status/decision_log/report) found in installer.js',
   );
   // Defence-in-depth: the canonical sentinel key never appears in installer.js.
   assert(
     !installerSrc.includes('deferred_work'),
-    'AC4: installer.js carries no verdict/envelope key copy (deferred_work absent)',
+    'installer.js carries no verdict/envelope key copy (deferred_work absent)',
     'deferred_work literal found in installer.js',
   );
 
@@ -410,7 +406,7 @@ async function testPortabilityHonestyInstallOutput() {
     const hasProviderToken = /\bclaude(-code)?\b/i.test(src);
     assert(
       !hasProviderToken,
-      `AC4: ${label} has no provider-name ('claude'/'claude-code') conditional around verdict/envelope emission`,
+      `${label} has no provider-name ('claude'/'claude-code') conditional around verdict/envelope emission`,
       `provider token found in ${label}`,
     );
   }

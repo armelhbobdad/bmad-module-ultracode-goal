@@ -3,12 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest"]
 # ///
-"""Tests for formalize_check.py — the FR-5 readiness kernel.
+"""Tests for formalize_check.py — the readiness kernel.
 
-Covers the six Story 1.1 acceptance criteria against the six fixtures under
-tests/fixtures/formalize/: exact FR-5 schema + exit-0-on-payload (and exit-2 on
+Covers the six acceptance criteria against the six fixtures under
+tests/fixtures/formalize/: exact schema + exit-0-on-payload (and exit-2 on
 an invocation error), fail-closed on unreadable artifacts, per-item budget with
-no ratio cutoff (plus the AD-1 grep static guard), the no-dark-pass
+no ratio cutoff (plus the grep static guard), the no-dark-pass
 unclassified-signal -> JUDGMENT catch-all, Stage-1 resolution + stdlib-only
 (plus the ast.walk + PEP-723 guards), and self-explaining + deterministic
 output.
@@ -34,7 +34,7 @@ import pytest
 SCRIPT = Path(__file__).resolve().parent.parent / "formalize_check.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "formalize"
 
-# Frozen FR-5 schema constants compared with == (NOT subset): adding a stray key
+# Frozen schema constants compared with == (NOT subset): adding a stray key
 # OR dropping judgment_candidates/orphaned_indices fails the schema test.
 FR5_TOP_KEYS = frozenset(
     {
@@ -118,7 +118,7 @@ def _verdict(name: str, epic: str | None = None) -> dict:
     return json.loads(proc.stdout)
 
 
-# --- AC1: exact FR-5 schema + exit-0-on-payload -----------------------------
+# --- exact schema + exit-0-on-payload ---------------------------------------
 
 
 def test_schema_keys_exact_and_exit0():
@@ -161,7 +161,7 @@ def test_schema_keys_exact_and_exit0():
     assert bad.returncode == 2
 
 
-# --- AC2: fail-closed on unreadable artifacts -------------------------------
+# --- fail-closed on unreadable artifacts ------------------------------------
 
 
 def test_fail_closed_on_unreadable():
@@ -200,7 +200,7 @@ def test_fail_closed_on_unreadable():
     assert non_remediable, "an unreadable artifact must produce a non-remediable gap"
 
 
-# --- AC3: per-item budget, no ratio cutoff (AD-1) ---------------------------
+# --- per-item budget, no ratio cutoff ---------------------------------------
 
 
 def test_budget_is_per_item_count_no_cutoff():
@@ -230,7 +230,7 @@ def test_budget_is_per_item_count_no_cutoff():
             assert isinstance(gap["remediable"], bool)
 
     # Static guard: no ratio-vs-cutoff comparison / float-threshold constant
-    # exists in the script (AD-1). The grep returning a match (exit 0) FAILS.
+    # exists in the script. The grep returning a match (exit 0) FAILS.
     grep = subprocess.run(
         [
             "grep",
@@ -242,11 +242,11 @@ def test_budget_is_per_item_count_no_cutoff():
         text=True,
     )
     assert grep.returncode == 1, (
-        "AD-1 grep guard found a ratio cutoff in formalize_check.py:\n" + grep.stdout
+        "the no-cutoff grep guard found a ratio cutoff in formalize_check.py:\n" + grep.stdout
     )
 
 
-# --- AC4: unclassified signal -> JUDGMENT (no dark pass) --------------------
+# --- unclassified signal -> JUDGMENT (no dark pass) -------------------------
 
 
 def test_unclassified_signal_defaults_to_judgment():
@@ -274,7 +274,7 @@ def test_unclassified_signal_defaults_to_judgment():
     assert ready["judgment_required"] is False
 
 
-# --- AC5: Stage-1 resolution + stdlib-only ----------------------------------
+# --- Stage-1 resolution + stdlib-only ---------------------------------------
 
 # stdlib top-level module allow-list (no third-party imports).
 _STDLIB_ALLOW = frozenset(
@@ -333,7 +333,7 @@ def test_resolution_and_stdlib_only():
     assert not offenders, f"non-stdlib imports found: {sorted(offenders)}"
 
 
-# --- AC6: self-explaining + deterministic (NFR-1) ---------------------------
+# --- self-explaining + deterministic ----------------------------------------
 
 _SOURCE_RE = re.compile(r"^.+(:[0-9]+)?$")
 

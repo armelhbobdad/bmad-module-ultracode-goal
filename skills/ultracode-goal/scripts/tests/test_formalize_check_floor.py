@@ -3,18 +3,18 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest"]
 # ///
-"""Tests for the four Epic-11 JUDGMENT floor classes in formalize_check.py.
+"""Tests for the four permanent JUDGMENT floor classes in formalize_check.py.
 
-Story 1.2 seeds the four permanent hard-block detections — vacuous AC, leaked TEA
+These cover the four permanent hard-block detections — vacuous AC, leaked TEA
 artifact, orphaned never-green index, invented NFR threshold — plus the no-dark-
-pass catch-all, over the first committed fixture corpus under
+pass catch-all, over the committed fixture corpus under
 tests/fixtures/floor/. Each defect fixture has a sound/resolved TWIN that must NOT
 fire the detection: the twin is the anti-vacuous proof that the check keys on the
 DEFECT (a tautology / a wrong-location TEA file / a dangling citation / a missing
 source) and not on the mere presence of an AC / a TEA file / a citation / a
 number.
 
-INV-5 floor pin (AC5): the two never-machine-clearable classes (vacuous_ac,
+Floor pin: the two never-machine-clearable classes (vacuous_ac,
 invented_nfr_threshold) are emitted ONLY as judgment_candidates. The grep/source
 assertion in test_floor_classes_carry_frozen_remediable_literals is intentionally
 MUTATION-SENSITIVE: flipping either kind to remediable=True or routing it into
@@ -108,13 +108,13 @@ def _run_cli(name: str, epic: str | None = None) -> subprocess.CompletedProcess:
 
 def _verdict(name: str, epic: str | None = None) -> dict:
     proc = _run_cli(name, epic)
-    # FR-5 exit-code lane: exit 0 on any produced payload (a non-ready verdict is
+    # Exit-code lane: exit 0 on any produced payload (a non-ready verdict is
     # a valid result, not an invocation error).
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
 
 
-# --- AC1: vacuous_ac -> JUDGMENT, blocked -----------------------------------
+# --- vacuous_ac -> JUDGMENT, blocked ----------------------------------------
 
 
 def test_vacuous_ac_emits_judgment_blocked():
@@ -147,7 +147,7 @@ def test_vacuous_ac_sound_is_not_flagged():
     assert out["verdict"] == "ready"
 
 
-# --- AC2: leaked_tea_artifact -> MECHANICAL move ----------------------------
+# --- leaked_tea_artifact -> MECHANICAL move ---------------------------------
 
 
 def test_leaked_tea_artifact_is_mechanical_move():
@@ -179,7 +179,7 @@ def test_correctly_placed_tea_artifact_is_not_flagged():
     ] == []
 
 
-# --- AC3: orphaned never-green index ----------------------------------------
+# --- orphaned never-green index ---------------------------------------------
 
 
 def test_orphaned_index_is_caught():
@@ -212,7 +212,7 @@ def test_resolved_index_is_not_flagged():
     assert [f for f in findings if f["kind"] == "orphaned_index"] == []
 
 
-# --- AC4: invented_nfr_threshold hard-blocks --------------------------------
+# --- invented_nfr_threshold hard-blocks -------------------------------------
 
 
 def test_invented_nfr_threshold_hard_blocks():
@@ -230,7 +230,7 @@ def test_invented_nfr_threshold_hard_blocks():
     assert "source" in inv[0]["why_machine_cannot_decide"].lower()
     assert out["verdict"] == "blocked"
 
-    # The invented-threshold class can never be machine-cleared (AD-1 / AD-6).
+    # The invented-threshold class can never be machine-cleared.
     assert all(
         g["kind"] != "invented_nfr_threshold" for g in out["mechanical_gaps"]
     )
@@ -250,7 +250,7 @@ def test_sourced_or_unknown_threshold_is_not_flagged():
     ] == []
 
 
-# --- AC5: frozen human-authored remediable literals (INV-5 floor pin) -------
+# --- frozen human-authored remediable literals ------------------------------
 
 
 def test_floor_classes_carry_frozen_remediable_literals():
@@ -283,7 +283,7 @@ def test_floor_classes_carry_frozen_remediable_literals():
     # double quoted) and assert it carries no remediable-true marker. A mutation
     # flipping vacuous_ac / invented_nfr_threshold to remediable=True (or moving it
     # into a mechanical_gaps constructor with "remediable": True) FAILS here —
-    # this is the INV-5 floor pin and is intentionally mutation-sensitive.
+    # this is the floor pin and is intentionally mutation-sensitive.
     floor_kind_re = re.compile(r"""['"](?:vacuous_ac|invented_nfr_threshold)['"]""")
     remediable_true_re = re.compile(r"""remediable['"]?\s*[:=]\s*True""")
     matched_any = False
@@ -295,12 +295,12 @@ def test_floor_classes_carry_frozen_remediable_literals():
         block = source[start : end + 1]
         assert not remediable_true_re.search(block), (
             "a JUDGMENT-floor kind co-occurs with remediable=True in a finding "
-            "constructor block (INV-5 violated):\n%s" % block
+            "constructor block:\n%s" % block
         )
     assert matched_any, "expected the floor-kind literals to appear in source"
 
 
-# --- AC6: no-dark-pass catch-all --------------------------------------------
+# --- no-dark-pass catch-all -------------------------------------------------
 
 
 def test_unclassified_signal_defaults_to_judgment_no_dark_pass():

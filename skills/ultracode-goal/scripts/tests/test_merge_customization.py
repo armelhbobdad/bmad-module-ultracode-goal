@@ -3,25 +3,25 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest", "tomli-w"]
 # ///
-"""Tests for merge_customization.py (story 1.5).
+"""Tests for merge_customization.py.
 
 Run: uv run --with pytest --with tomli-w pytest scripts/tests/test_merge_customization.py -v
 
-Covers the seven story-1.5 ACs, each with its anti-vacuous twin:
-  AC1 test_merge_appends_stamped_facts
-  AC2 test_idempotent_reinstall
-  AC3 test_absent_channel_is_failloud_skip
-  AC4 test_handedit_conflict_reported_not_clobbered
-  AC5 test_guarded_import_and_no_reimplement
-  AC6 test_remove_strips_only_ucg_rows
-  AC7 test_exit_code_lane_and_pep723
+Covers the seven behaviors of the merge tool, each with its anti-vacuous twin:
+  test_merge_appends_stamped_facts
+  test_idempotent_reinstall
+  test_absent_channel_is_failloud_skip
+  test_handedit_conflict_reported_not_clobbered
+  test_guarded_import_and_no_reimplement
+  test_remove_strips_only_ucg_rows
+  test_exit_code_lane_and_pep723
 
 Each test builds its fixtures programmatically in tmp_path. The target lives
 under a synthetic ``_bmad/custom/`` tree with the real
 ``_bmad/scripts/resolve_customization.py`` copied alongside, so the tool's
 guarded ``deep_merge`` import resolves exactly as it will at install time.
 
-Byte-identity note (AC2, AC6): tomli-w round-trips reorder/reformat unrelated
+Byte-identity note (the idempotent-reinstall and remove tests): tomli-w round-trips reorder/reformat unrelated
 tables, so every byte-identity assertion compares against a snapshot produced
 THROUGH tomli-w (write the baseline once via the serializer before
 snapshotting). This makes the assertions test merge_customization's strip, not
@@ -163,7 +163,7 @@ def write_target_with_channel(custom: Path, extra_facts=None) -> Path:
 def write_target_without_channel(custom: Path, with_workflow: bool = True) -> Path:
     """A target that does NOT expose workflow.persistent_facts (schema
     mismatch). With ``with_workflow`` it has a [workflow] table that lacks the
-    persistent_facts key (the story-1.9 AC4 case); otherwise it has no
+    persistent_facts key (the schema-drift case); otherwise it has no
     [workflow] table at all.
     """
     target = custom / "bmad-prd.toml"
@@ -209,7 +209,7 @@ def ucg_facts(data: dict) -> list[str]:
     return [s for s in channel_facts(data) if isinstance(s, str) and UCG_MARKER.search(s)]
 
 
-# --- AC1 --------------------------------------------------------------------
+# --- merge appends stamped facts --------------------------------------------
 
 
 def test_merge_appends_stamped_facts(tmp_path):
@@ -249,7 +249,7 @@ def test_merge_appends_stamped_facts(tmp_path):
     assert data[WORKFLOW_KEY][HUMAN_WORKFLOW_SCALAR_KEY] == HUMAN_WORKFLOW_SCALAR_VAL
 
 
-# --- AC2 --------------------------------------------------------------------
+# --- idempotent reinstall ---------------------------------------------------
 
 
 def test_idempotent_reinstall(tmp_path):
@@ -293,7 +293,7 @@ def test_idempotent_reinstall(tmp_path):
     assert sha256(mutant_bytes) != sha256(bytes_run2)
 
 
-# --- AC3 --------------------------------------------------------------------
+# --- absent channel is a fail-loud skip -------------------------------------
 
 
 def test_absent_channel_is_failloud_skip(tmp_path):
@@ -325,7 +325,7 @@ def test_absent_channel_is_failloud_skip(tmp_path):
     assert good_result["rows_added"] == len(FRAGMENT_FACTS)
 
 
-# --- AC4 --------------------------------------------------------------------
+# --- hand-edit conflict reported, not clobbered -----------------------------
 
 
 def test_handedit_conflict_reported_not_clobbered(tmp_path):
@@ -370,7 +370,7 @@ def test_handedit_conflict_reported_not_clobbered(tmp_path):
     assert "bmad-prd-01" in result2["conflicts"]
 
     # Anti-vacuous twin: the NON-stamped human row is preserved untouched and
-    # NEVER appears in conflicts (INV-1 human-content safety).
+    # NEVER appears in conflicts (human-content safety).
     assert human_row in facts_after
     assert "bmad-prd-01" in result2["conflicts"]  # the stamped one is flagged
     assert all(not c.startswith("Operator") for c in result2["conflicts"])
@@ -378,11 +378,11 @@ def test_handedit_conflict_reported_not_clobbered(tmp_path):
     assert UCG_MARKER.search(human_row) is None
 
 
-# --- AC5 --------------------------------------------------------------------
+# --- guarded import, engine never reimplemented -----------------------------
 
 
 def test_guarded_import_and_no_reimplement(tmp_path):
-    # (a) The script never defines deep_merge/_merge_arrays locally (INV-2).
+    # (a) The script never defines deep_merge/_merge_arrays locally.
     proc = subprocess.run(
         ["grep", "-c", r"def deep_merge\|def _merge_arrays", str(SCRIPT)],
         capture_output=True,
@@ -415,11 +415,11 @@ def test_guarded_import_and_no_reimplement(tmp_path):
     assert proc_present.returncode == 0, proc_present.stderr
 
 
-# --- AC6 --------------------------------------------------------------------
+# --- remove strips only stamped rows ----------------------------------------
 
 
 def test_remove_strips_only_ucg_stamped(tmp_path):
-    """Story 1.8 AC1 (extends the story-1.5 AC6 test): --remove deletes exactly
+    """--remove deletes exactly
     the [ucg:<id>]-marked rows + the [ucg] table — determinism is grep-c == 0
     for both the marker substring and the literal [ucg] header — while every
     human-authored non-stamped row + workflow scalar survives byte-identical.
@@ -446,7 +446,7 @@ def test_remove_strips_only_ucg_stamped(tmp_path):
     assert proc_remove.returncode == 0, proc_remove.stderr
     after_remove = target.read_bytes()
 
-    # Determinism (AC1): post-remove the file carries ZERO [ucg]-stamped
+    # Determinism: post-remove the file carries ZERO [ucg]-stamped
     # artifacts — the marker substring count and the literal [ucg] table-header
     # count are both 0 (the grep-c == 0 contract).
     post_text = target.read_text(encoding="utf-8")
@@ -456,7 +456,7 @@ def test_remove_strips_only_ucg_stamped(tmp_path):
     assert len(ucg_facts(reverted)) == 0  # via tomllib re-parse of the channel
     assert "ucg" not in reverted  # stamp table removed
 
-    # Byte-identical reversal to the pre-install snapshot (INV-10 / NFR-5).
+    # Byte-identical reversal to the pre-install snapshot.
     assert sha256(after_remove) == sha256(pre_install_snapshot)
 
     # The human-authored non-stamped rows survive --remove, and the human-owned
@@ -477,7 +477,7 @@ def test_remove_strips_only_ucg_stamped(tmp_path):
 
 
 def test_remove_leaves_human_content_byte_identical(tmp_path):
-    """Story 1.8 AC2: --remove leaves the human-owned region BYTE-identical.
+    """--remove leaves the human-owned region BYTE-identical.
     Baseline = a tomli-w-serialized human file (human channel entry + a
     [workflow] scalar + a top-level scalar); install a UCG fragment, then
     --remove; the post-remove bytes equal the baseline bytes exactly.
@@ -502,7 +502,7 @@ def test_remove_leaves_human_content_byte_identical(tmp_path):
     assert baseline.read_bytes() == baseline_bytes
 
     # Anti-vacuous twin (a): a human-added persistent_facts entry whose wording
-    # OVERLAPS a UCG directive but carries NO marker is NOT removed (FR-11:
+    # OVERLAPS a UCG directive but carries NO marker is NOT removed (a
     # different/absent id is always preserved).
     custom_b = _engine_tree(tmp_path / "overlap")
     look_alike = FRAGMENT_FACTS[0].replace(" [ucg:bmad-prd-01]", "")  # same text, no marker
@@ -525,7 +525,7 @@ def test_remove_leaves_human_content_byte_identical(tmp_path):
 
 
 def test_remove_idempotent_and_noop_on_clean(tmp_path):
-    """Story 1.8 AC3: --remove on an already-clean / never-installed target is a
+    """--remove on an already-clean / never-installed target is a
     TRUE no-op — byte-identical in==out (or absent stays absent), exit 0,
     JSON removed:0. A second consecutive --remove is also a no-op.
     """
@@ -577,7 +577,7 @@ def test_remove_idempotent_and_noop_on_clean(tmp_path):
 
 
 def test_install_then_remove_roundtrip_identity(tmp_path):
-    """Story 1.8 AC5: --remove is the EXACT inverse of install. baseline ==
+    """--remove is the EXACT inverse of install. baseline ==
     bytes after (install then --remove). Twin: install TWICE then --remove ONCE
     still round-trips to baseline (matches on stamp, not append count).
     """
@@ -593,7 +593,7 @@ def test_install_then_remove_roundtrip_identity(tmp_path):
     assert baseline.read_bytes() == baseline_bytes  # exact round-trip
 
     # Anti-vacuous twin: install TWICE then --remove ONCE still round-trips
-    # (story-1.5 install is idempotent strip-then-reappend, so one --remove
+    # (install is idempotent strip-then-reappend, so one --remove
     # clears it fully — proving --remove matches on stamp, not on append count).
     run_tool(baseline, fragment)
     run_tool(baseline, fragment)
@@ -612,7 +612,7 @@ def test_install_then_remove_roundtrip_identity(tmp_path):
     assert baseline_bytes + b"\n" != baseline_bytes  # trailing-blank-line mutant
 
 
-# --- AC7 --------------------------------------------------------------------
+# --- exit-code lane and PEP-723 block ---------------------------------------
 
 
 def test_exit_code_lane_and_pep723(tmp_path):

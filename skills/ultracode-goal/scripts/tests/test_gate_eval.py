@@ -355,7 +355,7 @@ def test_story_selector_epic_id_not_confused_with_child_story(tmp_path):
     # The E-E collision: a single-component epic id (1) must resolve the epic
     # report, NOT child story 1-1 whose LAST component also equals 1 — and
     # trace-1-1.md sorts BEFORE trace-1.md, so an unscoped/suffix match would
-    # wrongly return the child's gate as the epic verdict (the F4 false-verdict
+    # wrongly return the child's gate as the epic verdict (the false-verdict
     # class this selector exists to prevent). Reachable in-repo: epic 1 / story 1-1.
     write_trace_report(tmp_path, "trace-1-1.md", "gate-decision-1-1.json")
     write_named_slim(tmp_path, "gate-decision-1-1.json", "FAIL", p0="NOT_MET")
