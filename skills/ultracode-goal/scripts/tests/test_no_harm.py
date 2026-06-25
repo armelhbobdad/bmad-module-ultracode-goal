@@ -43,8 +43,9 @@ import tomllib
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "merge_customization.py"
-# The live engine a plain BMAD run resolves through.
-REAL_ENGINE = Path(__file__).resolve().parents[4] / "_bmad" / "scripts" / "resolve_customization.py"
+# The live engine a plain BMAD run resolves through — vendored under fixtures/
+# so the suite stays hermetic in CI (the real _bmad/ tree is gitignored).
+REAL_ENGINE = Path(__file__).resolve().parent / "fixtures" / "engine" / "resolve_customization.py"
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets" / "ucg-awareness"
 REPO_ROOT = Path(__file__).resolve().parents[4]
 

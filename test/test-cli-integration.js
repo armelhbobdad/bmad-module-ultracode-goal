@@ -695,7 +695,9 @@ async function testGitignoreEntries() {
 // ============================================================
 
 const REPO_ROOT = path.resolve(__dirname, '..');
-const REAL_ENGINE = path.join(REPO_ROOT, '_bmad', 'scripts', 'resolve_customization.py');
+// Vendored under skills/.../tests/fixtures/engine/ so the suite stays hermetic
+// in CI (the real _bmad/ tree is gitignored and absent on a clean checkout).
+const REAL_ENGINE = path.join(REPO_ROOT, 'skills', 'ultracode-goal', 'scripts', 'tests', 'fixtures', 'engine', 'resolve_customization.py');
 
 // The enumerated forbidden cross-provider-auto-enforcement-claim set, defined
 // as a literal constant. The

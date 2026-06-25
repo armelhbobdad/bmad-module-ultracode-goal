@@ -39,8 +39,9 @@ import tomllib
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "merge_customization.py"
-# The real engine the tool imports deep_merge from, at _bmad/scripts/.
-REAL_ENGINE = Path(__file__).resolve().parents[4] / "_bmad" / "scripts" / "resolve_customization.py"
+# The real engine the tool imports deep_merge from — vendored under fixtures/
+# so the suite stays hermetic in CI (the real _bmad/ tree is gitignored).
+REAL_ENGINE = Path(__file__).resolve().parent / "fixtures" / "engine" / "resolve_customization.py"
 
 
 # tomli-w is the writer dep the TOOL declares in its PEP-723 block. The shared
