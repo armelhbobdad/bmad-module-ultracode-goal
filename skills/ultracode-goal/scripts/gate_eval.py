@@ -34,7 +34,18 @@ Artifact resolution:
     e2e-trace-summary.json and read its gate fields. When even the summary
     carries no gate fields (not gate-eligible), gate_status is NOT_EVALUATED.
 
-    python3 gate_eval.py --trace-output DIR --profile production \
+    --story (multi-story shared dir): when many stories write per-story-named
+    trace reports + gate decisions into ONE shared <trace-output>, an unscoped
+    glob would resolve the first/oldest report's gate (the bug --story fixes).
+    Pass --story <id> and resolution is scoped to that story's artifacts: the
+    trace report whose filename carries the id (then its frontmatter hint), else
+    a conventionally-named gate-decision-<id>.json / e2e-trace-summary-<id>.json.
+    Matching is on id components (11-6 == 11.6 == 11_6) anchored to the stem's
+    trailing components, so epic id 1 resolves trace-1 (never child story 1-1)
+    and 11-6 is never confused with 1-11-6. With no per-story artifact found it
+    falls back to the unscoped resolution, so a single-story dir is unchanged.
+
+    python3 gate_eval.py --trace-output DIR --profile production --story 11-6 \
         --nfr DIR/nfr-assessment.md --test-review DIR/test-review.md
 """
 
@@ -81,9 +92,58 @@ def _frontmatter(text: str) -> dict[str, str]:
     return out
 
 
-def _resolve_gate_file(trace_output: Path) -> Path:
-    """Locate the slim gate-decision file, honoring a trace-report hint."""
-    for report in sorted(trace_output.glob("*.md")):
+def _story_variants(story: str | None) -> list[str]:
+    """Separator-insensitive variants of a story id for filename matching.
+
+    A story id like ``11-6`` is written into per-story artifact names with any of
+    ``-`` / ``.`` / ``_`` as the separator depending on the producing tool; treat
+    them as equal so ``--story 11-6`` matches ``trace-11.6.md`` and
+    ``gate-decision-11_6.json`` alike. Order is stable and de-duplicated.
+    """
+    if not story or not story.strip():
+        return []
+    parts = re.split(r"[-._]", story.strip())
+    variants = [sep.join(parts) for sep in ("-", ".", "_")]
+    variants.append(story.strip())
+    return list(dict.fromkeys(v for v in variants if v))
+
+
+def _stem_matches_story(stem: str, story: str) -> bool:
+    """True iff a filename stem's trailing id-components equal the story's.
+
+    Components are the maximal ``[-._]``-separated runs (so ``11-6`` == ``11.6``
+    == ``11_6``). The story's components must be a suffix of the stem's, AND the
+    stem component immediately preceding that suffix (if any) must be
+    non-numeric — a filename prefix like ``trace`` / ``gate-decision`` qualifies,
+    a longer numeric id does not. This keeps epic id ``1`` (matches ``trace-1``,
+    not child story ``trace-1-1``) apart from story ``1-1``, and story ``11-6``
+    apart from ``1-11-6``. Component matching also rejects ``trace-211`` for id
+    ``11`` (``211`` != ``11``).
+    """
+    story_parts = [p for p in re.split(r"[-._]", story.strip()) if p]
+    stem_parts = [p for p in re.split(r"[-._]", stem) if p]
+    if not story_parts or len(story_parts) > len(stem_parts):
+        return False
+    cut = len(stem_parts) - len(story_parts)
+    if stem_parts[cut:] != story_parts:
+        return False
+    return cut == 0 or not stem_parts[cut - 1].isdigit()
+
+
+def _resolve_gate_file(trace_output: Path, story: str | None = None) -> Path:
+    """Locate the slim gate-decision file, honoring a trace-report hint.
+
+    With ``story`` set, scope resolution to that story's artifacts so a single
+    shared multi-story ``trace_output`` does not resolve the first/oldest
+    story's gate. Falls back to the unscoped resolution when no per-story
+    artifact is found, so a single-story dir behaves exactly as before.
+    """
+    reports = sorted(trace_output.glob("*.md"))
+    if story and story.strip():
+        scoped = [r for r in reports if _stem_matches_story(r.stem, story)]
+        if scoped:
+            reports = scoped
+    for report in reports:
         try:
             fm = _frontmatter(report.read_text(encoding="utf-8"))
         except OSError:
@@ -95,6 +155,13 @@ def _resolve_gate_file(trace_output: Path) -> Path:
             if hint:
                 hinted = Path(hint)
                 return hinted if hinted.is_absolute() else trace_output / hinted
+    # No frontmatter hint. With a story in scope, prefer the conventionally-named
+    # per-story slim file before the shared default so the shared dir resolves
+    # the right story even when no trace report points at it.
+    for v in _story_variants(story):
+        candidate = trace_output / f"gate-decision-{v}.json"
+        if candidate.is_file():
+            return candidate
     return trace_output / "gate-decision.json"
 
 
@@ -113,9 +180,18 @@ def _gate_fields_from_summary(summary: dict) -> dict:
     }
 
 
-def load_gate(trace_output: Path, reasons: list[str]) -> dict:
+def _resolve_summary_file(trace_output: Path, story: str | None) -> Path:
+    """The summary fallback path, preferring a per-story summary when one exists."""
+    for v in _story_variants(story):
+        candidate = trace_output / f"e2e-trace-summary-{v}.json"
+        if candidate.is_file():
+            return candidate
+    return trace_output / "e2e-trace-summary.json"
+
+
+def load_gate(trace_output: Path, reasons: list[str], story: str | None = None) -> dict:
     """Return normalized gate fields, preferring the slim file, else the summary."""
-    gate_file = _resolve_gate_file(trace_output)
+    gate_file = _resolve_gate_file(trace_output, story)
     if gate_file.is_file():
         slim = _read_json(gate_file)
         reasons.append(f"gate read from {gate_file.name}")
@@ -126,7 +202,7 @@ def load_gate(trace_output: Path, reasons: list[str]) -> dict:
             "overall_status": slim.get("overall_status"),
         }
 
-    summary_file = trace_output / "e2e-trace-summary.json"
+    summary_file = _resolve_summary_file(trace_output, story)
     if summary_file.is_file():
         reasons.append(
             f"{gate_file.name} absent; gate read from {summary_file.name} (not a failure)"
@@ -234,7 +310,7 @@ def evaluate(args: argparse.Namespace) -> dict:
     reasons: list[str] = []
     trace_output = Path(args.trace_output)
 
-    gate = load_gate(trace_output, reasons)
+    gate = load_gate(trace_output, reasons, getattr(args, "story", None))
     gate_status = (gate["gate_status"] or "NOT_EVALUATED").upper()
     verdict = GATE_VERDICT.get(gate_status, "escalate")
     if gate_status not in GATE_VERDICT:
@@ -267,6 +343,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Evaluate the TEA quality gate into a verdict.")
     parser.add_argument("--trace-output", required=True, help="Directory holding the trace gate artifacts.")
     parser.add_argument("--profile", required=True, choices=["light", "production"])
+    parser.add_argument(
+        "--story",
+        help="Current story id; scopes gate-file resolution to that story's "
+        "artifacts in a shared multi-story trace dir. Omit for a single-story dir.",
+    )
     parser.add_argument("--nfr", help="Path to nfr-assessment.md (production only).")
     parser.add_argument("--test-review", help="Path to test-review.md (production only).")
     args = parser.parse_args(argv)

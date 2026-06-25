@@ -18,16 +18,18 @@ The gate reads artifacts TEA produces. In **production**, before running the gat
 Production:
 
 ```
-uv run {skill-root}/scripts/gate_eval.py --trace-output {workflow.trace_output_dir} --profile production --nfr {nfr-assessment.md} --test-review {test-review.md}
+uv run {skill-root}/scripts/gate_eval.py --trace-output {workflow.trace_output_dir} --story <story_id> --profile production --nfr {nfr-assessment.md} --test-review {test-review.md}
 ```
 
 Light:
 
 ```
-uv run {skill-root}/scripts/gate_eval.py --trace-output {workflow.trace_output_dir} --profile light
+uv run {skill-root}/scripts/gate_eval.py --trace-output {workflow.trace_output_dir} --story <story_id> --profile light
 ```
 
-Resolve `{nfr-assessment.md}` and `{test-review.md}` to the paths TEA wrote them to (under `{workflow.trace_output_dir}` or the TEA output root); pass the production-only flags only in production. The script reads `gate-decision.json` (resolving its filename from the trace report frontmatter, falling back to the `e2e-trace-summary.json` gate fields when the slim file is absent — that fallback is **not** a failure). It returns JSON:
+Resolve `{nfr-assessment.md}` and `{test-review.md}` to the paths TEA wrote them to (under `{workflow.trace_output_dir}` or the TEA output root); pass the production-only flags only in production. The script reads `gate-decision.json` (resolving its filename from the trace report frontmatter, falling back to the `e2e-trace-summary.json` gate fields when the slim file is absent — that fallback is **not** a failure).
+
+**`--story` in a shared multi-story trace dir.** When every story in a multi-story Epic writes a per-story-named trace report + gate decision (`trace-<id>.md`, `gate-decision-<id>.json`) into the **one** shared `{workflow.trace_output_dir}`, an unscoped read resolves the first/oldest story's gate — a false verdict for every later story. Pass `--story <story_id>` (the id of the story you are gating) so resolution is scoped to that story's artifacts; matching is on id components (`11-6` == `11.6` == `11_6`) anchored to the trailing components, so epic id `1` resolves `trace-1` and never the child story `1-1`'s report. For the **epic-level** gate after the last story, pass the epic's own id the same way (it resolves the epic's `trace-<epic>` report, not any child story). `--story` is optional and backward-compatible: a no-match falls back to the unscoped read, so omit it only when `{workflow.trace_output_dir}` provably holds a single story's artifacts. The experimental `--parallel` workflow (`assets/execute-epic.workflow.js`) shares one `trace_output` across its worktree agents too, so it now passes `--story` per story automatically. If your TEA build does not name artifacts per story, isolate the current story's `trace-*.md` + `gate-decision*.json` into a fresh dir and point `--trace-output` there instead. It returns JSON:
 
 ```json
 {"verdict": "advance|defer|reloop|escalate",
