@@ -92,6 +92,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # test:cli drives the real installer (Step 6b runs merge_customization.py
+      # via `uv run`) and round-trips TOML through `uv`/`python3` helpers, so the
+      # validate job needs both on PATH — same uv setup the python job uses.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Smoke test conventional-changelog-cli bin resolution on Windows
         if: runner.os == 'Windows'
         run: npx --no-install conventional-changelog-cli --help
