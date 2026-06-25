@@ -296,7 +296,8 @@ async function testHelpCatalogRegistration() {
 
     catalogText = await fs.readFile(catalogPath, 'utf8');
     const ucgRowCount = catalogText.split('\n').filter((l) => l.startsWith('UltraCode Goal,')).length;
-    assert(ucgRowCount === 2, 'reinstall keeps exactly one row set (_meta + capability)', `found ${ucgRowCount}`);
+    // _meta + 2 capability rows (ultracode-goal + ucg-formalize, story 1-7); anti-zombie keeps the set stable across reinstall (not 6).
+    assert(ucgRowCount === 3, 'reinstall is anti-zombie: _meta + 2 capability rows, no duplication', `found ${ucgRowCount}`);
 
     // Uninstall path: UCG rows removed, foreign rows survive
     const touched = await removeHelpEntries(projectDir, ['UltraCode Goal']);
@@ -1181,6 +1182,145 @@ async function testStep6bUcgAwareness() {
 }
 
 // ============================================================
+// Test Suite 8b: Step 6b decline no-op (Story 1.8 AC4)
+// ============================================================
+//
+// The decline path writes nothing: enable_ucg_awareness=false skips Step 6b
+// entirely, so merge_customization.py is never spawned and the _bmad/custom/
+// file inventory + bytes equal the pre-install set exactly. The positive
+// control (=true) proves the no-op is caused by the decline GATE, not an inert
+// step. And /ucg-formalize (formalize_check.py) stays invocable after decline
+// (INV-3 verify-without-shape).
+
+/** Snapshot {filename -> sha256(bytes)} of _bmad/custom/*.toml (empty if dir absent). */
+async function snapshotCustomToml(projectDir) {
+  const crypto = require('node:crypto');
+  const customDir = path.join(projectDir, '_bmad', 'custom');
+  if (!(await fs.pathExists(customDir))) return {};
+  const out = {};
+  for (const name of await fs.readdir(customDir)) {
+    if (!name.endsWith('.toml')) continue;
+    const bytes = await fs.readFile(path.join(customDir, name));
+    out[name] = crypto.createHash('sha256').update(bytes).digest('hex');
+  }
+  return out;
+}
+
+/** grep-style count of literal `[ucg]` stamp headers under _bmad/custom/. */
+async function countUcgStamps(projectDir) {
+  const customDir = path.join(projectDir, '_bmad', 'custom');
+  if (!(await fs.pathExists(customDir))) return 0;
+  let count = 0;
+  for (const name of await fs.readdir(customDir)) {
+    if (!name.endsWith('.toml')) continue;
+    const text = await fs.readFile(path.join(customDir, name), 'utf8');
+    count += (text.match(/^\[ucg\]\s*$/gm) || []).length;
+  }
+  return count;
+}
+
+async function testStep6bDeclineNoOp() {
+  console.log(`${colors.yellow}Test Suite 8b: Step 6b decline no-op (Story 1.8 AC4)${colors.reset}\n`);
+
+  const { Installer } = require('../tools/cli/lib/installer');
+  const { spawnSync } = require('node:child_process');
+
+  // --- AC4: enable_ucg_awareness=false writes NOTHING under _bmad/custom/ ----
+  {
+    const projectDir = await makeTempDir('s8b-decline');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, PLANNING_SKILLS);
+
+      // Pre-install custom-toml inventory (engine + skills present, no UCG yet).
+      const before = await snapshotCustomToml(projectDir);
+
+      const installer = new Installer();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'decline-noop',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: false,
+        _action: 'fresh',
+      });
+      restore();
+      assert(result.success === true, 'AC4: declined install returns success');
+
+      // Inventory + bytes equal the pre-install set exactly (no UCG file/byte).
+      const after = await snapshotCustomToml(projectDir);
+      assert(
+        JSON.stringify(before) === JSON.stringify(after),
+        'AC4: _bmad/custom/*.toml inventory + bytes unchanged by a declined install',
+        `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+      );
+      // Zero [ucg] stamps anywhere under _bmad/custom/ (grep -rc '\[ucg\]' == 0).
+      assert((await countUcgStamps(projectDir)) === 0, 'AC4: zero [ucg] stamps under _bmad/custom/ after decline');
+
+      // INV-3: /ucg-formalize (formalize_check.py) is still invocable after a
+      // decline — the standalone gate path is unaffected (verify-without-shape).
+      const formalize = path.join(projectDir, '_bmad', 'ucg', 'ultracode-goal', 'scripts', 'formalize_check.py');
+      assert(await fs.pathExists(formalize), 'AC4: formalize_check.py installed (standalone gate present after decline)');
+      const proc = spawnSync('uv', ['run', '--script', formalize, '--help'], { encoding: 'utf8' });
+      assert(
+        proc.status === 0 && /usage:\s*formalize_check\.py/i.test(proc.stdout),
+        'AC4: formalize_check.py runs (--help) after decline (INV-3)',
+        `status=${proc.status} stderr=${(proc.stderr || '').slice(0, 200)}`,
+      );
+    } catch (error) {
+      assert(false, 'AC4 decline no-op completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- AC4 positive-control twin: the SAME harness with =true DOES create at
+  //     least one _bmad/custom/{skill}.toml carrying an [ucg] stamp — proving
+  //     the no-op above is caused by the decline gate, not an inert Step 6b. ---
+  {
+    const projectDir = await makeTempDir('s8b-accept');
+    try {
+      await seedEngine(projectDir);
+      await seedSkills(projectDir, PLANNING_SKILLS);
+
+      const installer = new Installer();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'accept-control',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      assert(result.success === true, 'AC4-twin: accepted install returns success');
+
+      const after = await snapshotCustomToml(projectDir);
+      const wroteToml = Object.keys(after);
+      assert(
+        wroteToml.length > 0,
+        'AC4-twin: accept (=true) DOES create at least one _bmad/custom/{skill}.toml',
+        `wrote=${wroteToml.join(', ')}`,
+      );
+      assert(
+        (await countUcgStamps(projectDir)) >= 1,
+        'AC4-twin: at least one [ucg] stamp under _bmad/custom/ when accepted (gate, not inert step)',
+      );
+    } catch (error) {
+      assert(false, 'AC4 positive-control completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  console.log('');
+}
+
+// ============================================================
 // Runner
 // ============================================================
 
@@ -1243,6 +1383,7 @@ async function runTests() {
   await testFreshInstallWithoutLearning();
   await testGitignoreEntries();
   await testStep6bUcgAwareness();
+  await testStep6bDeclineNoOp();
   await testBannerGeometry();
 
   console.log(`${colors.cyan}========================================`);

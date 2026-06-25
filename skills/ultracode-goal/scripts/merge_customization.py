@@ -387,9 +387,35 @@ def _do_remove(target_path: Path, target_data: dict, target_existed: bool, verbo
     """--remove: strip only [ucg:<id>]-marked rows from workflow.persistent_facts
     + delete the top-level [ucg] table, leaving every non-UCG item and human
     scalar/table byte-identical.
+
+    TRUE no-op when there is nothing to remove: if the target carries neither a
+    [ucg] stamp NOR any [ucg:<id>]-marked row, the file is NOT rewritten (bytes
+    stay byte-identical, in==out), and an absent target is left absent (never
+    created). 'Nothing to remove' is a clean success (exit 0, removed:0), per
+    the merge exit-code lane (1=validation, 2=missing-dep only). A second
+    consecutive --remove is therefore also a no-op (AC3).
     """
     existing_facts = _get_channel(target_data)
     rows_before = sum(1 for item in existing_facts if isinstance(item, str) and _is_ucg_row(item))
+    has_stamp = isinstance(target_data.get(STAMP_KEY), dict)
+    nothing_to_remove = rows_before == 0 and not has_stamp
+
+    if nothing_to_remove:
+        # Do NOT touch the file: no rewrite, no creation. Byte-identical no-op.
+        if verbose:
+            state = "absent" if not target_existed else "no UCG artifacts"
+            print(f"--remove no-op: target has {state}; wrote nothing", file=sys.stderr)
+        result = {
+            "status": "success",
+            "target_path": str(target_path.resolve()),
+            "target_existed": target_existed,
+            "rows_removed": 0,
+            "rows_added": 0,
+            "skipped": None,
+            "conflicts": [],
+        }
+        _emit(result)
+        sys.exit(0)
 
     merged = dict(target_data)
     if _channel_exposed(target_data):
