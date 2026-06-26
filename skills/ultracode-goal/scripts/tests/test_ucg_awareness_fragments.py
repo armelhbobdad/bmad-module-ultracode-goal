@@ -45,6 +45,9 @@ EXPECTED_FRAGMENTS = {
     "bmad-architecture.toml",
     "bmad-create-epics-and-stories.toml",
     "bmad-create-story.toml",
+    # Epic 2, story 2.7 — the two TEA shaping fragments.
+    "bmad-testarch-test-design.toml",
+    "bmad-testarch-nfr.toml",
 }
 
 # The deprecated PRD shims a fragment must never be named for or reference.

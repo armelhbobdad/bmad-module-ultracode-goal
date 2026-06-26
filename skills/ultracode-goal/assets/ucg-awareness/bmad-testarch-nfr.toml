@@ -1,0 +1,20 @@
+# UCG awareness fragment for bmad-testarch-nfr.
+# Additive guardrail facts landing in the one universal sanctioned append channel
+# (persistent_facts, authored top-level here; merge_customization.py re-homes them
+# into the target's nested [workflow].persistent_facts). The gate, not this shaping,
+# is load-bearing (INV-3); a plain run is unaffected or strictly improved (NFR-3).
+
+persistent_facts = [
+  "Reuse the test-design NFR plan as the primary source of NFR categories and thresholds; never re-derive or re-guess a threshold the plan already states. [ucg:bmad-testarch-nfr-01]",
+  "Extract any still-missing threshold from the tech-spec, PRD, architecture, or story and name the evidence source for each category's verdict; a category asserted PASS must cite a named evidence source, not a bare claim. [ucg:bmad-testarch-nfr-02]",
+  "A threshold that is genuinely unknown is marked UNKNOWN and routed to CONCERNS, never asserted PASS on an unmeasured number; UNKNOWN is a concern, not a pass. [ucg:bmad-testarch-nfr-03]",
+  "Write nfr-assessment.md with the overallStatus field the downstream gate reads (PASS / CONCERNS / FAIL / NOT_ASSESSED); state that status from the assessed categories and do not originate it as a free value. [ucg:bmad-testarch-nfr-04]",
+  "Write the nfr-assessment under the configured trace_output / test_artifacts root; never leave it in the source or implementation tree. [ucg:bmad-testarch-nfr-05]",
+  "These are run-scoped guardrail facts that shape the NFR assessment to be ready-by-construction; they are additive guidance, narrower than per-AC directives, and not the verdict. The gate is load-bearing; a plain run is unaffected or strictly improved. [ucg:bmad-testarch-nfr-06]",
+]
+
+[ucg]
+managed = true
+version = "0.3.0"
+block = "ucg-awareness"
+installed_at = "2026-06-26T00:00:00Z"
