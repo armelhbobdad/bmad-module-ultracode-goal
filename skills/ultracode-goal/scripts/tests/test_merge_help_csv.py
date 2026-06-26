@@ -8,7 +8,7 @@
 Run: uv run --with pytest pytest scripts/tests/test_merge_help_csv.py -v
 
 Covers fresh-target creation, the anti-zombie idempotency guarantee,
-foreign-row preservation, positional header preservation when merging an
+foreign-row preservation, positional header preservation when merging a legacy
 after/before source into a preceded-by/followed-by catalog, and the
 no-data-rows validation error.
 """
@@ -26,11 +26,18 @@ SCRIPT = Path(__file__).resolve().parents[1] / "merge_help_csv.py"
 
 SOURCE_HEADER = (
     "module,skill,display-name,menu-code,description,action,args,phase,"
-    "after,before,required,output-location,outputs"
+    "preceded-by,followed-by,required,output-location,outputs"
 )
 CATALOG_HEADER = (
     "module,skill,display-name,menu-code,description,action,args,phase,"
     "preceded-by,followed-by,required,output-location,outputs"
+)
+# A legacy source that still spells columns 9-10 after/before. The positional
+# merge must place its rows into a canonical catalog without renaming, so this
+# divergence-tolerance stays covered now that the live source is canonical.
+LEGACY_SOURCE_HEADER = (
+    "module,skill,display-name,menu-code,description,action,args,phase,"
+    "after,before,required,output-location,outputs"
 )
 UCG_MAIN = (
     'UltraCode Goal,ultracode-goal,Run Epic Autonomously,UG,"Run a BMAD Epic, autonomously.",,'
@@ -48,13 +55,13 @@ FOREIGN_ROW = (
 )
 
 
-def write_source(tmp_path: Path, rows: list[str] | None = None) -> Path:
+def write_source(tmp_path: Path, rows: list[str] | None = None, header: str = SOURCE_HEADER) -> Path:
     # Lives in its own assets/ subdir so a target named module-help.csv in
     # tmp_path never collides with the source file.
     source_dir = tmp_path / "assets"
     source_dir.mkdir(exist_ok=True)
     source = source_dir / "module-help.csv"
-    lines = [SOURCE_HEADER, *(rows if rows is not None else [UCG_MAIN, UCG_EXTRA])]
+    lines = [header, *(rows if rows is not None else [UCG_MAIN, UCG_EXTRA])]
     source.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return source
 
@@ -117,9 +124,9 @@ def test_preserves_foreign_module_rows(tmp_path):
 
 
 def test_positional_merge_keeps_target_catalog_header(tmp_path):
-    # The assembled catalog spells columns 9-10 preceded-by/followed-by; an
-    # after/before source must merge positionally without renaming them.
-    source = write_source(tmp_path)
+    # The assembled catalog spells columns 9-10 preceded-by/followed-by; a
+    # legacy after/before source must still merge positionally without renaming.
+    source = write_source(tmp_path, header=LEGACY_SOURCE_HEADER)
     target = tmp_path / "bmad-help.csv"
     target.write_text("\n".join([CATALOG_HEADER, FOREIGN_ROW]) + "\n", encoding="utf-8")
 

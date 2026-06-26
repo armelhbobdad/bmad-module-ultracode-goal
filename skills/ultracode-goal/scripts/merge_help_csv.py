@@ -14,10 +14,11 @@ appending fresh rows, so re-running is idempotent and stale entries never
 persist.
 
 The merge is positional: when the target already exists, its header line is
-kept as-is. The source header spells columns 9-10 `after`/`before` (the
-standalone-module validator's canonical names); the assembled catalog spells
-the same columns `preceded-by`/`followed-by`. The column semantics are
-identical, so rows transfer verbatim either way.
+kept as-is. The source header spells columns 9-10 `preceded-by`/`followed-by`
+— the BMad-canonical names, matching every live module-help.csv, the assembled
+bmad-help.csv, and the standalone-module validator. Because the merge maps by
+position (the target header is authoritative), even a legacy source that still
+spelled those columns `after`/`before` would transfer verbatim either way.
 
 With --module-yaml, a `_meta` docs row is synthesized from module.yaml's
 `name` and `docs_llms` and merged ahead of the source rows — the same row the
@@ -36,8 +37,8 @@ from io import StringIO
 from pathlib import Path
 
 # Fallback header, used only when neither the target nor the source carries
-# one. Matches the standalone-module source convention (after/before); the
-# assembled catalog's preceded-by/followed-by occupy the same positions.
+# one. Matches the BMad-canonical convention (preceded-by/followed-by) shared by
+# every live module-help.csv and the assembled catalog.
 HEADER = [
     "module",
     "skill",
@@ -47,8 +48,8 @@ HEADER = [
     "action",
     "args",
     "phase",
-    "after",
-    "before",
+    "preceded-by",
+    "followed-by",
     "required",
     "output-location",
     "outputs",
