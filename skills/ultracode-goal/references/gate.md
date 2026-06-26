@@ -42,7 +42,7 @@ Do not recompute TEA thresholds or re-judge `gate_status` — read it as given. 
 
 ## Route on the verdict
 
-- **`advance`** (gate_status PASS or WAIVED) → the story passes. Move to the next story; when the last story passes, run the Epic-level trace gate the same way, then proceed to Stage 6 (`references/finalize.md`).
+- **`advance`** (gate_status PASS or WAIVED) → the story passes. Move to the next story. When **every story of the Epic is `done`**, run the Epic-level trace gate the same way, then proceed to Stage 6 (`references/finalize.md`). **Partial-by-design exception:** if this run delivered only a deliberate *strict subset* of the Epic's stories (in-scope ⊊ Epic — e.g. a conditional / evidence-gated Epic where the operator scoped a subset; this is distinct from ingest-and-scope.md's already-`done`-skipping, which still ends with every story `done`) — do **not** author an Epic-level gate: a PASS would misrepresent an incomplete Epic as complete. Record the per-story advance(s) and proceed to Stage 6 with the Epic left in its partial / conditional state (the `partial-complete` terminal outcome — see `references/finalize.md`).
 
 - **`defer`** (gate_status CONCERNS, or non-critical code-review / NFR findings that did not flip the gate) → append the open items to the ledger at `{workflow.deferred_work_path}` using the schema below, then **advance** anyway. The Epic keeps moving; the parked work is visible.
 
