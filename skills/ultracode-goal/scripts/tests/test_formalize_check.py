@@ -379,6 +379,12 @@ def test_self_explaining_and_deterministic():
 # --- AD-5 measurement protocol: timing block + no time-based block ----------
 
 INJECTED_MS = 50
+# time.sleep() can wake EARLY by up to the OS timer granularity (~16 ms on
+# Windows); the injected-delay lower bound subtracts that slack so it stays a
+# real anti-constant proof (a hardcoded/raw-non-delta reads ~0, nowhere near
+# this floor) without flaking on a coarse-timer runner.
+SLEEP_SLACK_MS = 16
+INJECTED_FLOOR_MS = INJECTED_MS - SLEEP_SLACK_MS
 
 
 def _build_args(name: str, epic: str) -> dict:
@@ -420,7 +426,7 @@ def test_timing_block_present_all_verdicts(monkeypatch):
     #     (a monotonic-DELTA lower bound a hardcoded constant cannot satisfy)
     monkeypatch.setattr(fc, "_mechanical_hook", lambda: time.sleep(INJECTED_MS / 1000))
     slowed = fc.build_verdict(**args)
-    assert slowed["timing"]["mechanical_ms"] >= INJECTED_MS
+    assert slowed["timing"]["mechanical_ms"] >= INJECTED_FLOOR_MS
     assert slowed["timing"]["wall_clock_ms"] >= slowed["timing"]["mechanical_ms"]
 
 
@@ -431,7 +437,7 @@ def test_no_time_based_block(monkeypatch):
     # An over-budget mechanical half returns the SAME verdict it would at any speed.
     assert out["verdict"] == "ready"
     assert out["ready"] is True
-    assert out["timing"]["wall_clock_ms"] >= INJECTED_MS
+    assert out["timing"]["wall_clock_ms"] >= INJECTED_FLOOR_MS
     # The CLI exit lane is unchanged by a slow run (exit 0 on any payload).
     assert _run_cli("ready_epic").returncode == 0
     # Static: no authored duration cutoff / ceiling / timeout anywhere in the kernel.

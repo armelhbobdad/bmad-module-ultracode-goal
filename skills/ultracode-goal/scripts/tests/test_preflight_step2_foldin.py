@@ -49,7 +49,10 @@ def move_and_repoint(repo_root, leaked_rel, trace_root_rel, gap, *, mutant=None)
     leaked.unlink()
     refs = 0
     if mutant != "skip_repoint":
-        new = str(dest.relative_to(repo_root))
+        # Re-point with a POSIX forward-slash reference: the MOVE rewrites a
+        # documentation reference, not an OS path, so it must be portable
+        # (str(Path(...)) emits backslashes on Windows and breaks the ref).
+        new = dest.relative_to(repo_root).as_posix()
         for p in repo_root.rglob("*"):
             if not p.is_file() or p == dest:
                 continue
