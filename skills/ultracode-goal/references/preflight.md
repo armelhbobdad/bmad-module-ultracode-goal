@@ -99,10 +99,10 @@ If any fails: write the blockers — mechanical and semantic — to `.decision-l
  "decision_log": "<path to this run's .decision-log.md>",
  "report": null,
  "deferred_work": null,
- "reason": "<first/most-severe blocker, one line>"}
+ "reason": "<first blocker in the adapter's blocker-list order, one line>"}
 ```
 
-The log carries the full blocker list.
+The log carries the full blocker list. A confirmed **formalize RED** (a formalize-subagent `reds[]` entry unioned into the no-RED clause by step 4) surfaces through this **identical** five-key channel as a semantic-scan RED — no formalize-specific key, no formalize-specific status string. `reason` is the **first blocker in the adapter's blocker-list order** — positional `blockers[0]` flattened to one line (reds carry no severity field), built by the one shared `scripts/headless_envelope.py` `build_headless_envelope` adapter so every headless exit serializes through a single envelope definition (INV-9). The rich FR-5 verdict stays a separate script-layer object the adapter consumes; it never nests into the envelope (AD-7).
 
 ## 5. Arm the environment (only when the gate passes)
 
