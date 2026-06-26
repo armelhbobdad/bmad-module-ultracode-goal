@@ -195,6 +195,6 @@ destination, file, or endpoint is introduced; the record lands only in `.decisio
 Per AD-5 / NFR-7 the wall-clock ceiling is DECLARED-UNKNOWN — it is set only from a first real
 preflight-invoked run (a downstream operator action, out of scope here), and no number is authored
 into this SKILL or the kernel before then. An over-budget formalize never blocks, escalates, or
-downgrades a verdict; the measurement is provider-agnostic provenance, never a gate (INV-7). On a
-non-Claude-Code provider the standalone `/ucg-formalize` still records its own duration; only the
-preflight auto-invocation is Claude-Code-only.
+downgrades a verdict; the measurement is provider-agnostic provenance, never a gate (INV-7). Outside
+the autonomous conductor the standalone `/ucg-formalize` still records its own duration; only the
+preflight auto-invocation is conductor-specific.
