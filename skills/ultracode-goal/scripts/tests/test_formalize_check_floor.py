@@ -179,6 +179,37 @@ def test_correctly_placed_tea_artifact_is_not_flagged():
     ] == []
 
 
+def test_leaked_tea_excludes_ucg_impl_artifacts(tmp_path):
+    """Regression (health-check fp-979777b / d5): a UCG story-note or run-sentinel
+    whose filename merely carries a TEA marker token (because the STORY SLUG does) is
+    NOT a leaked TEA artifact — only a genuine TEA output is flagged. Skipping these is
+    load-bearing: they live under impl-artifacts by design, so flagging one would
+    deadlock the budget==0 launch gate (the only clearing action, a MOVE, misfiles it).
+    Exercises all three identity-exclusion branches; the genuine leak stays flagged.
+    """
+    impl = tmp_path / "impl-artifacts"
+    impl.mkdir()
+    # (1) story-note: <epic>-<story>-<slug>.md whose slug carries "test-design"
+    (impl / "2-7-tea-shaping-test-design-nfr.md").write_text(
+        "---\nstory_id: 2-7\nauthored_by: ultracode-goal run epic-2\n---\n# note\n",
+        encoding="utf-8",
+    )
+    # (2) run sentinels: dotfiles whose name carries "test-design"
+    (impl / ".tests-ran-2-7-test-design-nfr").write_text("ran\n", encoding="utf-8")
+    (impl / ".budget-2-7-test-design.json").write_text("{}\n", encoding="utf-8")
+    # (3) UCG-authored note NOT matching the N-N- prefix but carrying "trace" — caught
+    #     by the authored_by frontmatter identity check
+    (impl / "epic-2-trace-notes.md").write_text(
+        "---\nauthored_by: ultracode-goal\n---\n# retro trace\n", encoding="utf-8"
+    )
+    # genuine leaked TEA artifact — must STILL be flagged (anti-vacuous: the narrowing
+    # did not disable the detector)
+    (impl / "test-design-9-1.md").write_text("# Test Design\n", encoding="utf-8")
+
+    leaked = {p.name for p in fc._leaked_tea_artifacts(impl, None)}
+    assert leaked == {"test-design-9-1.md"}, leaked
+
+
 # --- orphaned never-green index ---------------------------------------------
 
 

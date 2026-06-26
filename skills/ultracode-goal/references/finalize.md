@@ -1,6 +1,6 @@
 # Stage 6 — Finalize
 
-**Goal:** Make the run pay off for the next one. Capture what was learned to the right durable store, optionally run a retrospective, audit the decision log, produce a run report, and surface the deferred-work ledger. This is the terminal stage — reached after the Epic-level gate advanced, or when a story escalated and the run is `blocked`. Converse in `{communication_language}`; the run report and ledger are written in `{document_output_language}`.
+**Goal:** Make the run pay off for the next one. Capture what was learned to the right durable store, optionally run a retrospective, audit the decision log, produce a run report, and surface the deferred-work ledger. This is the terminal stage — reached after the Epic-level gate advanced, when a story escalated and the run is `blocked`, or when the run completed its in-scope *strict subset* of a deliberately-partial Epic without an Epic-level gate (a **`partial-complete`** outcome — attended only; headless's in-scope is every not-`done` story, so a successful headless run always finishes the Epic and emits `complete`). Converse in `{communication_language}`; the run report and ledger are written in `{document_output_language}`.
 
 ## Capture to Auto Memory — deliberately
 
@@ -57,7 +57,7 @@ Read `{workflow.implementation_artifacts}/.mem-state.json`. Act only on its latc
 
 ## Record the terminal run-status
 
-Execute maintains the heartbeat `{workflow.implementation_artifacts}/run-status.json` as the spine advances (shape: `{epic, story, index, total, last_verdict, reloop_count, profile, updated}`). At close, write its **terminal** state — the final story/index, the Epic-level `last_verdict` (`advance` when complete, the escalating story's verdict when blocked), and a fresh `updated` timestamp — so a poller reading the file after the run sees the settled outcome, not a stale mid-run snapshot.
+Execute maintains the heartbeat `{workflow.implementation_artifacts}/run-status.json` as the spine advances (shape: `{epic, story, index, total, last_verdict, reloop_count, profile, updated}`). At close, write its **terminal** state — the final story/index, the `last_verdict` (`advance` when the Epic completed, the escalating story's verdict when blocked, or the last in-scope story's `advance` for a `partial-complete` run — a deliberate strict subset of the Epic delivered with no Epic-level gate), and a fresh `updated` timestamp — so a poller reading the file after the run sees the settled outcome, not a stale mid-run snapshot.
 
 ## Surface the deferred-work ledger
 

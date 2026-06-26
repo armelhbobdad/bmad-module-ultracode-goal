@@ -496,6 +496,34 @@ def _tea_trace_output_root(tea_config: Path, project_root: Path) -> Path | None:
     return path if path.is_absolute() else (project_root / path)
 
 
+# UCG's own impl-artifact bookkeeping is NOT a TEA artifact, even when its filename
+# carries a TEA marker token because the STORY SLUG does (e.g. a story-note
+# "2-7-...-test-design-nfr.md", or a ".tests-ran-<story>" / ".budget-<story>"
+# sentinel for that story). The leak check must skip these: relocating one is a
+# misfile, and — because they live under impl-artifacts BY DESIGN — moving it would
+# be the only thing that clears the gate, so a "leave it in place" disposition would
+# deadlock the budget==0 launch gate. Identity decides, not the marker substring.
+# (Health-check fp-979777b / deferred d5.)
+_UCG_STORY_NOTE_RE = re.compile(r"^\d+-\d+-")
+
+
+def _is_ucg_impl_artifact(path: Path, name: str) -> bool:
+    """True for a UCG-owned impl-artifact (run sentinel / story note), which is never
+    a leaked TEA artifact. ``name`` is the lowercased filename."""
+    if name.startswith("."):
+        return True  # run sentinels: .tests-ran-<story>, .budget-<story>
+    if _UCG_STORY_NOTE_RE.match(name):
+        return True  # story notes: <epic>-<story>-<slug>.md
+    if name.endswith(".md"):
+        try:
+            head = path.read_text(encoding="utf-8", errors="ignore")[:600]
+        except OSError:
+            return False
+        if "authored_by: ultracode-goal" in head:
+            return True  # UCG-authored note whose name does not match the prefix rule
+    return False
+
+
 def _leaked_tea_artifacts(
     impl_artifacts: Path, trace_root: Path | None
 ) -> list[Path]:
@@ -503,7 +531,9 @@ def _leaked_tea_artifacts(
 
     A TEA artifact correctly placed under trace_root is NOT a leak; one under
     impl-artifacts (and outside trace_root) is (the check keys on the
-    WRONG LOCATION, not on mere presence of a TEA file).
+    WRONG LOCATION, not on mere presence of a TEA file). UCG's own story notes /
+    run sentinels are excluded even when their filename carries a marker token
+    (see _is_ucg_impl_artifact).
     """
     if not impl_artifacts.is_dir():
         return []
@@ -515,6 +545,8 @@ def _leaked_tea_artifacts(
     for path in all_files:
         name = path.name.lower()
         if not any(marker in name for marker in TEA_ARTIFACT_MARKERS):
+            continue
+        if _is_ucg_impl_artifact(path, name):
             continue
         if trace_root is not None and trace_root in path.parents:
             continue
