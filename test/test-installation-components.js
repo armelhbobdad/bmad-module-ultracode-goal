@@ -173,8 +173,9 @@ async function testStandaloneModuleAssets() {
     const csvText = await fs.readFile(helpCsvPath, 'utf8');
     const lines = csvText.trim().split('\n');
     assert(
-      lines[0] === 'module,skill,display-name,menu-code,description,action,args,phase,after,before,required,output-location,outputs',
-      'module-help.csv carries the 13-column standalone-module header',
+      lines[0] ===
+        'module,skill,display-name,menu-code,description,action,args,phase,preceded-by,followed-by,required,output-location,outputs',
+      'module-help.csv carries the 13-column canonical (preceded-by/followed-by) header',
       lines[0],
     );
     const dataLines = lines.slice(1);

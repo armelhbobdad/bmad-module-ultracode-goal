@@ -14,9 +14,10 @@
  *   some BMad setup flows merge into. Only updated when it already exists;
  *   never created (nothing reads a fresh one in a project without it).
  *
- * The merge is positional: an existing target keeps its own header line. The
- * source spells columns 9-10 `after`/`before`; the assembled catalog spells
- * them `preceded-by`/`followed-by` — same semantics, rows transfer verbatim.
+ * The merge is positional: an existing target keeps its own header line, and a
+ * missing target is created with the catalog's canonical `preceded-by`/`followed-by`
+ * header. Source and catalog now share those names; a legacy source spelling
+ * columns 9-10 `after`/`before` still transfers verbatim, since rows map by position.
  *
  * CSV handling is a minimal RFC 4180 implementation (csv-parse is a
  * devDependency; this module ships in the published CLI).

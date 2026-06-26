@@ -55,7 +55,7 @@ uv run {skill-root}/scripts/merge_help_csv.py --target "{project-root}/_bmad/_co
 
 `--module-yaml` makes the script synthesize the module's `_meta` docs row (from `name` + `docs_llms`) alongside the capability rows — the identical catalog state the npx installer produces.
 
-The merge is positional and keeps the target's own header line, so the source's `after`/`before` column names and the assembled catalog's `preceded-by`/`followed-by` interoperate without translation.
+The merge is positional and keeps the target's own header line. The source and the assembled catalog share the canonical `preceded-by`/`followed-by` column names, and because the merge maps by position even a legacy `after`/`before` source would interoperate without translation.
 
 All scripts output JSON to stdout with results. If any exits non-zero, surface the error and stop.
 
