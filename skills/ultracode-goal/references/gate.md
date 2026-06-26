@@ -13,6 +13,27 @@ The gate reads artifacts TEA produces. In **production**, before running the gat
 
 `bmad-testarch-nfr` (produces `nfr-assessment.md`) and `bmad-testarch-test-review` are independent — of each other *and* of the automate→trace chain — so run them in any order, or concurrently with it; `gate_eval.py` consumes all three artifacts without caring how they were produced. (`bmad-testarch-test-review` normally runs in Execute per story — run it here only if you lack a current `test-review.md` for the story.) In **`--light`**, skip all of the above and run only `bmad-testarch-trace`, then the gate with `--profile light` (trace gate only — no NFR/review AND).
 
+## Non-web `--light`: author the deterministic trace artifacts
+
+When the module's TEA chain is web-only, `bmad-testarch-trace` cannot run on a non-web stack and so cannot emit the binding gate decision. Do **not** reverse-engineer a prior run's leftover artifacts — author the two files to the exact shape `scripts/gate_eval.py` reads; every other field in real TEA output (`target`, `links`/`trace_report_path`, `rationale`, `schema_version`) is decoration the reader never touches. Name both for the story (`trace-<id>.md`, `gate-decision-<id>.json`) so `--story <id>` scoping resolves them in a shared `--trace-output` dir.
+
+**`trace-<id>.md`** — only the frontmatter is read (the body is human prose). The resolver needs exactly two keys:
+
+```yaml
+---
+workflowType: testarch-trace              # must be 'testarch-trace' or 'trace', else the report is skipped
+gateDecisionFile: gate-decision-<id>.json # the slim file to read; relative to --trace-output (absolute honored)
+---
+```
+
+**`gate-decision-<id>.json`** — the slim file the hint points at. `gate_eval.py` reads only these four keys; `gate_status` alone drives the `--light` verdict (PASS/WAIVED → advance, CONCERNS → defer, FAIL → reloop, NOT_EVALUATED → escalate), the other three are passed through into the verdict JSON / `.decision-log.md`:
+
+```json
+{ "gate_status": "PASS", "p0_status": "MET", "p1_status": "MET", "overall_status": "MET" }
+```
+
+Write a PASS only when the story's acceptance criteria are demonstrably satisfied with lint and build green (the `--light` Definition-of-Done — see `references/define-done.md`); a non-green story is `reloop`/`escalate`, never a hand-authored PASS (see the INVARIANT in "Route on the verdict"). `p0_status`/`p1_status`/`overall_status` are passthrough-only here — they do not drive the `--light` verdict, so write them to reflect reality, never to dress up a non-green story. If you instead write the always-present `e2e-trace-summary.json`, the reader takes its top-level `gate_status` and the nested `gate_criteria.{p0_status,p1_status,overall_status}` — the same fields one level down.
+
 ## Run the gate
 
 Production:
