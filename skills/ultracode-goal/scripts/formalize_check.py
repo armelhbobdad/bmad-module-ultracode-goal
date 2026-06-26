@@ -57,6 +57,7 @@ import argparse
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 # The story-status vocabulary BMad's sprint-planning writes into
@@ -649,6 +650,19 @@ def _scan_nfr_assessment(text: str, rel: str) -> list[dict]:
     return candidates
 
 
+# --- timing seam (AD-5 measurement protocol) ---------------------------------
+# A no-op marker at the start of the mechanical half. Production never overrides
+# it; a test monkeypatches it to inject a known delay so `mechanical_ms` is
+# asserted against a deterministic monotonic-DELTA lower bound (defeating any
+# hardcoded constant or raw unsubtracted clock read). Timing is measured AFTER the
+# verdict is decided and never alters it — there is NO duration-vs-literal compare
+# and NO code path that blocks/escalates/downgrades a verdict on elapsed time
+# (INV-7 / NFR-7 / AD-5: the wall-clock budget is UNKNOWN, measured never guessed,
+# and set only from a first real run — no number is authored here).
+def _mechanical_hook() -> None:
+    return None
+
+
 # --- verdict assembly --------------------------------------------------------
 
 
@@ -661,6 +675,12 @@ def build_verdict(
 ) -> dict:
     mechanical_gaps: list[dict] = []
     judgment_candidates: list[dict] = []
+
+    # AD-5 timing: monotonic samples at entry and at the mechanical-half start.
+    _entry_ns = time.monotonic_ns()
+    _mech_start_ns = time.monotonic_ns()
+    _mechanical_hook()
+    nfr_path: Path | None = None
 
     # --- PRD / ADR presence (planning-artifacts root, fail-closed) ---
     prd_path = _find_marked_file(planning_artifacts, PRD_MARKERS)
@@ -1006,6 +1026,10 @@ def build_verdict(
         "gate_ability_tag_coverage": gate_ability_tag_coverage,
     }
 
+    # AD-5 timing: close the mechanical-half window BEFORE the verdict is derived,
+    # so the verdict can never depend on elapsed time.
+    _mech_end_ns = time.monotonic_ns()
+
     mechanical_budget = len(mechanical_gaps)
     judgment_required = bool(judgment_candidates)
 
@@ -1018,6 +1042,26 @@ def build_verdict(
         verdict = "remediable"
     ready = verdict == "ready"
 
+    # AD-5 provenance: artifact_count is the cardinality of the FR-5 resolver's
+    # located, readable artifact set — content-derived and deterministic for a
+    # given fixture. timing keys are present on every payload (ready/remediable/
+    # blocked alike); the verdict never gates the timing record.
+    artifact_count = (
+        (1 if _present_and_readable(prd_path) else 0)
+        + (1 if _present_and_readable(adr_path) else 0)
+        + (1 if (sprint_status is not None and sprint_text is not None) else 0)
+        + sum(1 for body in story_reads.values() if body is not None)
+        + (1 if test_design_path is not None else 0)
+        + (1 if nfr_path is not None else 0)
+    )
+    _exit_ns = time.monotonic_ns()
+    timing = {
+        "wall_clock_ms": (_exit_ns - _entry_ns) / 1e6,
+        "epic": epic,
+        "artifact_count": artifact_count,
+        "mechanical_ms": (_mech_end_ns - _mech_start_ns) / 1e6,
+    }
+
     return {
         "ready": ready,
         "verdict": verdict,
@@ -1026,6 +1070,7 @@ def build_verdict(
         "mechanical_gaps": mechanical_gaps,
         "judgment_candidates": judgment_candidates,
         "checks": checks,
+        "timing": timing,
     }
 
 

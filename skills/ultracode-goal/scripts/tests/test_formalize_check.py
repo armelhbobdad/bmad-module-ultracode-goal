@@ -27,6 +27,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -45,8 +46,10 @@ FR5_TOP_KEYS = frozenset(
         "mechanical_gaps",
         "judgment_candidates",
         "checks",
+        "timing",
     }
 )
+FR5_TIMING_KEYS = frozenset({"wall_clock_ms", "epic", "artifact_count", "mechanical_ms"})
 FR5_CHECK_KEYS = frozenset(
     {
         "prd_present",
@@ -281,6 +284,7 @@ _STDLIB_ALLOW = frozenset(
         "json",
         "re",
         "sys",
+        "time",
         "tomllib",
         "pathlib",
         "os",
@@ -352,7 +356,13 @@ def test_self_explaining_and_deterministic():
     first = _run_cli("remediable_epic")
     second = _run_cli("remediable_epic")
     assert first.returncode == 0 and second.returncode == 0
-    assert first.stdout == second.stdout
+    # Determinism holds for everything EXCEPT the AD-5 `timing` block, whose
+    # wall-clock deltas are load-dependent by design (advisory, never a contract).
+    p_first = json.loads(first.stdout)
+    p_second = json.loads(second.stdout)
+    p_first.pop("timing", None)
+    p_second.pop("timing", None)
+    assert p_first == p_second
 
     # Anti-vacuous twin: a timestamp/uuid in the payload would break the
     # byte-identical re-run; an empty source would break the <path:line> assertion
@@ -364,6 +374,71 @@ def test_self_explaining_and_deterministic():
     assert not re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", serialized), (
         "an ISO wall-clock leaked into the verdict payload"
     )
+
+
+# --- AD-5 measurement protocol: timing block + no time-based block ----------
+
+INJECTED_MS = 50
+
+
+def _build_args(name: str, epic: str) -> dict:
+    root = _fixture_dir(name)
+    return dict(
+        epic=epic,
+        project_root=root,
+        planning_artifacts=root / "planning-artifacts",
+        impl_artifacts=root / "impl-artifacts",
+        tea_config=root / "tea" / "config.yaml",
+    )
+
+
+def test_timing_block_present_all_verdicts(monkeypatch):
+    # The timing block is present on the ready, remediable, AND blocked payloads,
+    # with EXACTLY the four AD-5 provenance keys and numeric deltas.
+    cases = {"ready_epic": "ready", "remediable_epic": "remediable", "unreadable_epic": "blocked"}
+    counts = {}
+    for name, expected in cases.items():
+        out = _verdict(name)
+        assert out["verdict"] == expected, (name, out["verdict"])
+        timing = out["timing"]
+        assert set(timing.keys()) == FR5_TIMING_KEYS, timing
+        assert isinstance(timing["wall_clock_ms"], (int, float))
+        assert isinstance(timing["mechanical_ms"], (int, float))
+        assert timing["wall_clock_ms"] >= timing["mechanical_ms"] >= 0
+        assert timing["epic"] == EPIC_OF[name]
+        assert isinstance(timing["artifact_count"], int)
+        counts[name] = timing["artifact_count"]
+    # (c) content-derived: differing fixtures report DIFFERENT artifact_count
+    assert len(set(counts.values())) >= 2, counts
+
+    # Deterministic, jitter-independent anti-constant proof via an injected delay:
+    args = _build_args("ready_epic", "1")
+    # (b) the un-injected mechanical_ms is small (defeats a raw unsubtracted clock read)
+    base = fc.build_verdict(**args)
+    assert base["timing"]["mechanical_ms"] < INJECTED_MS
+    # (a) inject a known fixed sleep into the mechanical half -> mechanical_ms >= INJECTED_MS
+    #     (a monotonic-DELTA lower bound a hardcoded constant cannot satisfy)
+    monkeypatch.setattr(fc, "_mechanical_hook", lambda: time.sleep(INJECTED_MS / 1000))
+    slowed = fc.build_verdict(**args)
+    assert slowed["timing"]["mechanical_ms"] >= INJECTED_MS
+    assert slowed["timing"]["wall_clock_ms"] >= slowed["timing"]["mechanical_ms"]
+
+
+def test_no_time_based_block(monkeypatch):
+    args = _build_args("ready_epic", "1")
+    monkeypatch.setattr(fc, "_mechanical_hook", lambda: time.sleep(INJECTED_MS / 1000))
+    out = fc.build_verdict(**args)
+    # An over-budget mechanical half returns the SAME verdict it would at any speed.
+    assert out["verdict"] == "ready"
+    assert out["ready"] is True
+    assert out["timing"]["wall_clock_ms"] >= INJECTED_MS
+    # The CLI exit lane is unchanged by a slow run (exit 0 on any payload).
+    assert _run_cli("ready_epic").returncode == 0
+    # Static: no authored duration cutoff / ceiling / timeout anywhere in the kernel.
+    src = SCRIPT.read_text(encoding="utf-8")
+    assert not re.search(
+        r"timeout|ceiling|deadline|max_(ms|seconds|wall)|>\s*[0-9]+\s*#\s*(ms|sec)", src, re.IGNORECASE
+    ), "the kernel must author no wall-clock cutoff (AD-5 / NFR-7)"
 
 
 if __name__ == "__main__":

@@ -36,6 +36,8 @@ The verdict is computed from the **resolved artifact set on disk** — the real 
 
 This step only *produces* the verdict. Its mechanical gaps, judgment candidates, and reds are read downstream by steps 2–4 (sibling stories); nothing is folded in here.
 
+Per the AD-5 / NFR-9 measurement protocol, log the formalize duration provenance — `wall_clock_ms`, `mechanical_ms`, `artifact_count` — to `.decision-log.md` on every verdict, reusing the existing step-3 scan boundary for the end-to-end split; no number gates the run (the wall-clock budget is measured, never guessed).
+
 ## 2. Auto-remediation pass
 
 Clear each remediable blocker, then **re-run the check** so the budget reflects the fixes. Remediate:
