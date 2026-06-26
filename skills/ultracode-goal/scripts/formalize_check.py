@@ -57,6 +57,7 @@ import argparse
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 # The story-status vocabulary BMad's sprint-planning writes into
@@ -521,6 +522,147 @@ def _leaked_tea_artifacts(
     return leaked
 
 
+# --- TEA-reader (AD-6): read TEA's emitted fields, NEVER originate them --------
+# formalize stays a READER of the TEA test-design risk matrix + nfr-assessment.md
+# located under the trace_output root; it verifies presence/parseability and
+# value->source-or-UNKNOWN provenance, recomputes ONLY a blank P×I score cell when
+# both P and I are stated (provenance arithmetic), and never originates an NFR
+# threshold, a P0-P3 percentage, a Quality Score, or an overallStatus.
+
+_OVERALL_STATUS_RE = re.compile(
+    r"(?:Overall\s+Status|overallStatus)[*:_\s]*[`*]*\s*(PASS|CONCERNS|FAIL|NOT_ASSESSED)",
+    re.IGNORECASE,
+)
+
+
+def _find_under(root: Path | None, marker: str) -> Path | None:
+    """First readable file under ``root`` whose name carries ``marker`` (lowercased)."""
+    if root is None or not root.is_dir():
+        return None
+    try:
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and marker in path.name.lower():
+                return path
+    except OSError:
+        return None
+    return None
+
+
+def _table_rows(text: str):
+    """Yield (line_no, [cells]) for each markdown table row (``| a | b | …|``)."""
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 3:
+            yield line_no, [cell.strip() for cell in stripped.strip("|").split("|")]
+
+
+def _scan_test_design(text: str, rel: str) -> tuple[list[dict], list[dict]]:
+    """Risk-matrix P×I provenance: blank-cell recompute (mechanical) vs disagreement
+    (judgment), plus an unsourced NFR threshold (judgment). Reader-only, blank-cell-only."""
+    gaps: list[dict] = []
+    candidates: list[dict] = []
+    cols: dict[str, int] | None = None
+    for _, cells in _table_rows(text):
+        lower = [c.lower() for c in cells]
+        if "p" in lower and "i" in lower and any("score" in c for c in lower):
+            cols = {
+                "P": lower.index("p"),
+                "I": lower.index("i"),
+                "Score": next(idx for idx, c in enumerate(lower) if "score" in c),
+            }
+            break
+    if cols is not None:
+        header_seen = False
+        for line_no, cells in _table_rows(text):
+            lower = [c.lower() for c in cells]
+            if not header_seen:
+                header_seen = "p" in lower and "i" in lower and any("score" in c for c in lower)
+                continue
+            if all(set(c) <= set("-: ") for c in cells):  # separator row
+                continue
+            if max(cols.values()) >= len(cells):
+                continue
+            p, i, score = cells[cols["P"]], cells[cols["I"]], cells[cols["Score"]]
+            if not (p.isdigit() and i.isdigit()):
+                continue
+            product = int(p) * int(i)
+            if score == "":
+                gaps.append({
+                    "id": "blank_pxi_score:%s:%d" % (rel, line_no),
+                    "kind": "blank_pxi_score",
+                    "severity": "low",
+                    "detail": "Blank P×I score with stated P=%s, I=%s -> recompute %d" % (p, i, product),
+                    "remediable": True,
+                    "source": "%s:%d" % (rel, line_no),
+                    "recomputed": product,
+                })
+            elif score.isdigit() and int(score) != product:
+                candidates.append({
+                    "source": "%s:%d" % (rel, line_no),
+                    "kind": "risk_score_conflict",
+                    "why_machine_cannot_decide": "stated risk score %s conflicts with stated P,I "
+                    "(%s×%s=%d); requires TEA reconciliation" % (score, p, i, product),
+                })
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if _NFR_NUMBER_RE.search(line) and not _SOURCE_CITATION_RE.search(line):
+            candidates.append({
+                "source": "%s:%d" % (rel, line_no),
+                "kind": "invented_nfr_threshold",
+                "why_machine_cannot_decide": "NFR threshold number with no cited source and not marked "
+                "UNKNOWN; the kernel reads thresholds, it never invents the value",
+            })
+    return gaps, candidates
+
+
+def _scan_nfr_assessment(text: str, rel: str) -> list[dict]:
+    """Read TEA's per-category PASS rows; flag PASS-on-UNKNOWN and PASS-without-evidence
+    as judgment_candidates. overallStatus is READ via the gate_eval recognizer, never
+    re-derived or overwritten."""
+    candidates: list[dict] = []
+    # READ TEA's overallStatus via the same recognizer gate_eval.py uses (AD-6);
+    # the kernel never re-derives or emits it. A present-but-unreadable assessment
+    # (no parseable overallStatus at all) is itself a JUDGMENT a human must resolve.
+    overall = _OVERALL_STATUS_RE.search(text)
+    if overall is None:
+        candidates.append({
+            "source": "%s:1" % rel,
+            "kind": "nfr_overall_status_unreadable",
+            "why_machine_cannot_decide": "nfr-assessment has no parseable overallStatus "
+            "(PASS/CONCERNS/FAIL/NOT_ASSESSED); the kernel reads this field, it never originates it",
+        })
+    for line_no, cells in _table_rows(text):
+        if not any(cell.strip().upper() == "PASS" for cell in cells):
+            continue
+        row = " | ".join(cells)
+        if any("unknown" in cell.lower() for cell in cells):
+            candidates.append({
+                "source": "%s:%d" % (rel, line_no),
+                "kind": "nfr_pass_on_unknown",
+                "why_machine_cannot_decide": "category asserted PASS on an UNKNOWN threshold; "
+                "UNKNOWN routes to CONCERNS, never PASS",
+            })
+        elif not _SOURCE_CITATION_RE.search(row):
+            candidates.append({
+                "source": "%s:%d" % (rel, line_no),
+                "kind": "nfr_pass_without_evidence",
+                "why_machine_cannot_decide": "category asserted PASS with no named evidence source",
+            })
+    return candidates
+
+
+# --- timing seam (AD-5 measurement protocol) ---------------------------------
+# A no-op marker at the start of the mechanical half. Production never overrides
+# it; a test monkeypatches it to inject a known delay so `mechanical_ms` is
+# asserted against a deterministic monotonic-DELTA lower bound (defeating any
+# hardcoded constant or raw unsubtracted clock read). Timing is measured AFTER the
+# verdict is decided and never alters it — there is NO duration-vs-literal compare
+# and NO code path that blocks/escalates/downgrades a verdict on elapsed time
+# (INV-7 / NFR-7 / AD-5: the wall-clock budget is UNKNOWN, measured never guessed,
+# and set only from a first real run — no number is authored here).
+def _mechanical_hook() -> None:
+    return None
+
+
 # --- verdict assembly --------------------------------------------------------
 
 
@@ -533,6 +675,12 @@ def build_verdict(
 ) -> dict:
     mechanical_gaps: list[dict] = []
     judgment_candidates: list[dict] = []
+
+    # AD-5 timing: monotonic samples at entry and at the mechanical-half start.
+    _entry_ns = time.monotonic_ns()
+    _mech_start_ns = time.monotonic_ns()
+    _mechanical_hook()
+    nfr_path: Path | None = None
 
     # --- PRD / ADR presence (planning-artifacts root, fail-closed) ---
     prd_path = _find_marked_file(planning_artifacts, PRD_MARKERS)
@@ -814,6 +962,49 @@ def build_verdict(
             }
         )
 
+    # --- TEA-reader (AD-6): read TEA's emitted fields under the trace_output root ---
+    # Fires ONLY when a test-design artifact is located under trace_root (a TEA run is
+    # in progress); otherwise no TEA artifact is read and nothing is added. With a
+    # test-design present, an nfr-assessment is EXPECTED — a missing/unreadable one is
+    # a FAILING signal (fail-closed, INV-4), never neutral.
+    test_design_path = _find_under(trace_root, "test-design")
+    if test_design_path is not None and trace_root is not None:
+        td_rel = _rel(test_design_path, project_root)
+        td_text = _safe_read_text(test_design_path)
+        if td_text is None:
+            mechanical_gaps.append({
+                "id": "test_design_unreadable:%s" % td_rel,
+                "kind": "unreadable_tea_artifact",
+                "severity": "high",
+                "detail": "test-design artifact unreadable: %s" % td_rel,
+                "remediable": False,
+                "source": td_rel,
+            })
+        else:
+            td_gaps, td_candidates = _scan_test_design(td_text, td_rel)
+            mechanical_gaps.extend(td_gaps)
+            judgment_candidates.extend(td_candidates)
+
+        nfr_path = _find_under(trace_root, "nfr-assessment")
+        nfr_text = _safe_read_text(nfr_path) if nfr_path is not None else None
+        if nfr_text is None:
+            nfr_rel = (
+                _rel(nfr_path, project_root) if nfr_path is not None
+                else _rel(trace_root / "nfr-assessment.md", project_root)
+            )
+            mechanical_gaps.append({
+                "id": "nfr_assessment_absent",
+                "kind": "missing_nfr_assessment",
+                "severity": "high",
+                "detail": "nfr-assessment.md absent or unreadable under trace_output: %s" % nfr_rel,
+                # Fail-closed (INV-4, mirroring gate_eval.py nfr_status is None -> failing):
+                # an absent/unreadable nfr assessment is a FAILING gap, never neutral.
+                "remediable": False,
+                "source": nfr_rel,
+            })
+        else:
+            judgment_candidates.extend(_scan_nfr_assessment(nfr_text, _rel(nfr_path, project_root)))
+
     # --- reporting ratios (NEVER compared to a cutoff) ---
     ac_machine_checkable_ratio = (
         (ac_machine_checkable / ac_total) if ac_total else 0.0
@@ -835,6 +1026,10 @@ def build_verdict(
         "gate_ability_tag_coverage": gate_ability_tag_coverage,
     }
 
+    # AD-5 timing: close the mechanical-half window BEFORE the verdict is derived,
+    # so the verdict can never depend on elapsed time.
+    _mech_end_ns = time.monotonic_ns()
+
     mechanical_budget = len(mechanical_gaps)
     judgment_required = bool(judgment_candidates)
 
@@ -847,6 +1042,26 @@ def build_verdict(
         verdict = "remediable"
     ready = verdict == "ready"
 
+    # AD-5 provenance: artifact_count is the cardinality of the FR-5 resolver's
+    # located, readable artifact set — content-derived and deterministic for a
+    # given fixture. timing keys are present on every payload (ready/remediable/
+    # blocked alike); the verdict never gates the timing record.
+    artifact_count = (
+        (1 if _present_and_readable(prd_path) else 0)
+        + (1 if _present_and_readable(adr_path) else 0)
+        + (1 if (sprint_status is not None and sprint_text is not None) else 0)
+        + sum(1 for body in story_reads.values() if body is not None)
+        + (1 if test_design_path is not None else 0)
+        + (1 if nfr_path is not None else 0)
+    )
+    _exit_ns = time.monotonic_ns()
+    timing = {
+        "wall_clock_ms": (_exit_ns - _entry_ns) / 1e6,
+        "epic": epic,
+        "artifact_count": artifact_count,
+        "mechanical_ms": (_mech_end_ns - _mech_start_ns) / 1e6,
+    }
+
     return {
         "ready": ready,
         "verdict": verdict,
@@ -855,6 +1070,7 @@ def build_verdict(
         "mechanical_gaps": mechanical_gaps,
         "judgment_candidates": judgment_candidates,
         "checks": checks,
+        "timing": timing,
     }
 
 

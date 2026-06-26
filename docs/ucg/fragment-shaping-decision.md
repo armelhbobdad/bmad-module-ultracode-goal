@@ -79,6 +79,36 @@ A block whose `Status:` is not `ACCEPTED`, that is missing, or whose
 - Date: 2026-06-25
 - Status: ACCEPTED
 
+## Fragment: [ucg:bmad-testarch-test-design]
+
+- Fragment file: `skills/ultracode-goal/assets/ucg-awareness/bmad-testarch-test-design.toml`
+- Shift-left shaping coverage: extract every NFR threshold from PRD/architecture/ADR/epic/story
+  and cite its source, never guess (a genuinely-unknown threshold is marked UNKNOWN and routed to a
+  risk/deferral); a risk matrix of genuine risks each with a unique id, category, probability x impact
+  score, and a mitigation on score >= 6; the score cell is the P x I product, not a free number;
+  honest P0-P3 priorities (TEA owns the percentages); Create + Epic-Level mode; every test-design
+  artifact under the configured trace_output root.
+- Permanent floor classes: invented-NFR-threshold (numbers cite a source or are UNKNOWN); leaked
+  TEA artifact (test-design outputs under the trace_output root, never the source/impl tree).
+- Reviewer: ultracode-goal conductor (machine-evidenced via test_tea_fragments.py; operator
+  ratification batched to the end-of-epic review — deferred d3)
+- Date: 2026-06-26
+- Status: ACCEPTED
+
+## Fragment: [ucg:bmad-testarch-nfr]
+
+- Fragment file: `skills/ultracode-goal/assets/ucg-awareness/bmad-testarch-nfr.toml`
+- Shift-left shaping coverage: reuse the test-design NFR plan as the primary source of categories and
+  thresholds (never re-derive/re-guess); name each category's evidence source (a PASS cites a named
+  source, not a bare claim); a genuinely-unknown threshold is marked UNKNOWN and routed to CONCERNS,
+  never asserted PASS on an unmeasured number; write nfr-assessment.md with the overallStatus the
+  gate reads (state it from the categories, never originate it); under the trace_output root.
+- Permanent floor classes: invented-NFR-threshold; leaked TEA artifact.
+- Reviewer: ultracode-goal conductor (machine-evidenced via test_tea_fragments.py; operator
+  ratification batched to the end-of-epic review — deferred d3)
+- Date: 2026-06-26
+- Status: ACCEPTED
+
 ## Fragment: [ucg:bmad-create-story]
 
 - Fragment file: `skills/ultracode-goal/assets/ucg-awareness/bmad-create-story.toml`

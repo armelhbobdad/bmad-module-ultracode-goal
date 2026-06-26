@@ -39,7 +39,7 @@ Load config from `{project-root}/_bmad/config.yaml` and `config.user.yaml` (root
 These exist because the documented mechanics make the intuitive shortcut wrong. Do not optimize them away.
 
 - **Completion is decided by `scripts/gate_eval.py` reading TEA's `gate-decision.json` — never your own judgment, and never the `/goal` evaluator alone.** That evaluator only sees the transcript; it cannot read the gate file. The JSON is the truth.
-- **Launch the unattended run only when `scripts/preflight_check.py` returns green *after the remediation pass* (intervention budget == 0) and ultracode + Auto Mode are on.** Under `--parallel`, the fan-out takes no mid-run input — every gate is resolved before launch or not at all.
+- **Launch the unattended run only when `scripts/preflight_check.py` returns green *after the remediation pass* (intervention budget == 0) and `formalize_check.py returns ready` (post-remediation — the FR-5 verdict the step-4 gate decides) and ultracode + Auto Mode are on.** Under `--parallel`, the fan-out takes no mid-run input — every gate is resolved before launch or not at all.
 - **Only non-gate-blocking work defers** to `{workflow.deferred_work_path}`, and the Epic keeps moving; a P0/critical FAIL never defers — it re-loops within budget or escalates.
 - **Rollback is git** — Epic branch off `{workflow.epic_branch_prefix}`, one commit per green story, worktree isolation. `/rewind` checkpoints miss Bash changes; do not rely on them.
 - **Invariants live in PreToolUse hooks**, auto-merged into `.claude/settings.local.json` at preflight — not in memory, which is context, not enforcement.

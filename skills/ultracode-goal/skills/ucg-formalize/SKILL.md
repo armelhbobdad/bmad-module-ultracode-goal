@@ -179,3 +179,22 @@ An automator parses one schema regardless of the verdict; this is the SAME envel
 the autonomous run's preflight clause emits for the same blocked input, so the two entry points
 cannot drift. Record the final verdict to `.decision-log.md` before emitting;
 the log carries the full blocker and remediation list.
+
+## Measurement protocol (AD-5 / NFR-9)
+
+The kernel emits a self-measured `timing` block on every verdict — ready, remediable, and blocked
+alike — carrying `wall_clock_ms`, `mechanical_ms`, `epic`, and `artifact_count`: monotonic deltas the
+kernel measures itself, never an author-supplied number. This SKILL layer reads that block, measures
+`end_to_end_ms` with a monotonic clock wrapped around the EXISTING step-2 remediation loop and the
+EXISTING step-3 judgment subagent read — the same single spawn, with no extra subagent and no extra
+prompt introduced solely to time it (the mechanical-vs-end-to-end split AD-5 names) — and appends one
+measurement line (`epic`, `artifact_count`, `wall_clock_ms`, `mechanical_ms`, `end_to_end_ms`) to the
+run's `.decision-log.md` on every verdict. It rides NFR-9's existing channel: no separate logging
+destination, file, or endpoint is introduced; the record lands only in `.decision-log.md`.
+
+Per AD-5 / NFR-7 the wall-clock ceiling is DECLARED-UNKNOWN — it is set only from a first real
+preflight-invoked run (a downstream operator action, out of scope here), and no number is authored
+into this SKILL or the kernel before then. An over-budget formalize never blocks, escalates, or
+downgrades a verdict; the measurement is provider-agnostic provenance, never a gate (INV-7). Outside
+the autonomous conductor the standalone `/ucg-formalize` still records its own duration; only the
+preflight auto-invocation is conductor-specific.

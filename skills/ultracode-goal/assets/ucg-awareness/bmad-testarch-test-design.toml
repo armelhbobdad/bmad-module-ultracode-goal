@@ -1,0 +1,23 @@
+# UCG awareness fragment for bmad-testarch-test-design.
+# Additive guardrail facts landing in the one universal sanctioned append channel
+# (persistent_facts, authored top-level here; merge_customization.py re-homes them
+# into the target's nested [workflow].persistent_facts). The gate, not this shaping,
+# is load-bearing (INV-3); a plain run is unaffected or strictly improved (NFR-3).
+# Idempotent strip-then-reappend is merge_customization.py's concern, matched by the
+# per-directive [ucg:{skill}-NN] id marker each entry carries.
+
+persistent_facts = [
+  "Extract every NFR threshold (latency, size, count, rate, timeout) from the PRD, architecture, ADRs, epics, or stories and cite the source artifact it came from; never guess a number — a genuinely-unknown threshold is marked UNKNOWN and converted into a risk, assumption, or deferral rather than an invented value. [ucg:bmad-testarch-test-design-01]",
+  "Populate the risk matrix with genuine risks (not features), each carrying a unique id, a category (TECH/SEC/PERF/DATA/BUS/OPS), and probability x impact scores (1-3 each); any risk scoring 6 or higher must carry a stated mitigation. [ucg:bmad-testarch-test-design-02]",
+  "When a risk row states both probability and impact, fill its score cell with the probability x impact product; if a stated score disagrees with the stated probability and impact, reconcile it rather than leaving the conflict — the score is arithmetic from the two factors, not a free number. [ucg:bmad-testarch-test-design-03]",
+  "Assign P0-P3 priorities honestly (P0 = blocks a core flow, high risk, no workaround); TEA owns the coverage percentages, so state the priorities truthfully and do not restate or recompute the threshold percentages here. [ucg:bmad-testarch-test-design-04]",
+  "Run in Create mode at Epic-Level so the plan is a fresh deterministic artifact, never a stalled interactive resume; a legal sprint-status makes the Epic-Level selection automatic. [ucg:bmad-testarch-test-design-05]",
+  "Write every test-design artifact under the configured trace_output / test_artifacts root; never leave a test-design plan, risk matrix, or any TEA artifact in the source or implementation tree. [ucg:bmad-testarch-test-design-06]",
+  "These are run-scoped guardrail facts that shape test-design to be ready-by-construction; they are narrower than per-AC directives and are not the verdict. A story is ready only when the gate says so, and these facts are additive guidance a plain run can ignore with no harm. [ucg:bmad-testarch-test-design-07]",
+]
+
+[ucg]
+managed = true
+version = "0.3.0"
+block = "ucg-awareness"
+installed_at = "2026-06-26T00:00:00Z"

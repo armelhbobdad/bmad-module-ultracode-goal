@@ -22,6 +22,22 @@ Qualify the script path with `{skill-root}` (per SKILL.md Conventions a bare `sc
 
 `budget` is the count of mechanical blockers. The script does **not** decide semantic intervention — that is your job in step 3. Treat `green: true` from the script as *necessary but not sufficient*.
 
+## 1b. Run the formalize readiness check
+
+Step 1's `preflight_check.py` counts mechanical facts; it cannot read the planning corpus and decide whether the Epic is *formally ready*. That FR-5 readiness verdict is produced here — immediately after the mechanical check of step 1 and before the remediation pass of step 2 — by the same single kernel the standalone `/ucg-formalize` entry point runs, so one readiness definition serves both entry points (INV-9):
+
+```
+uv run {skill-root}/scripts/formalize_check.py --epic <id> --project-root {project-root} --planning-artifacts {planning_artifacts} --impl-artifacts {workflow.implementation_artifacts} --tea-config {workflow.tea_config_path}
+```
+
+Qualify the path with `{skill-root}` for the same cwd-safety reason step 1 does (a bare `scripts/…` resolves from the skill root, not the project cwd the conductor runs from). Story 1.3's `ucg-formalize` SKILL.md names the identical kernel path, so the two callers cannot drift to divergent scripts.
+
+The verdict is computed from the **resolved artifact set on disk** — the real PRD / architecture / epic / story content the FR-5 resolver locates — regardless of whether any customization shaping applied; the gate reads the artifact on disk, not the shaping (INV-3). The kernel is **fail-closed**: an unreadable or absent artifact is a *failing signal*, never neutral (INV-4, mirroring `gate_eval.py`'s `nfr_status is None → failing`). The run is unconditional on that resolved corpus — it is the verify side that must hold even when shaping legitimately did not land.
+
+This step only *produces* the verdict. Its mechanical gaps, judgment candidates, and reds are read downstream by steps 2–4 (sibling stories); nothing is folded in here.
+
+Per the AD-5 / NFR-9 measurement protocol, log the formalize duration provenance — `wall_clock_ms`, `mechanical_ms`, `artifact_count` — to `.decision-log.md` on every verdict, reusing the existing step-3 scan boundary for the end-to-end split; no number gates the run (the wall-clock budget is measured, never guessed).
+
 ## 2. Auto-remediation pass
 
 Clear each remediable blocker, then **re-run the check** so the budget reflects the fixes. Remediate:
@@ -34,6 +50,7 @@ Clear each remediable blocker, then **re-run the check** so the budget reflects 
 - **`sprint-status.yaml` absent** (`sprint_status_present: false`): ensure it is present (via `bmad-sprint-planning`). Its presence makes TEA test-design **auto-select Epic-Level** and skip its interactive System/Epic mode prompt — without it, Stage 3 stalls on a question no one is there to answer.
 - **TEA mode**: force **Create** mode for every TEA workflow this run. Resume/Validate/Edit are interactive and will halt an unattended run. Set/confirm whatever the TEA config exposes (`tea_execution_mode`) so no workflow resumes a prior session.
 - **Secrets / credentials** a story needs (test env keys, API tokens): **interactive** — prompt **once**, now, and capture them out of git. **Headless** — do not prompt; an unresolvable secret becomes a RED blocker (step 4), never a deferred question.
+- **Formalize mechanical gaps** (`formalize_check.py`'s `mechanical_gaps[]` from step 1b): fold these machine-derivable, meaning-preserving fixes into *this same* pass — never a second remediation pass and never a new step heading. The genuinely-new one is the leaked-TEA-artifact **MOVE-and-re-point**: move a TEA artifact that leaked into a source/impl dir out to the `{workflow.trace_output_dir}` / test_artifacts root, then re-point every in-repo reference to the new path (content is only relocated, never rewritten); the orphaned-index and missing-AC gaps reuse the `bmad-create-story` scaffold this step already runs. Auto-clear **only** a `mechanical_gaps[]` entry whose `remediable == true` (the human-authored literal at `preflight_check.py:411,424`, never re-decided in this prose, INV-6); a leaked-artifact finding the kernel emitted as a `judgment_candidates[]` entry or with `remediable: false` is **not** moved here — that residual content-soundness judgment routes to the step-3 scan / step-4 hard gate. These remediations reuse the existing remediate-then-re-run loop below ("run the script from step 1 again"), so the budget re-reflects the formalize fixes on re-run with no extra invocation.
 
 **Ordering: only framework → ci is load-bearing** (the CI scaffold halts without a framework, as its bullet states). Every other remediation above is mutually independent — run them in any order, or concurrently; do not serialize them defensively.
 
@@ -51,6 +68,8 @@ The script counts mechanical facts; it cannot read a PRD and tell that a product
 - contradictions between PRD and ADR,
 - acceptance criteria that presuppose a decision no artifact actually makes,
 - a story whose "done" is undefinable from the artifacts.
+
+**Second hypothesis stream — seed the formalize candidates.** Pass that SAME single throwaway subagent a second set of targeted hypotheses alongside the recall advisories: `formalize_check.py`'s `judgment_candidates[]` (from step 1b) as a **`source:line` list** — the references only, never the inlined artifact bodies — so the subagent confirms machine-flagged candidates *instead of scanning blind*. The kernel only *flags*; the throwaway subagent *decides* — it must **confirm-or-clear** each seeded `judgment_candidate` into `reds` or `concerns`, never recording one as a RED unprompted. Fail-closed (INV-4): a `judgment_candidate` the subagent can neither confirm nor clear **defaults to RED** (JUDGMENT), mirroring `gate_eval.py`'s `nfr_status is None → failing`. This adds zero net subagent and zero net conductor context — the same single spawn, the same discarded-context discipline, and the same three-key return object below.
 
 The subagent must return **ONLY this object — no prose, no document quotes beyond the one-line evidence fields**, so you hold the findings while the corpus stays in its discarded context:
 
@@ -70,8 +89,9 @@ Every `reds` entry is **RED** — it cannot be auto-remediated, because the fix 
 **Launch only when ALL hold:**
 
 - post-remediation script `budget == 0` (every mechanical blocker cleared),
-- the semantic scan found **no RED** (no undecided product/architecture, no unresolvable secret),
-- **ultracode** session effort and **Auto Mode** are on (gated to Opus/Sonnet 4.6+; required for unattended xhigh + auto-workflow execution).
+- the semantic scan **and the formalize subagent** found **no RED** — the two reds streams unioned (no undecided product/architecture, no unresolvable secret, no confirmed formalize red),
+- **ultracode** session effort and **Auto Mode** are on (gated to Opus/Sonnet 4.6+; required for unattended xhigh + auto-workflow execution),
+- the post-remediation formalize_check.py verdict is `ready` — i.e. `mechanical_budget == 0` AND the formalize subagent found no RED — re-using the step-1b kernel's verdict after the step-2 fold-in and step-3 seed (not a fresh gate-time check); this clause holds on verdict `ready` and only `ready`, so any other verdict (`blocked`, an un-cleared `remediable`, or an unreadable / absent / unparseable / missing verdict) FAILS the gate under the "If any fails … STOP" disposition below.
 
 If any fails: write the blockers — mechanical and semantic — to `.decision-log.md` with what each needs to clear, and **STOP**. Do not launch a partially-ready run; a single guessed architecture decision corrupts the whole Epic. In **headless**, instead emit the blocked JSON in the canonical five-key shape (every key always present; `report` and `deferred_work` are `null` because the run blocked before producing them):
 
@@ -81,10 +101,10 @@ If any fails: write the blockers — mechanical and semantic — to `.decision-l
  "decision_log": "<path to this run's .decision-log.md>",
  "report": null,
  "deferred_work": null,
- "reason": "<first/most-severe blocker, one line>"}
+ "reason": "<first blocker in the adapter's blocker-list order, one line>"}
 ```
 
-The log carries the full blocker list.
+The log carries the full blocker list. A confirmed **formalize RED** (a formalize-subagent `reds[]` entry unioned into the no-RED clause by step 4) surfaces through this **identical** five-key channel as a semantic-scan RED — no formalize-specific key, no formalize-specific status string. `reason` is the **first blocker in the adapter's blocker-list order** — positional `blockers[0]` flattened to one line (reds carry no severity field), built by the one shared `scripts/headless_envelope.py` `build_headless_envelope` adapter so every headless exit serializes through a single envelope definition (INV-9). The rich FR-5 verdict stays a separate script-layer object the adapter consumes; it never nests into the envelope (AD-7).
 
 ## 5. Arm the environment (only when the gate passes)
 
