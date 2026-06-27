@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Shared primitives for ultracode-goal Cross-Session Recall (D12).
+"""Shared primitives for ultracode-goal Cross-Session Recall.
 
 This is the shared internal library — NOT a CLI entrypoint (no argparse, no
 main). It lives under scripts/lib/ (out of the CLI-entrypoint scope) and is

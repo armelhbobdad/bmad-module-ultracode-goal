@@ -1,6 +1,6 @@
 // EXPERIMENTAL — ultracode-goal --parallel worktree fan-out.
 //
-// This is the additive, opt-in parallel execution path (decision D4'/D7). The DEFAULT
+// This is the additive, opt-in parallel execution path. The DEFAULT
 // path is the sequential /goal spine in references/execute.md; this script only runs when
 // the operator passes --parallel. It shares the SAME truth sources as the sequential path:
 // the deterministic gate is scripts/gate_eval.py reading TEA's gate-decision.json (never

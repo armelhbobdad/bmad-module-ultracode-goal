@@ -10,7 +10,7 @@ file/directory existence, and reads TEA config flags. It reports mechanical
 facts plus a `budget` count of mechanical blockers. It does NOT decide whether
 to intervene, remediate, or block on semantic grounds — that judgment lives in
 references/preflight.md (the LLM). The "auto-remediation then hard-gate"
-posture (decision D2') is the LLM's to run; this script only tells it what is
+posture is the LLM's to run; this script only tells it what is
 mechanically true right now.
 
 What counts as a mechanical blocker (each adds 1 to `budget`):
