@@ -180,7 +180,7 @@ def test_correctly_placed_tea_artifact_is_not_flagged():
 
 
 def test_leaked_tea_excludes_ucg_impl_artifacts(tmp_path):
-    """Regression (health-check fp-979777b / d5): a UCG story-note or run-sentinel
+    """Regression: a UCG story-note or run-sentinel
     whose filename merely carries a TEA marker token (because the STORY SLUG does) is
     NOT a leaked TEA artifact — only a genuine TEA output is flagged. Skipping these is
     load-bearing: they live under impl-artifacts by design, so flagging one would

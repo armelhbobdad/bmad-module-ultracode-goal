@@ -1,17 +1,17 @@
-"""Story 3.1 — Phase-3 evidence gate (AD-4 / OQ4 / R4 / NFR-8), doc-lint, stdlib + pytest.
+"""Phase-3 evidence gate, doc-lint, stdlib + pytest.
 
 The load-bearing deliverable is the `## … — Phase-3 evidence gate` section appended to
 skills/ultracode-goal/.decision-log.md: three `### Promotion gate — <fragment>` blocks (one each for
 bmad-dev-story / bmad-code-review / bmad-sprint-planning), each carrying the five readiness fields
 status / decision_needed / attribution_rubric / nfr8_collision_check / promotion_trigger, plus a
 self-binding downstream-map table and a cut-ability line. This test is a pure ci-deterministic doc-lint
-(no runtime stop-authority, NFR-8/INV-7): it string-parses the markdown and asserts the gate is
+(no runtime stop-authority): it string-parses the markdown and asserts the gate is
 non-vacuous and orphan-checked.
 
 POSITIVE assertions run against the REAL .decision-log.md section. ANTI-VACUOUS twins run the SAME
 checks against named programmatic mutations of fixtures/phase3/good_section.md and assert each flips red.
 
-CI-portability (Epic-1 rule): the section's grounding cites gitignored `_bmad-output/…` planning paths.
+CI-portability: the section's grounding cites gitignored `_bmad-output/…` planning paths.
 The on-disk existence check hard-asserts only the tracked decision-log itself; a cited `_bmad-output/`
 planning path is asserted to be a file only WHEN present (verified manually at authoring; not CI-gated).
 The no-phantom-epics-path and no-3.[2-5]-story-id checks are pure regex and ARE CI-enforced — they catch
@@ -38,7 +38,7 @@ _KNOWN_LABELS = (
     "promotion_trigger",
 )
 _REQUIRED_STATUS = "DEFERRED — not built (pending field evidence)"
-# AD-4 forbidden placeholder tokens (word-boundary, case-insensitive) + literal '???'.
+# Forbidden placeholder tokens (word-boundary, case-insensitive) + literal '???'.
 _PLACEHOLDER_TOKENS = ("tbd", "todo", "placeholder", "none")
 _RUNTIME_TOKENS = ("preflight", "PreToolUse", "Stop", "gate_eval.py")
 _CUT_TOKENS = ("cut", "terminal", "not promoted")
@@ -112,7 +112,7 @@ def _parse_downstream_map(section):
 
 
 def _check_three_blocks(section):
-    """AC1: exactly three blocks, the three target ids each once, all five fields present."""
+    """Case 1: exactly three blocks, the three target ids each once, all five fields present."""
     headings, blocks = _parse_blocks(section)
     assert len(headings) == 3, "expected exactly 3 promotion blocks, got %d" % len(headings)
     assert sorted(headings) == sorted(_FRAGMENTS), "block ids %r != target set" % headings
@@ -134,7 +134,7 @@ def _has_placeholder(text):
 
 
 def _check_rubrics(section):
-    """AC2: each attribution_rubric names its fragment-specific artifact shape, no placeholder."""
+    """Case 2: each attribution_rubric names its fragment-specific artifact shape, no placeholder."""
     _, blocks = _parse_blocks(section)
     for frag in _FRAGMENTS:
         rubric = blocks[frag]["attribution_rubric"]
@@ -145,7 +145,7 @@ def _check_rubrics(section):
 
 
 def _check_nfr8(section):
-    """AC3: nfr8_collision_check is co-equal/terminal (names a runtime layer + a cut outcome);
+    """Case 3: nfr8_collision_check is co-equal/terminal (names a runtime layer + a cut outcome);
     promotion_trigger requires BOTH rubric AND check via a standalone AND."""
     _, blocks = _parse_blocks(section)
     for frag in _FRAGMENTS:
@@ -160,7 +160,7 @@ def _check_nfr8(section):
 
 
 def _check_backrefs(section):
-    """AC4: self-binding, zero dangling refs against artifacts that exist today."""
+    """Case 4: self-binding, zero dangling refs against artifacts that exist today."""
     headings, blocks = _parse_blocks(section)
     rows = _parse_downstream_map(section)
     # (a) downstream-map closes bidirectionally with the blocks
@@ -180,7 +180,7 @@ def _check_backrefs(section):
     for tok in re.findall(r"(?<![\w-])bmad-[a-z]+(?:-[a-z]+)*", section):
         assert tok in _FRAGMENT_SET, "orphan fragment id: %s" % tok
     # (e) every cited on-disk path resolves WHEN present. Planning paths under _bmad-output/ are
-    #     gitignored (absent in CI) → checked only when present (Epic-1 portability rule); the
+    #     gitignored (absent in CI) → checked only when present (CI-portability rule); the
     #     no-phantom-epics-path + no-3.[2-5] regex checks above are the CI-enforced orphan guards.
     for cited in re.findall(r"_bmad-output/[^\s`)]+\.md", section):
         p = _PROJECT_ROOT / cited

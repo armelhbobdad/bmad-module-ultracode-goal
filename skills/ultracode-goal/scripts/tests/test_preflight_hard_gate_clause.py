@@ -1,4 +1,4 @@
-"""Story 2.4 — step-4 fourth AND-clause: union formalize reds + verdict==ready.
+"""Step-4 fourth AND-clause: union formalize reds + verdict==ready.
 
 Static prose-contract assertions over preflight.md '## 4. Hard gate': exactly four
 co-equal AND-clauses, the formalize reds unioned into the existing no-RED clause (not

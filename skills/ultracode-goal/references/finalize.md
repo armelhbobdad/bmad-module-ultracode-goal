@@ -83,7 +83,7 @@ In headless (`-H`), compose the final JSON, run the Workflow health check (below
  "deferred_work": "<path to {workflow.deferred_work_path}, or null>"}
 ```
 
-A blocked exit (a story escalated) emits the same five keys plus `reason`, with `report`/`deferred_work` `null` — the shape `references/preflight.md` and the `scripts/headless_envelope.py` adapter build (INV-9).
+A blocked exit (a story escalated) emits the same five keys plus `reason`, with `report`/`deferred_work` `null` — the shape `references/preflight.md` and the `scripts/headless_envelope.py` adapter build (one shared envelope definition).
 
 ## Workflow health check (terminal)
 

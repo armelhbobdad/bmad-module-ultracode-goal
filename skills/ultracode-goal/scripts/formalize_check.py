@@ -503,7 +503,6 @@ def _tea_trace_output_root(tea_config: Path, project_root: Path) -> Path | None:
 # misfile, and — because they live under impl-artifacts BY DESIGN — moving it would
 # be the only thing that clears the gate, so a "leave it in place" disposition would
 # deadlock the budget==0 launch gate. Identity decides, not the marker substring.
-# (Health-check fp-979777b / deferred d5.)
 _UCG_STORY_NOTE_RE = re.compile(r"^\d+-\d+-")
 
 
@@ -554,7 +553,7 @@ def _leaked_tea_artifacts(
     return leaked
 
 
-# --- TEA-reader (AD-6): read TEA's emitted fields, NEVER originate them --------
+# --- TEA-reader: read TEA's emitted fields, NEVER originate them ---------------
 # formalize stays a READER of the TEA test-design risk matrix + nfr-assessment.md
 # located under the trace_output root; it verifies presence/parseability and
 # value->source-or-UNKNOWN provenance, recomputes ONLY a blank P×I score cell when
@@ -651,7 +650,7 @@ def _scan_nfr_assessment(text: str, rel: str) -> list[dict]:
     as judgment_candidates. overallStatus is READ via the gate_eval recognizer, never
     re-derived or overwritten."""
     candidates: list[dict] = []
-    # READ TEA's overallStatus via the same recognizer gate_eval.py uses (AD-6);
+    # READ TEA's overallStatus via the same recognizer gate_eval.py uses;
     # the kernel never re-derives or emits it. A present-but-unreadable assessment
     # (no parseable overallStatus at all) is itself a JUDGMENT a human must resolve.
     overall = _OVERALL_STATUS_RE.search(text)
@@ -682,14 +681,14 @@ def _scan_nfr_assessment(text: str, rel: str) -> list[dict]:
     return candidates
 
 
-# --- timing seam (AD-5 measurement protocol) ---------------------------------
+# --- timing seam (measurement protocol) -------------------------------------
 # A no-op marker at the start of the mechanical half. Production never overrides
 # it; a test monkeypatches it to inject a known delay so `mechanical_ms` is
 # asserted against a deterministic monotonic-DELTA lower bound (defeating any
 # hardcoded constant or raw unsubtracted clock read). Timing is measured AFTER the
 # verdict is decided and never alters it — there is NO duration-vs-literal compare
 # and NO code path that blocks/escalates/downgrades a verdict on elapsed time
-# (INV-7 / NFR-7 / AD-5: the wall-clock budget is UNKNOWN, measured never guessed,
+# (the wall-clock budget is UNKNOWN, measured never guessed,
 # and set only from a first real run — no number is authored here).
 def _mechanical_hook() -> None:
     return None
@@ -708,7 +707,7 @@ def build_verdict(
     mechanical_gaps: list[dict] = []
     judgment_candidates: list[dict] = []
 
-    # AD-5 timing: monotonic samples at entry and at the mechanical-half start.
+    # timing: monotonic samples at entry and at the mechanical-half start.
     _entry_ns = time.monotonic_ns()
     _mech_start_ns = time.monotonic_ns()
     _mechanical_hook()
@@ -994,11 +993,11 @@ def build_verdict(
             }
         )
 
-    # --- TEA-reader (AD-6): read TEA's emitted fields under the trace_output root ---
+    # --- TEA-reader: read TEA's emitted fields under the trace_output root ---
     # Fires ONLY when a test-design artifact is located under trace_root (a TEA run is
     # in progress); otherwise no TEA artifact is read and nothing is added. With a
     # test-design present, an nfr-assessment is EXPECTED — a missing/unreadable one is
-    # a FAILING signal (fail-closed, INV-4), never neutral.
+    # a FAILING signal (fail-closed), never neutral.
     test_design_path = _find_under(trace_root, "test-design")
     if test_design_path is not None and trace_root is not None:
         td_rel = _rel(test_design_path, project_root)
@@ -1029,7 +1028,7 @@ def build_verdict(
                 "kind": "missing_nfr_assessment",
                 "severity": "high",
                 "detail": "nfr-assessment.md absent or unreadable under trace_output: %s" % nfr_rel,
-                # Fail-closed (INV-4, mirroring gate_eval.py nfr_status is None -> failing):
+                # Fail-closed (mirroring gate_eval.py nfr_status is None -> failing):
                 # an absent/unreadable nfr assessment is a FAILING gap, never neutral.
                 "remediable": False,
                 "source": nfr_rel,
@@ -1058,7 +1057,7 @@ def build_verdict(
         "gate_ability_tag_coverage": gate_ability_tag_coverage,
     }
 
-    # AD-5 timing: close the mechanical-half window BEFORE the verdict is derived,
+    # timing: close the mechanical-half window BEFORE the verdict is derived,
     # so the verdict can never depend on elapsed time.
     _mech_end_ns = time.monotonic_ns()
 
@@ -1074,7 +1073,7 @@ def build_verdict(
         verdict = "remediable"
     ready = verdict == "ready"
 
-    # AD-5 provenance: artifact_count is the cardinality of the FR-5 resolver's
+    # provenance: artifact_count is the cardinality of the readiness resolver's
     # located, readable artifact set — content-derived and deterministic for a
     # given fixture. timing keys are present on every payload (ready/remediable/
     # blocked alike); the verdict never gates the timing record.

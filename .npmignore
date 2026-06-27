@@ -36,6 +36,7 @@ skills/**/scripts/tests/
 skills/**/__pycache__/
 skills/**/.pytest_cache/
 skills/reports/
+skills/ultracode-goal/assets/ucg-awareness/shaping-decision.md
 
 # Python bytecode
 __pycache__/

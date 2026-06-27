@@ -356,7 +356,7 @@ def test_self_explaining_and_deterministic():
     first = _run_cli("remediable_epic")
     second = _run_cli("remediable_epic")
     assert first.returncode == 0 and second.returncode == 0
-    # Determinism holds for everything EXCEPT the AD-5 `timing` block, whose
+    # Determinism holds for everything EXCEPT the `timing` block, whose
     # wall-clock deltas are load-dependent by design (advisory, never a contract).
     p_first = json.loads(first.stdout)
     p_second = json.loads(second.stdout)
@@ -376,7 +376,7 @@ def test_self_explaining_and_deterministic():
     )
 
 
-# --- AD-5 measurement protocol: timing block + no time-based block ----------
+# --- measurement protocol: timing block + no time-based block --------------
 
 INJECTED_MS = 50
 # time.sleep() can wake EARLY by up to the OS timer granularity (~16 ms on
@@ -400,7 +400,7 @@ def _build_args(name: str, epic: str) -> dict:
 
 def test_timing_block_present_all_verdicts(monkeypatch):
     # The timing block is present on the ready, remediable, AND blocked payloads,
-    # with EXACTLY the four AD-5 provenance keys and numeric deltas.
+    # with EXACTLY the four provenance keys and numeric deltas.
     cases = {"ready_epic": "ready", "remediable_epic": "remediable", "unreadable_epic": "blocked"}
     counts = {}
     for name, expected in cases.items():
@@ -444,7 +444,7 @@ def test_no_time_based_block(monkeypatch):
     src = SCRIPT.read_text(encoding="utf-8")
     assert not re.search(
         r"timeout|ceiling|deadline|max_(ms|seconds|wall)|>\s*[0-9]+\s*#\s*(ms|sec)", src, re.IGNORECASE
-    ), "the kernel must author no wall-clock cutoff (AD-5 / NFR-7)"
+    ), "the kernel must author no wall-clock cutoff"
 
 
 if __name__ == "__main__":

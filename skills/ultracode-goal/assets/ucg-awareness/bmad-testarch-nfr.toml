@@ -2,7 +2,7 @@
 # Additive guardrail facts landing in the one universal sanctioned append channel
 # (persistent_facts, authored top-level here; merge_customization.py re-homes them
 # into the target's nested [workflow].persistent_facts). The gate, not this shaping,
-# is load-bearing (INV-3); a plain run is unaffected or strictly improved (NFR-3).
+# is load-bearing; a plain run is unaffected or strictly improved.
 
 persistent_facts = [
   "Reuse the test-design NFR plan as the primary source of NFR categories and thresholds; never re-derive or re-guess a threshold the plan already states. [ucg:bmad-testarch-nfr-01]",

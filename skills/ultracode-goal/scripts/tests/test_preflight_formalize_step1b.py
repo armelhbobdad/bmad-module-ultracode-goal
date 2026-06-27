@@ -1,4 +1,4 @@
-"""Story 2.1 — preflight.md step-1b: invoke formalize_check.py after preflight_check.py.
+"""preflight.md step-1b: invoke formalize_check.py after preflight_check.py.
 
 Pure static text assertions over the reference doc (the conductor's prose contract),
 mirroring test_health_check_fp.py's read-references/{stage}.md pattern. No subprocess,
@@ -70,7 +70,7 @@ def test_invocation_has_all_fr5_flags_with_canonical_placeholders():
         line for line in text.splitlines() if _QUALIFIED_INVOCATION in line
     )
     for flag in _FR5_FLAGS:
-        assert flag in inv_line, f"missing FR-5 flag/placeholder on invocation line: {flag!r}"
+        assert flag in inv_line, f"missing readiness flag/placeholder on invocation line: {flag!r}"
 
 
 def test_one_kernel_token_self_contained():
@@ -79,10 +79,10 @@ def test_one_kernel_token_self_contained():
 
 def test_step1b_states_inv3_inv4_unconditional():
     block = _step1b_block(_text())
-    assert re.search(r"resolved artifact", block, re.IGNORECASE), "INV-3 resolved-artifact missing"
+    assert re.search(r"resolved artifact", block, re.IGNORECASE), "resolved-artifact assertion missing"
     assert re.search(
         r"fail[- ]closed|failing signal", block, re.IGNORECASE
-    ), "INV-4 fail-closed missing"
+    ), "fail-closed assertion missing"
     assert "enable_ucg_awareness" not in block
     assert not re.search(r"only (if|when) .*customization", block, re.IGNORECASE), (
         "step-1b must run unconditionally on disk, never gated on customization"
@@ -97,7 +97,7 @@ def test_step1b_is_invocation_only():
 
 def test_one_kernel_two_entry_points():
     if not _UCG_FORMALIZE_SKILL.exists():
-        pytest.skip("ucg-formalize SKILL.md not yet shipped by story 1.3")
+        pytest.skip("ucg-formalize SKILL.md not present")
     preflight_token = _formalize_token(_text())
     skill_token = _formalize_token(_UCG_FORMALIZE_SKILL.read_text(encoding="utf-8"))
     assert preflight_token == skill_token == _ONE_KERNEL_TOKEN

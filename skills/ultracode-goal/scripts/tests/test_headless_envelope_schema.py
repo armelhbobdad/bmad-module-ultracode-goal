@@ -1,9 +1,9 @@
-"""Story 2.5 — headless blocked envelope: route a formalize RED through the canonical JSON.
+"""Headless blocked envelope: route a formalize RED through the canonical JSON.
 
 (1) Schema parity: the preflight step-4 blocked block and the SKILL.md master block carry
 the same five canonical keys (+ conditional reason); no formalize-prefixed key. (2) The
 build_headless_envelope adapter routes a formalize RED through the IDENTICAL channel as a
-semantic-scan RED, with the FR-5 verdict never nested. (3) reason is positional blockers[0],
+semantic-scan RED, with the formalize verdict never nested. (3) reason is positional blockers[0],
 one physical line. (4) the formalize RED is logged. (5) one envelope definition tree-wide.
 Stdlib + pytest only.
 """
@@ -61,7 +61,7 @@ def _canonical_block(text: str) -> dict:
     raise AssertionError("no canonical envelope block found")
 
 
-# AC-1 -----------------------------------------------------------------------
+# Case 1 ---------------------------------------------------------------------
 def test_preflight_blocked_block_has_exact_canonical_keys():
     pre = _first_block_after(_PREFLIGHT.read_text(encoding="utf-8"), "## 4. Hard gate")
     skill = _canonical_block(_SKILL_MD.read_text(encoding="utf-8"))
@@ -70,7 +70,7 @@ def test_preflight_blocked_block_has_exact_canonical_keys():
     assert not any("formalize" in k for k in pre), "no formalize-prefixed key on the headless surface"
 
 
-# AC-2 -----------------------------------------------------------------------
+# Case 2 ---------------------------------------------------------------------
 def test_formalize_red_routes_through_blocked_envelope(tmp_path):
     log = tmp_path / "dl.md"
     fr5 = {
@@ -90,7 +90,7 @@ def test_formalize_red_routes_through_blocked_envelope(tmp_path):
         "deferred_work": None,
         "reason": he._one_line({"source": "prd.md:42", "decision_needed": "choose store"}),
     }
-    assert all(v is not fr5 and v != fr5 for v in env.values()), "FR-5 verdict must never be an envelope value"
+    assert all(v is not fr5 and v != fr5 for v in env.values()), "the formalize verdict must never be an envelope value"
 
     # anti-vacuous: a SEMANTIC-SCAN red with identical content yields the byte-identical envelope
     sem = [{"source": "prd.md:42", "decision_needed": "choose store", "kind": "undecided-architecture"}]
@@ -98,7 +98,7 @@ def test_formalize_red_routes_through_blocked_envelope(tmp_path):
     assert env2 == env, "formalize and semantic-scan reds share one channel"
 
 
-# AC-3 -----------------------------------------------------------------------
+# Case 3 ---------------------------------------------------------------------
 def test_reason_is_first_red_one_line(tmp_path):
     log = str(tmp_path / "dl.md")
     sem = {"source": "prd.md:10", "decision_needed": "pick auth", "kind": "undecided-product"}
@@ -112,7 +112,7 @@ def test_reason_is_first_red_one_line(tmp_path):
     assert "\n" not in reason and "line1" in reason and "line3" in reason
 
 
-# AC-4 -----------------------------------------------------------------------
+# Case 4 ---------------------------------------------------------------------
 def test_blocked_envelope_logs_formalize_red(tmp_path):
     log = tmp_path / "dl.md"
     red = {"source": "epic.md:99", "decision_needed": "resolve the undecided NFR threshold"}
@@ -123,7 +123,7 @@ def test_blocked_envelope_logs_formalize_red(tmp_path):
     assert "epic.md:99" in body and "resolve the undecided NFR threshold" in body
 
 
-# AC-5 -----------------------------------------------------------------------
+# Case 5 ---------------------------------------------------------------------
 def test_single_envelope_definition():
     canon_keysets = []
     statuses = []

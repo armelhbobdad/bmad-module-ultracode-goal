@@ -297,7 +297,7 @@ def test_light_profile_ignores_production_signals(tmp_path):
     assert result["nfr_status"] is None
 
 
-# --- --story selector in a shared multi-story trace dir (fp-910f0fd) ----------
+# --- --story selector in a shared multi-story trace dir ----------
 
 
 def write_named_slim(dir_path, name, gate_status, p0="MET", p1="MET", overall="MET"):

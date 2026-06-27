@@ -2,24 +2,24 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Story 2.5 — the single headless-envelope adapter (AD-7 / INV-9).
+"""The single headless-envelope adapter.
 
 `build_headless_envelope` adapts a blocker source — either an ordered blocker list
-or `formalize_check.py`'s FR-5 verdict object — into the ONE canonical five-key
+or `formalize_check.py`'s formalize verdict object — into the ONE canonical five-key
 headless envelope (status, skill, decision_log, report, deferred_work) plus the
 conditional `reason`, exactly the shape the preflight step-4 block and the
-ucg-formalize SKILL.md block document. The FR-5 verdict stays a SEPARATE
-script-layer object — it is never nested into the envelope (AD-7 two-layer
+ucg-formalize SKILL.md block document. The formalize verdict stays a SEPARATE
+script-layer object — it is never nested into the envelope (two-layer
 separation). A formalize RED therefore routes through the IDENTICAL channel as a
 semantic-scan RED; no formalize-specific key, no formalize-specific status.
 
 `reason` is POSITIONAL: the one-line rendering of `blockers[0]` (the caller-supplied
 order; reds carry no severity field), flattened to a single physical line. Every
-formalize RED is also written to the run's `.decision-log.md` (NFR-9), so a headless
+formalize RED is also written to the run's `.decision-log.md`, so a headless
 block is never silent and the one-line reason reconstructs to its full finding.
 
-Stdlib-only. Fail-closed (INV-4, mirroring gate_eval.py `nfr_status is None -> failing`):
-a missing / unparseable FR-5 verdict is treated as a blocking signal, never neutral.
+Stdlib-only. Fail-closed (mirroring gate_eval.py `nfr_status is None -> failing`):
+a missing / unparseable formalize verdict is treated as a blocking signal, never neutral.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import re
 from pathlib import Path
 
 SKILL = "ultracode-goal"
-# The five always-present canonical keys (AD-7); `reason` is the conditional sixth.
+# The five always-present canonical keys; `reason` is the conditional sixth.
 CANONICAL_KEYS = ("status", "skill", "decision_log", "report", "deferred_work")
 
 
@@ -41,7 +41,7 @@ def _one_line(blocker: dict) -> str:
 
 
 def fr5_blockers(verdict: object) -> list[dict]:
-    """Extract an ordered blocker list from an FR-5 verdict — fail-closed.
+    """Extract an ordered blocker list from a formalize verdict — fail-closed.
 
     A missing / non-dict / unparseable verdict, or one whose ``verdict`` is not the
     terminal ``ready``, is a BLOCKING signal: blocked when ``verdict == 'blocked'``
@@ -69,7 +69,7 @@ def fr5_blockers(verdict: object) -> list[dict]:
 
 
 def _append_blockers_to_log(decision_log: str, blockers: list[dict]) -> None:
-    """Write the full formalize/semantic blockers (source:line + decision_needed) to the log (NFR-9)."""
+    """Write the full formalize/semantic blockers (source:line + decision_needed) to the log."""
     lines = ["", "## Headless blocked envelope — full blocker list", ""]
     for b in blockers:
         lines.append(f"- {b.get('source', '')} :: {b.get('decision_needed', '')}")
@@ -82,7 +82,7 @@ def build_headless_envelope(source, decision_log, *, write_log: bool = True) -> 
     """Adapt a blocker source into the canonical blocked envelope.
 
     ``source`` is either an ordered list of blocker dicts (each {source, decision_needed})
-    or an FR-5 verdict dict (adapted via :func:`fr5_blockers`). Returns exactly the five
+    or a formalize verdict dict (adapted via :func:`fr5_blockers`). Returns exactly the five
     canonical keys plus ``reason`` (the one-line rendering of ``blockers[0]``).
     """
     blockers = source if isinstance(source, list) else fr5_blockers(source)
