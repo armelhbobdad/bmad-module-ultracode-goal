@@ -1,6 +1,6 @@
 ---
 title: UltraCode Goal (UCG)
-description: Run a BMAD Epic autonomously to a machine-checked Definition-of-Done. Completion is a fact on disk: gate_eval.py reads PASS, never the model's say-so.
+description: "Run a BMAD Epic autonomously to a machine-checked Definition-of-Done. Completion is a fact on disk: gate_eval.py reads PASS, never the model's say-so."
 template: splash
 hero:
   title: UltraCode Goal

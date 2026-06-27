@@ -1,6 +1,6 @@
 ---
 title: Stability and Public Contract
-description: The 0.1.0 stability posture: which CLI, config, JSON, and gate surfaces are the supported public contract versus everything that is @internal and free to change.
+description: "The 0.1.0 stability posture: which CLI, config, JSON, and gate surfaces are the supported public contract versus everything that is @internal and free to change."
 ---
 
 > **Status:** 0.x, pre-1.0. The surfaces below are the intended public contract at `0.1.0`. Per [Semantic Versioning 2.0.0](https://semver.org/), a `0.x` series makes no stability guarantee across minor versions; this document records what we *try* to hold stable and what is explicitly `@internal`, so a consumer knows which surfaces to pin against and which to treat as free to change.
