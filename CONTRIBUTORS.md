@@ -4,12 +4,12 @@ This module is made possible by contributions from our community. We gratefully 
 
 ## Maintainer
 
-- **[armelhbobdad](https://github.com/armelhbobdad)** — creator and maintainer.
+- **[armelhbobdad](https://github.com/armelhbobdad)**: creator and maintainer.
 
 ## How We Credit Contributors
 
-- **Git history** — Every contribution is preserved in the project's commit history
-- **GitHub contributors graph** — Visual representation at <https://github.com/armelhbobdad/bmad-module-ultracode-goal/graphs/contributors>
+- **Git history**: Every contribution is preserved in the project's commit history
+- **GitHub contributors graph**: Visual representation at <https://github.com/armelhbobdad/bmad-module-ultracode-goal/graphs/contributors>
 
 ## Becoming a Contributor
 
@@ -22,7 +22,7 @@ Anyone who submits a pull request that is merged becomes a contributor. Contribu
 - Code reviews
 - Helping others in discussions
 
-There are no minimum contribution requirements — whether it's a one-character typo fix or a major feature, we value all contributions.
+There are no minimum contribution requirements: whether it's a one-character typo fix or a major feature, we value all contributions.
 
 ## AI Assistance
 

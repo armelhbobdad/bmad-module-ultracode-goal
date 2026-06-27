@@ -1,16 +1,16 @@
 # Contributing to UltraCode Goal
 
-UCG runs a BMAD Epic autonomously to a machine-checked Definition-of-Done. Completion is decided by a deterministic script reading TEA's gate artifact — never by the model's opinion of its own work. See [README.md](README.md) for the pitch; this file covers how to land changes without breaking that contract.
+UCG runs a BMAD Epic autonomously to a machine-checked Definition-of-Done. Completion is decided by a deterministic script reading TEA's gate artifact, never by the model's opinion of its own work. See [README.md](README.md) for the pitch; this file covers how to land changes without breaking that contract.
 
 UCG is a [BMAD](https://github.com/bmad-code-org/BMAD-METHOD) module. For BMAD philosophy, framework conventions, and module-authoring patterns in general, start at [docs.bmad-method.org](https://docs.bmad-method.org). This doc stays scoped to what's UCG-specific.
 
 ## What You Can Contribute
 
-- **Stage references** (`skills/ultracode-goal/references/*.md`) — the per-stage instructions the conductor loads one at a time (ingest-and-scope, preflight, define-done, execute, gate, finalize). Example: tightening the resume logic in `execute.md`.
-- **Deterministic scripts and their tests** (`skills/ultracode-goal/scripts/`) — the plumbing that the LLM must not second-guess: `preflight_check.py`, `gate_eval.py`, the hooks, `health_check_fp.py`. Every script change ships with a test in `scripts/tests/`.
-- **Validators** — deterministic checks that run in `npm run quality`. Example: a check that flags a stage reference drifting from the stage table in `SKILL.md`.
-- **Docs** (`docs/`) — tutorial / reference / explanation content.
-- **Bug reports** — always useful, especially when they arrive via the workflow health-check loop (see below).
+- **Stage references** (`skills/ultracode-goal/references/*.md`): the per-stage instructions the conductor loads one at a time (ingest-and-scope, preflight, define-done, execute, gate, finalize). Example: tightening the resume logic in `execute.md`.
+- **Deterministic scripts and their tests** (`skills/ultracode-goal/scripts/`): the plumbing that the LLM must not second-guess: `preflight_check.py`, `gate_eval.py`, the hooks, `health_check_fp.py`. Every script change ships with a test in `scripts/tests/`.
+- **Validators**: deterministic checks that run in `npm run quality`. Example: a check that flags a stage reference drifting from the stage table in `SKILL.md`.
+- **Docs** (`docs/`): tutorial / reference / explanation content.
+- **Bug reports**: always useful, especially when they arrive via the workflow health-check loop (see below).
 
 If you're not sure where a change belongs, open an issue and ask before writing code.
 
@@ -20,8 +20,8 @@ If you're not sure where a change belongs, open an issue and ask before writing 
 
 - [Node.js](https://nodejs.org/) >= 22 (see `.nvmrc`)
 - [Python](https://www.python.org/) >= 3.10
-- [uv](https://docs.astral.sh/uv/) — runs the Python test suite
-- `git`, `gh` — used by the run itself and by the health-check loop
+- [uv](https://docs.astral.sh/uv/): runs the Python test suite
+- `git`, `gh`: used by the run itself and by the health-check loop
 
 ```bash
 git clone https://github.com/armelhbobdad/bmad-module-ultracode-goal.git
@@ -49,7 +49,7 @@ uv run --with pytest pytest skills/ultracode-goal/scripts/tests/ -v
 
    `git log --oneline -20` is the authoritative style guide. Match what you see.
 
-3. **Reference issues with `Fixes #NNN`** in the PR body. Use **same-repo GitHub issue numbers only** — internal author notes are not public contracts.
+3. **Reference issues with `Fixes #NNN`** in the PR body. Use **same-repo GitHub issue numbers only**; internal author notes are not public contracts.
 4. **Pre-commit hooks run automatically** via husky + lint-staged on staged files only.
 5. **PR description:** explain _why_. What was broken, what does this change, and how did you verify it? Keep it honest and short.
 6. **If you used Claude (or any AI assistant)** to write a non-trivial chunk of the change, add a `Co-Authored-By:` trailer to the commit. Not mandatory, but we prefer accurate attribution over silent ghostwriting.
@@ -74,13 +74,13 @@ Every UCG run that reaches Finalize ends with a health-check reflection step tha
 
 ## Releasing
 
-Maintainers only — if you're not cutting a release, skip this section.
+Maintainers only. If you're not cutting a release, skip this section.
 
-Releases go through the OIDC-backed GitHub Actions release pipeline — the only supported route, with a required-reviewer gate on the `release` environment and auto-provenance on the npm tarball. The canonical, step-by-step procedure (branch-protection rules, the `release` environment, npm Trusted Publisher registration, and the rollback playbook) lives in `docs/_internal/RELEASING.md`.
+Releases go through the OIDC-backed GitHub Actions release pipeline: the only supported route, with a required-reviewer gate on the `release` environment and auto-provenance on the npm tarball. The canonical, step-by-step procedure (branch-protection rules, the `release` environment, npm Trusted Publisher registration, and the rollback playbook) lives in `docs/_internal/RELEASING.md`.
 
 ## What We Don't Accept
 
-- **Changes that bypass `npm run quality`** — skipping hooks, excluding files from linters, loosening a validator to make a PR green. Fix the underlying issue instead.
+- **Changes that bypass `npm run quality`**: skipping hooks, excluding files from linters, loosening a validator to make a PR green. Fix the underlying issue instead.
 - **Tests that mock the gate contract.** UCG's whole value is that completion is decided by `gate_eval.py` reading a real TEA artifact. A test that mocks the gate file's status to force an `advance` hides exactly the contract the suite exists to protect. Test against real artifact shapes.
 - **Emoji in source files and docs.** Project standard. (Badges and the README's star CTA are the exceptions.)
 - **Drive-by reformats.** Please don't reflow whole files or rename things you didn't touch.

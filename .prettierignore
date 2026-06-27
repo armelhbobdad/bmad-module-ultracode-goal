@@ -11,6 +11,9 @@ website/
 # Build output
 build/
 
+# graphify knowledge-graph output (generated locally, gitignored)
+graphify-out/
+
 # Temp reference files
 temp/
 

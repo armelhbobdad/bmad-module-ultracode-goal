@@ -12,6 +12,7 @@ ignores:
   - z*/**
   - temp/**
   - build/**
+  - graphify-out/**
   - skills/**/.analysis/**
   - skills/**/.decision-log.md
 
