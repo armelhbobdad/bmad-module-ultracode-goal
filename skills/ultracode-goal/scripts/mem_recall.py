@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Cross-Session Recall read path for ultracode-goal (D12) — latch + filter.
+"""Cross-Session Recall read path for ultracode-goal — latch + filter.
 
 Advisory-only, voice-never-vote, fail-closed, OFF by default. Nothing here ever
 touches the gate/completion path; this script only validates the claude-mem

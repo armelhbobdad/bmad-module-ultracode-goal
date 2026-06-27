@@ -192,7 +192,7 @@ def test_non_bash_tool_is_allowed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cross-Session Recall gate (D12) — the claude-mem latch path.
+# Cross-Session Recall gate — the claude-mem latch path.
 #
 # The gate is armed by a .mem-state.json latch under impl-artifacts; tests point
 # ULTRACODE_IMPL_ARTIFACTS at tmp_path so the latch (and its absence) is fully

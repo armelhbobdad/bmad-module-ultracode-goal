@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Cross-Session Recall write path for ultracode-goal (D12) — build/spill/drain.
+"""Cross-Session Recall write path for ultracode-goal — build/spill/drain.
 
 Advisory-only, voice-never-vote, fail-closed, OFF by default. This script builds
 the save_observation payload the skill MAY persist after a run, and provides a

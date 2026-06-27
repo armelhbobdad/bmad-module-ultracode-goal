@@ -106,6 +106,6 @@ flowchart LR
     class WF accent
 ```
 
-## Why the hooks live in settings.local.json (decision D6)
+## Why the hooks live in settings.local.json
 
 The PreToolUse and Stop hooks are auto-merged into `{project-root}/.claude/settings.local.json` (machine-local, gitignored, honored after the workspace trust dialog), not into a committed settings file or memory. The reasoning: these hooks are **enforcement, not context**. A committed hook would impose this module's commit guard on every contributor and every unrelated session in the repo; a hook in memory would not block a commit at all. The machine-local file scopes enforcement to the machine actually running the unattended Epic, and the gitignore keeps it out of shared history. The skill re-merges them every run (idempotently) and asserts they are active before the run goes unattended; it does not assume a prior run left them in place. Because the file is machine-local and executes on your machine, review what is merged; see [SECURITY.md](../SECURITY.md).

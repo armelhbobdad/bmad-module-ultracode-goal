@@ -139,7 +139,7 @@ def _git_writes(command: str) -> set[str]:
     return verbs
 
 
-# --- Cross-Session Recall gate (D12) -----------------------------------------
+# --- Cross-Session Recall gate ----------------------------------------------
 # claude-mem stays advisory-only and fails closed *during a UCG run*. The run is
 # signalled by a machine latch written once at Stage 1 Ingest and removed at
 # Stage 6 Finalize; its presence — not any env flag — arms this gate.
