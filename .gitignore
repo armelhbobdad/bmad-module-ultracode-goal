@@ -68,3 +68,6 @@ build/
 **/.decision-log.md
 **/.memlog.md
 .claude/.story-automator-active
+
+# graphify knowledge-graph output (generated locally, not shipped)
+graphify-out
