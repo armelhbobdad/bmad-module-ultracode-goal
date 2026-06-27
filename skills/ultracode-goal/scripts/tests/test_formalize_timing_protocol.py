@@ -20,7 +20,7 @@ _CEILING_NUMBER = r"ceiling.*=.*[0-9]+ *(ms|s|min)|budget.*[0-9]+ *(ms|seconds|m
 _TIME_CUTOFF = r"timeout|ceiling|deadline|max_(ms|seconds|wall)"
 
 
-def test_ac2_measurement_protocol_documented():
+def test_measurement_protocol_documented():
     skill = _FORMALIZE_SKILL.read_text(encoding="utf-8")
     assert re.search(r"mechanical_ms|end_to_end_ms|wall_clock_ms|artifact_count", skill)
     assert re.search(r"existing decision-log channel", skill), "the block must name the decision-log channel it reuses"
@@ -33,7 +33,7 @@ def test_ac2_measurement_protocol_documented():
     assert not re.search(r"existing decision-log channel", "a measurement note with no channel reference")
 
 
-def test_ac4_no_authored_ceiling_number():
+def test_no_authored_ceiling_number():
     skill = _FORMALIZE_SKILL.read_text(encoding="utf-8")
     kernel = _KERNEL.read_text(encoding="utf-8")
     assert not re.search(_CEILING_NUMBER, skill), "no authored wall-clock ceiling number in the SKILL"
@@ -42,7 +42,7 @@ def test_ac4_no_authored_ceiling_number():
     assert re.search(_CEILING_NUMBER, "wall-clock ceiling = 30s")
 
 
-def test_ac5_no_measurement_only_spawn():
+def test_no_measurement_only_spawn():
     skill = _FORMALIZE_SKILL.read_text(encoding="utf-8")
     assert not re.search(r"second subagent|new subagent|additional prompt", skill)
     # anti-vacuous: a dedicated timing subagent would surface here

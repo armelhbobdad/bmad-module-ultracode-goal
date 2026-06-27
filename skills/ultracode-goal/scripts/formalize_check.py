@@ -503,7 +503,6 @@ def _tea_trace_output_root(tea_config: Path, project_root: Path) -> Path | None:
 # misfile, and — because they live under impl-artifacts BY DESIGN — moving it would
 # be the only thing that clears the gate, so a "leave it in place" disposition would
 # deadlock the budget==0 launch gate. Identity decides, not the marker substring.
-# (Health-check fp-979777b.)
 _UCG_STORY_NOTE_RE = re.compile(r"^\d+-\d+-")
 
 

@@ -6,6 +6,6 @@ description: A standalone /ucg-formalize <epic> readiness verdict. Use when an o
 
 This SKILL.md mutant has the `name:` frontmatter line DELETED. The validate-skills
 SKILL-02 rule must fire HIGH+ (CRITICAL) on the missing `name` field, so a `--strict`
-run over a directory carrying this content as SKILL.md exits 1. This is the AC1
+run over a directory carrying this content as SKILL.md exits 1. This is the
 anti-vacuous twin input: it proves the validator is actually reading the new skill
 dir and not silently skipping an unknown path.

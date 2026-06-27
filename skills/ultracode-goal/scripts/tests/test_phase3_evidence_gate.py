@@ -112,7 +112,7 @@ def _parse_downstream_map(section):
 
 
 def _check_three_blocks(section):
-    """AC1: exactly three blocks, the three target ids each once, all five fields present."""
+    """Case 1: exactly three blocks, the three target ids each once, all five fields present."""
     headings, blocks = _parse_blocks(section)
     assert len(headings) == 3, "expected exactly 3 promotion blocks, got %d" % len(headings)
     assert sorted(headings) == sorted(_FRAGMENTS), "block ids %r != target set" % headings
@@ -134,7 +134,7 @@ def _has_placeholder(text):
 
 
 def _check_rubrics(section):
-    """AC2: each attribution_rubric names its fragment-specific artifact shape, no placeholder."""
+    """Case 2: each attribution_rubric names its fragment-specific artifact shape, no placeholder."""
     _, blocks = _parse_blocks(section)
     for frag in _FRAGMENTS:
         rubric = blocks[frag]["attribution_rubric"]
@@ -145,7 +145,7 @@ def _check_rubrics(section):
 
 
 def _check_nfr8(section):
-    """AC3: nfr8_collision_check is co-equal/terminal (names a runtime layer + a cut outcome);
+    """Case 3: nfr8_collision_check is co-equal/terminal (names a runtime layer + a cut outcome);
     promotion_trigger requires BOTH rubric AND check via a standalone AND."""
     _, blocks = _parse_blocks(section)
     for frag in _FRAGMENTS:
@@ -160,7 +160,7 @@ def _check_nfr8(section):
 
 
 def _check_backrefs(section):
-    """AC4: self-binding, zero dangling refs against artifacts that exist today."""
+    """Case 4: self-binding, zero dangling refs against artifacts that exist today."""
     headings, blocks = _parse_blocks(section)
     rows = _parse_downstream_map(section)
     # (a) downstream-map closes bidirectionally with the blocks

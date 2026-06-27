@@ -1,7 +1,7 @@
 """formalize_check.py as a READER of TEA's emitted fields.
 
-AC-3: blank-cell-ONLY P×I recompute (mechanical) vs a stated-score disagreement (judgment)
-vs an unsourced threshold (judgment), never originating a number. AC-4: read TEA's NFR
+Case 3: blank-cell-ONLY P×I recompute (mechanical) vs a stated-score disagreement (judgment)
+vs an unsourced threshold (judgment), never originating a number. Case 4: read TEA's NFR
 overallStatus (never re-derive), flag PASS-on-UNKNOWN and PASS-without-evidence as judgment
 candidates, and treat a missing/unreadable nfr-assessment as a FAILING gap (fail-closed).
 
@@ -56,7 +56,7 @@ def _kinds(items: list[dict]) -> list[str]:
 _RISK_HEADER = "| Risk ID | Category | P | I | Score | Mitigation |\n|--|--|--|--|--|--|\n"
 
 
-# AC-3 -----------------------------------------------------------------------
+# Case 3 ---------------------------------------------------------------------
 def test_blank_only_pxi_and_judgment_routing(tmp_path):
     # (a) blank Score with stated P=3,I=2 -> MECHANICAL gap, recompute 6
     td_a = _RISK_HEADER + "| TECH-1 | TECH | 3 | 2 |  | retry |\n"
@@ -83,7 +83,7 @@ def test_blank_only_pxi_and_judgment_routing(tmp_path):
     assert "risk_score_conflict" not in _kinds(out["judgment_candidates"])
 
 
-# AC-4 -----------------------------------------------------------------------
+# Case 4 ---------------------------------------------------------------------
 _NFR_HEADER = "Overall Status: CONCERNS\n\n| Category | Status | Threshold | Evidence |\n|--|--|--|--|\n"
 _CLEAN_TD = _RISK_HEADER + "| T-1 | TECH | 2 | 2 | 4 | x |\n"
 

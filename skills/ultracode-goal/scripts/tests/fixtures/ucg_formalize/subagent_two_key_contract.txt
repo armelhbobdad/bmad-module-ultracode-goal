@@ -2,7 +2,7 @@
 
 This mutant describes the SUPERSEDED two-key `{reds, concerns}` PRD subagent
 contract — it is missing the third `advisories_checked` key that the live
-`references/preflight.md` three-key contract requires. The AC5 anti-vacuous twin
+`references/preflight.md` three-key contract requires. The anti-vacuous twin
 must REJECT this shape (set-inequality against the preflight three-key contract),
 proving the skill reuses the existing single-subagent three-key contract rather
 than inventing the divergent two-key one.

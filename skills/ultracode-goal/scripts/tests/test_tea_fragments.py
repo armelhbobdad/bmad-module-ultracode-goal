@@ -1,9 +1,9 @@
 """TEA shaping fragments: channel discipline, idempotent merge, inertness.
 
-AC-1 channel discipline (only persistent_facts + [ucg] stamp; no superseded channel),
-AC-2 idempotent + reversible merge into workflow.persistent_facts via the VENDORED engine
+Case 1 channel discipline (only persistent_facts + [ucg] stamp; no superseded channel),
+Case 2 idempotent + reversible merge into workflow.persistent_facts via the VENDORED engine
 (CI-portable — never the gitignored .claude target; mirrors test_merge_customization.py's
-hermetic fixture pattern), AC-5 non-UCG inertness (no auto-fire) + deep_merge validity.
+hermetic fixture pattern), Case 5 non-UCG inertness (no auto-fire) + deep_merge validity.
 
 Fragments author persistent_facts TOP-LEVEL; merge_customization.py re-homes them into the
 target's nested [workflow].persistent_facts (verified: merge_customization.py:255-257). The
@@ -68,7 +68,7 @@ def _disciplined(data: dict, text: str) -> bool:
     return stamp.get("managed") is True and stamp.get("block") == "ucg-awareness"
 
 
-# AC-1 -----------------------------------------------------------------------
+# Case 1 ---------------------------------------------------------------------
 def test_fragments_target_only_persistent_facts_and_stamp():
     for frag in (TEST_DESIGN, NFR):
         assert _disciplined(_load(frag), frag.read_text(encoding="utf-8")), frag.name
@@ -84,7 +84,7 @@ def test_fragments_target_only_persistent_facts_and_stamp():
     assert not _disciplined(tomllib.loads(nostamp), nostamp)
 
 
-# AC-2 (CI-portable: vendored engine, never the gitignored .claude target) ----
+# Case 2 (CI-portable: vendored engine, never the gitignored .claude target) ----
 def _engine_tree(tmp_path: Path) -> Path:
     custom = tmp_path / "_bmad" / "custom"
     scripts = tmp_path / "_bmad" / "scripts"
@@ -148,7 +148,7 @@ def test_merge_idempotent_and_reversible_into_persistent_facts(tmp_path):
     assert any(f.startswith("TAMPERED") for f in _channel(tgt)), "the conflict is left in place, not clobbered"
 
 
-# AC-5 -----------------------------------------------------------------------
+# Case 5 ---------------------------------------------------------------------
 def _deep_merge():
     spec = importlib.util.spec_from_file_location("engine_rc", REAL_ENGINE)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
