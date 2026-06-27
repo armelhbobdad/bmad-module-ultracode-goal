@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: How UltraCode Goal works as a conductor over BMAD, TEA, and Claude Code primitives: the three enforcement layers, file layout, and customization resolution.
+description: "How UltraCode Goal works as a conductor over BMAD, TEA, and Claude Code primitives: the three enforcement layers, file layout, and customization resolution."
 ---
 
 UltraCode Goal is a conductor. It orchestrates the installed BMAD epic toolbox and the TEA gates, composing Claude Code primitives (`/goal`, Auto Mode, Auto Memory, hooks, git/worktree isolation) and replaces none of them. This page covers the conductor model, the three enforcement layers in depth, the file layout, customization resolution, and why the hooks live where they do.

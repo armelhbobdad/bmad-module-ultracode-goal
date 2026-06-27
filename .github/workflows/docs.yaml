@@ -10,6 +10,13 @@ on:
       - "tools/build-docs.js"
       - ".github/workflows/docs.yaml"
       - "package.json"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "website/**"
+      - "tools/build-docs.js"
+      - ".github/workflows/docs.yaml"
+      - "package.json"
   workflow_dispatch:
 
 permissions:
@@ -55,6 +62,9 @@ jobs:
           path: build/site
 
   deploy:
+    # Build runs on PRs too (catches broken frontmatter / build failures before
+    # they reach main); deploy only on a push to main or a manual dispatch there.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

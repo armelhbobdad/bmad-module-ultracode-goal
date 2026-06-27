@@ -1,6 +1,6 @@
 ---
 title: Parallel Mode
-description: The experimental --parallel worktree fan-out for Stage 4: how stories run isolated and converge on one epic gate, how concurrency is bounded, and the known limits to expect.
+description: "The experimental --parallel worktree fan-out for Stage 4: how stories run isolated and converge on one epic gate, how concurrency is bounded, and the known limits to expect."
 ---
 
 > **Experimental, opt-in.** `--parallel` is an additive execution path. The sequential `/goal` spine ([how it works](how-it-works.md), Stage 4) is the **default and recommended** path. Use `--parallel` only when you understand the known limits below, and expect to fall back to the spine.
