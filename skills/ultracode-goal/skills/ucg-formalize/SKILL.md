@@ -163,7 +163,7 @@ into the envelope.
 
 Serialize the envelope through the one shared adapter
 `{skill-root}/scripts/headless_envelope.py` (`build_headless_envelope`) — the same
-definition `references/preflight.md` uses under INV-9 — passing the ordered blocker list
+definition `references/preflight.md` uses — passing the ordered blocker list
 from step 4. The adapter emits the canonical keys and the positional `reason`
 (`blockers[0]`), so this entry point and the autonomous run cannot serialize a blocked
 exit differently.
@@ -196,15 +196,15 @@ An automator parses the five canonical keys at any verdict; `reason` appears onl
 blocked emit. Record the final verdict to
 `.decision-log.md` before emitting; the log carries the full blocker and remediation list.
 
-## Measurement protocol (AD-5 / NFR-9)
+## Measurement protocol
 
 The kernel emits a self-measured `timing` block on every verdict carrying `wall_clock_ms`,
 `mechanical_ms`, `epic`, and `artifact_count`. This layer measures `end_to_end_ms` by bracketing the
 step-2 remediation loop and step-3 judgment read with two real monotonic clock reads (a one-line
 `python3 -c 'import time; print(time.monotonic_ns())'` before and after — measured, never authored),
 and appends one line (`epic`, `artifact_count`, `wall_clock_ms`, `mechanical_ms`, `end_to_end_ms`) to
-`.decision-log.md` on every verdict, on NFR-9's existing channel.
+`.decision-log.md` on every verdict, reusing the existing decision-log channel.
 
-The wall-clock ceiling is declared-unknown (AD-5 / NFR-7): set only from a first real
+The wall-clock ceiling is declared-unknown: set only from a first real
 preflight-invoked run, never authored here. An over-budget formalize never blocks, escalates, or
-downgrades a verdict — the measurement is provenance, not a gate (INV-7).
+downgrades a verdict — the measurement is provenance, not a gate.

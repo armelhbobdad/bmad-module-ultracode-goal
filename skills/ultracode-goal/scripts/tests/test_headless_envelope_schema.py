@@ -1,9 +1,9 @@
-"""Story 2.5 — headless blocked envelope: route a formalize RED through the canonical JSON.
+"""Headless blocked envelope: route a formalize RED through the canonical JSON.
 
 (1) Schema parity: the preflight step-4 blocked block and the SKILL.md master block carry
 the same five canonical keys (+ conditional reason); no formalize-prefixed key. (2) The
 build_headless_envelope adapter routes a formalize RED through the IDENTICAL channel as a
-semantic-scan RED, with the FR-5 verdict never nested. (3) reason is positional blockers[0],
+semantic-scan RED, with the formalize verdict never nested. (3) reason is positional blockers[0],
 one physical line. (4) the formalize RED is logged. (5) one envelope definition tree-wide.
 Stdlib + pytest only.
 """
@@ -90,7 +90,7 @@ def test_formalize_red_routes_through_blocked_envelope(tmp_path):
         "deferred_work": None,
         "reason": he._one_line({"source": "prd.md:42", "decision_needed": "choose store"}),
     }
-    assert all(v is not fr5 and v != fr5 for v in env.values()), "FR-5 verdict must never be an envelope value"
+    assert all(v is not fr5 and v != fr5 for v in env.values()), "the formalize verdict must never be an envelope value"
 
     # anti-vacuous: a SEMANTIC-SCAN red with identical content yields the byte-identical envelope
     sem = [{"source": "prd.md:42", "decision_needed": "choose store", "kind": "undecided-architecture"}]

@@ -1,4 +1,4 @@
-"""Story 2.2 — step-2 fold-in + leaked-TEA-artifact MOVE remediation.
+"""Step-2 fold-in + leaked-TEA-artifact MOVE remediation.
 
 Two layers: (1) doc-shape assertions over preflight.md '## 2.' (bullet present, no
 new pass, fold-in source contract, per-finding remediable gating prose); (2) a
@@ -33,7 +33,7 @@ def move_and_repoint(repo_root, leaked_rel, trace_root_rel, gap, *, mutant=None)
     """Mechanize the leaked-TEA-artifact MOVE-and-re-point, honoring `remediable`.
 
     A gap whose `remediable` is not True yields zero moves and zero rewrites
-    (the AD-1/INV-6 per-finding gate) — unless mutant='ignore_gate'.
+    (the per-finding remediable gate) — unless mutant='ignore_gate'.
     mutant in {None,'skip_repoint','rewrite_body','ignore_gate'}.
     Returns {'moves': int, 'dest': Path|None, 'refs_rewritten': int}.
     """

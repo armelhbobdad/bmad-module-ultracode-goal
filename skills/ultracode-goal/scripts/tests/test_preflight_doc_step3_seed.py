@@ -1,4 +1,4 @@
-"""Story 2.3 — step-3 second hypothesis stream: seed formalize judgment_candidates.
+"""Step-3 second hypothesis stream: seed formalize judgment_candidates.
 
 Doc-shape assertions over preflight.md '## 3.' — the seed rides the EXISTING single
 throwaway subagent (no second subagent), keeps the three-key return contract, preserves

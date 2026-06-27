@@ -37,7 +37,7 @@ FRAGMENT_DIR = (
     Path(__file__).resolve().parent.parent.parent / "assets" / "ucg-awareness"
 )
 REPO_ROOT = Path(__file__).resolve().parents[4]
-DECISION_DOC = REPO_ROOT / "docs" / "ucg" / "fragment-shaping-decision.md"
+DECISION_DOC = FRAGMENT_DIR / "shaping-decision.md"
 
 # The four — and only four — fragments this story authors.
 EXPECTED_FRAGMENTS = {
@@ -45,7 +45,7 @@ EXPECTED_FRAGMENTS = {
     "bmad-architecture.toml",
     "bmad-create-epics-and-stories.toml",
     "bmad-create-story.toml",
-    # Epic 2, story 2.7 — the two TEA shaping fragments.
+    # The two TEA shaping fragments.
     "bmad-testarch-test-design.toml",
     "bmad-testarch-nfr.toml",
 }
@@ -231,10 +231,12 @@ def test_binds_live_prd_surface_not_shims():
     assert "bmad-create-prd.toml" not in basenames
     assert "bmad-edit-prd.toml" not in basenames
 
-    # grep the four bodies for the shim ids -> zero matches.
+    # grep the fragment bodies (.toml only) for the shim ids -> zero matches.
+    # Scoped to *.toml so a sibling doc that names the shims to document their
+    # avoidance (e.g. shaping-decision.md) is not a false positive.
     for shim in SHIM_IDS:
         proc = subprocess.run(
-            ["grep", "-rl", shim, str(FRAGMENT_DIR)],
+            ["grep", "-rl", "--include=*.toml", shim, str(FRAGMENT_DIR)],
             capture_output=True,
             text=True,
         )

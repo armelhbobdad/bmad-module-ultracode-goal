@@ -1,9 +1,9 @@
-"""Story 2.7 — formalize_check.py as a READER of TEA's emitted fields (AD-6).
+"""formalize_check.py as a READER of TEA's emitted fields.
 
 AC-3: blank-cell-ONLY P×I recompute (mechanical) vs a stated-score disagreement (judgment)
 vs an unsourced threshold (judgment), never originating a number. AC-4: read TEA's NFR
 overallStatus (never re-derive), flag PASS-on-UNKNOWN and PASS-without-evidence as judgment
-candidates, and treat a missing/unreadable nfr-assessment as a FAILING gap (fail-closed, INV-4).
+candidates, and treat a missing/unreadable nfr-assessment as a FAILING gap (fail-closed).
 
 Fixtures are built programmatically in tmp_path (hermetic; not linted). The TEA-reader fires
 only when a test-design artifact is located under the trace_output root.

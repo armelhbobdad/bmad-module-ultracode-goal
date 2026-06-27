@@ -23,7 +23,7 @@ status: DEFERRED — not built (pending field evidence)
 decision_needed: cut-vs-build — should the dev-story trust-the-gate guardrail SHAPING fragment be authored
   and wired, or cut outright? Open until a real observed dev-story need is attributed in this field.
 attribution_rubric: satisfied ONLY by a decision_needed entry that names a concrete, real observed
-  dev-story artifact shape — per the AD-4 explicit-attribution rubric. A bare question that names no
+  dev-story artifact shape — per the explicit-attribution rubric. A bare question that names no
   dev-story artifact shape does NOT satisfy it.
 nfr8_collision_check: co-equal, possibly-terminal reason distinct from YAGNI — promote ONLY if landing this
   fragment in persistent_facts does not duplicate, override, or fight the runtime enforcement held by
@@ -37,7 +37,7 @@ status: DEFERRED — not built (pending field evidence)
 decision_needed: cut-vs-build — should the code-review adversarial-layers guidance SHAPING fragment be
   authored and wired, or cut outright? Open until a real observed code-review need is attributed here.
 attribution_rubric: satisfied ONLY by a decision_needed entry that names a concrete, real observed
-  code-review (adversarial-layers) artifact shape — per the AD-4 explicit-attribution rubric. A generic
+  code-review (adversarial-layers) artifact shape — per the explicit-attribution rubric. A generic
   question that names no code-review artifact shape does NOT satisfy it.
 nfr8_collision_check: co-equal, possibly-terminal reason distinct from YAGNI — promote ONLY if shaping
   bmad-code-review through persistent_facts does not duplicate, override, or fight the runtime enforcement
@@ -52,7 +52,7 @@ decision_needed: cut-vs-build — should the sprint-planning legal-sprint-status
   fragment ONLY be authored and wired, or cut outright? SCOPE — the SHAPING fragment alone, NOT the
   Phase-1/2 readiness check. Open until a real observed sprint-planning SHAPING need is attributed here.
 attribution_rubric: satisfied ONLY by a decision_needed entry that names a concrete, real observed
-  sprint-planning / sprint-status.yaml SHAPING artifact shape — per the AD-4 explicit-attribution rubric.
+  sprint-planning / sprint-status.yaml SHAPING artifact shape — per the explicit-attribution rubric.
   A question that names no sprint-status.yaml artifact shape does NOT satisfy it.
 nfr8_collision_check: co-equal, possibly-terminal reason distinct from YAGNI — promote ONLY if shaping
   bmad-sprint-planning through persistent_facts does not duplicate, override, or fight the runtime

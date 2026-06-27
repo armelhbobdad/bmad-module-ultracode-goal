@@ -1,4 +1,4 @@
-"""Story 2.7 — TEA shaping fragments: channel discipline, idempotent merge, inertness.
+"""TEA shaping fragments: channel discipline, idempotent merge, inertness.
 
 AC-1 channel discipline (only persistent_facts + [ucg] stamp; no superseded channel),
 AC-2 idempotent + reversible merge into workflow.persistent_facts via the VENDORED engine
@@ -7,7 +7,7 @@ hermetic fixture pattern), AC-5 non-UCG inertness (no auto-fire) + deep_merge va
 
 Fragments author persistent_facts TOP-LEVEL; merge_customization.py re-homes them into the
 target's nested [workflow].persistent_facts (verified: merge_customization.py:255-257). The
-story's AC-1 "under the [workflow] namespace" describes the TARGET landing, not the fragment.
+phrase "under the [workflow] namespace" describes the TARGET landing, not the fragment.
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ def test_merge_idempotent_and_reversible_into_persistent_facts(tmp_path):
     assert _run(target, extra=["--remove"]).returncode == 0
     assert _sha(target) == original, "--remove restores the byte-identical pre-install target"
 
-    # anti-vacuous: a hand-edited stamped row is a CONFLICT (FR-11), not silently re-stamped
+    # anti-vacuous: a hand-edited stamped row is a CONFLICT, not silently re-stamped
     tgt = _write_target(_engine_tree(tmp_path / "b"), [HUMAN_FACT])
     assert _run(tgt, TEST_DESIGN).returncode == 0
     data = tomllib.loads(tgt.read_text(encoding="utf-8"))

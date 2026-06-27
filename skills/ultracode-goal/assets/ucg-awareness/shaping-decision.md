@@ -1,8 +1,3 @@
----
-title: UCG Awareness Fragment Shaping Decision
-description: Operator sign-off that each of the four planning shaping fragments encodes its workflow's shift-left shaping as additive persistent_facts guardrails, signed against the note that the gate, not the shaping, is the guarantee.
----
-
 # UCG Awareness Fragment Shaping Decision
 
 This is the decision-doc gate. Content adequacy of a shaping
@@ -91,7 +86,7 @@ A block whose `Status:` is not `ACCEPTED`, that is missing, or whose
 - Permanent floor classes: invented-NFR-threshold (numbers cite a source or are UNKNOWN); leaked
   TEA artifact (test-design outputs under the trace_output root, never the source/impl tree).
 - Reviewer: ultracode-goal conductor (machine-evidenced via test_tea_fragments.py; operator
-  ratification batched to the end-of-epic review — deferred d3)
+  ratification batched to the end-of-epic review)
 - Date: 2026-06-26
 - Status: ACCEPTED
 
@@ -105,7 +100,7 @@ A block whose `Status:` is not `ACCEPTED`, that is missing, or whose
   gate reads (state it from the categories, never originate it); under the trace_output root.
 - Permanent floor classes: invented-NFR-threshold; leaked TEA artifact.
 - Reviewer: ultracode-goal conductor (machine-evidenced via test_tea_fragments.py; operator
-  ratification batched to the end-of-epic review — deferred d3)
+  ratification batched to the end-of-epic review)
 - Date: 2026-06-26
 - Status: ACCEPTED
 
