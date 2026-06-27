@@ -15,11 +15,9 @@ This is the terminal step of Stage 6 (Finalize) — Stage 7 in SKILL.md's stages
 
 ## Anti-fabrication rules
 
-- **DO NOT FABRICATE ISSUES.** If the workflow ran smoothly, say so and exit. Inventing issues to appear thorough is a SYSTEM FAILURE.
-- Only report issues you **ACTUALLY encountered** while following the stage instructions during THIS run.
-- Every finding MUST cite the **specific stage reference file and section** where the issue occurred.
-- If you are unsure whether something was a real issue or your own confusion, DO NOT report it.
-- **Reporting zero issues is the EXPECTED outcome** for a well-designed workflow.
+- Report only friction you **actually hit this run** — a fabricated issue is worse than none, because it pollutes the maintainers' queue. Reporting zero issues is the healthy, expected outcome for a well-designed workflow.
+- Every finding cites the **specific stage reference file and section** where the issue occurred.
+- If you are unsure whether something was a real issue or your own confusion, do not report it.
 
 ## 0. Announce arrival
 
@@ -101,7 +99,7 @@ In headless (`-H`) there is no human to answer [Y]/[N]/[E], so that gate is **by
 - If `{workflow.health_check_autosubmit}` is **false** (the default): **queue EVERY finding locally** (§5c). Never live-submit in an unattended run with autosubmit off.
 - If `{workflow.health_check_autosubmit}` is **true**: **live-submit `bug` findings only** (§5a) — still script-fingerprinted, remote-dedup-searched, and seen-cache-guarded; **friction and gap always queue** (§5c).
 
-The health check must **NEVER block or delay the final headless JSON emit**. It is fire-and-queue: do the routing above, then return so Finalize emits its JSON. If `gh` is unavailable at any live-submit step, fall through to §5c — never stall.
+The health check must **never block or delay the final headless JSON emit** — a stall here strands the automator that is waiting on that JSON. It is fire-and-queue: do the routing above, then return so Finalize emits its JSON. If `gh` is unavailable at any live-submit step, fall through to §5c — never stall.
 
 ## 5. Severity routing (attended [Y] path)
 
@@ -174,7 +172,7 @@ gh label create "{fp}" --repo {healthCheckRepo} --color "ededed" \
   --description "Health-check fingerprint dedup key" 2>/dev/null || true
 ```
 
-The `|| true` makes it idempotent: if the label already exists, `gh label create` exits non-zero and we proceed unharmed. The other labels (`health-check`, `workflow-improvement`, `bug`/`friction`/`gap`) are pre-created repo labels and need no guard.
+The `2>/dev/null || true` keeps it idempotent — a pre-existing label is not an error. The other labels (`health-check`, `workflow-improvement`, `bug`/`friction`/`gap`) are pre-created repo labels and need no guard.
 
 **Then create the issue:**
 
@@ -200,53 +198,15 @@ uv run {skill-root}/scripts/health_check_fp.py record --fp {fp} --cache {seenCac
 - **Respect length budgets.** Finding, Expected, Actual, Impact, Suggested Fix are **each ONE sentence**. Evidence is 2-5 bullets, not prose.
 - **Quote, do not paraphrase.** In Evidence, cite the exact `file:line` with the quoted text in quotes.
 - **Never narrate the session.** The reader wants the defect, not the story. If a sentence starts with "During my run…", delete it.
-- **If unsure it is a real issue, do not submit it.**
 
-**Issue body format:**
-
-```markdown
-## Workflow
-ultracode-goal/{stage}
-
-## Step File
-`skills/ultracode-goal/references/{stage}.md`
-
-## Severity
-`{bug | friction | gap}`
-
-## Fingerprint
-`{fp}`
-
-## Finding
-<!-- ONE sentence: what is the problem? -->
-
-## Expected
-<!-- ONE sentence: what did the stage instruct or imply should happen? -->
-
-## Actual
-<!-- ONE sentence: what did you observe instead? -->
-
-## Evidence
-<!-- 2-5 bulleted `file:line` citations with quoted text. No narrative. -->
-- `skills/ultracode-goal/references/{stage}.md:NN` — "quoted text from the file"
-
-## Impact
-<!-- ONE sentence: what did this cost in THIS run? -->
-
-## Suggested Fix
-<!-- ONE sentence, ONE recommendation. -->
-
-## Environment
-| Field | Value |
-|-------|-------|
-| Date | {ISO date} |
-| OS | {e.g. Ubuntu 24.04, macOS 15.2, Windows 11} |
-| AI Editor | {e.g. Claude Code, Cursor} |
-| Model | {e.g. Claude Opus 4.6, Claude Sonnet 4.6} |
-| Profile | {production \| light} |
-| Run mode | {attended \| headless} |
-| Module Version | {resolved per the order below, else N/A} |
-```
+**Issue body** — a markdown report with these sections in order: **Workflow**
+(`ultracode-goal/{stage}`), **Step File** (`skills/ultracode-goal/references/{stage}.md`),
+**Severity** (`bug | friction | gap`), **Fingerprint** (`{fp}`), **Finding**, **Expected**,
+**Actual**, **Evidence**, **Impact**, **Suggested Fix**, and an **Environment** table. Per
+the writing rules above, Finding / Expected / Actual / Impact / Suggested Fix are each one
+sentence, and Evidence is 2-5 quoted `file:line` bullets with no narrative. The Environment
+table carries: Date (ISO), OS, AI Editor, Model, Profile (`production | light`), Run mode
+(`attended | headless`), and Module Version (from the script below, else `N/A`).
 
 **Module Version comes from the script** — never walk the file ladder in-prompt:
 
@@ -297,8 +257,6 @@ Workflow complete."
 
 In an unattended run, do not display prompts — just write the files, log the count and paths, and return.
 
-## CRITICAL STEP COMPLETION NOTE
+## Terminal step
 
-This is the **terminal step of Finalize**. After it returns — clean run, findings submitted, queued, or discarded — the ultracode-goal run is **fully done**; there is nothing further to load. **In headless, Finalize emits the final five-key JSON AFTER this step returns** — so this step must never block, prompt, or stall waiting for input, and must never mutate or delay that emit.
-
-**Master rule:** honesty is the only policy. Zero findings is the expected, healthy outcome. Fabricating issues to appear thorough undermines the entire self-improvement system and is a SYSTEM FAILURE.
+This is the terminal step of Finalize — when it returns the run is fully done, nothing further to load. In headless, Finalize emits the final JSON only **after** this step returns, so it must not stall the emit (the never-block rule lives in §4-headless).

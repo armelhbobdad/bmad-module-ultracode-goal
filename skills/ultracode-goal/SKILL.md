@@ -26,13 +26,13 @@ Run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {ski
 
 If it fails, resolve the `workflow` block yourself by reading these three files in base → team → user order (scalars override, tables deep-merge, arrays append): `{skill-root}/customize.toml`, `{project-root}/_bmad/custom/{skill-name}.toml`, `{project-root}/_bmad/custom/{skill-name}.user.toml`. Read every customized value below as `{workflow.<name>}`.
 
-Load config from `{project-root}/_bmad/config.yaml` and `config.user.yaml` (root + `bmm` section for `{planning_artifacts}`); fall back to `{project-root}/_bmad/bmm/config.yaml`. If config is missing — or the user passed `setup`, `configure`, or `register` — offer the module's one-time self-registration (`assets/module-setup.md`), or continue with defaults. Load `{workflow.persistent_facts}` and greet in `{communication_language}`.
+Load config from `{project-root}/_bmad/config.yaml` and `config.user.yaml` (root + `bmm` section for `{planning_artifacts}`); fall back to `{project-root}/_bmad/bmm/config.yaml`. If config is missing — or the user passed `setup`, `configure`, or `register` — offer the module's one-time self-registration (`assets/module-setup.md`), or continue with defaults. Load `{workflow.persistent_facts}` and greet in `{communication_language}`. Run any `{workflow.activation_steps_prepend}` entries in order at the start of activation, and any `{workflow.activation_steps_append}` entries after the greet and before Stage 1 — both default to empty (a stock run is unaffected; a populated override executes in order).
 
 **Run modes.** Profile defaults to **production** (full TEA gates); `--light` runs the trace gate only. Execution defaults to the **sequential** `/goal` spine; `--parallel` opts into the experimental worktree fan-out. `-H` is headless. `--yes` skips Stage 1's open-floor invite and the launch confirm (the launch briefing still prints) — it **never** skips the hard preflight gate. `--retro` runs the close-out retrospective: interactive runs offer it at Epic close anyway, but headless runs it only when `--retro` was passed.
 
 **Quick launch** (copy-paste, swap in your Epic id): `ultracode goal epic-7` — attended, production, sequential. `ultracode goal epic-7 --light --yes` — the expert one-liner: trace-only gate, no conversational stops. `ultracode goal epic-7 -H --retro` — headless automation with the close-out retrospective.
 
-**Resume.** The workspace is this skill's run folder holding `.decision-log.md`. If one exists for the Epic, surface it with its last session date and offer to resume — the log recovers full state regardless of compaction. Otherwise create it at intent and append a session heading. On resume, re-enter Execute at the first story whose last logged gate verdict is not advance; advanced stories are not re-run; re-assert (do not rebuild) the Epic branch, hooks, and allowlist before continuing.
+**Resume.** The workspace is this skill's run folder holding `.decision-log.md`. If one exists for the Epic, surface it with its last session date and offer to resume — the log recovers full state regardless of compaction. Otherwise create it at intent and append a session heading. **Route resume by the last stage the log reached** — the run folder is created at intent (Stage 1), so a prior run that blocked *before* Execute also leaves one: if the log carries gate verdicts, re-enter Execute at the first story whose last verdict is not advance (advanced stories are not re-run), re-asserting — not rebuilding — the Epic branch, hooks, and allowlist first; if it blocked at Stage 1 (epic unresolved) or Stage 2 (preflight RED — the case an operator fixes then re-invokes), re-run from that stage so the hard preflight gate is never skipped. In headless (`-H`) never offer — auto-resume a not-all-done Epic by this same stage routing (a previously-preflight-RED Epic re-runs the gate, it does not enter Execute), and log the resume as an assumption.
 
 ## Non-negotiables
 
@@ -63,17 +63,27 @@ Run the stages in order; each routes by the testable conditions stated in its fi
 
 With `-H`, run non-interactively: infer scope, default to **production** (unless `--light`), never prompt — a secret that cannot be resolved becomes a red blocker, not a question — and let `.decision-log.md` absorb every assumption.
 
-**One emit shape, every exit point.** Whether the run completes (Stage 6), or blocks early at ingest (Stage 1, e.g. epic unresolved), at preflight (Stage 2), or at a story escalation (Stage 6), emit this exact object — all five keys always present, `null` when that artifact was not produced, and `reason` carrying a one-line cause **only** when blocked:
+**One core schema, every exit point.** Every exit — completing at Stage 6, or blocking early at ingest (Stage 1, e.g. epic unresolved), at preflight (Stage 2), or at a story escalation — emits the **five canonical keys** `status`, `skill`, `decision_log`, `report`, `deferred_work`, always present (`null` when that artifact was not produced), so those five are KeyError-safe wherever the run stopped. A **blocked** exit appends a sixth key, `reason` (the one-line cause); a **complete** exit omits it — so read `reason` only when `status` is `blocked`. A completed run:
 
 ```json
-{"status": "complete|blocked",
+{"status": "complete",
  "skill": "ultracode-goal",
  "decision_log": "<path to this run's .decision-log.md>",
  "report": "<path to run-report.md, or null>",
- "deferred_work": "<path to {workflow.deferred_work_path}, or null>",
- "reason": "<one line, present only when blocked>"}
+ "deferred_work": "<path to {workflow.deferred_work_path}, or null>"}
 ```
 
-An automator parses one schema regardless of where the run stopped; a blocked-before-report exit returns `report` and `deferred_work` as `null` rather than omitting them.
+A run that blocked (the same five keys, plus `reason`; `report`/`deferred_work` `null` because no report was produced):
+
+```json
+{"status": "blocked",
+ "skill": "ultracode-goal",
+ "decision_log": "<path to this run's .decision-log.md>",
+ "report": null,
+ "deferred_work": null,
+ "reason": "<one line, the blocking cause>"}
+```
+
+This is byte-identical to the `/ucg-formalize` envelope and the shape `references/finalize.md` and the `scripts/headless_envelope.py` adapter honor (INV-9).
 
 Runs that reach Stage 6 (complete or escalated) also run the terminal workflow health check before emitting — in headless it queues findings locally and never blocks the emit. Runs that block at Stage 1 or Stage 2 do not: there is no executed workflow surface to audit, and inventing findings there would be fabrication.
