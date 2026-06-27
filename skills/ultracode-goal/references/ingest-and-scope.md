@@ -6,7 +6,7 @@ The operator is the expert on intent; you are the expert on what the artifacts s
 
 ## First-touch reality check
 
-Before resolving anything, confirm this is even a BMAD project. If the `{project-root}/_bmad/` config **and** `sprint-status.yaml` **and** any Epic are **all** absent, this does not look like a BMAD project — say so plainly, point at `bmad-bmb-setup` (to scaffold the module) and `bmad-sprint-planning` (to generate the sprint plan), and **stop**. Never carry a wrong-repo invocation into preflight. In headless (`-H`), emit the blocked JSON (per SKILL.md Headless) with `reason` "not a BMAD project". This is the only absence that hard-stops at Stage 1; once any one of the three is present, proceed and let the resolution rules below judge the rest.
+Before resolving anything, confirm this is even a BMAD project. If the `{project-root}/_bmad/` config **and** `sprint-status.yaml` **and** any Epic are **all** absent, this does not look like a BMAD project — say so plainly, point at `bmad-bmb-setup` (to scaffold the module) and `bmad-sprint-planning` (to generate the sprint plan), and **stop**. Never carry a wrong-repo invocation into preflight. In headless (`-H`), emit the five-key blocked JSON — `status` `blocked`, `skill` `ultracode-goal`, `decision_log` set, `report` and `deferred_work` `null`, plus `reason` "not a BMAD project" — the canonical headless shape every block point honors (restated here so Stage 1's strict-parse emit stands even if SKILL.md dropped on compaction). This is the only absence that hard-stops at Stage 1; once any one of the three is present, proceed and let the resolution rules below judge the rest.
 
 ## Resolve the Epic and its artifacts
 
@@ -26,8 +26,8 @@ Resolution order:
 
    It emits one line per Epic — id, story count, per-status counts, and `all_done` — and the story list per Epic. If the operator named an Epic, take it. Otherwise pick the obvious in-flight Epic from the rollup (single `in-progress`, or the next `backlog` after the last `done`). If genuinely ambiguous, list the candidates with their status and ask. Headless: pick the lowest-numbered not-`done` Epic and log the choice plus the rejected candidates. The pick stays judgment; the rollup only replaces the YAML parse.
 2. Confirm the Epic has a body (acceptance-bearing stories or an Epic file). A title-only Epic with no stories is not blocking here — Stage 2 generates missing stories/ACs via `bmad-create-story`. Note it so Stage 2 expects remediation.
-3. **In-scope = not-yet-`done`.** The run's in-scope stories are the resolved Epic's stories whose rollup status is not `done`. A partially-done Epic — say stories 1–3 hand-finished before this run was ever invoked — carries only its remaining stories into preflight; log the done ones as `skipped-already-done` so Execute never re-drives them (the resume cursor only covers re-invocations that have a prior run folder; this rule covers the fresh invocation that doesn't).
-4. **Already-done short-circuit.** If *every* story for the resolved Epic is already `done`, do not carry a no-op Epic into preflight: surface "this Epic is already complete — re-run anyway?" and proceed only on a yes (an explicit yes re-scopes all stories deliberately). Headless: emit the blocked JSON (per SKILL.md Headless) with `reason` "epic already complete".
+3. **In-scope = not-yet-`done`.** The run's in-scope stories are the resolved Epic's stories whose rollup status is not `done`. A partially-done Epic — say stories 1–3 hand-finished before this run was ever invoked — carries only its remaining stories into preflight; log the done ones as `skipped-already-done` so Execute never re-drives them (the resume cursor only covers re-invocations that have a prior run folder; this rule covers the fresh invocation that doesn't). **Operator-scoped subset:** if the operator deliberately names a *strict subset* of the not-`done` stories (a conditional or evidence-gated Epic where only some stories are in play this run), honor it — in-scope ⊊ Epic. Such a run ends in the **`partial-complete`** terminal state with no Epic-level gate authored (gate.md / finalize.md), distinct from the already-done skip above, which still ends with every story `done`. Headless never narrows this way: its in-scope is every not-`done` story, so a successful headless run always finishes the Epic.
+4. **Already-done short-circuit.** If *every* story for the resolved Epic is already `done`, do not carry a no-op Epic into preflight: surface "this Epic is already complete — re-run anyway?" and proceed only on a yes (an explicit yes re-scopes all stories deliberately). Headless: emit the same five-key blocked JSON (`report`/`deferred_work` `null`) with `reason` "epic already complete".
 5. If `sprint-status.yaml` is absent (the rollup says so and emits no Epics) or `{planning_artifacts}` has no PRD/ADR for this Epic, that is not a hard stop at this stage — record the gap; Stage 2 preflight reports it mechanically and the semantic scan judges whether the missing planning artifact is a true RED (undecided product/architecture) or a benign absence.
 
 Do not open story or planning files for deep reading here — note their paths so Stage 2 and the TEA stages scan them. Reading them now bloats context ahead of delegation.
@@ -36,13 +36,17 @@ Do not open story or planning files for deep reading here — note their paths s
 
 Profile defaults to **production** — the full TEA chain (test-design + atdd + automate + test-review + nfr + trace + ci) wired as gates. `--light` downscopes to the trace gate only. Headless is always production unless `--light` was passed explicitly.
 
-Surface the default with its cost up front, so the choice is made at this cheap stage rather than discovered at the expensive one: "Production (full TEA chain per story — the thorough, slower default) unless you want `--light` (trace gate only — faster and cheaper, with proportionally lighter evidence)." One soft-gate touch — "Anything else on scope before I preflight?" — then move on. Don't re-derive the profile later; Stages 3 and 5 read what you lock here.
+Surface the default with its cost up front, so the choice is made at this cheap stage rather than discovered at the expensive one: "Production (full TEA chain per story — the thorough, slower default) unless you want `--light` (trace gate only — faster and cheaper, with proportionally lighter evidence)." One soft-gate touch — "Anything else on scope before I preflight?" — then move on. **Under `--yes` (and headless), skip that soft-gate and the Operator-notes solicitation entirely**: resolve the profile from the flags and proceed straight to preflight, so the "no conversational stops" contract the expert one-liner advertises actually holds. Don't re-derive the profile later; Stages 3 and 5 read what you lock here.
 
 Also note execution mode for the log: **sequential** `/goal` spine (default) or `--parallel` (experimental worktree fan-out). It does not change scope, but the log should carry it so the run is reconstructable after compaction.
 
 ## Operator notes
 
 This is the operator's last chance to drop a pre-launch hint before they walk away — "watch the auth flow in story 3", "the payments mock is flaky", "story 5's AC is looser than it reads". This is the capture-don't-interrupt case: record each as a named **Operator notes** entry in `.decision-log.md`, tagged with the story it concerns where one is named, rather than letting it float as loose prose. Execute (Stage 4) reads these and surfaces the relevant note into that story's `bmad-dev-story` / review context, so a hint given now actually reaches the unattended run. There may be none — do not invent them; just leave the channel open.
+
+## Deferred-work carryover
+
+A prior run of this Epic may have parked non-blocking work in the ledger at `{workflow.deferred_work_path}` — Stage 6 appends to it but only the *closing* run surfaces it, so on a fresh re-run that ledger is the sole record of parked work (Cross-Session Recall is off by default). Close the loop here: if the file exists and carries this Epic's heading, read its `open` items and surface them as **scope candidates** — e.g. "epic-7 has 3 open deferred items from prior runs — pull any into this run?" Do **not** auto-scope them (they were deliberately parked and non-blocking; auto-pulling re-litigates that decision). In headless, log the open deferred items to `.decision-log.md` as context and proceed on current scope — the same voice-not-vote posture recall advisories get. If the file or this Epic's heading is absent, there is nothing to carry; move on.
 
 ## Cross-Session Recall (optional)
 
@@ -66,7 +70,7 @@ When `{workflow.cross_session_recall}` is `"on"` **and** the claude-mem MCP tool
    uv run {skill-root}/scripts/mem_recall.py latch --impl-artifacts {workflow.implementation_artifacts} --run-id <run-id> --recall on --probe <probe.json> --tool-form plugin
    ```
 
-   On a schema mismatch the latch records claude-mem **absent LOUDLY** — log that WARN to `.decision-log.md` and proceed gateless; do not retry.
+   On a schema mismatch the latch records claude-mem **absent**, loudly — log that WARN to `.decision-log.md` and proceed gateless; do not retry.
 4. **Filter** the same probe into typed, ranked advisories:
 
    ```
@@ -85,4 +89,4 @@ The run folder holding `.decision-log.md` is this run's workspace and canonical 
 
 ## Progression
 
-Proceed to `references/preflight.md` once the decision log records: a single resolved Epic id, the located (or explicitly-noted-missing) `sprint-status.yaml` / Epic-stories / PRD-ADR paths, and the locked profile. If the Epic cannot be resolved to one id, stop and ask (headless: emit the blocked JSON per SKILL.md Headless with `reason` "epic unresolved") — never preflight an ambiguous target.
+Proceed to `references/preflight.md` once the decision log records: a single resolved Epic id, the located (or explicitly-noted-missing) `sprint-status.yaml` / Epic-stories / PRD-ADR paths, and the locked profile. If the Epic cannot be resolved to one id, stop and ask (headless: emit the same five-key blocked JSON with `reason` "epic unresolved") — never preflight an ambiguous target.

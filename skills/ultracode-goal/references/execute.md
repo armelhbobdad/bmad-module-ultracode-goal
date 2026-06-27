@@ -2,7 +2,7 @@
 
 Drive each in-scope story from its red-phase acceptance tests (generated in Stage 3) to a green, committed state. This stage **produces and prints evidence**; it does **not** decide completion. The completion verdict belongs to Stage 5 (`scripts/gate_eval.py` reading TEA's `gate-decision.json`) — never the `/goal` transcript evaluator, which can only see what you surface and cannot read the gate file. Run prose in `{communication_language}`.
 
-Two paths. **Sequential `/goal` spine is the DEFAULT.** `--parallel` worktree fan-out is an additive, **EXPERIMENTAL** opt-in. Both share the same hooks and the same Stage 5 gate.
+Two paths. **Sequential `/goal` spine is the default.** `--parallel` worktree fan-out is an additive, **experimental** opt-in. Both share the same hooks and the same Stage 5 gate.
 
 Preconditions (asserted, not assumed): you are on the Epic branch (`{workflow.epic_branch_prefix}…`, off a `{workflow.protected_branches}` branch), PreToolUse + Stop hooks are active in `.claude/settings.local.json`, the allowlist is pre-populated, and — **in production** — every in-scope story has an `atdd-checklist-{story_key}.md` with `test.skip` acceptance tests. (Under `--light` there is no atdd-checklist by design; the story file's clear acceptance criteria are the Stage-5 trace oracle instead — see define-done.md's `--light` note. The clear-ACs precondition still holds.) If any is false, return to Stage 2.
 

@@ -1,3 +1,4 @@
+# DO NOT EDIT -- overwritten on every update.
 # Customization for ultracode-goal.
 # Resolved at activation via resolve_customization.py (base -> team -> user).
 # Teams/users override in {project-root}/_bmad/custom/ultracode-goal.toml (and .user.toml)
