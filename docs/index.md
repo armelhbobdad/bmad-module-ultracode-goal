@@ -64,3 +64,4 @@ The docs split into three buckets: **Why** (start here), **Try** (do stuff), and
 - [Health Check](./health-check.md): the terminal self-improvement reflection: what it sends, the privacy model, and how to disable it.
 - [Cross-Session Recall](./cross-session-recall.md): the optional claude-mem integration and its trust model.
 - [Troubleshooting](./troubleshooting.md): real failure modes and their remediations.
+- [UCG vs bmad-auto](./comparison.md): an honest, side-by-side comparison with bmad-code-org's bmad-auto orchestrator.
