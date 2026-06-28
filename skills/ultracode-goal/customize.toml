@@ -28,7 +28,7 @@ story_token_budget = 1500000
 parallel_max_concurrency = 8
 
 # --- Commands pre-populated to the allowlist before an unattended run ---
-allowlist_commands = ["git status", "git add -A", "git commit", "npm test", "npm run lint", "npm run build", "pytest", "uv run"]
+allowlist_commands = ["git status", "git add", "git commit", "npm test", "npm run lint", "npm run build", "pytest", "uv run"]
 
 # --- Hook fired at epic completion (prompt or shell command); empty = none ---
 on_epic_complete = ""
