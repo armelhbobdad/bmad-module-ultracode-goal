@@ -238,90 +238,57 @@ async function testMarketplaceManifest() {
   console.log('');
 }
 
-async function testPortabilityHonestyInstallOutput() {
-  console.log(`${colors.yellow}Test Suite 6: Portability-Honesty Install Output${colors.reset}\n`);
+async function testClaudeCodeOnly() {
+  console.log(`${colors.yellow}Test Suite 6: Claude-Code-only installer${colors.reset}\n`);
 
-  // Source of the canonical gap line + the installer source for static greps.
-  // (This is a static-fact suite: the BEHAVIORAL "printed once at install on a
-  // non-Claude-Code target" — driving install() and counting the gap line in
-  // captured stdout — is covered by the cross-provider honesty suite in test-cli-integration.js.
-  // Here we pin the constant's shape and the single emit SITE statically.)
   const installerPath = path.join(REPO_ROOT, 'tools', 'cli', 'lib', 'installer.js');
-  const { PORTABILITY_GAP_LINE } = require(installerPath);
   const installerSrc = await fs.readFile(installerPath, 'utf8');
+  const uiSrc = await fs.readFile(path.join(REPO_ROOT, 'tools', 'cli', 'lib', 'ui.js'), 'utf8');
+  const platformsPath = path.join(REPO_ROOT, 'tools', 'cli', 'lib', 'platform-codes.yaml');
+  const platforms = yaml.load(await fs.readFile(platformsPath, 'utf8')).platforms || {};
 
-  const README_PATH = path.join(REPO_ROOT, 'README.md');
-  const DOCS_PATH = path.join(REPO_ROOT, 'docs', 'how-it-works.md');
-
-  // ---- one canonical gap line, exactly one emit site -------------------
+  // ---- the installer targets exactly one platform: claude-code -------------
+  const platformCodes = Object.keys(platforms);
   assert(
-    typeof PORTABILITY_GAP_LINE === 'string' && /Claude.?Code.*only/i.test(PORTABILITY_GAP_LINE),
-    'PORTABILITY_GAP_LINE is exported and names Claude Code as the only place enforcement is automatic',
-    PORTABILITY_GAP_LINE,
+    platformCodes.length === 1 && platformCodes[0] === 'claude-code',
+    'platform-codes.yaml lists exactly one platform: claude-code',
+    platformCodes.join(', '),
   );
-  // Count UNCOMMENTED emit sites: a `warn(PORTABILITY_GAP_LINE)` call that is
-  // not on a `//`-commented line. This pins the live emit-site count to exactly
-  // one. Twin: this count===1 fails if the emit is DUPLICATED (count 2) OR
-  // SUPPRESSED — whether by deletion (count 0) or by commenting it out (count 0,
-  // because a commented line is excluded) — proving the test pins the exact
-  // count, not mere textual presence.
-  const emitCount = installerSrc.split('\n').filter((l) => /warn\(PORTABILITY_GAP_LINE\)/.test(l) && !/^\s*\/\//.test(l)).length;
-  assert(emitCount === 1, 'installer.js emits PORTABILITY_GAP_LINE from exactly one site', `emit sites = ${emitCount}`);
+  assert(
+    platforms['claude-code'] && platforms['claude-code'].installer.target_dir === '.claude/skills',
+    'claude-code installs to .claude/skills',
+  );
 
-  // ---- honest copy, never over-claiming --------------------------------
-  // Case-insensitive forbidden-claim denylist + the three required markers.
-  const denylist = ['cross-provider enforcement', 'enforced everywhere', 'autonomous enforcement on any', 'auto-enforced on'];
-  const hasAllMarkers = (text) => text.includes('Claude Code') && text.includes('/ucg-formalize') && /\b(manual|on-demand)\b/i.test(text);
-  const denyHits = (text) => {
-    const lc = text.toLowerCase();
-    return denylist.filter((phrase) => lc.includes(phrase));
-  };
+  // ---- the cross-provider portability gap line is gone --------------------
+  const installerExports = require(installerPath);
+  assert(installerExports.PORTABILITY_GAP_LINE === undefined, 'installer.js no longer exports PORTABILITY_GAP_LINE');
+  assert(!installerSrc.includes('PORTABILITY_GAP_LINE'), 'installer.js carries no PORTABILITY_GAP_LINE reference');
 
-  // Extract the README portability paragraph (the new "What still ships
-  // everywhere" line) and the docs "Portability" section paragraph.
-  const readmeSrc = await fs.readFile(README_PATH, 'utf8');
-  const readmePara = (readmeSrc.split('\n').find((l) => l.includes('What still ships everywhere')) || '').trim();
-  const docsSrc = await fs.readFile(DOCS_PATH, 'utf8');
-  const docsMatch = docsSrc.match(/## Portability:[\s\S]*?(?=\n## |$)/);
-  const docsPara = docsMatch ? docsMatch[0].trim() : '';
+  // ---- no IDE multiselect; the install target is hardcoded to Claude Code --
+  assert(!/multiselect\(/.test(uiSrc), 'ui.js promptInstall has no IDE multiselect prompt');
+  assert(/ides = \['claude-code'\]/.test(uiSrc), 'ui.js hardcodes the Claude Code install target');
 
-  const subjects = [
-    ['PORTABILITY_GAP_LINE constant', PORTABILITY_GAP_LINE],
-    ['README portability paragraph', readmePara],
-    ['docs/how-it-works.md portability paragraph', docsPara],
-  ];
-  for (const [label, text] of subjects) {
-    assert(text.length > 0, `${label} is present (non-empty)`, label);
-    const hits = denyHits(text);
-    // Twin: an over-claim like "autonomous enforcement works on any provider"
-    // both trips the denylist AND drops the markers — either branch fails.
-    assert(hits.length === 0, `${label} contains no forbidden cross-provider claim`, hits.join(' | '));
-    assert(hasAllMarkers(text), `${label} carries all three required markers (Claude Code + /ucg-formalize + manual/on-demand)`, label);
-  }
+  // ---- README + docs no longer claim cross-provider portability -----------
+  const readmeSrc = await fs.readFile(path.join(REPO_ROOT, 'README.md'), 'utf8');
+  assert(/only Claude Code/i.test(readmeSrc), 'README states UCG is for Claude Code only');
+  assert(
+    !/installs on any editor|provider-portable|What still ships everywhere|across providers/i.test(readmeSrc),
+    'README makes no cross-provider/portability claim',
+  );
+  const docsSrc = await fs.readFile(path.join(REPO_ROOT, 'docs', 'how-it-works.md'), 'utf8');
+  assert(!/##\s*Portability/i.test(docsSrc), 'docs/how-it-works.md has no Portability section');
 
-  // ---- portable half ships, never no-install ---------------------------
-  // For each portable-half artifact that EXISTS in source, assert it is present
-  // (skip-if-absent-in-source so the suite never orphans over a sibling-story
-  // artifact). Asserting against the SOURCE tree: the installer copies the
-  // skills/ tree wholesale via copySrcFiles, so a source artifact dropped from
-  // the install would first be a source-tree regression.
+  // ---- the standalone gate + planning fragments still ship for Claude Code -
   const SKILL_SRC = path.join(SKILLS_DIR, 'ultracode-goal');
-  const portableHalf = [
+  const shipped = [
     path.join(SKILL_SRC, 'skills', 'ucg-formalize', 'SKILL.md'),
     path.join(SKILL_SRC, 'scripts', 'formalize_check.py'),
     path.join(SKILL_SRC, 'scripts', 'merge_customization.py'),
   ];
-  for (const artifactPath of portableHalf) {
+  for (const artifactPath of shipped) {
     const rel = path.relative(REPO_ROOT, artifactPath).replaceAll(path.sep, '/');
-    // skip-if-absent-in-source: only assert presence for artifacts that exist.
-    if (await fs.pathExists(artifactPath)) {
-      assert(true, `portable-half artifact present in source: ${rel}`);
-    } else {
-      console.log(`${colors.dim}  (skip-if-absent-in-source) ${rel} not yet authored${colors.reset}`);
-    }
+    assert(await fs.pathExists(artifactPath), `shipped artifact present in source: ${rel}`, rel);
   }
-  // At least one ucg-awareness/*.toml persistent_facts fragment (these ship in
-  // source today — so this branch is always exercisable).
   const awarenessDir = path.join(SKILL_SRC, 'assets', 'ucg-awareness');
   let awarenessFragments = [];
   if (await fs.pathExists(awarenessDir)) {
@@ -329,88 +296,23 @@ async function testPortabilityHonestyInstallOutput() {
   }
   assert(
     awarenessFragments.length > 0,
-    'at least one ucg-awareness/{skill}.toml persistent_facts fragment ships in source',
+    'at least one ucg-awareness/{skill}.toml planning fragment ships in source',
     `found ${awarenessFragments.length}`,
   );
 
-  // Static check: the delimited Step 6b region contains no provider-gated
-  // early-return/throw refusal. Scope the negative grep to the Step 6b block.
-  const step6bMatch = installerSrc.match(/Step 6b:[\s\S]*?(?=\n {4}\/\/ Step 7:)/);
-  assert(step6bMatch !== null, 'Step 6b region is delimited in installer.js', 'no Step 6b/Step 7 delimiters found');
-  if (step6bMatch) {
-    const step6b = step6bMatch[0];
-    // Twin: an early-return that skips copying the fragments on non-Claude-Code
-    // would introduce a provider-gated refusal token in this block.
-    const refusalToken = /\b(unsupported|no-install)\b/i.test(step6b);
-    // A provider-gated return/throw refusal: a line carrying BOTH a bare
-    // return/throw control-flow token AND a 'claude'/'claude-code' provider name
-    // (in either order — e.g. `if (!ides.includes('claude-code')) return;` or
-    // `return; // claude-only`). The legitimate `ides.includes('claude-code')`
-    // gating the single non-blocking WARN does not match — that line has no
-    // return/throw. Scan line-by-line so the two tokens must co-occur in one
-    // control-flow statement, not merely somewhere in the block.
-    const providerGatedReturn = step6b.split('\n').some((l) => /\b(return|throw)\b/.test(l) && /\bclaude(-code)?\b/i.test(l));
-    assert(!refusalToken, 'Step 6b block contains no "unsupported"/"no-install" refusal token', 'refusal token found in Step 6b');
-    assert(
-      !providerGatedReturn,
-      'Step 6b block has no provider-gated early-return/throw refusal',
-      'provider-name-guarded return/throw found in Step 6b',
-    );
-  }
-
-  // ---- provider-invariant verdict + envelope (no fork here) ----
-  // (a) installer.js carries ZERO envelope literal and zero verdict-mapping copy
-  //     — this step emits the gap line, not a forked envelope. The envelope's
-  //     identifying SHAPE is the co-occurrence of its structural keys
-  //     status + decision_log + report (the envelope's five keys are status / skill /
-  //     decision_log / report / deferred_work). The detector fires on that
-  //     structural co-occurrence rather than requiring all five, so a FORKED
-  //     envelope literal that DROPS deferred_work off Claude Code is still
-  //     caught (the spec twin). Each key is matched as a quoted JSON object key
-  //     so plain English prose ("a report", "status of") never trips it.
+  // ---- installer carries no forked verdict envelope -----------------------
   const structuralEnvelopeKeys = ['status', 'decision_log', 'report'];
   const keyAsJsonLiteral = (k) => installerSrc.includes(`"${k}"`) || installerSrc.includes(`'${k}'`);
-  const installerHasEnvelopeShape = structuralEnvelopeKeys.every(keyAsJsonLiteral);
-  // Twin: inlining a forked envelope literal — even one dropping deferred_work
-  // off Claude Code — lands status/decision_log/report as JSON keys in
-  // installer.js, so installerHasEnvelopeShape becomes true and this fails.
   assert(
-    !installerHasEnvelopeShape,
-    'installer.js contains ZERO envelope literal / verdict-mapping copy (no forked envelope, even one dropping deferred_work)',
+    !structuralEnvelopeKeys.every(keyAsJsonLiteral),
+    'installer.js contains no forked verdict envelope literal',
     'envelope-shaped key co-occurrence (status/decision_log/report) found in installer.js',
   );
-  // Defence-in-depth: the canonical sentinel key never appears in installer.js.
   assert(
     !installerSrc.includes('deferred_work'),
     'installer.js carries no verdict/envelope key copy (deferred_work absent)',
     'deferred_work literal found in installer.js',
   );
-
-  // (b) skip-if-absent zero-provider-conditional check over the formalize
-  //     kernel + the ucg-formalize SKILL adapter: no 'claude'/'claude-code'
-  //     branching around verdict/envelope emission. Both are clean today, so
-  //     this PASSES; its twin (a planted provider-conditional dropping
-  //     deferred_work off Claude Code) would fail.
-  const providerInvariantSubjects = [
-    ['formalize_check.py', path.join(SKILL_SRC, 'scripts', 'formalize_check.py')],
-    ['ucg-formalize/SKILL.md', path.join(SKILL_SRC, 'skills', 'ucg-formalize', 'SKILL.md')],
-  ];
-  for (const [label, p] of providerInvariantSubjects) {
-    if (!(await fs.pathExists(p))) {
-      console.log(`${colors.dim}  (skip-if-absent) ${label} not yet authored — provider-conditional check skipped${colors.reset}`);
-      continue;
-    }
-    const src = await fs.readFile(p, 'utf8');
-    // Provider-name conditional: a 'claude'/'claude-code' token inside an
-    // if/branch construct. The files have zero 'claude' tokens today, so any
-    // occurrence is a fork signal.
-    const hasProviderToken = /\bclaude(-code)?\b/i.test(src);
-    assert(
-      !hasProviderToken,
-      `${label} has no provider-name ('claude'/'claude-code') conditional around verdict/envelope emission`,
-      `provider token found in ${label}`,
-    );
-  }
 
   console.log('');
 }
@@ -429,7 +331,7 @@ async function runTests() {
   await testScripts();
   await testStandaloneModuleAssets();
   await testMarketplaceManifest();
-  await testPortabilityHonestyInstallOutput();
+  await testClaudeCodeOnly();
 
   console.log(`${colors.cyan}========================================`);
   console.log('Test Results:');

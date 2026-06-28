@@ -18,8 +18,6 @@
 
 **Built for [Claude Code](https://www.anthropic.com/claude-code), and only Claude Code.** UCG composes `/goal`, Auto Mode, Auto Memory, and runtime hooks; the autonomous run itself requires Claude Code.
 
-**What still ships everywhere, and what doesn't.** The shift-left planning customization and the standalone `/ucg-formalize` readiness gate are provider-portable BMAD content that installs on any editor; the install never refuses. What Claude Code adds is the preflight enforcement that fires `/ucg-formalize` automatically at run start. Off Claude Code, `/ucg-formalize` stays a manual, on-demand verdict you invoke yourself, and its readiness verdict plus five-key headless envelope are byte-identical across providers; only the automatic invocation is Claude-Code-only. ([How portability works →](./docs/how-it-works.md#portability-what-installs-everywhere-and-what-claude-code-adds))
-
 _UCG is a standalone [BMAD](https://github.com/bmad-code-org/BMAD-METHOD) module that delivers a BMAD Epic end to end without a babysitter. It preflights to a remediated green light, turns acceptance criteria into executable tests with the Test Architect (TEA), and advances a story only when a deterministic script reads `PASS` from TEA's gate artifact, not when the model decides it feels done._
 
 </div>
@@ -69,7 +67,7 @@ Requires [Claude Code](https://www.anthropic.com/claude-code) (the runtime UCG c
 npx bmad-module-ultracode-goal install
 ```
 
-You'll be prompted for a project name, your IDEs, and whether to install the learning material. UCG is also available through the Claude plugin marketplace. See [Getting Started](./docs/getting-started.md) for that path.
+You'll be prompted for a project name and whether to install the learning material; the skill installs for Claude Code. UCG is also available through the Claude plugin marketplace. See [Getting Started](./docs/getting-started.md) for that path.
 
 > **Hook security:** UCG installs `PreToolUse`/`Stop` hooks into your machine-local, gitignored `.claude/settings.local.json` at preflight, never into a committed file. They run zero-dependency Python scripts shipped in the skill. See [SECURITY.md](SECURITY.md) for exactly what they execute and how to remove them.
 

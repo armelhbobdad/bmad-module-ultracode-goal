@@ -5,7 +5,8 @@
  * supporting files) are copied directly to each IDE's skills/ directory.
  * IDEs read SKILL.md natively.
  *
- * Supports 23+ IDEs via platform-codes.yaml (config-driven, no IDE-specific code).
+ * UCG is Claude-Code-only; platform-codes.yaml carries the single Claude Code
+ * target (config-driven, no IDE-specific code).
  */
 
 const path = require('node:path');
@@ -52,38 +53,11 @@ function getAvailablePlatforms() {
 }
 
 /**
- * Get IDE auto-detection markers.
- * Returns { 'claude-code': ['.claude'], 'cursor': ['.cursor'], ... }
- *
- * Uses explicit detection_marker from platform config when available,
- * otherwise derives from the top-level directory of target_dir.
- * The derived marker only works when the IDE's config directory exists
- * independently of the installer (e.g. .claude/ exists before UCG install).
- */
-function getDetectionMarkers() {
-  const config = loadPlatforms();
-  const markers = {};
-  for (const [code, p] of Object.entries(config.platforms)) {
-    if (p.suspended) continue;
-    const targetDir = p.installer?.target_dir;
-    if (!targetDir) continue;
-    if (p.installer.detection_marker) {
-      markers[code] = [p.installer.detection_marker];
-    } else {
-      // Derive from target_dir — works when top-level dir is the IDE's own config dir
-      const topDir = '.' + targetDir.split('/')[0].replace(/^\./, '');
-      markers[code] = [topDir];
-    }
-  }
-  return markers;
-}
-
-/**
  * Install skill directories to all selected IDEs.
  *
  * @param {string} projectDir - Project root directory
  * @param {string} ucgDir - Path to installed UCG module (e.g., {projectDir}/_bmad/ucg)
- * @param {string[]} ideCodes - Array of IDE codes (e.g., ['claude-code', 'cursor'])
+ * @param {string[]} ideCodes - Array of IDE codes (always ['claude-code'])
  * @returns {{ installed: number, ides: string[], directories: string[] }}
  */
 async function installSkillsToIdes(projectDir, ucgDir, ideCodes) {
@@ -215,4 +189,4 @@ async function removeAllUcgSkills(projectDir) {
   return removed;
 }
 
-module.exports = { installSkillsToIdes, getAvailablePlatforms, getDetectionMarkers, removeAllUcgSkills, loadPlatforms };
+module.exports = { installSkillsToIdes, getAvailablePlatforms, removeAllUcgSkills, loadPlatforms };

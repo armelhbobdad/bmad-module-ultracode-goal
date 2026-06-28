@@ -69,7 +69,7 @@ skills/ultracode-goal/
 │       ├── guard_pretooluse.py    #   commit invariants (PreToolUse)
 │       └── budget_stop.py         #   turn/token budget (Stop)
 ├── skills/
-│   └── ucg-formalize/             # Standalone readiness gate (installs everywhere)
+│   └── ucg-formalize/             # Standalone readiness gate
 └── assets/
     ├── execute-epic.workflow.js   # EXPERIMENTAL --parallel worktree fan-out
     ├── module.yaml · module-setup.md · module-help.csv   # install metadata
