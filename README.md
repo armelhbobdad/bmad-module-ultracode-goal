@@ -97,6 +97,8 @@ A skeptical reader is probably already running one of these. Here is the honest 
 
 The alternatives aren't bad; they solve different problems. **UCG solves exactly one: advancing an epic only when a deterministic script confirms the gate passed, and giving you the verdict JSON to check it yourself.**
 
+UCG's closest peer is [bmad-auto](https://github.com/bmad-code-org/bmad-auto) (published under the bmad-code-org org), which makes the opposite architectural bet (a deterministic Python loop driving any CLI from outside the agent). For an honest, side-by-side look at where each one wins, see [UCG vs bmad-auto](https://armelhbobdad.github.io/bmad-module-ultracode-goal/comparison/).
+
 ## Verifying
 
 You don't have to take the gate's word for it. The deterministic pieces ship with a test suite, and you can run the evaluator on a real artifact yourself.
