@@ -19,7 +19,7 @@
       "name": "bmad-module-ultracode-goal",
       "source": "./",
       "description": "Supercharges BMAD with Claude Code Goal Mode, Auto Mode, and Auto Memory: autonomous Epic execution to a machine-checked, TEA-gated Definition-of-Done. Execute Epics. Accumulate Knowledge. Deliver Outcomes.",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "author": {
         "name": "Armel"
       },
