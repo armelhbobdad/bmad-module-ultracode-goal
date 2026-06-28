@@ -1,39 +1,21 @@
 # BMAD Platform Codes Configuration
 #
+# UltraCode Goal is Claude-Code-only: its autonomous run composes Claude Code
+# primitives (/goal, Auto Mode, Auto Memory, PreToolUse/Stop hooks, dynamic
+# workflows) that no other editor provides, so the installer targets Claude Code
+# and only Claude Code. This file stays config-driven (one entry) so the install
+# machinery has a single source of truth.
+#
 # Each platform entry has:
 #   name: Display name shown to users
 #   preferred: Whether shown as a recommended option on install
-#   suspended: (optional) Message explaining why install is blocked
-#   skill_invocation_prefix: (optional) Prefix users type to invoke a named
-#     skill in this IDE's chat. Examples:
-#       "/"        — slash command, e.g. /ultracode-goal (most IDEs)
-#       "$"        — dollar mention, e.g. $ultracode-goal (Codex)
-#       "/skill:"  — namespaced slash, e.g. /skill:ultracode-goal (Pi)
-#     Omit when the IDE only auto-invokes skills from descriptions and has
-#     no manual invocation form (Cline, GitHub Copilot, Junie, etc.).
+#   skill_invocation_prefix: Prefix users type to invoke a named skill in this
+#     IDE's chat (e.g. "/" -> /ultracode-goal).
 #   installer:
+#     detection_marker: (optional) Path that signals the IDE is present
 #     target_dir: Directory where skill directories are installed
 #     legacy_targets: (optional) Old target dirs to clean up on reinstall
 platforms:
-  antigravity:
-    name: "Google Antigravity"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      detection_marker: .agent/antigravity
-      legacy_targets:
-        - .agent/workflows
-      target_dir: .agent/skills
-
-  auggie:
-    name: "Auggie"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      legacy_targets:
-        - .augment/commands
-      target_dir: .augment/skills
-
   claude-code:
     name: "Claude Code"
     preferred: true
@@ -42,182 +24,3 @@ platforms:
       legacy_targets:
         - .claude/commands
       target_dir: .claude/skills
-
-  cline:
-    name: "Cline"
-    preferred: false
-    # Auto-invoked from descriptions; no manual prefix
-    installer:
-      detection_marker: .clinerules
-      legacy_targets:
-        - .clinerules/workflows
-      target_dir: .cline/skills
-
-  codex:
-    name: "Codex"
-    preferred: false
-    skill_invocation_prefix: "$"
-    installer:
-      detection_marker: .codex
-      legacy_targets:
-        - .codex/prompts
-      target_dir: .agents/skills
-
-  codebuddy:
-    name: "CodeBuddy"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      legacy_targets:
-        - .codebuddy/commands
-      target_dir: .codebuddy/skills
-
-  crush:
-    name: "Crush"
-    preferred: false
-    # Auto-invoked from descriptions; no manual prefix
-    installer:
-      legacy_targets:
-        - .crush/commands
-      target_dir: .crush/skills
-
-  cursor:
-    name: "Cursor"
-    preferred: true
-    skill_invocation_prefix: "/"
-    installer:
-      legacy_targets:
-        - .cursor/commands
-      target_dir: .cursor/skills
-
-  gemini:
-    name: "Gemini CLI"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      legacy_targets:
-        - .gemini/commands
-      target_dir: .gemini/skills
-
-  github-copilot:
-    name: "GitHub Copilot"
-    preferred: false
-    # Auto-invoked from descriptions; no manual prefix
-    installer:
-      detection_marker: .github/copilot-instructions.md
-      legacy_targets:
-        - .github/agents
-        - .github/prompts
-      target_dir: .github/skills
-
-  iflow:
-    name: "iFlow"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      legacy_targets:
-        - .iflow/commands
-      target_dir: .iflow/skills
-
-  junie:
-    name: "Junie"
-    preferred: false
-    # Auto-invoked from descriptions; no manual prefix
-    installer:
-      target_dir: .junie/skills
-
-  kilo:
-    name: "KiloCoder"
-    preferred: false
-    # Auto-invoked from descriptions; no manual prefix
-    installer:
-      legacy_targets:
-        - .kilocode/workflows
-      target_dir: .kilocode/skills
-
-  kiro:
-    name: "Kiro"
-    preferred: false
-    # Auto-invoked from descriptions; no manual prefix
-    installer:
-      legacy_targets:
-        - .kiro/steering
-      target_dir: .kiro/skills
-
-  ona:
-    name: "Ona"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      target_dir: .ona/skills
-
-  opencode:
-    name: "OpenCode"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      legacy_targets:
-        - .opencode/agents
-        - .opencode/commands
-        - .opencode/agent
-        - .opencode/command
-      target_dir: .opencode/skills
-
-  pi:
-    name: "Pi"
-    preferred: false
-    skill_invocation_prefix: "/skill:"
-    installer:
-      target_dir: .pi/skills
-
-  qoder:
-    name: "Qoder"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      target_dir: .qoder/skills
-
-  qwen:
-    name: "QwenCoder"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      legacy_targets:
-        - .qwen/commands
-      target_dir: .qwen/skills
-
-  roo:
-    name: "Roo Code"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      legacy_targets:
-        - .roo/commands
-      target_dir: .roo/skills
-
-  rovo-dev:
-    name: "Rovo Dev"
-    preferred: false
-    # Auto-invoked from descriptions; no manual prefix
-    installer:
-      legacy_targets:
-        - .rovodev/workflows
-      target_dir: .rovodev/skills
-
-  trae:
-    name: "Trae"
-    preferred: false
-    # Auto-invoked from descriptions; no manual prefix
-    installer:
-      legacy_targets:
-        - .trae/rules
-      target_dir: .trae/skills
-
-  windsurf:
-    name: "Windsurf"
-    preferred: false
-    skill_invocation_prefix: "/"
-    installer:
-      legacy_targets:
-        - .windsurf/workflows
-      target_dir: .windsurf/skills

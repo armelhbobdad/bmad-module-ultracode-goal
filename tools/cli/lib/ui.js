@@ -9,7 +9,7 @@
  *   spark   #A5B4FC  — icons
  */
 
-const { intro, outro, text, multiselect, confirm, note, isCancel, cancel, log, select } = require('@clack/prompts');
+const { intro, outro, text, confirm, note, isCancel, cancel, log, select } = require('@clack/prompts');
 const chalk = require('chalk');
 const figlet = require('figlet');
 const path = require('node:path');
@@ -17,7 +17,7 @@ const fs = require('fs-extra');
 const yaml = require('js-yaml');
 const { readManifest } = require('./manifest');
 const { compareVersions } = require('./version-check');
-const { getAvailablePlatforms, getDetectionMarkers } = require('./ide-skills');
+const { getAvailablePlatforms } = require('./ide-skills');
 
 const UCG_FOLDER = '_bmad/ucg';
 
@@ -210,31 +210,6 @@ class UI {
       log.info('Previous configuration detected — defaults pre-populated.');
     }
 
-    // Build IDE options from platform-codes.yaml
-    const platforms = getAvailablePlatforms();
-    const ideOptions = platforms.map((p) => ({
-      label: p.preferred ? `${p.label} (Recommended)` : p.label,
-      value: p.value,
-    }));
-
-    // Pre-check IDEs: saved config takes priority, then auto-detect from directories
-    const savedIdes = savedConfig?.ides || [];
-    let initialIdes = [];
-    if (savedIdes.length > 0) {
-      initialIdes = savedIdes;
-    } else {
-      const detectedIdes = await this.detectIdes(projectDir);
-      if (detectedIdes.length > 0) {
-        initialIdes = detectedIdes;
-        log.info(`Auto-detected IDEs: ${brand.light(detectedIdes.join(', '))}`);
-      }
-    }
-
-    // Mark initially selected IDEs
-    for (const opt of ideOptions) {
-      opt.initialSelected = initialIdes.includes(opt.value);
-    }
-
     // Project name
     const project_name = await text({
       message: 'Project name:',
@@ -245,17 +220,11 @@ class UI {
       return { cancelled: true };
     }
 
-    // IDE selection
-    const ides = await multiselect({
-      message: 'Which tools/IDEs are you using?',
-      options: ideOptions,
-      initialValues: initialIdes,
-      required: true,
-    });
-    if (isCancel(ides)) {
-      cancel('Installation cancelled.');
-      return { cancelled: true };
-    }
+    // UCG is Claude-Code-only: its autonomous run composes Claude Code
+    // primitives (/goal, Auto Mode, hooks, dynamic workflows) no other editor
+    // provides, so the skill installs to Claude Code with no IDE prompt.
+    const ides = ['claude-code'];
+    log.info(`The skill installs for ${brand.light('Claude Code')}.`);
 
     // Learning material
     const install_learning = await confirm({
@@ -289,20 +258,6 @@ class UI {
       _action: action,
       cancelled: false,
     };
-  }
-
-  async detectIdes(projectDir) {
-    const markers = getDetectionMarkers();
-    const detected = [];
-    for (const [ide, paths] of Object.entries(markers)) {
-      for (const p of paths) {
-        if (await fs.pathExists(path.join(projectDir, p))) {
-          detected.push(ide);
-          break;
-        }
-      }
-    }
-    return detected;
   }
 
   async loadSavedConfig(projectDir, ucgFolder) {
@@ -352,8 +307,8 @@ class UI {
     // Compose the activate line shown in steps and outro.
     let activateLine;
     if (invocations.length === 0) {
-      // Update flow with no IDE list — show both common forms
-      activateLine = `${brand.light('/ultracode-goal')} ${chalk.dim('(Claude Code)')}  ${chalk.dim('·')}  ${brand.light('$ultracode-goal')} ${chalk.dim('(Codex)')}`;
+      // Defensive: no IDE list resolved. UCG installs for Claude Code only.
+      activateLine = `${brand.light('/ultracode-goal')} ${chalk.dim('(Claude Code)')}`;
     } else if (invocations.length === 1) {
       const inv = invocations[0];
       activateLine = inv.auto ? chalk.dim(`${inv.ide} auto-loads ultracode-goal`) : brand.light(inv.command);

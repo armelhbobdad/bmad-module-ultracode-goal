@@ -22,16 +22,6 @@ const DEV_ARTIFACTS = new Set(['.analysis', '.decision-log.md', '__pycache__', '
 // deliberately NOT enrolled here.
 const STEP6B_PLANNING_FRAGMENTS = ['bmad-prd', 'bmad-architecture', 'bmad-create-epics-and-stories', 'bmad-create-story'];
 
-// Single canonical cross-provider portability gap line.
-// Exported so the integration test asserts against this exact string — keep it a clean,
-// honest sentence that matches /Claude.?Code.*only/i and contains NONE of the
-// forbidden cross-provider auto-enforcement phrases. The note is non-blocking:
-// the portable fragments + the standalone /ucg-formalize gate install on every
-// provider; only the preflight HOOK auto-runs on Claude Code, and elsewhere
-// /ucg-formalize is a manual on-demand verdict.
-const PORTABILITY_GAP_LINE =
-  'Automatic preflight gating at run start is a Claude Code-only capability; on other providers /ucg-formalize stays available as a manual, on-demand verdict you invoke yourself, while the portable shaping fragments and the standalone gate still install everywhere.';
-
 class Installer {
   constructor() {
     // Resolve directories relative to this file (tools/cli/lib/ -> up 3 levels)
@@ -57,12 +47,17 @@ class Installer {
       if (config._savedConfigYaml) {
         try {
           const savedData = yaml.load(config._savedConfigYaml);
-          if (!config.ides && savedData.ides) config.ides = savedData.ides;
           if (config.install_learning == null && savedData.install_learning != null) config.install_learning = savedData.install_learning;
         } catch {
           /* ignore parse errors, defaults will apply */
         }
       }
+
+      // UCG is Claude-Code-only, so an update always refreshes the Claude Code
+      // skill copy. Older installs did not persist `ides`; without this the IDE
+      // copy is never re-copied (Step 5 skips on an empty list) and silently
+      // stays on the previous version even though _bmad/ucg/ updated.
+      config.ides = ['claude-code'];
 
       s.start('Updating UCG files...');
       await fs.remove(ucgDir);
@@ -157,14 +152,6 @@ class Installer {
         log.warn(msg);
       };
       try {
-        // Cross-provider honesty: emit the single
-        // portability gap line when the target IDE set excludes Claude Code.
-        // Never a refusal, never a duplicate — exactly one print.
-        const ides = Array.isArray(config.ides) ? config.ides : [];
-        if (!ides.includes('claude-code')) {
-          warn(PORTABILITY_GAP_LINE);
-        }
-
         // The merge engine deep_merge is imported by
         // merge_customization.py from {projectDir}/_bmad/scripts/resolve_customization.py.
         // If it is absent/older, no-op Step 6b entirely (verify-only degrade):
@@ -253,13 +240,7 @@ class Installer {
    * @returns {Promise<boolean>}
    */
   async isSkillPresent(projectDir, skill) {
-    const roots = [
-      path.join(projectDir, '.claude', 'skills'),
-      path.join(projectDir, '.cursor', 'skills'),
-      path.join(projectDir, '.opencode', 'skills'),
-      path.join(projectDir, 'bmad', 'skills'),
-      path.join(projectDir, '_bmad', 'skills'),
-    ];
+    const roots = [path.join(projectDir, '.claude', 'skills'), path.join(projectDir, '_bmad', 'skills')];
     for (const root of roots) {
       if (await fs.pathExists(path.join(root, skill))) return true;
     }
@@ -416,4 +397,4 @@ class Installer {
   }
 }
 
-module.exports = { Installer, PORTABILITY_GAP_LINE, STEP6B_PLANNING_FRAGMENTS };
+module.exports = { Installer, STEP6B_PLANNING_FRAGMENTS };

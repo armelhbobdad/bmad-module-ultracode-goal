@@ -191,7 +191,7 @@ async function testUpdatePreservesConfig() {
       projectDir,
       ucgFolder: '_bmad/ucg',
       project_name: 'original-name',
-      ides: ['cursor'],
+      ides: ['claude-code'],
       install_learning: false,
       _action: 'fresh',
     };
@@ -206,7 +206,17 @@ async function testUpdatePreservesConfig() {
     const origConfig = await fs.readFile(configPath, 'utf8');
     assert(origConfig.includes('original-name'), 'initial config has original project name');
 
-    // Step 2: Update
+    // Plant a stale sentinel inside the per-IDE skill copy. A genuine refresh
+    // wipes and re-copies that directory (cleanUcgSkills removes it, then
+    // installSkillsToIdes re-copies), so the sentinel must be GONE afterward.
+    // If the update silently skips Step 5 (the stale-copy bug, which fired when
+    // `ides` could not be recovered), the sentinel survives and the assertion below fails.
+    const ideSkillDir = path.join(projectDir, '.claude', 'skills', 'ultracode-goal');
+    const staleMarker = path.join(ideSkillDir, 'STALE.marker');
+    await fs.writeFile(staleMarker, 'v0.3.0');
+
+    // Step 2: Update (note: no `ides` in the update config — the installer must
+    // force claude-code so the per-IDE copy is still refreshed)
     const updateConfig = {
       projectDir,
       ucgFolder: '_bmad/ucg',
@@ -227,9 +237,12 @@ async function testUpdatePreservesConfig() {
     assert(await fs.pathExists(path.join(ucgDir, 'ultracode-goal', 'SKILL.md')), 'skill exists after update');
     assert(await fs.pathExists(path.join(ucgDir, 'module.yaml')), 'module.yaml exists after update');
 
-    // IDE selection should carry over from the saved config (cursor was selected on fresh install)
-    const claudeSkillsAfterUpdate = await fs.pathExists(path.join(projectDir, '.cursor', 'skills', 'ultracode-goal', 'SKILL.md'));
-    assert(claudeSkillsAfterUpdate, 'IDE skill reinstalled from saved config after update');
+    // The per-IDE copy must be genuinely refreshed: SKILL.md present AND the
+    // planted stale sentinel wiped. pathExists(SKILL.md) alone is vacuous (the
+    // update never touches .claude/skills, so SKILL.md survives regardless) — the
+    // sentinel is what proves Step 5 actually re-copied the directory.
+    assert(await fs.pathExists(path.join(ideSkillDir, 'SKILL.md')), 'Claude Code skill copy present after update');
+    assert(!(await fs.pathExists(staleMarker)), 'stale sentinel wiped on update — per-IDE copy genuinely refreshed, not left stale');
 
     // Manifest should reflect update action
     const manifestPath = path.join(projectDir, '_bmad/_config/ucg-manifest.yaml');
@@ -345,7 +358,7 @@ async function testUninstallCleansUp() {
       projectDir,
       ucgFolder: '_bmad/ucg',
       project_name: 'uninstall-test',
-      ides: ['claude-code', 'cursor'],
+      ides: ['claude-code'],
       install_learning: true,
       _action: 'fresh',
     };
@@ -358,7 +371,6 @@ async function testUninstallCleansUp() {
     assert(await fs.pathExists(path.join(projectDir, '_bmad/ucg')), 'UCG dir exists before uninstall');
     assert(await fs.pathExists(path.join(projectDir, '_ucg-learn')), '_ucg-learn exists before uninstall');
     assert(await fs.pathExists(path.join(projectDir, '.claude/skills')), '.claude/skills exists before uninstall');
-    assert(await fs.pathExists(path.join(projectDir, '.cursor/skills')), '.cursor/skills exists before uninstall');
 
     // Read manifest
     const manifest = await readManifest(projectDir);
@@ -411,7 +423,6 @@ async function testUninstallCleansUp() {
     assert(!(await fs.pathExists(path.join(projectDir, '_bmad/ucg'))), 'UCG dir removed');
     assert(!(await fs.pathExists(path.join(projectDir, '_ucg-learn'))), '_ucg-learn removed');
     assert(!(await fs.pathExists(path.join(projectDir, '.claude/skills'))), '.claude/skills removed');
-    assert(!(await fs.pathExists(path.join(projectDir, '.cursor/skills'))), '.cursor/skills removed');
     assert(!(await fs.pathExists(path.join(projectDir, '_bmad'))), '_bmad/ cleaned up (empty)');
   } catch (error) {
     assert(false, 'uninstall flow completes without error', error.message);
@@ -431,8 +442,8 @@ async function testIdeSkillInstallation() {
     const { Installer } = require('../tools/cli/lib/installer');
     const installer = new Installer();
 
-    // Test with a subset of IDEs (claude-code and cursor represent the pattern)
-    const testIdes = ['claude-code', 'cursor'];
+    // UCG installs for Claude Code only.
+    const testIdes = ['claude-code'];
 
     const config = {
       projectDir,
@@ -450,7 +461,6 @@ async function testIdeSkillInstallation() {
     // Verify each IDE got the skill directory (not command files)
     const ideSkillDirs = {
       'claude-code': '.claude/skills',
-      cursor: '.cursor/skills',
     };
 
     for (const [ide, targetDir] of Object.entries(ideSkillDirs)) {
@@ -699,15 +709,6 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 // in CI (the real _bmad/ tree is gitignored and absent on a clean checkout).
 const REAL_ENGINE = path.join(REPO_ROOT, 'skills', 'ultracode-goal', 'scripts', 'tests', 'fixtures', 'engine', 'resolve_customization.py');
 
-// The enumerated forbidden cross-provider-auto-enforcement-claim set, defined
-// as a literal constant. The
-// machine half asserts the honesty line matches the POSITIVE shape exactly once
-// AND matches ZERO of these alternations — printing any forbidden literal flips
-// .test() to true and fails the suite (non-vacuous).
-const STEP6B_FORBIDDEN_ENFORCEMENT =
-  /(auto.?enforc|automatic(ally)? enforc|preflight (is )?enforced|enforced (on|across) (cursor|all providers|every provider)|cross-?provider auto|enforce.{0,20}(cursor|all providers|every provider))/i;
-const CLAUDE_CODE_ONLY = /Claude.?Code.*only/i;
-
 /**
  * Copy the real deep_merge engine into a temp project so merge_customization.py
  * resolves it exactly as it will at install time (mirrors REAL_ENGINE in
@@ -760,7 +761,7 @@ const PLANNING_SKILLS = ['bmad-prd', 'bmad-architecture', 'bmad-create-epics-and
 async function testStep6bUcgAwareness() {
   console.log(`${colors.yellow}Test Suite 8: Step 6b — UCG-awareness shaping${colors.reset}\n`);
 
-  const { Installer, PORTABILITY_GAP_LINE } = require('../tools/cli/lib/installer');
+  const { Installer } = require('../tools/cli/lib/installer');
   const { promptInstall } = require('../tools/cli/lib/ui');
 
   // --- ui.js promptInstall surfaces exactly one new opt-in -------------
@@ -1115,63 +1116,6 @@ async function testStep6bUcgAwareness() {
       assert(await fs.pathExists(prdPath), 'update-action install preserves _bmad/custom/bmad-prd.toml');
     } catch (error) {
       assert(false, 'idempotent reinstall completes without error', error.message + '\n' + error.stack);
-    } finally {
-      await fs.remove(projectDir);
-    }
-  }
-
-  // --- cross-provider honesty (operator-benchmark machine half) --------
-  {
-    const projectDir = await makeTempDir('s6b-honesty');
-    try {
-      await seedEngine(projectDir);
-      await seedSkills(projectDir, PLANNING_SKILLS);
-      const installer = new Installer();
-
-      // Spy BEFORE suppressConsole reassigns stdout — capture notes + warnings.
-      const spy = spyClackSinks();
-      const restore = suppressConsole();
-      const result = await installer.install({
-        projectDir,
-        ucgFolder: '_bmad/ucg',
-        project_name: 'honesty',
-        ides: ['cursor'], // excludes claude-code -> portability note fires
-        install_learning: false,
-        enable_ucg_awareness: true,
-        _action: 'fresh',
-      });
-      restore();
-      spy.restore();
-
-      const joined = spy.joined();
-      const claudeCodeOnlyLines = joined.split('\n').filter((l) => CLAUDE_CODE_ONLY.test(l)).length;
-      assert(claudeCodeOnlyLines === 1, 'exactly one /Claude.?Code.*only/i line emitted', `found ${claudeCodeOnlyLines}`);
-      assert(
-        STEP6B_FORBIDDEN_ENFORCEMENT.test(joined) === false,
-        'ZERO forbidden cross-provider auto-enforcement phrases',
-        `matched: ${JSON.stringify(joined.match(STEP6B_FORBIDDEN_ENFORCEMENT))}`,
-      );
-      // the exported constant is the line printed (and itself clean)
-      assert(CLAUDE_CODE_ONLY.test(PORTABILITY_GAP_LINE), 'PORTABILITY_GAP_LINE matches the positive shape');
-      assert(STEP6B_FORBIDDEN_ENFORCEMENT.test(PORTABILITY_GAP_LINE) === false, 'PORTABILITY_GAP_LINE matches none of the forbidden set');
-
-      // the four overlays still wrote for present skills (never no-install)
-      const customDir = path.join(projectDir, '_bmad', 'custom');
-      for (const skill of PLANNING_SKILLS) {
-        assert(await fs.pathExists(path.join(customDir, `${skill}.toml`)), `${skill}.toml still wrote on a non-Claude-Code provider`);
-      }
-      assert(result.success === true, 'install returns success on a non-Claude-Code provider');
-
-      // Anti-vacuous twin: a forbidden literal flips the negative guard true.
-      const tamperedJoined = joined + '\npreflight enforced on cursor across all providers';
-      assert(
-        STEP6B_FORBIDDEN_ENFORCEMENT.test(tamperedJoined) === true,
-        'Twin: a forbidden literal flips STEP6B_FORBIDDEN_ENFORCEMENT.test to true',
-      );
-      // positive count fails on empty output (non-vacuous)
-      assert(''.split('\n').filter((l) => CLAUDE_CODE_ONLY.test(l)).length === 0, 'Twin: count===1 fails on empty output');
-    } catch (error) {
-      assert(false, 'cross-provider honesty completes without error', error.message + '\n' + error.stack);
     } finally {
       await fs.remove(projectDir);
     }

@@ -27,7 +27,7 @@ The run also depends on recent Claude Code primitives: `/goal`, dynamic workflow
 npx bmad-module-ultracode-goal install
 ```
 
-The installer is interactive: it prompts for the project name and which IDEs to configure, then copies the skill into place. As an alternative, the module can be installed from the plugin marketplace entry (`.claude-plugin/marketplace.json`) the same way as other BMAD plugins.
+The installer is interactive: it prompts for the project name and whether to install the learning material, then installs the skill for Claude Code. As an alternative, the module can be installed from the plugin marketplace entry (`.claude-plugin/marketplace.json`) the same way as other BMAD plugins.
 
 ## First run
 
