@@ -188,11 +188,10 @@ for (const r of perStory) {
 phase('EpicGate')
 const epicGate = await agent(
   `All stories of BMAD Epic "${epic}" have been delivered on their worktree branches. ` +
-    `Run the EPIC-LEVEL TEA quality gate over the consolidated epic` +
-    (isProduction ? ` (run bmad-testarch-automate -> bmad-testarch-trace -> bmad-testarch-nfr first)` : ` (run bmad-testarch-trace first)`) +
+    `Run the EPIC-LEVEL TRACE gate over the consolidated epic — a trace-only read of the epic's gate_status, passing NO --nfr/--test-review (the per-story production NFR/test-review ANDs already ran at each story gate, and TEA writes no epic-level aggregate; a placeholder epic-level --test-review path would fail-closed and spuriously downgrade an epic PASS to reloop)` +
+    (isProduction ? ` (run bmad-testarch-automate -> bmad-testarch-trace first to build the epic trace decision)` : ` (run bmad-testarch-trace first)`) +
     `, then run EXACTLY:\n` +
-    `  uv run ${skillRoot}/scripts/gate_eval.py --trace-output ${traceOutput} --story ${epic} --profile ${profile}` +
-    (isProduction ? ` --nfr <nfr-assessment.md> --test-review <test-review.md>` : ``) + `\n` +
+    `  uv run ${skillRoot}/scripts/gate_eval.py --trace-output ${traceOutput} --story ${epic} --profile ${profile}\n` +
     `Return the script's verdict, gate_status, and reasons VERBATIM. Do not recompute thresholds or override the verdict.\n` +
     `Per-story outcomes for context: ${JSON.stringify(perStory.map((r) => ({ story: r.story, verdict: r.verdict, gate_status: r.gate_status })))}\n\n` +
     `Return ONLY the JSON object matching the schema.`,
