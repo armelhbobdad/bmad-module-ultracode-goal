@@ -82,6 +82,8 @@ The subagent must return **ONLY this object — no prose, no document quotes bey
  "advisories_checked": [{"sig": "<advisory id>", "status": "recurred|not-observed|unknown"}]}
 ```
 
+**Retrieving the result on an async-spawn platform.** The contract above assumes a *synchronous* spawn whose return text reaches you directly. If this run spawns the subagent as a **background teammate** instead, its plain-text return is **not** routed back to the conductor — so additionally instruct it to persist this *same* object to a file (e.g. `{workflow.implementation_artifacts}/.preflight-scan.json`) and read that file back, or to message you the object explicitly. The discarded-context discipline is unchanged: you ingest only the object, never the corpus, which stays discarded in the subagent's context. (The same retrieval rule applies to any subagent this run spawns asynchronously — e.g. a background-delegated Execute `bmad-dev-story` or a gate TEA sub-skill: route its structured result through a file or an explicit message, never an unrouted plain-text return.)
+
 Every `reds` entry is **RED** — it cannot be auto-remediated, because the fix is a human decision, and an unattended run guessing it produces confidently wrong work. A purely cosmetic gap belongs in `concerns`, never RED; recall-derived hypotheses are attributed under `advisories_checked` and are never themselves RED and never block launch. Record each RED finding with its source and the exact decision needed in `.decision-log.md`.
 
 ## 4. Hard gate
