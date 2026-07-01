@@ -36,6 +36,25 @@ Write a PASS only when the story is demonstrably done to its profile's Definitio
 
 **Which profile's gate you then run.** The hand-authored trace decision above is the same file for either profile; only what you AND onto it differs. Under **`--light`** it *is* the whole gate — run `gate_eval.py --profile light` (below) and stop. Under **production** — the legitimate case when an operator scopes foundational, non-web packages to the full chain — the production ANDs still apply. TEA's *browser* generators are what a non-web stack cannot run as-is: ATDD in Stage 3 and the automate→trace pair here. So the story's acceptance tests are authored and driven in the stack's own harness (the Vitest case) and reach the production Definition-of-Done un-skipped and passing, and you hand-author the trace decision above in place of automate→trace. `bmad-testarch-nfr` and `bmad-testarch-test-review` are independent of that browser pair (see "Backfill the gate evidence" above), so still produce `nfr-assessment.md` and `test-review.md` the normal way and run `gate_eval.py --profile production --story <story_id> --nfr … --test-review …`. Pass **both** flags: `gate_eval.py` fail-closes a `--nfr`/`--test-review` path that is given-but-missing, but a flag you simply *omit* is silently skipped and its AND quietly dropped — so omitting them on a production run inflates the gate by losing a signal, the same dishonesty the hand-authored-PASS rule forbids. If a signal genuinely cannot be produced on the stack either, that is a CONCERNS/`defer` or a `reloop`, never a dropped flag. A stack that cannot meet the production acceptance-test bar at all belongs under `--light` (see the framework fitness caveat in `references/preflight.md`), not a hand-waved production PASS. The honesty bar is unchanged: a PASS requires full AC coverage by passing tests, never to dodge an AND.
 
+**Hand-authored `nfr-assessment.md` and `test-review.md` shapes (production path only).** `gate_eval.py` scans these two files with the *same* parser it uses on real TEA output, so a hand- or agent-authored file must carry the exact fields below — otherwise the scanner reads the signal as *not found* and, under the fail-closed contract, treats it as **failing**, spuriously downgrading an `advance` to `reloop`. (Under `--light` neither file is read, so this whole block is production-only.) Only the named field is parsed; everything else is human prose.
+
+`nfr-assessment.md` — the reader needs one field:
+
+```markdown
+**Overall Status:** PASS
+```
+
+`PASS` | `CONCERNS` | `FAIL` (the key may also be written `overallStatus:`). A `FAIL` — or a status the scanner cannot find — downgrades `advance`→`reloop`.
+
+`test-review.md` — the reader needs two fields:
+
+```markdown
+**Quality Score**: 89/100
+**Recommendation**: Approve
+```
+
+The score **must** carry the `/100` denominator: a bare `score: 89` matches nothing, is read as *not found*, and fail-closes to `reloop` — always write it as `N/100` (a `Quality Score` label or a bare `score` both parse, but only with `/100`). `Recommendation` ∈ `Approve` | `Approve with Comments` | `Request Changes` | `Block`; a `Block`, or a score `< 80`, downgrades `advance`→`reloop`.
+
 ## Run the gate
 
 Production:
