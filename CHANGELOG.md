@@ -8,6 +8,32 @@ All notable changes to this project will be documented in this file. The format 
 
 - **Cross-Session Recall** (optional): when [claude-mem](https://github.com/thedotmack/claude-mem) is installed and cross_session_recall is set to on, the executor consults prior runs of the same repo during Ingest and Preflight and records one structured outcome at Finalize, advisory only, hook-latched, never part of the gate. No effect when claude-mem is absent. Off by default.
 
+## [0.5.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v0.4.0...v0.5.0) (2026-07-12)
+
+### ⚠ BREAKING CHANGES
+
+* **ucg:** the installer no longer installs UCG to non-Claude
+providers (Codex, Cursor, and the rest). UCG installs to Claude Code only.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+### Features
+
+* **ucg:** make UCG Claude-Code-only ([13e3e3b](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/13e3e3b9072c3603da39fb3a1d5dc5b1ff5992ec))
+
+### Bug Fixes
+
+* **ucg:** defer to formalize's strict sprint-status read on non-default tracks ([b3494b5](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/b3494b57af701c62425b5e2b3447eda9f6649f75))
+* **ucg:** disarm stale prior-run hooks before the preflight remediation commit ([6190858](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/6190858f69ca34a0562c141f81af2a77341f194c))
+* **ucg:** document hand-authored nfr/test-review shapes for the non-web gate path ([92dd7d0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/92dd7d0580153490cc85c120fbda1dc849a84297))
+* **ucg:** isolate per-story commits when stage 3 pre-generates sibling tests ([5a65690](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/5a65690b807b143f815d9d165f360b1d9a4ac6f1))
+* **ucg:** key isolated tracks to a numeric epic prefix for the rollup ([447b27b](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/447b27b56daa3f198c878e94197bf1a8671ca62a)), closes [#33](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/33)
+* **ucg:** make the Epic-level gate trace-only on both execution paths ([4305d18](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/4305d1842b97d5e900465345007e9e7ee9377b75))
+* **ucg:** note async-spawn result retrieval for the preflight scan subagent ([5553b0a](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/5553b0a76d79c5099d1be2178add46f92b753839))
+* **ucg:** re-verify each story on the committed HEAD before advancing ([9c965e3](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/9c965e36ae44fd68eb0d9b2b55bd96bc5287b98a))
+* **ucg:** run-scope the async preflight-scan retrieval file ([95ec887](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/95ec887c394a0b3f120ac70de1af402b6da29821))
+* **ucg:** scope colliding/cross-file epic initiatives to an isolated track ([76128da](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/76128da0a49af92471df22cdfaf5c6028e371019))
+* **ucg:** scope the per-story test run to catch cross-package regressions ([5c42d79](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/5c42d79a1589e2ca5a4107f37620f3f07d5f6378))
 ## [0.4.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v0.3.0...v0.4.0) (2026-06-28)
 
 ### Features
