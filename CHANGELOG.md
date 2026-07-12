@@ -8,6 +8,11 @@ All notable changes to this project will be documented in this file. The format 
 
 - **Cross-Session Recall** (optional): when [claude-mem](https://github.com/thedotmack/claude-mem) is installed and cross_session_recall is set to on, the executor consults prior runs of the same repo during Ingest and Preflight and records one structured outcome at Finalize, advisory only, hook-latched, never part of the gate. No effect when claude-mem is absent. Off by default.
 
+## [0.5.1](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v0.5.0...v0.5.1) (2026-07-12)
+
+### Bug Fixes
+
+* **deps:** pin figlet to 1.11.0 (1.11.1 crashes at require via npx) ([03c6792](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/03c6792647f7fe287f1533485d2d975aa9ac5c29))
 ## [0.5.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v0.4.0...v0.5.0) (2026-07-12)
 
 ### ⚠ BREAKING CHANGES
