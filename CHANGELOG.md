@@ -59,7 +59,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 * **ucg:** SKILL launch Non-negotiable requires formalize_check.py returns ready (story 2-6) ([45c44a9](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/45c44a9c40a33e238d68b4986c6d32f18565cba3))
 * **ucg:** step-2 fold-in + leaked-TEA-artifact MOVE remediation (story 2-2) ([4a15804](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/4a1580401e4d2164396fde0d02dab8af0e00d186))
 * **ucg:** step-3 seeds formalize judgment_candidates into the subagent (story 2-3) ([8ba0925](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/8ba0925382fce32e0771bfecdfa17fe202eea54f))
-* **ucg:** step-4 fourth AND-clause — union formalize reds + verdict==ready (story 2-4) ([3f1aba3](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/3f1aba3474ecf5816d9255c85d0590cb8fe4d587))
+* **ucg:** step-4 fourth AND-clause: union formalize reds + verdict==ready (story 2-4) ([3f1aba3](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/3f1aba3474ecf5816d9255c85d0590cb8fe4d587))
 * **ucg:** TEA shaping fragments + formalize reader-not-evaluator (story 2-7) ([a21dd25](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/a21dd250ddcd455abc7d6a4a8c27c6634b79c208))
 
 ### Bug Fixes
