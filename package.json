@@ -73,7 +73,7 @@
     "@clack/prompts": "^1.1.0",
     "chalk": "^4.1.2",
     "commander": "^14.0.0",
-    "figlet": "^1.8.0",
+    "figlet": "1.11.0",
     "fs-extra": "^11.3.0",
     "js-yaml": "^4.1.0"
   },
