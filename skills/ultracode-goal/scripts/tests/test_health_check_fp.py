@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -241,6 +242,105 @@ def test_record_invalid_action_exits_one(tmp_path):
                 "--issue-url", "https://example/1", "--action", "upvoted", "--date", "2026-06-04")
     assert proc.returncode == 1
     assert "error" in json.loads(proc.stdout)
+
+
+# --- the resolved disposition: seen is a verdict, not cache presence -------
+
+
+def _seen_after(tmp_path, action, issue_url="https://github.com/o/r/issues/1"):
+    """Record one fp with `action`, then read the seen verdict back."""
+    cache = tmp_path / "seen.json"
+    fp = "fp-abc1234"
+    rec = _run("record", "--fp", fp, "--cache", str(cache),
+               "--issue-url", issue_url, "--action", action, "--date", "2026-07-19")
+    assert rec.returncode == 0, rec.stderr
+    proc = _run("seen", "--fp", fp, "--cache", str(cache))
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_record_accepts_resolved(tmp_path):
+    cache = tmp_path / "seen.json"
+    proc = _run("record", "--fp", "fp-abc1234", "--cache", str(cache),
+                "--issue-url", "", "--action", "resolved", "--date", "2026-07-19")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["written"] is True
+
+
+def test_seen_resolved_does_not_suppress(tmp_path):
+    # The fail-open this closes: a fixed finding used to keep suppressing
+    # forever, so a REGRESSION of the same defect was silently swallowed.
+    payload = _seen_after(tmp_path, "resolved")
+
+    assert payload["seen"] is False, "a resolved fingerprint must not suppress"
+    assert payload["status"] == "regression"
+    # The record RIDES ALONG so the caller can link the original rather than
+    # file the recurrence as a first sighting. Returning None here would restore
+    # the signal but throw away the history, which is the point of `resolved`.
+    assert payload["record"] is not None
+    assert payload["record"]["action"] == "resolved"
+    assert payload["record"]["date"] == "2026-07-19"
+
+
+@pytest.mark.parametrize("action", ["created", "reacted", "commented", "queued"])
+def test_seen_suppressing_actions_still_suppress(tmp_path, action):
+    # Anti-vacuous twin for the test above: the identical flow, differing only
+    # in the action. Without it, `seen: false` unconditionally would pass the
+    # resolved test while re-reporting every finding on every run.
+    payload = _seen_after(tmp_path, action)
+
+    assert payload["seen"] is True, "%s must still suppress" % action
+    assert payload["status"] == "handled"
+    assert payload["record"]["action"] == action
+
+
+def test_seen_unrecognized_action_does_not_suppress(tmp_path):
+    # Written by a hand-edit or a newer module. It cannot be confirmed handled,
+    # so it reports: a duplicate is closed by the dedup Action, a silenced
+    # regression is caught by nothing.
+    cache = tmp_path / "seen.json"
+    cache.write_text(
+        json.dumps({"fp-abc1234": {"action": "teleported", "date": "2026-07-19",
+                                   "issue_url": ""}}),
+        encoding="utf-8",
+    )
+    proc = _run("seen", "--fp", "fp-abc1234", "--cache", str(cache))
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+
+    assert payload["seen"] is False
+    assert payload["status"] == "unrecognized"
+    assert payload["record"]["action"] == "teleported"
+
+
+def test_seen_unseen_carries_status(tmp_path):
+    proc = _run("seen", "--fp", "fp-abc1234", "--cache", str(tmp_path / "nope.json"))
+    payload = json.loads(proc.stdout)
+    assert payload == {"seen": False, "status": "unseen", "record": None}
+
+
+def test_suppressing_actions_is_not_derived_from_actions():
+    """`resolved` must be opted OUT of suppression by construction.
+
+    SUPPRESSING_ACTIONS is a literal tuple rather than `ACTIONS` minus
+    `resolved`, so a disposition added later defaults to NOT suppressing until
+    someone opts it in. Deriving it would silently re-arm suppression for every
+    future action, which is the exact defect this disposition exists to fix.
+    """
+    src = SCRIPT.read_text(encoding="utf-8")
+
+    # A literal tuple, not `tuple(a for a in ACTIONS if ...)` or a set-difference.
+    match = re.search(r"^SUPPRESSING_ACTIONS = \(([^)]*)\)", src, re.MULTILINE)
+    assert match, "SUPPRESSING_ACTIONS must be a module-level literal tuple"
+    suppressing = re.findall(r'"([a-z]+)"', match.group(1))
+    assert "resolved" not in suppressing
+
+    actions = re.search(r"^ACTIONS = \(([^)]*)\)", src, re.MULTILINE)
+    assert actions, "ACTIONS must be a module-level literal tuple"
+    valid = re.findall(r'"([a-z]+)"', actions.group(1))
+    assert "resolved" in valid, "resolved must be a recordable action"
+    # No drift: every suppressing action is still a valid action.
+    assert set(suppressing) < set(valid)
 
 
 # --- corrupt cache resilience ----------------------------------------------

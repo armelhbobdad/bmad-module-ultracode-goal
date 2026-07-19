@@ -129,7 +129,14 @@ uv run {skill-root}/scripts/health_check_fp.py fingerprint \
 uv run {skill-root}/scripts/health_check_fp.py seen --fp {fp} --cache {seenCachePath}
 ```
 
-→ `{"seen": true, "record": {...}}` means this user already handled this fingerprint on this machine — skip submission silently and log: `"fp-xxxxxxx: already handled on {record.date}, {record.issue_url} — skipping"`. `{"seen": false, "record": null}` means proceed.
+→ **`seen` is the suppression verdict, not mere cache presence.** Read `status`:
+
+- **`unseen`** (`seen: false`, `record: null`) — proceed.
+- **`handled`** (`seen: true`) — this user already handled this fingerprint on this machine and the defect is still open: skip submission silently and log `"fp-xxxxxxx: already handled on {record.date}, {record.issue_url} — skipping"`.
+- **`regression`** (`seen: false`, `record` present, `record.action` is `resolved`) — this fingerprint was fixed and closed out, so a fresh sighting is a **regression, not a duplicate**. Do NOT suppress. Proceed, and mark it so it can never be filed as a first sighting: title it `[health-check][{severity}][{fp}] {workflow}: REGRESSION — {short description}` and open the body with `Regression of {record.issue_url} (resolved {record.date}).` When `record.issue_url` is empty (the prior sighting only ever queued, so no issue exists), write `Regression of a previously resolved local finding (resolved {record.date}).` instead — the `{fp}` label still ties the two together server-side.
+- **`unrecognized`** (`seen: false`, `record` present) — the record carries an action this version does not know, so it cannot be confirmed handled. Proceed as an ordinary submission. Reporting a duplicate is self-healing (the dedup Action closes it); silencing a live defect is not.
+
+**The cache is machine-local.** It records what *this* user did on *this* machine, so a `resolved` written by whoever fixed the defect is not visible to anyone else. When `record.issue_url` is non-empty the shared source of truth is the issue itself, so prefer it: `gh issue view {record.issue_url} --json state` and treat `CLOSED` as `regression` even when the local record still says `created`/`reacted`/`commented`. If that call fails for any reason (offline, no auth, deleted issue), keep the local verdict rather than blocking — this is an advisory refinement, never a gate.
 
 **3. Check GitHub CLI** with `gh auth status`. If it fails, fall through to §5c (offline fallback).
 
@@ -228,6 +235,8 @@ Even when queuing, **still compute the fingerprint via the script** (so the queu
 uv run {skill-root}/scripts/health_check_fp.py record --fp {fp} --cache {seenCachePath} \
   --issue-url "" --action queued --date {YYYY-MM-DD}
 ```
+
+**Never overwrite a `resolved` record with `queued`.** `record` is a flat overwrite, and this path runs on the documented default (`autosubmit` off, and friction/gap always queue), so a single unattended run between a fix and the next attended report would otherwise downgrade `resolved` back to `queued` and silently re-arm the suppression the fix just removed. Read the cache first (`seen --fp {fp}`) and **skip this record entirely when `status` is `regression`** — the queue file is still written, and the `resolved` record stays intact so the next §5a run still sees the regression. Log the skip: `"fp-xxxxxxx: resolved on {record.date}, leaving the record intact — queued file written"`.
 
 **Filename:** `hc-ultracode-goal-{stage}-{YYYYMMDD-HHmmss}.md`.
 
