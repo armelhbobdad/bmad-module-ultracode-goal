@@ -1,0 +1,1 @@
+**On resume, re-enter Execute at the first story whose last logged gate verdict is not advance; advanced stories are not re-run; re-assert (do not rebuild) the Epic branch, hooks, and allowlist before continuing.**
