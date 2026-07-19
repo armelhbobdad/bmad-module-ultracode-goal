@@ -96,3 +96,29 @@ def test_mutant_step5_without_staging_sentence_reds_only_step5():
     assert _SEPARATE_STAGING_RE.search(_step4(mutated)), (
         "the step-4 control must stay green under the same mutation"
     )
+
+
+def test_mutant_step4_without_staging_sentence_reds_only_step4():
+    """Twin, mirrored: strip the staging sentence from step 4 only.
+
+    The step-4 direction was verified by hand while step 4 was authored, which
+    left the two commit sites unevenly proven: step 5 had an executed twin and
+    step 4 had none. This is that twin, and it carries the same paired shape -
+    step 4 reds while the IDENTICAL matcher stays green on step 5 - so neither
+    site can satisfy its own check off the other's copy of the sentence.
+    """
+    text = _text()
+    original = _step4(text)
+    mutated_block = re.sub(
+        r"\*\*Staging is itself a prior, SEPARATE tool call\*\*.*?rule the marker fol",
+        "", original, flags=re.DOTALL,
+    )
+    assert mutated_block != original, "step-4 staging sentence anchor drifted"
+    mutated = text.replace(original, mutated_block, 1)
+
+    assert not _SEPARATE_STAGING_RE.search(_step4(mutated)), (
+        "with the sentence stripped, the step-4 assertion must fail"
+    )
+    assert _SEPARATE_STAGING_RE.search(_step5(mutated)), (
+        "the step-5 control must stay green under the same mutation"
+    )
