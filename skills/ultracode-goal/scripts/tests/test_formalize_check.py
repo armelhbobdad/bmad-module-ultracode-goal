@@ -447,5 +447,139 @@ def test_no_time_based_block(monkeypatch):
     ), "the kernel must author no wall-clock cutoff"
 
 
+# --- empty in-scope story set must not read ready ---------------------------
+
+STORY_BODY = """# Story 7-1: Kernel
+
+## Acceptance Criteria
+
+1. Running `pytest tests/test_kernel.py::test_reads_config` exits 0, and the
+   anti-vacuous twin `test_reads_config_missing_reds` fails when the config is
+   removed. gate-ability: mechanical.
+"""
+
+
+def _mini_project(tmp_path, with_story: bool):
+    """A minimal Epic-7 project whose ONLY variable is whether a story exists.
+
+    Everything else the kernel reads is present and readable, so the empty story
+    set is the sole difference between the two runs.
+    """
+    root = tmp_path / ("with_story" if with_story else "no_story")
+    planning = root / "planning-artifacts"
+    impl = root / "impl-artifacts"
+    planning.mkdir(parents=True)
+    impl.mkdir(parents=True)
+    (planning / "prd-fixture.md").write_text("# PRD\n", encoding="utf-8")
+    (planning / "architecture-fixture.md").write_text("# Architecture\n", encoding="utf-8")
+    (impl / "sprint-status.yaml").write_text(
+        "generated: fixture\ndevelopment_status:\n  epic-7: in-progress\n  7-1-kernel: backlog\n",
+        encoding="utf-8",
+    )
+    if with_story:
+        (impl / "7-1-kernel.md").write_text(STORY_BODY, encoding="utf-8")
+    return root
+
+
+def _run_project(root: Path) -> dict:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--epic",
+            "7",
+            "--project-root",
+            str(root),
+            "--planning-artifacts",
+            str(root / "planning-artifacts"),
+            "--impl-artifacts",
+            str(root / "impl-artifacts"),
+            "--tea-config",
+            str(root / "tea" / "config.yaml"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_zero_in_scope_stories_is_remediable_not_ready(tmp_path):
+    # The fail-open this closes: with no story files, every per-story and per-AC
+    # check iterates nothing, so the Epic used to score a clean zero-gap `ready`
+    # vacuously — the exact verdict the launch gate treats as go.
+    out = _run_project(_mini_project(tmp_path, with_story=False))
+
+    assert out["verdict"] == "remediable"
+    assert out["ready"] is False
+    assert out["checks"]["stories_with_ac"] == 0
+
+    gaps = [g for g in out["mechanical_gaps"] if g["kind"] == "no_in_scope_stories"]
+    assert len(gaps) == 1
+    gap = gaps[0]
+    assert gap["severity"] == "high"
+    # Remediable: the create-story scaffold generates the missing story files.
+    assert gap["remediable"] is True
+    assert "7" in gap["detail"]
+    assert "impl-artifacts" in gap["detail"]
+    assert "impl-artifacts" in gap["source"]
+
+    # It counts toward the budget exactly like every other gap (not special-cased
+    # out of it), which is what moves the verdict off `ready`.
+    assert out["mechanical_budget"] == len(out["mechanical_gaps"])
+    assert out["mechanical_budget"] >= 1
+
+
+def test_non_empty_story_set_emits_no_empty_set_gap(tmp_path):
+    # Anti-vacuous twin (data): the SAME project with one story file present
+    # fires ZERO no_in_scope_stories gaps — proving the gap keys on the EMPTY
+    # story set and not merely on running the kernel over this project shape.
+    out = _run_project(_mini_project(tmp_path, with_story=True))
+
+    assert all(g["kind"] != "no_in_scope_stories" for g in out["mechanical_gaps"])
+    assert out["checks"]["stories_with_ac"] == 1
+
+
+_EMPTY_STORY_SET_GUARD = "    if not story_paths:\n"
+
+
+def test_mutant_without_empty_story_set_gap_reads_ready(tmp_path):
+    """Twin for test_zero_in_scope_stories_is_remediable_not_ready.
+
+    Concrete mutation: neutralize the empty-story-set guard in build_verdict
+    (`if not story_paths:` -> `if False:`) on a COPY of the script, so no gap is
+    appended. The zero-story project then reports `ready` with mechanical_budget
+    0 — the pre-fix fail-open — which reds the verdict/budget assertions in the
+    named test above. If `remediable` survived this mutation, the guard would not
+    be what produces it and the named test would prove nothing.
+    """
+    src = SCRIPT.read_text(encoding="utf-8")
+    assert _EMPTY_STORY_SET_GUARD in src, "mutation anchor drifted out of formalize_check.py"
+    mutant_dir = tmp_path / "src"
+    mutant_dir.mkdir()
+    mutant = mutant_dir / "mutant_formalize_check.py"
+    mutant.write_text(src.replace(_EMPTY_STORY_SET_GUARD, "    if False:\n", 1), encoding="utf-8")
+
+    root = _mini_project(tmp_path, with_story=False)
+    proc = subprocess.run(
+        [
+            sys.executable, str(mutant), "--epic", "7",
+            "--project-root", str(root),
+            "--planning-artifacts", str(root / "planning-artifacts"),
+            "--impl-artifacts", str(root / "impl-artifacts"),
+            "--tea-config", str(root / "tea" / "config.yaml"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+
+    assert out["verdict"] == "ready"
+    assert out["mechanical_budget"] == 0
+    assert out["mechanical_gaps"] == []
+    assert out["checks"]["stories_with_ac"] == 0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
