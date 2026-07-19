@@ -415,5 +415,166 @@ def test_no_story_flag_is_backward_compatible(tmp_path):
     assert result["gate_status"] == "PASS"
 
 
+# --- --story fails closed on a genuine no-match ------------------------------
+
+
+def _per_story_dir(tmp_path):
+    """A shared dir holding TWO stories' per-story-named artifacts (2-1, 4-2)."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    write_trace_report(tmp_path, "trace-2-1.md", "gate-decision-2-1.json")
+    write_named_slim(tmp_path, "gate-decision-2-1.json", "PASS")
+    write_trace_report(tmp_path, "trace-4-2.md", "gate-decision-4-2.json")
+    write_named_slim(tmp_path, "gate-decision-4-2.json", "FAIL", p0="NOT_MET")
+    return tmp_path
+
+
+def test_absent_story_in_per_story_named_dir_is_not_evaluated(tmp_path):
+    # The fail-open this closes: story 4-9 wrote NOTHING here, yet the unscoped
+    # fallback used to hand back the first report's gate — reporting an
+    # unevaluated story as a green PASS/advance. A per-story-named dir means the
+    # requested story is genuinely absent, so the read fails closed.
+    _per_story_dir(tmp_path)
+    result = run_gate(tmp_path, profile="light", story="4-9")
+
+    assert result["gate_status"] == "NOT_EVALUATED"
+    assert result["verdict"] == "escalate"
+    # Explicitly NOT the neighbouring story's verdict.
+    assert result["verdict"] != "advance"
+    assert result["p0_status"] is None
+    assert result["p1_status"] is None
+    assert result["overall_status"] is None
+    # The reasons name the story that was asked for and say why no fallback ran.
+    assert any("4-9" in r for r in result["reasons"])
+    assert any("named per story" in r for r in result["reasons"])
+    assert not any("gate-decision-2-1.json" in r for r in result["reasons"])
+
+
+def test_absent_story_in_per_story_named_dir_without_reports(tmp_path):
+    # Same rule keyed on the gate-decision names alone (no trace reports at all):
+    # gate-decision-4-2.json is named for a story, so the dir is per-story-named.
+    write_named_slim(tmp_path, "gate-decision-4-2.json", "PASS")
+    result = run_gate(tmp_path, profile="light", story="4-9")
+    assert result["gate_status"] == "NOT_EVALUATED"
+    assert result["verdict"] == "escalate"
+
+
+def test_generic_named_dir_still_resolves_unmatched_story(tmp_path):
+    # PRESERVED documented fallback: a dir holding ONE story's artifacts under
+    # generic names (trace.md / gate-decision.json) carries no story id to match,
+    # so --story must still resolve it rather than fail closed.
+    (tmp_path / "trace.md").write_text(
+        "---\nworkflowType: 'testarch-trace'\n---\n# trace report\n", encoding="utf-8"
+    )
+    write_slim(tmp_path, "PASS")
+    result = run_gate(tmp_path, profile="light", story="4-9")
+    assert result["gate_status"] == "PASS"
+    assert result["verdict"] == "advance"
+    assert any("gate-decision.json" in r for r in result["reasons"])
+
+
+def test_present_story_still_resolves_in_per_story_named_dir(tmp_path):
+    # The fail-closed rule must not swallow a story that IS present: 4-2 resolves
+    # its own gate-decision-4-2.json, not the sibling 2-1 PASS.
+    _per_story_dir(tmp_path)
+    result = run_gate(tmp_path, profile="light", story="4-2")
+    assert result["gate_status"] == "FAIL"
+    assert result["verdict"] == "reloop"
+    assert any("gate-decision-4-2.json" in r for r in result["reasons"])
+
+
+def test_epic_level_resolution_still_works_alongside_children(tmp_path):
+    # Epic-level gate: --story 4 resolves the epic's OWN artifact, never child 4-1
+    # (whose stem also ends in a numeric component).
+    write_trace_report(tmp_path, "trace-4-1.md", "gate-decision-4-1.json")
+    write_named_slim(tmp_path, "gate-decision-4-1.json", "FAIL", p0="NOT_MET")
+    write_trace_report(tmp_path, "trace-4.md", "gate-decision-4.json")
+    write_named_slim(tmp_path, "gate-decision-4.json", "PASS")
+
+    epic = run_gate(tmp_path, profile="light", story="4")
+    assert epic["gate_status"] == "PASS"
+    assert any("gate-decision-4.json" in r for r in epic["reasons"])
+    # And an epic with no artifacts of its own still fails closed here.
+    assert run_gate(tmp_path, profile="light", story="9")["gate_status"] == "NOT_EVALUATED"
+
+
+# --- Anti-vacuous twin: mutate a COPY of the script, assert the test reds -----
+
+
+def _write_mutant(tmp_path, name, old, new):
+    """Copy the shipped script, apply one textual mutation, return the copy."""
+    src = SCRIPT.read_text(encoding="utf-8")
+    assert old in src, f"mutation anchor drifted out of gate_eval.py: {name}"
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    path = tmp_path / f"mutant_{name}.py"
+    path.write_text(src.replace(old, new, 1), encoding="utf-8")
+    return path
+
+
+_FAIL_CLOSED_CLAUSE = (
+    "        elif scoped_slim is None and _is_per_story_named(trace_output):\n"
+    "            return None\n"
+)
+
+
+def test_mutant_without_fail_closed_clause_reports_neighbours_pass(tmp_path):
+    """Twin for test_absent_story_in_per_story_named_dir_is_not_evaluated.
+
+    Concrete mutation: delete the fail-closed clause from _resolve_gate_file, so
+    resolution falls through to the unscoped read exactly as it did before the
+    fix. The absent story 4-9 then reports the NEIGHBOUR story 2-1's PASS —
+    which is the assertion the named test above makes, so that test reds. If the
+    NOT_EVALUATED survived this deletion, the clause would not be what produces
+    it and the named test would prove nothing.
+    """
+    mutant = _write_mutant(tmp_path / "src", "no_fail_closed", _FAIL_CLOSED_CLAUSE, "")
+    trace = _per_story_dir(tmp_path / "trace")
+
+    proc = subprocess.run(
+        [sys.executable, str(mutant), "--trace-output", str(trace),
+         "--profile", "light", "--story", "4-9"],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+
+    # The pre-fix fail-open, reproduced against the mutant.
+    assert result["gate_status"] == "PASS"
+    assert result["verdict"] == "advance"
+    assert any("gate-decision-2-1.json" in r for r in result["reasons"])
+
+
+def test_mutant_always_fail_closed_reds_the_generic_fallback(tmp_path):
+    """Twin for test_generic_named_dir_still_resolves_unmatched_story.
+
+    Concrete mutation: drop the _is_per_story_named guard so ANY no-match fails
+    closed. The generic-name dir then returns NOT_EVALUATED instead of its PASS,
+    reding the named test above. This isolates the per-story-named condition as
+    load-bearing rather than the fail-close being unconditional.
+    """
+    mutant = _write_mutant(
+        tmp_path / "src",
+        "always_fail_closed",
+        "        elif scoped_slim is None and _is_per_story_named(trace_output):\n",
+        "        elif scoped_slim is None:\n",
+    )
+    trace = tmp_path / "trace"
+    trace.mkdir(parents=True)
+    (trace / "trace.md").write_text(
+        "---\nworkflowType: 'testarch-trace'\n---\n# trace report\n", encoding="utf-8"
+    )
+    write_slim(trace, "PASS")
+
+    proc = subprocess.run(
+        [sys.executable, str(mutant), "--trace-output", str(trace),
+         "--profile", "light", "--story", "4-9"],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+
+    assert result["gate_status"] == "NOT_EVALUATED"
+    assert result["verdict"] == "escalate"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

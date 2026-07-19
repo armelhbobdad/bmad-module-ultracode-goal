@@ -768,6 +768,25 @@ def build_verdict(
 
     # --- per-story / per-AC scan ---
     story_paths = _story_files(impl_artifacts, epic, story_keys)
+
+    # An EMPTY in-scope story set is a fail-open, not a pass: every per-story and
+    # per-AC check below iterates nothing, so an Epic whose story files do not
+    # exist would otherwise score a clean zero-gap `ready` vacuously. Count it as
+    # a gap like any other so the verdict is `remediable` instead.
+    if not story_paths:
+        mechanical_gaps.append(
+            {
+                "id": "no_in_scope_stories",
+                "kind": "no_in_scope_stories",
+                "severity": "high",
+                "detail": "No in-scope story files found for Epic %s under "
+                "impl-artifacts: %s" % (epic, _rel(impl_artifacts, project_root)),
+                # The create-story scaffold generates the missing story files.
+                "remediable": True,
+                "source": _rel(impl_artifacts, project_root),
+            }
+        )
+
     stories_with_ac = 0
     ac_total = 0
     ac_machine_checkable = 0
