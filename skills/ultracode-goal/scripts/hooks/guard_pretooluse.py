@@ -8,14 +8,22 @@
 Enforces invariants that must NOT live in memory (context, not enforcement):
   1. No `git commit`/`git push` while on a protected branch.
   2. No `git commit` until a "tests-ran" marker exists for the current story.
-  3. No `git commit` while the staged index is empty (a commit that captures no
+  3. Marker freshness: no `git commit` unless that marker carries a
+     `baseline=<sha>` line matching, character for character, the SHA the story
+     recorded when it started. A bare existence check accepts a marker replayed
+     from an earlier code state; this ties the marker to the story it claims to
+     be green for. Both values are READ from disk (two file reads, no git call)
+     and neither is recomputed, so a story spanning several commits stays valid
+     after HEAD moves. Fail closed: a marker with no `baseline=` line, or an
+     unreadable baseline file, denies.
+  4. No `git commit` while the staged index is empty (a commit that captures no
      work), or while the staged-index probe cannot answer (fail closed).
-  4. Un-skip proof: in production (an atdd-checklist for the current story is on
+  5. Un-skip proof: in production (an atdd-checklist for the current story is on
      disk), no `git commit` while the STAGED CONTENT of any acceptance-test file
      that checklist enumerates still contains `test.skip(`. This reads the blob
      being committed, not a diff, so it also catches a story's first commit,
      where there is no prior blob to compare against.
-  5. Cross-Session Recall gate: while a UCG run is active (a .mem-state.json
+  6. Cross-Session Recall gate: while a UCG run is active (a .mem-state.json
      latch is present), claude-mem stays advisory-only and fails closed — any
      claude-mem MCP call (and any filesystem reach into .claude-mem) is denied
      unless the latch is green (present + schema_ok + recall on). Outside a run
@@ -42,6 +50,13 @@ Config resolution (all optional, env wins so the conductor can inject per run):
                                 _test_artifacts): unset means the check is out
                                 of scope, never a deny.
   Marker file checked: <impl_artifacts>/.tests-ran-<story_id>
+  Baseline read:       <impl_artifacts>/.baseline-<story_id>, the SHA the story
+                  recorded before any implementation. Compared as a verbatim,
+                  whitespace-stripped string against the marker's `baseline=`
+                  line: no `git rev-parse`, no short-SHA normalization, no
+                  case-folding. Same <impl_artifacts> and same <story_id> the
+                  tests-ran marker uses, deliberately, so there is one
+                  resolution path rather than two that can drift apart.
   State latch checked: <impl_artifacts>/.mem-state.json (Cross-Session Recall)
   Checklist read: <test_artifacts>/atdd-checklist-<story_id>.md, keyed by the
                   SAME story id the tests-ran marker uses (the id resolved by
@@ -368,6 +383,93 @@ def _git_writes(command: str) -> set[str]:
     return _command_write_verbs(command, 0)
 
 
+# --- Marker freshness -------------------------------------------------------
+# A tests-ran marker proves that a suite once ran green. Nothing in a bare
+# existence check stops that marker from being REPLAYED: written against an
+# earlier code state, or left over from a previous story, it satisfies the check
+# forever. So the marker carries the commit the story started from, and this
+# clause requires it to equal the SHA the story recorded.
+#
+# Both sides are read as strings from files that already exist for other
+# reasons, so this costs two file reads and one comparison — no `git rev-parse`.
+# That is not an optimization: recomputing the SHA here would compare against a
+# HEAD that has already moved on any story that commits more than once, and
+# would deny its second commit. Read, never derive.
+
+_MARKER_BASELINE_RE = re.compile(r"^baseline=(.*)$", re.MULTILINE)
+
+
+def _marker_baseline_sha(marker: Path) -> str | None:
+    """The SHA on the marker's FIRST `baseline=` line, whitespace-stripped.
+
+    None when the marker cannot be read at all or carries no such line — both
+    of which the caller treats as a deny, not as "check not applicable".
+    """
+    try:
+        text = marker.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    match = _MARKER_BASELINE_RE.search(text)
+    return match.group(1).strip() if match else None
+
+
+def _recorded_baseline_sha(baseline: Path) -> str | None:
+    """The story's recorded baseline SHA, read verbatim off its own file.
+
+    Deliberately NOT `git rev-parse HEAD`: the story is anchored to where it
+    started, and HEAD walks away from that as soon as the story's first commit
+    lands.
+    """
+    try:
+        return baseline.read_text(encoding="utf-8").strip() or None
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _marker_freshness_gate(marker: Path, baseline: Path) -> None:
+    """Deny a commit whose tests-ran marker was not written for this baseline.
+
+    Fail closed on both absences. There is no inert path here (unlike the
+    un-skip proof's unset-env case): a marker that cannot be tied to a baseline
+    is exactly the replayed marker this clause exists to refuse, so "cannot
+    tell" and "does not match" get the same answer.
+    """
+    marker_sha = _marker_baseline_sha(marker)
+    if marker_sha is None:
+        _deny(
+            "Marker-freshness guard: refusing `git commit` — the tests-ran "
+            f"marker {marker} carries no `baseline=<sha>` line, so it cannot be "
+            f"tied to the commit this story started from ({baseline}) and may "
+            "be a marker replayed from an earlier code state. Failing closed. "
+            "Re-run the story's test/lint/build to green, then rewrite "
+            f"{marker} with a `baseline=<sha>` line copied verbatim from "
+            f"{baseline}, then commit."
+        )
+    baseline_sha = _recorded_baseline_sha(baseline)
+    if baseline_sha is None:
+        _deny(
+            "Marker-freshness guard: refusing `git commit` — this story's "
+            f"recorded baseline {baseline} is missing or unreadable, so the "
+            f"tests-ran marker {marker} cannot be checked against it. Failing "
+            "closed. Restore that file (the full 40-hex commit this story "
+            "started from, one line), re-run the story's test/lint/build to "
+            f"green, then rewrite {marker} with a `baseline=<sha>` line copied "
+            "verbatim from it, then commit."
+        )
+    if marker_sha != baseline_sha:
+        _deny(
+            "Marker-freshness guard: refusing `git commit` — the tests-ran "
+            f"marker {marker} records baseline={marker_sha}, but this story's "
+            f"recorded baseline {baseline} is {baseline_sha}. The marker was "
+            "written against a different code state, so it proves nothing "
+            "about the tree being committed now. Re-run the story's "
+            f"test/lint/build to green, then rewrite {marker} with a "
+            f"`baseline=<sha>` line copied verbatim from {baseline} (copied, "
+            "never re-derived from `git rev-parse HEAD` — the baseline does "
+            "not move while the story runs), then commit."
+        )
+
+
 # --- Un-skip proof ----------------------------------------------------------
 # In production the story's atdd-checklist is the ground truth for which files
 # carry its acceptance tests. This clause reads the STAGED post-image of each of
@@ -680,7 +782,10 @@ def main() -> None:
         impl = _impl_artifacts(cwd)
         story = _current_story(impl)
         marker = (impl / f".tests-ran-{story}") if (impl and story) else None
-        if marker is None or not marker.is_file():
+        # Same impl-artifacts dir and same story id as the marker, on purpose:
+        # one resolution path, so the two files cannot drift apart.
+        baseline = (impl / f".baseline-{story}") if (impl and story) else None
+        if marker is None or baseline is None or not marker.is_file():
             target = str(marker) if marker else "<impl-artifacts>/.tests-ran-<story>"
             _deny(
                 "Tests-ran guard: refusing `git commit` — no tests-ran marker "
@@ -688,6 +793,7 @@ def main() -> None:
                 f"test/lint/build to green and write {target} before committing. "
                 "Commit only at a verified-green story boundary."
             )
+        _marker_freshness_gate(marker, baseline)
         if not _staged_index_nonempty(cwd):
             _deny(
                 "Empty-index guard: refusing `git commit` — the staged index is "

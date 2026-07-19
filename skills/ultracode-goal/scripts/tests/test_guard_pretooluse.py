@@ -105,6 +105,11 @@ def _commit_event(cwd: Path, command: str = "git commit -m wip") -> dict:
     }
 
 
+def _reason(out: dict | None) -> str:
+    assert out is not None, "expected a decision on stdout"
+    return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_protected_branch_denies_commit(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -172,16 +177,47 @@ def test_epic_branch_commit_denied_without_tests_marker(tmp_path: Path) -> None:
     assert "STORY-1" in reason
 
 
-def _green_story_repo(tmp_path: Path, *, stage: bool) -> tuple[Path, Path]:
-    """A repo on the epic branch with a tests-ran marker, optionally with work
-    staged by a prior separate call (what the guard now requires to commit)."""
+# The SHA the story recorded before any implementation, and a different one
+# standing in for "this marker was written against an earlier code state".
+_BASELINE_SHA = "4f1c0d3a9b6e2f8d5c7a1b0e3d9f6a2c8b4e7d10"
+_STALE_SHA = "9a3e5c17b028d4f6e91c73a508b2d6f4c1e97a35"
+
+
+def _write_story_markers(
+    impl: Path, *, marker_sha: str | None, baseline_sha: str | None
+) -> None:
+    """The pair the commit clauses read: the tests-ran marker and the baseline.
+
+    `marker_sha` None writes a marker with NO `baseline=` line (the shape every
+    marker had before the freshness clause existed); `baseline_sha` None writes
+    no baseline file at all.
+    """
+    lines = ["story=STORY-1"]
+    if marker_sha is not None:
+        lines.append(f"baseline={marker_sha}")
+    lines.append("suite=ok")
+    (impl / ".tests-ran-STORY-1").write_text("\n".join(lines) + "\n")
+    if baseline_sha is not None:
+        (impl / ".baseline-STORY-1").write_text(baseline_sha + "\n")
+
+
+def _green_story_repo(
+    tmp_path: Path,
+    *,
+    stage: bool,
+    marker_sha: str | None = _BASELINE_SHA,
+    baseline_sha: str | None = _BASELINE_SHA,
+) -> tuple[Path, Path]:
+    """A repo on the epic branch with a tests-ran marker naming the story's
+    recorded baseline, optionally with work staged by a prior separate call
+    (both of which the guard now requires to commit)."""
     repo = tmp_path / "repo"
     repo.mkdir(parents=True)
     _init_repo(repo, "ultracode/epic-42")
     impl = repo / "impl"
     impl.mkdir()
     (impl / ".current-story").write_text("STORY-1")
-    (impl / ".tests-ran-STORY-1").write_text("ok")
+    _write_story_markers(impl, marker_sha=marker_sha, baseline_sha=baseline_sha)
     if stage:
         (repo / "story.txt").write_text("story work")
         _git(repo, "add", "-A")
@@ -257,7 +293,8 @@ def test_staged_index_probe_failure_denies_commit(tmp_path: Path) -> None:
     impl = tmp_path / "impl"
     impl.mkdir()
     (impl / ".current-story").write_text("STORY-1")
-    (impl / ".tests-ran-STORY-1").write_text("ok")
+    # A fresh marker, so the deny below is unambiguously the index probe.
+    _write_story_markers(impl, marker_sha=_BASELINE_SHA, baseline_sha=_BASELINE_SHA)
 
     code, out = _run_hook(
         _commit_event(nonrepo),
@@ -287,6 +324,175 @@ def test_staged_index_probe_missing_git_binary_denies_commit(tmp_path: Path) -> 
     assert code == 2  # probe raised -> fail closed
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "Empty-index guard" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# ---------------------------------------------------------------------------
+# Marker freshness: the tests-ran marker must name the story's own baseline.
+#
+# A bare existence check accepts a marker replayed from an earlier code state.
+# The marker therefore carries a `baseline=<sha>` line and the guard requires it
+# to equal the SHA the story recorded, character for character. Both values are
+# read off disk; neither is recomputed from git, which is what lets a story that
+# commits more than once stay valid once HEAD has moved past its baseline.
+#
+# Every test in this section stages real work, so a deny can never be the
+# empty-index clause firing first, and asserts on the deny MESSAGE, not only on
+# the exit code.
+# ---------------------------------------------------------------------------
+
+
+def test_marker_with_matching_baseline_allows_commit(tmp_path: Path) -> None:
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    # The fixture property the twins below depend on, asserted rather than assumed.
+    assert f"baseline={_BASELINE_SHA}" in (impl / ".tests-ran-STORY-1").read_text()
+    assert (impl / ".baseline-STORY-1").read_text().strip() == _BASELINE_SHA
+
+    code, out = _run_hook(
+        _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 0, "the marker names this story's baseline: a green boundary"
+    assert out is None
+
+
+def test_stale_marker_baseline_denies_commit(tmp_path: Path) -> None:
+    # The marker was written when the story sat at an earlier commit, then
+    # replayed to satisfy a later one.
+    repo, impl = _green_story_repo(tmp_path, stage=True, marker_sha=_STALE_SHA)
+
+    code, out = _run_hook(
+        _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 2
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = _reason(out)
+    assert "Marker-freshness guard" in reason  # names the failing clause...
+    assert "Empty-index guard" not in reason  # ...and not a sibling one
+    assert str(impl / ".tests-ran-STORY-1") in reason  # both files it compared
+    assert str(impl / ".baseline-STORY-1") in reason
+    assert _STALE_SHA in reason and _BASELINE_SHA in reason  # and both values
+    # the recovery: re-run to green, then rewrite the marker
+    assert "Re-run the story's test/lint/build to green" in reason
+    assert "rewrite" in reason and "copied verbatim" in reason
+
+
+def test_marker_without_baseline_line_denies_commit(tmp_path: Path) -> None:
+    # The pre-freshness marker shape. There is deliberately no inert path here:
+    # a marker that cannot be tied to a baseline is the replayed marker case.
+    repo, impl = _green_story_repo(tmp_path, stage=True, marker_sha=None)
+    assert "baseline=" not in (impl / ".tests-ran-STORY-1").read_text()
+
+    code, out = _run_hook(
+        _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 2
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = _reason(out)
+    assert "Marker-freshness guard" in reason
+    assert "no `baseline=<sha>` line" in reason
+    assert str(impl / ".baseline-STORY-1") in reason
+
+
+def test_unreadable_baseline_file_denies_commit(tmp_path: Path) -> None:
+    # Absent baseline first: the marker is well-formed, so the deny can only be
+    # the unreadable baseline.
+    repo, impl = _green_story_repo(tmp_path, stage=True, baseline_sha=None)
+    assert not (impl / ".baseline-STORY-1").exists()
+
+    code, out = _run_hook(
+        _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 2
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = _reason(out)
+    assert "Marker-freshness guard" in reason
+    assert "missing or unreadable" in reason
+    assert str(impl / ".tests-ran-STORY-1") in reason
+
+    # Second unreadable shape, exercised only where file modes actually bite
+    # (a root runner ignores them, and a conditional beats a silent skip).
+    baseline = impl / ".baseline-STORY-1"
+    baseline.write_text(_BASELINE_SHA + "\n")
+    baseline.chmod(0o000)
+    if not os.access(baseline, os.R_OK):
+        code, out = _run_hook(
+            _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+        )
+        assert code == 2
+        assert "missing or unreadable" in _reason(out)
+    baseline.chmod(0o644)
+
+    # Control: made readable again, the same fixture is allowed. Without it the
+    # pair would pass even if the clause denied unconditionally.
+    code, out = _run_hook(
+        _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 0
+    assert out is None
+
+
+def test_marker_baseline_survives_head_move_on_multi_commit_story(
+    tmp_path: Path,
+) -> None:
+    """A story that commits twice keeps the SHA it started from.
+
+    The comparison SHA is READ from the baseline file, never recomputed, so the
+    story's second commit is judged against where it started rather than
+    against the HEAD its own first commit created.
+    """
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+
+    # The story's first commit lands, so HEAD walks off the recorded baseline.
+    _git(repo, "commit", "-q", "-m", "story work, part one")
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+    assert head_after != head_before, "HEAD must actually have moved"
+    assert head_after != _BASELINE_SHA
+
+    # More work, staged in its own prior call. The marker is NOT rewritten.
+    (repo / "story2.txt").write_text("story work, part two")
+    _git(repo, "add", "story2.txt")
+
+    code, out = _run_hook(
+        _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 0, "the second commit of a multi-commit story stays allowed"
+    assert out is None
+
+
+def test_stale_marker_denies_with_no_atdd_checklist_present(tmp_path: Path) -> None:
+    """The freshness clause is not scoped to the production profile.
+
+    The guard reads no profile, so "no atdd-checklist on disk" IS the lighter
+    profile as the guard can observe it. A stale marker must still deny there,
+    which is what keeps this module's own runs inside the net.
+    """
+    repo, impl = _green_story_repo(tmp_path, stage=True, marker_sha=_STALE_SHA)
+    tests_root = repo / "test-artifacts"
+    tests_root.mkdir()
+    assert not (tests_root / "atdd-checklist-STORY-1.md").exists()
+    assert not any(impl.glob("atdd-checklist-*"))
+
+    code, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {
+            "ULTRACODE_IMPL_ARTIFACTS": str(impl),
+            "ULTRACODE_TEST_ARTIFACTS": str(tests_root),
+        },
+    )
+
+    assert code == 2
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "Marker-freshness guard" in _reason(out)
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +682,199 @@ def test_mutant_probe_unknown_exit_code_fails_open_allows_commit(tmp_path: Path)
         mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
     )
     assert code == 0, "the allow-path assertion stays green (exit 1)"
+
+
+# --- Executed mutants of the marker-freshness clause ------------------------
+# One mutation per obligation, each on a COPY of the hook under tmp_path. The
+# shipped hook is the LIVE PreToolUse guard for this repo, so no test may touch
+# it.
+
+_FRESHNESS_EQUALITY = "    if marker_sha != baseline_sha:\n"
+_FRESHNESS_NO_MARKER_LINE = "    if marker_sha is None:\n        _deny(\n"
+_FRESHNESS_NO_BASELINE = "    if baseline_sha is None:\n        _deny(\n"
+_FRESHNESS_CALL_SITE = "        _marker_freshness_gate(marker, baseline)"
+_BASELINE_READ_BODY = (
+    "    try:\n"
+    '        return baseline.read_text(encoding="utf-8").strip() or None\n'
+    "    except (OSError, UnicodeDecodeError):\n"
+    "        return None"
+)
+
+
+def test_twin_neutered_equality_check_allows_stale_marker(tmp_path: Path) -> None:
+    """Twin: with the equality branch neutered, the replayed marker is ALLOWED.
+
+    Control + mutant in ONE function on purpose. Without the control half, a
+    mutation that silently matched nothing would leave the copy behaving like
+    the original and this test would still pass on a no-op edit; with it, a
+    no-op mutation reds here.
+    """
+    control = tmp_path / "control_guard.py"
+    control.write_text(_hook_source(), encoding="utf-8")
+    repo_c, impl_c = _green_story_repo(tmp_path / "c", stage=True, marker_sha=_STALE_SHA)
+    code, out = _run_mutant_hook(
+        control, _commit_event(repo_c), repo_c, {"ULTRACODE_IMPL_ARTIFACTS": str(impl_c)}
+    )
+    assert code == 2, "the UNMUTATED copy must still deny the replayed marker"
+    assert "Marker-freshness guard" in _reason(out)
+
+    mutant = _write_mutant(
+        tmp_path,
+        "no_equality",
+        _FRESHNESS_EQUALITY,
+        "    if False:  # mutant: equality check removed\n",
+    )
+    repo_m, impl_m = _green_story_repo(tmp_path / "m", stage=True, marker_sha=_STALE_SHA)
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo_m), repo_m, {"ULTRACODE_IMPL_ARTIFACTS": str(impl_m)}
+    )
+    assert code == 0, "the stale-marker deny assertion must red without the equality"
+    assert out is None
+
+
+def test_mutant_inverted_freshness_equality_denies_matching_pair(
+    tmp_path: Path,
+) -> None:
+    """Twin for the ALLOW direction: invert the comparison.
+
+    The matching pair then denies, so the allow assertion reds — which is what
+    proves it asserts the clause's allow branch rather than merely observing
+    that the clause never fires.
+    """
+    mutant = _write_mutant(
+        tmp_path, "inverted_equality", _FRESHNESS_EQUALITY, "    if marker_sha == baseline_sha:\n"
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 2, "the matching-pair allow assertion must red when inverted"
+    assert "Marker-freshness guard" in _reason(out)
+
+
+def test_mutant_freshness_absence_falls_open_allows_both_gaps(tmp_path: Path) -> None:
+    """Twin: replace both fail-closed branches with a fall-through to allow.
+
+    This is exactly the edit that would turn the deliberate no-escape-hatch
+    posture into the inert one the sibling un-skip clause uses for its unset
+    env var, so both absence assertions must red under it.
+    """
+    mutant = _write_mutant_multi(
+        tmp_path,
+        "freshness_fail_open",
+        [
+            (_FRESHNESS_NO_MARKER_LINE,
+             "    if marker_sha is None:\n        _allow()\n        _deny(\n"),
+            (_FRESHNESS_NO_BASELINE,
+             "    if baseline_sha is None:\n        _allow()\n        _deny(\n"),
+        ],
+    )
+
+    no_line_repo, no_line_impl = _green_story_repo(
+        tmp_path / "a", stage=True, marker_sha=None
+    )
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(no_line_repo), no_line_repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(no_line_impl)},
+    )
+    assert code == 0, "the missing-`baseline=`-line deny assertion must red"
+    assert out is None
+
+    no_file_repo, no_file_impl = _green_story_repo(
+        tmp_path / "b", stage=True, baseline_sha=None
+    )
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(no_file_repo), no_file_repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(no_file_impl)},
+    )
+    assert code == 0, "the unreadable-baseline deny assertion must red"
+    assert out is None
+
+    # ...while the mismatch deny is untouched: the mutation removes the two
+    # absence branches, not the clause.
+    stale_repo, stale_impl = _green_story_repo(
+        tmp_path / "c", stage=True, marker_sha=_STALE_SHA
+    )
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(stale_repo), stale_repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(stale_impl)},
+    )
+    assert code == 2, "the stale-marker deny assertion stays green"
+
+
+def test_mutant_recomputing_baseline_from_git_denies_after_head_move(
+    tmp_path: Path,
+) -> None:
+    """Twin: source the comparison SHA from `git rev-parse HEAD` instead of
+    reading the recorded baseline. Once HEAD has moved the recomputed value no
+    longer equals the marker's line, and the multi-commit assertion reds."""
+    mutant = _write_mutant(
+        tmp_path,
+        "recomputed_baseline",
+        _BASELINE_READ_BODY,
+        "    out = subprocess.run(\n"
+        '        ["git", "rev-parse", "HEAD"], capture_output=True, text=True\n'
+        "    )\n"
+        "    return out.stdout.strip() or None",
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    # Pin the marker to the pre-move HEAD so the unmutated clause would allow.
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+    _write_story_markers(impl, marker_sha=head, baseline_sha=head)
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 0, "before HEAD moves, a recomputed SHA happens to agree"
+    assert out is None
+
+    _git(repo, "commit", "-q", "-m", "story work, part one")
+    (repo / "story2.txt").write_text("story work, part two")
+    _git(repo, "add", "story2.txt")
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 2, "the multi-commit assertion must red on a recomputed SHA"
+    assert "Marker-freshness guard" in _reason(out)
+
+
+def test_mutant_freshness_scoped_to_checklist_allows_light_stale_marker(
+    tmp_path: Path,
+) -> None:
+    """Twin: scope the clause to the production profile the way the sibling
+    un-skip clause is scoped. Under the lighter profile no checklist exists, the
+    clause stops firing, and the stale marker is allowed — so the
+    profile-independence assertion reds. This is the realistic regression: the
+    profile-scoped sibling lives in the same commit block."""
+    mutant = _write_mutant(
+        tmp_path,
+        "freshness_scoped",
+        _FRESHNESS_CALL_SITE,
+        '        if (impl / f"atdd-checklist-{story}.md").is_file():\n'
+        "            _marker_freshness_gate(marker, baseline)",
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=True, marker_sha=_STALE_SHA)
+    assert not (impl / "atdd-checklist-STORY-1.md").exists()
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 0, "the profile-independence assertion must red once scoped"
+    assert out is None
+
+    # Control: with a checklist on disk the scoped clause fires again, so the
+    # mutation really is a scoping change and not a wholesale deletion.
+    (impl / "atdd-checklist-STORY-1.md").write_text("# checklist\n")
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 2
+    assert "Marker-freshness guard" in _reason(out)
 
 
 def test_non_git_bash_is_allowed(tmp_path: Path) -> None:
@@ -934,11 +1333,6 @@ def _production_env(impl: Path, tests_root: Path) -> dict:
         "ULTRACODE_IMPL_ARTIFACTS": str(impl),
         "ULTRACODE_TEST_ARTIFACTS": str(tests_root),
     }
-
-
-def _reason(out: dict | None) -> str:
-    assert out is not None, "expected a decision on stdout"
-    return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_unskip_clean_staged_acceptance_test_allowed(tmp_path: Path) -> None:
@@ -1861,3 +2255,129 @@ def test_dash_c_payload_split_mid_quote_still_denies(tmp_path: Path) -> None:
 
     assert code == 2
     assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# ---------------------------------------------------------------------------
+# Writer side: the two places execute.md tells a story to write the marker.
+#
+# The reader above only refuses a marker that does not name the story's
+# baseline; something has to tell the writer to put the line there in the first
+# place, at BOTH marker-write sites. Step 2 writes the marker at green; step 5
+# writes a FRESH one when the post-commit re-verify comes back red — and a
+# step-5 marker without the line means a story that legitimately needs
+# remediation can never re-commit.
+#
+# ONE matcher is applied to both blocks, so each twin can red its own site while
+# the same matcher stays green on the other. Without that pairing, a matcher
+# that scanned the whole file would satisfy the step-5 check off step 2's
+# sentence and prove nothing about the second site.
+#
+# Stated limit: this is a presence proof over prose. It shows the instruction is
+# in the file, not that an executor obeys it; the behavioral proof is the reader
+# section above, against the real hook.
+# ---------------------------------------------------------------------------
+
+_EXECUTE_MD = Path(__file__).resolve().parents[2] / "references" / "execute.md"
+
+# The marker-format rule: the `baseline=<sha>` line, the file it is copied FROM,
+# and the copied-not-recomputed obligation, in that order and co-located.
+_BASELINE_LINE_RE = re.compile(
+    r"`baseline=<sha>` line"
+    r".{0,400}?`\{workflow\.implementation_artifacts\}/\.baseline-<story_id>`"
+    r".{0,400}?copied, never re-derived from `git rev-parse HEAD`",
+    re.DOTALL,
+)
+
+# Each site's added sentence, anchored so a twin's removal is surgical.
+_STEP2_BASELINE_SENTENCE_RE = re.compile(
+    r"\*\*That marker must carry a `baseline=<sha>` line\*\*"
+    r".*?denies the story's own second commit\.",
+    re.DOTALL,
+)
+_STEP5_BASELINE_SENTENCE_RE = re.compile(
+    r"\*\*That fresh marker carries the same `baseline=<sha>` line as step 2's\*\*"
+    r".*?could never close\. ",
+    re.DOTALL,
+)
+
+
+def _execute_text() -> str:
+    return _EXECUTE_MD.read_text(encoding="utf-8")
+
+
+def _md_step2(text: str | None = None) -> str:
+    text = text if text is not None else _execute_text()
+    start = text.index("\n2. ")
+    return text[start:text.index("\n3. ", start)]
+
+
+def _md_step5(text: str | None = None) -> str:
+    text = text if text is not None else _execute_text()
+    start = text.index("\n5. ")
+    return text[start:text.index("\n\n", start)]
+
+
+def test_execute_md_marker_step_copies_baseline_never_recomputes() -> None:
+    block = _md_step2()
+    assert "write the tests-ran marker" in block, "step-2 slice must be the marker write"
+    assert _BASELINE_LINE_RE.search(block), (
+        "step 2 must mandate a `baseline=<sha>` line copied from the story's "
+        "recorded baseline, never re-derived from `git rev-parse HEAD`"
+    )
+    # the pre-existing step-2 semantics must survive the edit
+    assert "PRINT the raw output" in block
+    assert "{workflow.implementation_artifacts}/.tests-ran-<story_id>" in block
+    # and the multi-commit reason for copying is stated, not just the rule
+    assert re.search(r"more than once|second commit", block)
+
+
+def test_execute_md_step5_fresh_marker_also_embeds_baseline() -> None:
+    block = _md_step5()
+    assert "re-commit" in block, "step-5 slice must be the re-verify/re-commit block"
+    assert "fresh `.tests-ran-<story_id>` marker" in block
+    assert _BASELINE_LINE_RE.search(block), (
+        "step 5's fresh marker must carry the same copied-not-recomputed "
+        "`baseline=<sha>` line as step 2's"
+    )
+
+
+def test_mutant_step5_marker_without_baseline_reds_only_step5() -> None:
+    """Twin: strip the baseline rule from step 5 only.
+
+    The step-5 matcher must red while the IDENTICAL matcher stays green on step
+    2. The green control is the load-bearing half: a matcher that scanned the
+    whole file would be satisfied by step 2's sentence and would pass the step-5
+    check vacuously.
+    """
+    text = _execute_text()
+    original = _md_step5(text)
+    mutated_block = _STEP5_BASELINE_SENTENCE_RE.sub("", original, count=1)
+    assert mutated_block != original, "step-5 baseline sentence anchor drifted"
+    mutated = text.replace(original, mutated_block, 1)
+
+    assert not _BASELINE_LINE_RE.search(_md_step5(mutated)), (
+        "with the sentence stripped, the step-5 assertion must fail"
+    )
+    assert _BASELINE_LINE_RE.search(_md_step2(mutated)), (
+        "the step-2 control must stay green under the same mutation"
+    )
+
+
+def test_mutant_step2_marker_without_baseline_reds_only_step2() -> None:
+    """Twin, mirrored: strip the baseline rule from step 2 only.
+
+    Same paired shape, so neither site can satisfy its own check off the other's
+    copy of the rule.
+    """
+    text = _execute_text()
+    original = _md_step2(text)
+    mutated_block = _STEP2_BASELINE_SENTENCE_RE.sub("", original, count=1)
+    assert mutated_block != original, "step-2 baseline sentence anchor drifted"
+    mutated = text.replace(original, mutated_block, 1)
+
+    assert not _BASELINE_LINE_RE.search(_md_step2(mutated)), (
+        "with the sentence stripped, the step-2 assertion must fail"
+    )
+    assert _BASELINE_LINE_RE.search(_md_step5(mutated)), (
+        "the step-5 control must stay green under the same mutation"
+    )
