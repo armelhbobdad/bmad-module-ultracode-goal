@@ -103,7 +103,7 @@ UCG's closest peer is [bmad-loop](https://github.com/bmad-code-org/bmad-loop) (f
 
 You don't have to take the gate's word for it. The deterministic pieces ship with a test suite, and you can run the evaluator on a real artifact yourself.
 
-Run the Python suite (318 tests across the preflight, gate, hook, readiness, memory, and customization scripts):
+Run the Python suite (450+ tests across the preflight, gate, hook, readiness, memory, and customization scripts):
 
 ```bash
 uv run --with pytest pytest skills/ultracode-goal/scripts/tests/ -v

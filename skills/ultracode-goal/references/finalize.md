@@ -39,7 +39,9 @@ Write the per-story evidence trail as **`gate-trail.md`, a peer of `run-report.m
 uv run {skill-root}/scripts/gate_trail.py --run-dir <this run's folder> --profile <light|production> --impl-artifacts {workflow.implementation_artifacts} --trace-output <the trace artifacts dir> --story <id>… --repo {project-root}
 ```
 
-Pass `--story` once per in-scope story **in sprint order** — the order is what turns the recorded baselines into commit ranges (each story's range ends at the next story's baseline, and at `HEAD` for the last one). The script prints the path it wrote; name that path in the run report.
+**The run's in-scope story ids are required, not optional.** Pass `--story` once per in-scope story **in sprint order** — the order is what turns the recorded baselines into commit ranges (each story's range ends at the next story's baseline, and at `HEAD` for the last one). The script prints the path it wrote; name that path in the run report.
+
+Naming no story (or a blank id) is refused: the script exits `2` with a usage line and writes nothing, rather than rendering a well-formed trail of zero sections that traces nothing and then gets named in the run report as delivered evidence. This does not contradict the fail-soft property below — `--story` is an **argument, not one of the sources**: an absent source is evidence the trail reports as `n/a`, while an absent story list is a malformed invocation, and there is nothing to render fail-soft *about*. That refusal is an **invocation error, not a gate verdict** — the same lane a missing `--run-dir` or `--profile` already occupies. It is never an escalation and never a reason to block a run that reached this stage: re-issue the command with the ids (you already hold them, in sprint order), **and either way continue through the remaining finalize steps** — the terminal `run-status.json` write, the headless emit and the health check must still run.
 
 Two properties are load-bearing, so do not "improve" them:
 

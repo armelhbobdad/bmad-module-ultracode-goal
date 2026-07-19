@@ -581,5 +581,111 @@ def test_mutant_without_empty_story_set_gap_reads_ready(tmp_path):
     assert out["checks"]["stories_with_ac"] == 0
 
 
+# ---------------------------------------------------------------------------
+# The same empty-set fail-open, one level down: a story that HAS a file but
+# declares no acceptance criteria.
+# ---------------------------------------------------------------------------
+
+# Three shapes a story file can take while asserting nothing. All three used to
+# read `ready`: the per-AC loop iterates zero times, so no gap is appended.
+AC_LESS_BODIES = {
+    "empty_file": "",
+    "heading_without_items": "# Story 7-1: Kernel\n\n## Acceptance Criteria\n",
+    "prose_without_ac_section": (
+        "# Story 7-1: Kernel\n\nAs an operator I want the kernel to read config.\n\n"
+        "## Tasks\n\n- wire it up\n"
+    ),
+}
+
+
+def _ac_less_project(tmp_path, shape: str):
+    """The `_mini_project` shape with the story present but asserting nothing.
+
+    Only the story BODY varies from the `with_story=True` fixture, so an
+    AC-less story is the sole difference from a passing run.
+    """
+    root = _mini_project(tmp_path, with_story=True)
+    (root / "impl-artifacts" / "7-1-kernel.md").write_text(
+        AC_LESS_BODIES[shape], encoding="utf-8"
+    )
+    return root
+
+
+@pytest.mark.parametrize("shape", sorted(AC_LESS_BODIES))
+def test_story_without_ac_is_remediable_not_ready(tmp_path, shape):
+    # The fail-open this closes: `no_in_scope_stories` keys on the story file
+    # being ABSENT, but a file that exists and declares no AC iterates the
+    # per-AC loop zero times just the same, scoring a clean zero-gap `ready`
+    # with stories_with_ac 0 - the exact verdict the launch gate treats as go.
+    out = _run_project(_ac_less_project(tmp_path, shape))
+
+    assert out["verdict"] == "remediable"
+    assert out["ready"] is False
+    assert out["checks"]["stories_with_ac"] == 0
+
+    gaps = [g for g in out["mechanical_gaps"] if g["kind"] == "story_without_ac"]
+    assert len(gaps) == 1
+    gap = gaps[0]
+    assert gap["severity"] == "high"
+    # Remediable: the create-story scaffold authors the AC section.
+    assert gap["remediable"] is True
+    assert "7-1-kernel.md" in gap["source"]
+
+    # It counts toward the budget like every other gap, which is what moves the
+    # verdict off `ready`.
+    assert out["mechanical_budget"] == len(out["mechanical_gaps"])
+
+
+def test_story_with_ac_emits_no_ac_less_gap(tmp_path):
+    # Anti-vacuous twin (data): the SAME project whose story declares a real AC
+    # fires ZERO story_without_ac gaps - proving the gap keys on the absent AC
+    # set and not merely on running the kernel over this project shape.
+    out = _run_project(_mini_project(tmp_path, with_story=True))
+
+    assert all(g["kind"] != "story_without_ac" for g in out["mechanical_gaps"])
+    assert out["checks"]["stories_with_ac"] == 1
+
+
+def test_mutant_without_ac_less_gap_reads_ready(tmp_path):
+    """Twin for test_story_without_ac_is_remediable_not_ready.
+
+    Concrete mutation: neutralize the AC-less branch in build_verdict
+    (`else:` -> `elif False:` on the `if ac_blocks:` arm) on a COPY of the
+    script, so no gap is appended. The AC-less project then reports `ready`
+    with mechanical_budget 0 - the pre-fix fail-open - which reds the
+    verdict/budget assertions in the named test above.
+    """
+    src = SCRIPT.read_text(encoding="utf-8")
+    anchor = "            stories_with_ac += 1\n        else:\n"
+    assert anchor in src, "mutation anchor drifted out of formalize_check.py"
+    mutant_dir = tmp_path / "src"
+    mutant_dir.mkdir()
+    mutant = mutant_dir / "mutant_formalize_check.py"
+    mutant.write_text(
+        src.replace(anchor, "            stories_with_ac += 1\n        elif False:\n", 1),
+        encoding="utf-8",
+    )
+
+    root = _ac_less_project(tmp_path, "empty_file")
+    proc = subprocess.run(
+        [
+            sys.executable, str(mutant), "--epic", "7",
+            "--project-root", str(root),
+            "--planning-artifacts", str(root / "planning-artifacts"),
+            "--impl-artifacts", str(root / "impl-artifacts"),
+            "--tea-config", str(root / "tea" / "config.yaml"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+
+    assert out["verdict"] == "ready"
+    assert out["mechanical_budget"] == 0
+    assert out["mechanical_gaps"] == []
+    assert out["checks"]["stories_with_ac"] == 0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -839,6 +839,28 @@ def build_verdict(
         ac_blocks = _split_ac_blocks(body)
         if ac_blocks:
             stories_with_ac += 1
+        else:
+            # The SAME empty-set fail-open as `no_in_scope_stories`, one level
+            # down: that guard keys on the story file being absent, but a story
+            # file that EXISTS and declares no AC iterates this per-AC loop zero
+            # times too, so it contributes no gap and the Epic reads a clean
+            # `ready` with stories_with_ac 0 - the verdict the launch gate treats
+            # as go. A story with nothing to verify cannot be formally ready, so
+            # count it as a gap like any other. This is also the landing zone of
+            # the other guard's own remediation: the create-story scaffold that
+            # clears `no_in_scope_stories` writes story files, and a stub it
+            # leaves AC-less would otherwise flip remediable straight to ready.
+            mechanical_gaps.append(
+                {
+                    "id": "story_without_ac:%s" % rel,
+                    "kind": "story_without_ac",
+                    "severity": "high",
+                    "detail": "Story declares no acceptance criteria: %s" % rel,
+                    # The create-story scaffold authors the AC section.
+                    "remediable": True,
+                    "source": rel,
+                }
+            )
 
         for line_no, block in ac_blocks:
             ac_total += 1

@@ -595,6 +595,73 @@ def test_commit_cell_lists_shas_from_the_recorded_baseline_range(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# The story list is an argument, not a source: fail-soft does not cover it.
+# ---------------------------------------------------------------------------
+
+
+def test_zero_stories_is_refused_and_nothing_is_written(tmp_path):
+    # The fail-open this closes: naming no story used to exit 0 and write a
+    # well-formed trail of zero sections - an evidence artifact that traces
+    # nothing, which the stage then names in the run report as delivered
+    # evidence. Refusal must happen before anything lands on disk.
+    run_dir = tmp_path / "run"
+    proc = run_trail(run_dir=run_dir, profile="light", stories=[], expect_ok=False)
+
+    assert proc.returncode == 2
+    assert "--story" in proc.stderr
+    assert not (run_dir / "gate-trail.md").exists()
+    # Refused up front, so not even the run folder is created.
+    assert not run_dir.exists()
+
+
+def test_blank_story_id_is_refused(tmp_path):
+    # The same error wearing a value: a blank id otherwise renders an anonymous
+    # section of nothing but `n/a`, which reads as a story that was gated and
+    # came back empty rather than one that was never named.
+    run_dir = tmp_path / "run"
+    proc = run_trail(run_dir=run_dir, profile="light", stories=[""], expect_ok=False)
+
+    assert proc.returncode == 2
+    assert "--story values must be non-empty story ids" in proc.stderr
+    assert not (run_dir / "gate-trail.md").exists()
+
+
+def test_one_story_still_renders(tmp_path):
+    # Anti-vacuous twin: the guard keys on the EMPTY/blank list and nothing
+    # else, so the ordinary single-story invocation is untouched.
+    run_dir = tmp_path / "run"
+    # repo is pinned to tmp_path so the commit-range lookup can never shell out
+    # against the runner's CWD; hermetic by construction, not by the accident of
+    # --impl-artifacts being absent.
+    proc = run_trail(run_dir=run_dir, profile="light", stories=["4-1"], repo=tmp_path)
+
+    assert proc.returncode == 0
+    assert (run_dir / "gate-trail.md").exists()
+
+
+def test_finalize_states_the_story_ids_are_required():
+    """The stage must say the ids are required and that refusal is not a halt.
+
+    Without this the section reads as best-effort: it sits under a paragraph
+    promising every source is optional, so a conductor can reasonably take the
+    whole invocation as fail-soft.
+    """
+    text = FINALIZE.read_text(encoding="utf-8")
+    match = re.search(r"^## Gate trail\s*$(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+    assert match, "finalize.md has no `## Gate trail` section"
+    body = match.group(1)
+
+    assert "required" in body.lower(), "the section must state the story ids are required"
+    # The refusal must be classified, or a hard exit at the SECOND of finalize's
+    # sections reads as an escalation and strands every step after it.
+    assert "invocation error" in body.lower()
+    assert "not a gate verdict" in body.lower()
+    assert re.search(r"continue through the remaining finalize steps", body, re.I), (
+        "the section must tell the conductor to finish the remaining finalize steps"
+    )
+
+
+# ---------------------------------------------------------------------------
 # House rules: the shipped surfaces describe behavior, never a plan identifier.
 # ---------------------------------------------------------------------------
 
