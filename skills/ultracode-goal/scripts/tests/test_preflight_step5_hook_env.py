@@ -88,8 +88,21 @@ def test_step5_baseline_fixture_lacks_test_artifacts_injection():
     )
     # and the pre-existing injections are present in both, so the baseline is a
     # real snapshot of this list rather than an empty file that trivially lacks it
+    # (asserted by shared membership, not by a raw count: the list legitimately
+    # shrinks when an injection is retired, and that must not fail this test)
     assert len(_hook_env_entries(baseline)) == 5
-    assert len(_hook_env_entries(_step5())) == 6
+    live = _hook_env_entries(_step5())
+    assert live, "step 5 must still list hook env injections"
+    for var in (
+        "ULTRACODE_PROTECTED_BRANCHES",
+        "ULTRACODE_IMPL_ARTIFACTS",
+        "ULTRACODE_MAX_TURNS",
+        "ULTRACODE_EPIC_BRANCH_PREFIX",
+    ):
+        assert _entry_for(baseline, var) is not None, f"{var} missing from the baseline"
+        assert _entry_for(_step5(), var) is not None, f"{var} missing from step 5"
+    # the contract var is the one the baseline lacks and the live section adds
+    assert _entry_for(_step5(), _ENV_VAR) is not None
 
 
 def test_step5_test_artifacts_value_matches_tea_resolved_root():

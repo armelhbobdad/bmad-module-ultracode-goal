@@ -88,7 +88,7 @@ Do not recompute TEA thresholds or re-judge `gate_status` — read it as given. 
 
 - **`defer`** (gate_status CONCERNS, or non-critical code-review / NFR findings that did not flip the gate) → append the open items to the ledger at `{workflow.deferred_work_path}` using the schema below, then **advance** anyway. The Epic keeps moving; the parked work is visible.
 
-- **`reloop`** (gate_status FAIL, or a production signal downgraded an advance) → run `bmad-correct-course` to diagnose and adjust, then re-run the story (back through Execute, `references/execute.md`) — **within the remaining turn/token budget**. Re-run the gate after. If the re-loop would exceed `{workflow.max_turns_per_story}` or `{workflow.story_token_budget}`, treat it as `escalate` instead.
+- **`reloop`** (gate_status FAIL, or a production signal downgraded an advance) → run `bmad-correct-course` to diagnose and adjust, then re-run the story (back through Execute, `references/execute.md`) — **within the remaining turn budget**. Re-run the gate after. If the re-loop would exceed `{workflow.max_turns_per_story}`, treat it as `escalate` instead.
 
 - **`escalate`** (gate_status NOT_EVALUATED — the gate could not be read — or budget exhausted on a FAIL) → **stop.** Do not advance, do not defer the failing item. Record the reason and the verdict JSON in `.decision-log.md`. In an attended run, surface the blocker to the user. In headless, this is a `blocked` outcome — emit the JSON in Stage 6 (`references/finalize.md`).
 

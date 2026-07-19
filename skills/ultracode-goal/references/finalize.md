@@ -26,7 +26,7 @@ Produce a report (write it as a peer of `.decision-log.md` in the run folder, e.
 - Epic and profile (production / `--light`), branch off `{workflow.epic_branch_prefix}`, sequential vs `--parallel`.
 - Per-story outcome: gate_status and verdict (advance / defer / reloop / escalate), and any re-loops spent against budget.
 - The Epic-level gate result.
-- Budget consumed vs `{workflow.max_turns_per_story}` / `{workflow.story_token_budget}`.
+- Turns consumed vs `{workflow.max_turns_per_story}`.
 - Learnings captured and where they went (memory vs CLAUDE.md).
 - A pointer to the deferred-work ledger and its open-item count.
 - Cross-Session Recall: consulted / wrote / skipped, plus the outbox tombstone count when the drain ran.
