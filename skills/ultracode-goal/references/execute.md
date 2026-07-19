@@ -84,11 +84,26 @@ As the spine advances — each time you move to a new story, log a gate verdict,
  "index": <1-based position of the current story>,
  "total": <in-scope story count>,
  "last_verdict": "<advance|defer|reloop|escalate, or null before the first gate>",
+ "last_reasons": [<the reason strings from the gate result just read, empty before the first gate>],
  "reloop_count": <re-loops spent so far this run>,
+ "stories": [{"story": "<story id>",
+              "phase": "<where the spine has this story>",
+              "verdict": "<that story's last gate verdict, or null before its gate>",
+              "dev_attempts": <implementation passes spent on this story>,
+              "reloop_count": <re-loops spent on this story>}],
+ "budget_used": {"turns": <turns spent on the current story>, "max_turns": <the resolved per-story turn ceiling>},
  "profile": "production|light",
  "updated": "<ISO-8601 timestamp>"}
 ```
 
-This is the file the Stage 2 launch briefing points the operator at ("where to watch"); Stage 6 (finalize) records the terminal state into it when the run closes.
+`last_reasons` and `budget_used` are machine-derived, not narrated. `last_reasons` is the `reasons` array from the `gate_eval.py` result the spine just read, copied across unedited, so a poller sees *why* the last verdict landed instead of only the verdict word; `stories` carries one entry per in-scope story on the same cadence, so an entry appears as soon as the spine reaches that story and its `verdict` stays null until the gate runs. The two `reloop_count`s are deliberately the same name at two nesting levels and are not duplicates: the top-level one is **run-scoped** (every re-loop spent this run), the one inside a `stories` entry is **story-scoped** (that story's own re-loops).
+
+`budget_used` has exactly two sub-keys and no third: `turns`, copied from the `turns` value in `{workflow.implementation_artifacts}/.budget-<story>.json` that the Stop hook maintains, and `max_turns`, the resolved `{workflow.max_turns_per_story}` — the same value preflight already injects into the hook environment, so the ceiling reported here and the ceiling the hook enforces cannot drift apart.
+
+When the prior snapshot's `budget_used.turns` and the current `.budget-<story>.json` disagree, the hook file wins: re-read it on every write and never carry the snapshot's own number forward, because the hook file is the only counter that observes every Stop event while a number already sitting in the snapshot is a stale copy written before the last turns landed.
+
+Before the Stop hook has fired for a story, no `.budget-<story>.json` exists yet. That is a normal early-story state, not an error: render `budget_used` as `{"turns": 0, "max_turns": <the resolved ceiling>}` and write the snapshot anyway — an absent hook file is never a reason to skip the write, defer it, or leave the heartbeat partially written.
+
+This is the file the Stage 2 launch briefing points the operator at ("where to watch"); Stage 6 (finalize) records the terminal state into it when the run closes, carrying every key above forward rather than overwriting the file with a narrower object.
 
 **Attended runs also get a ticker.** Each time you write the heartbeat, print one line into the transcript — `epic-7 ▸ story 3/6 — last verdict: advance` — so the watching human sees motion without opening a JSON file. Skip the ticker in headless (`-H`): the file is the interface there, and transcript prose has no reader.

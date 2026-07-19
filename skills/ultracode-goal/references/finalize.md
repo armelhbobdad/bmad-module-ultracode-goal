@@ -74,7 +74,7 @@ Read `{workflow.implementation_artifacts}/.mem-state.json`. Act only on its latc
 
 ## Record the terminal run-status
 
-Execute maintains the heartbeat `{workflow.implementation_artifacts}/run-status.json` as the spine advances (shape: `{epic, story, index, total, last_verdict, reloop_count, profile, updated}`). At close, write its **terminal** state — the final story/index, the `last_verdict` (`advance` when the Epic completed, the escalating story's verdict when blocked, or the last in-scope story's `advance` for a `partial-complete` run — a deliberate strict subset of the Epic delivered with no Epic-level gate), and a fresh `updated` timestamp — so a poller reading the file after the run sees the settled outcome, not a stale mid-run snapshot.
+Execute maintains the heartbeat `{workflow.implementation_artifacts}/run-status.json` as the spine advances (shape: `{epic, story, index, total, last_verdict, last_reasons, reloop_count, stories, budget_used, profile, updated}`). At close, write its **terminal** state — the final story/index, the `last_verdict` (`advance` when the Epic completed, the escalating story's verdict when blocked, or the last in-scope story's `advance` for a `partial-complete` run — a deliberate strict subset of the Epic delivered with no Epic-level gate), and a fresh `updated` timestamp — so a poller reading the file after the run sees the settled outcome, not a stale mid-run snapshot. **Write the whole shape, not a subset.** This write overwrites the file, so a narrower object silently strips keys a poller was reading mid-run: carry `last_reasons`, `stories` and `budget_used` through from the last heartbeat rather than dropping them off the artifact at the moment the run settles.
 
 ## Surface the deferred-work ledger
 
