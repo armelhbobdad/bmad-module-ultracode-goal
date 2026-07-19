@@ -88,6 +88,16 @@ When the Epic advanced, run: `python3 {project-root}/_bmad/scripts/resolve_custo
 
 If the resolved `{workflow.on_epic_complete}` is non-empty, follow it as the final terminal instruction (a prompt to run or a shell command) before exiting.
 
+## Escalation hook
+
+The mirror of the epic-complete hook at the opposite terminal. This hook fires **only on a `blocked` run** — a story escalated and the Epic never advanced — and never on a clean advance, so an operator who walked away learns that the run stopped being able to make progress on its own.
+
+Execute may already have pinged when it first observed the escalation marker, so this site is deduped against that same run-scoped marker, `{workflow.implementation_artifacts}/.on-escalation-fired-<run-id>`, **check-then-write**, at that byte-identical path — `<run-id>` is the run id minted at Stage 1, carried forward verbatim. If the marker is already present, skip silently: the other fire site already pinged for this run. If it is absent, run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_escalation`
+
+When the resolved `{workflow.on_escalation}` is non-empty, follow it as an instruction (a prompt to run or a shell command), stating alongside it **the escalating story id** and the path to that story's typed `escalation-<story_id>.json` sidecar as the context it carries, and only then write the fired-marker. A resolved-empty value is a silent no-op — nothing fires and no fired-marker is written — so an empty hook can never suppress a later real one.
+
+This is a side effect on the way out, never a gate on the exit: a hook that errors, hangs or is missing must not change the emitted JSON, the status, or the run-status already recorded. Under `--parallel` this is the only reachable fire site, since the fan-out's worktree agents each see their own `{workflow.implementation_artifacts}`; that is sufficient, because Finalize always runs in the conductor.
+
 ## Headless output
 
 In headless (`-H`), compose the final JSON, run the Workflow health check (below) in its unattended queue-only mode, then emit the JSON and stop. `status` is `complete` when the Epic-level gate advanced, or `blocked` when a story escalated. This is the **same five-canonical-key shape every headless exit point honors** (Stage 1 first-touch / already-done blocks, Stage 2 preflight block, and this Stage 6 final emit): the five keys `status`/`skill`/`decision_log`/`report`/`deferred_work` are **always present** (`report` and `deferred_work` `null` when not produced), so a caller parsing them never raises a KeyError. A **complete** emit is those five; a **blocked** exit appends a sixth, `reason` (the one-line cause):

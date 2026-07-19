@@ -40,6 +40,13 @@ allowlist_commands = ["git status", "git add", "git commit", "git rev-parse", "g
 # --- Hook fired at epic completion (prompt or shell command); empty = none ---
 on_epic_complete = ""
 
+# --- Hook fired when the run escalates (prompt or shell command); empty = none ---
+# The opposite terminal to on_epic_complete: that one fires only when the Epic
+# advanced, this one only when a story escalated. Fires at most once per run, at
+# the first escalation observed, so an operator who walked away hears that the
+# run stopped making progress on its own instead of finding out on their return.
+on_escalation = ""
+
 # --- Health check (workflow self-improvement; opt-out + autonomy-safe) ---
 # The terminal Finalize step reflects on the run and can file genuine workflow
 # friction as fingerprint-deduped GitHub issues. Honesty-by-default: zero
