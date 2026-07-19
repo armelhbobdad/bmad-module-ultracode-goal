@@ -72,3 +72,13 @@ health_check_autosubmit = false
 # Advisory only, never gates. Requires the third-party claude-mem plugin;
 # silently inactive without it. "on" = use claude-mem when present | "off" = never touch it.
 cross_session_recall = "off"
+
+# --- Knowledge-graph refresh (optional; runs at Finalize only) ---
+# Advisory only, never gates. Requires the third-party graphify CLI on PATH and
+# a prior graphify-out/manifest.json to increment from; silently inactive
+# without either. "off" = never touch it | "refresh" = one incremental,
+# time-boxed rebuild as the run exits, so the next session starts from a
+# current graph rather than a stale one. Finalize is the only call site: no
+# preflight step, no per-story step, and no effect on any gate verdict, the
+# recorded run-status, or the headless envelope.
+graphify_integration = "off"

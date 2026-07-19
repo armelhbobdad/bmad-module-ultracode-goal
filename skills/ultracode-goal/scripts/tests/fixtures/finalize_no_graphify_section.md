@@ -74,29 +74,6 @@ Read `{workflow.implementation_artifacts}/.mem-state.json`. Act only on its latc
 
 **Always, both paths** — **remove** `{workflow.implementation_artifacts}/.mem-state.json` as part of close-out. No active run means the hook stops gating claude-mem; an orphaned latch would deny the user's own usage between runs.
 
-## Knowledge-graph refresh (optional)
-
-Resolve the mode exactly as the hooks below resolve theirs:
-`python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.graphify_integration`
-
-Two values, and no others. `off` is the shipped default and a complete no-op — no probe, no delegation, no decision-log line, no output; there is nothing to read further in this section. `refresh` refreshes the project's knowledge graph on the way out, so the next session starts from a current one instead of a stale one.
-
-**Probe first, and degrade to silence.** Two preconditions, both required: graphify resolves on PATH (`command -v graphify`), and a prior `graphify-out/manifest.json` exists under `{project-root}` to increment from. If either is missing there is nothing to refresh — do nothing, print nothing, and write no `.decision-log.md` entry, so the run stays byte-identical to an `off` run. A "skipped it" log line is exactly the difference that would break that, so do not add one. Absence is silent; failure is logged. They are different events.
-
-The manifest precondition is not defensive padding. Refresh means refresh: with no manifest there is nothing to increment from, and a cold rebuild walks the whole corpus and spends API budget, which is the opposite of what a bounded step on the way out may do. A first-ever run in this mode therefore refreshes nothing and says nothing.
-
-**With both preconditions met, delegate one incremental rebuild from `{project-root}`** — graphify writes `graphify-out/` relative to the current working directory:
-
-```
-timeout 300 graphify . --update
-```
-
-`--update` re-extracts only what changed against the recorded manifest, so graphify's own manifest diff *is* the changed-path scoping: the run does not enumerate the Epic's paths, and there is no surface that would accept them. Never a cold full build.
-
-The delegation is hard time-boxed by the `timeout 300` prefix above and is **not retried**. On a non-zero exit or a timeout, log one `WARN graphify-refresh-failed` line to `.decision-log.md` and move on.
-
-**This never gates.** It is advisory-only in the same sense Cross-Session Recall is — it can add an artifact to the developer's machine, and it can change nothing else. A graphify failure, timeout or absence **never changes the gate verdict** and **never changes the terminal envelope**: the run's outcome (complete, blocked or partial-complete), the recorded run-status and the emitted JSON are unchanged whether this step ran, failed, or never fired at all. This section is the only site that calls graphify — no preflight step, no per-story step and no gate step does.
-
 ## Record the terminal run-status
 
 Execute maintains the heartbeat `{workflow.implementation_artifacts}/run-status.json` as the spine advances (shape: `{epic, story, index, total, last_verdict, last_reasons, reloop_count, stories, budget_used, profile, updated}`). At close, write its **terminal** state — the final story/index, the `last_verdict` (`advance` when the Epic completed, the escalating story's verdict when blocked, or the last in-scope story's `advance` for a `partial-complete` run — a deliberate strict subset of the Epic delivered with no Epic-level gate), and a fresh `updated` timestamp — so a poller reading the file after the run sees the settled outcome, not a stale mid-run snapshot. **Write the whole shape, not a subset.** This write overwrites the file, so a narrower object silently strips keys a poller was reading mid-run: carry `last_reasons`, `stories` and `budget_used` through from the last heartbeat rather than dropping them off the artifact at the moment the run settles.
