@@ -47,8 +47,9 @@ The skill name `ultracode-goal` and its documented invocation phrases ("run an e
 
 `scripts/gate_eval.py` is the deterministic completion authority. Covered:
 
-- **CLI flags**: `--trace-output` (required), `--profile` (`light` | `production`, required), `--nfr`, `--test-review` (production only).
+- **CLI flags**: `--trace-output` (required), `--profile` (`light` | `production`, required), `--story`, `--nfr`, `--test-review` (production only).
 - **Verdict vocabulary**: the `verdict` values `advance` / `defer` / `reloop` / `escalate`, and the `gate_status` values `PASS` / `CONCERNS` / `FAIL` / `WAIVED` / `NOT_EVALUATED`, plus the mapping between them. See the [gate model](../gate-model.md).
+- **`--story` fail-closed resolution**: when `--story` matches no artifact in a trace dir whose reports or gate-decision files are named per story, the result is `NOT_EVALUATED` (so, `escalate`), never a fallback to another story's gate. A trace dir whose candidates are all generically named (`trace.md`, `gate-decision.json`) still resolves unscoped. Which file the resolver picks, and how it decides that a name carries a story id, are internal.
 
 The contractual mapping each `gate_status` resolves to:
 

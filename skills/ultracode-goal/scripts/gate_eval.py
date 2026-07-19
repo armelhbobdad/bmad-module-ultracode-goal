@@ -42,8 +42,16 @@ Artifact resolution:
     a conventionally-named gate-decision-<id>.json / e2e-trace-summary-<id>.json.
     Matching is on id components (11-6 == 11.6 == 11_6) anchored to the stem's
     trailing components, so epic id 1 resolves trace-1 (never child story 1-1)
-    and 11-6 is never confused with 1-11-6. With no per-story artifact found it
-    falls back to the unscoped resolution, so a single-story dir is unchanged.
+    and 11-6 is never confused with 1-11-6.
+
+    With no per-story artifact found, what happens next depends on how the dir
+    is NAMED — FAIL-CLOSED, deliberately. If any trace report or gate-decision
+    file there is named for SOME story or epic (a trailing numeric id component
+    in its stem), the dir is per-story-named and the requested story is genuinely
+    absent: resolution fails closed to NOT_EVALUATED rather than handing back an
+    unrelated story's gate. If every candidate is generically named (trace.md,
+    gate-decision.json), the dir holds one story's artifacts and the unscoped
+    resolution still applies, so a single-story dir is unchanged.
 
     python3 gate_eval.py --trace-output DIR --profile production --story 11-6 \
         --nfr DIR/nfr-assessment.md --test-review DIR/test-review.md
@@ -130,19 +138,54 @@ def _stem_matches_story(stem: str, story: str) -> bool:
     return cut == 0 or not stem_parts[cut - 1].isdigit()
 
 
-def _resolve_gate_file(trace_output: Path, story: str | None = None) -> Path:
+def _has_trailing_id(stem: str) -> bool:
+    """True iff a filename stem's last id-component is numeric.
+
+    Such a stem is named for SOME story or epic (``trace-2-1``,
+    ``gate-decision-4``); a generic one is not (``trace``, ``gate-decision``).
+    """
+    parts = [p for p in re.split(r"[-._]", stem) if p]
+    return bool(parts) and parts[-1].isdigit()
+
+
+def _is_per_story_named(trace_output: Path) -> bool:
+    """True iff any trace report / gate-decision file there is named for a story.
+
+    Distinguishes a shared multi-story dir (where a story with no artifacts is
+    genuinely absent) from the single-story dir whose generically-named files
+    the unscoped fallback is documented to resolve.
+    """
+    candidates = list(trace_output.glob("*.md")) + list(trace_output.glob("gate-decision*.json"))
+    return any(_has_trailing_id(p.stem) for p in candidates)
+
+
+def _per_story_slim(trace_output: Path, story: str | None) -> Path | None:
+    """The conventionally-named per-story slim gate file, when one exists."""
+    for v in _story_variants(story):
+        candidate = trace_output / f"gate-decision-{v}.json"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _resolve_gate_file(trace_output: Path, story: str | None = None) -> Path | None:
     """Locate the slim gate-decision file, honoring a trace-report hint.
 
     With ``story`` set, scope resolution to that story's artifacts so a single
     shared multi-story ``trace_output`` does not resolve the first/oldest
-    story's gate. Falls back to the unscoped resolution when no per-story
-    artifact is found, so a single-story dir behaves exactly as before.
+    story's gate. Returns ``None`` when the story matches nothing in a
+    per-story-named dir — the story is genuinely absent, and taking the unscoped
+    fallback there would return a DIFFERENT story's gate as this story's
+    verdict. A generically-named dir keeps the documented unscoped fallback.
     """
     reports = sorted(trace_output.glob("*.md"))
+    scoped_slim = _per_story_slim(trace_output, story)
     if story and story.strip():
         scoped = [r for r in reports if _stem_matches_story(r.stem, story)]
         if scoped:
             reports = scoped
+        elif scoped_slim is None and _is_per_story_named(trace_output):
+            return None
     for report in reports:
         try:
             fm = _frontmatter(report.read_text(encoding="utf-8"))
@@ -158,10 +201,8 @@ def _resolve_gate_file(trace_output: Path, story: str | None = None) -> Path:
     # No frontmatter hint. With a story in scope, prefer the conventionally-named
     # per-story slim file before the shared default so the shared dir resolves
     # the right story even when no trace report points at it.
-    for v in _story_variants(story):
-        candidate = trace_output / f"gate-decision-{v}.json"
-        if candidate.is_file():
-            return candidate
+    if scoped_slim is not None:
+        return scoped_slim
     return trace_output / "gate-decision.json"
 
 
@@ -192,6 +233,21 @@ def _resolve_summary_file(trace_output: Path, story: str | None) -> Path:
 def load_gate(trace_output: Path, reasons: list[str], story: str | None = None) -> dict:
     """Return normalized gate fields, preferring the slim file, else the summary."""
     gate_file = _resolve_gate_file(trace_output, story)
+    if gate_file is None:
+        # Fail-closed: the dir names its artifacts per story and none is this
+        # story's, so there is nothing to read. Do NOT fall back to the unscoped
+        # read — it would report a neighbouring story's gate as this one's.
+        reasons.append(
+            f"story {story} has no trace report or gate decision in {trace_output}; "
+            "the directory is named per story, so no unscoped fallback was taken"
+        )
+        return {
+            "gate_status": "NOT_EVALUATED",
+            "p0_status": None,
+            "p1_status": None,
+            "overall_status": None,
+        }
+
     if gate_file.is_file():
         slim = _read_json(gate_file)
         reasons.append(f"gate read from {gate_file.name}")

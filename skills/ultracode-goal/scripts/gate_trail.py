@@ -252,8 +252,10 @@ def gate_status_for(trace_output: Path | None, story: str) -> tuple[str | None, 
     def belongs(path: Path) -> bool:
         return own_trace or gate_eval._stem_matches_story(path.stem, scope)
 
+    # The resolver itself returns None when this story is absent from a
+    # per-story-named directory; that is already "absent", so it skips the read.
     gate_file = gate_eval._resolve_gate_file(trace_output, scope)
-    if belongs(gate_file):
+    if gate_file is not None and belongs(gate_file):
         slim = read_json(gate_file)
         if slim is not None and slim.get("gate_status"):
             return str(slim["gate_status"]).strip(), gate_file.name
