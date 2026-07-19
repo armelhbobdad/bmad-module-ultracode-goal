@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1.0",
+  "evaluated_at": "2026-06-26T00:04:00.000Z",
+  "repo": "sample-repo",
+  "target": {
+    "type": "story",
+    "id": "2-4",
+    "label": "Story 2-4: sample light-profile story"
+  },
+  "collection_status": "COLLECTED",
+  "gate_basis": "priority_thresholds",
+  "gate_status": "PASS",
+  "rationale": "Every criterion covered by a passing named verification with an anti-vacuous twin. P0 100%, overall 100%. Suite green; lint and validate green. No deferral.",
+  "p0_status": "MET",
+  "p1_status": "MET",
+  "overall_status": "MET",
+  "critical_open": 0,
+  "links": {
+    "trace_report_path": "test-artifacts/traceability/trace-2-4.md",
+    "trace_report_url": "",
+    "artifact_url": "",
+    "journey_evidence_url": ""
+  }
+}

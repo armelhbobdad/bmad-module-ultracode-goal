@@ -3,18 +3,22 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""UltraCode-Goal budget Stop hook (Claude Code hook).
+"""UltraCode-Goal turn-budget Stop hook (Claude Code hook).
 
-Belt-and-suspenders to the in-/goal-condition "stop after N turns" clause:
-counts Stop events (turns) and accumulated tokens for the current story against
-max_turns_per_story / story_token_budget. On overrun it writes an escalation
-marker and surfaces a clear message, then LETS THE STOP PROCEED.
+Counts Stop events (turns) for the current story against max_turns_per_story.
+On overrun it writes an escalation marker and surfaces a clear message, then
+LETS THE STOP PROCEED. Turns are the only thing counted here: this layer sees
+one event per stop and no usage totals, so any other ceiling could never fire
+and none is claimed.
 
-KNOWN LIMITATION: a Stop hook fires only when Claude is *already* trying to stop.
-It cannot interrupt a /goal condition mid-turn — it can record the overrun and
-warn, but the budget ceiling is ultimately advisory at this layer. The hard
-runaway guard is the gate_eval re-loop budget plus the /goal stop-after-N clause;
-this hook is the third, defensive layer.
+A runaway story is bounded by three layers, in order of authority:
+  1. the in-condition "…or stop after N turns" clause inside the /goal
+     condition — the real in-loop bound;
+  2. the deterministic gate re-loop budget — a reloop that would exceed
+     max_turns_per_story becomes an escalate instead;
+  3. this hook, as RECORDER. A Stop hook fires only when Claude is *already*
+     trying to stop, so it cannot interrupt a /goal condition mid-turn. It
+     records the overrun and warns; it is advisory end to end and never blocks.
 
 Hook contract (reads one JSON object on stdin):
   in : {session_id, cwd, hook_event_name:"Stop", ...}
@@ -26,10 +30,10 @@ State + config (env wins so the conductor injects per-story values):
   ULTRACODE_IMPL_ARTIFACTS    state dir; default <cwd>/_bmad-output/implementation-artifacts
   ULTRACODE_STORY_ID          current story id; else <impl>/.current-story
   ULTRACODE_MAX_TURNS         int; default 25
-  ULTRACODE_TOKEN_BUDGET      int; default 1500000
-  ULTRACODE_TURN_TOKENS       int tokens to add this turn (optional; 0 if unknown)
 
-State file: <impl>/.budget-<story>.json  {turns:int, tokens:int}
+Any other ULTRACODE_* variable a conductor still injects is ignored here.
+
+State file: <impl>/.budget-<story>.json  {turns:int}
 Escalation marker: <impl>/.escalation-<story>.md
 """
 
@@ -37,9 +41,9 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 DEFAULT_MAX_TURNS = 25
-DEFAULT_TOKEN_BUDGET = 1_500_000
 
 
 def _read_event() -> dict:
@@ -50,7 +54,7 @@ def _read_event() -> dict:
         return {}
 
 
-def _emit(message: str | None) -> None:
+def _emit(message: str | None) -> NoReturn:
     """Exit 0 and let the stop proceed; surface a message only on overrun."""
     if message:
         print(json.dumps({"systemMessage": message, "suppressOutput": False}))
@@ -90,12 +94,9 @@ def _current_story(impl: Path | None) -> str:
 def _load_state(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return {
-            "turns": int(data.get("turns", 0)),
-            "tokens": int(data.get("tokens", 0)),
-        }
+        return {"turns": int(data.get("turns", 0))}
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
-        return {"turns": 0, "tokens": 0}
+        return {"turns": 0}
 
 
 def _save_state(path: Path, state: dict) -> None:
@@ -116,33 +117,23 @@ def main() -> None:
 
     story = _current_story(impl)
     max_turns = _int_env("ULTRACODE_MAX_TURNS", DEFAULT_MAX_TURNS)
-    token_budget = _int_env("ULTRACODE_TOKEN_BUDGET", DEFAULT_TOKEN_BUDGET)
-    turn_tokens = _int_env("ULTRACODE_TURN_TOKENS", 0)
 
     state_path = impl / f".budget-{story}.json"
     state = _load_state(state_path)
     state["turns"] += 1
-    state["tokens"] += max(turn_tokens, 0)
     _save_state(state_path, state)
 
-    over_turns = state["turns"] >= max_turns
-    over_tokens = token_budget > 0 and state["tokens"] >= token_budget
-    if not (over_turns or over_tokens):
+    if state["turns"] < max_turns:
         _emit(None)
 
-    breached = []
-    if over_turns:
-        breached.append(f"turns {state['turns']}/{max_turns}")
-    if over_tokens:
-        breached.append(f"tokens {state['tokens']}/{token_budget}")
-    detail = "; ".join(breached)
+    detail = f"turns {state['turns']}/{max_turns}"
 
     marker = impl / f".escalation-{story}.md"
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(
-            f"# Budget escalation — story {story}\n\n"
-            f"Story budget exceeded ({detail}). UltraCode-Goal stops this story "
+            f"# Turn budget escalation — story {story}\n\n"
+            f"Story turn budget exceeded ({detail}). UltraCode-Goal stops this story "
             f"and escalates: re-scope, split, or hand off. A Stop hook cannot "
             f"interrupt a /goal condition mid-turn, so treat this as advisory — "
             f"the deterministic guard is the gate_eval re-loop budget.\n",
@@ -152,7 +143,7 @@ def main() -> None:
         pass
 
     _emit(
-        f"UltraCode-Goal budget exceeded for story {story} ({detail}). "
+        f"UltraCode-Goal turn budget exceeded for story {story} ({detail}). "
         f"Escalation marker written to {marker}. Stop and escalate this story; "
         f"do not keep re-looping."
     )

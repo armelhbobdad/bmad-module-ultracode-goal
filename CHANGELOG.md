@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file. The format 
 
 - **Cross-Session Recall** (optional): when [claude-mem](https://github.com/thedotmack/claude-mem) is installed and cross_session_recall is set to on, the executor consults prior runs of the same repo during Ingest and Preflight and records one structured outcome at Finalize, advisory only, hook-latched, never part of the gate. No effect when claude-mem is absent. Off by default.
 
+### Deprecated
+
+- **`story_token_budget`** is deprecated and is now a no-op. The key is still shipped in `customize.toml`, still accepted, and still resolves, so existing team and user overrides keep working and nothing errors; it simply has no effect. Nothing reads it any more: the Stop hook counts turns only, and the preflight stage no longer injects a token budget into the hook environment. The runaway bound is `max_turns_per_story`, enforced by the "stop after N turns" clause in the run condition and by the gate's re-loop budget, with the Stop hook as the advisory recorder. Use `max_turns_per_story` instead.
+
 ## [0.5.1](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v0.5.0...v0.5.1) (2026-07-12)
 
 ### Bug Fixes

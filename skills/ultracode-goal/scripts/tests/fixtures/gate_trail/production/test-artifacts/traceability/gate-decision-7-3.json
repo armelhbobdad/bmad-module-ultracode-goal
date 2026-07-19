@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1.0",
+  "evaluated_at": "2026-07-01T00:00:00.000Z",
+  "repo": "sample-repo",
+  "target": {
+    "type": "story",
+    "id": "7-3",
+    "label": "Story 7-3: sample production story"
+  },
+  "collection_status": "COLLECTED",
+  "gate_basis": "priority_thresholds",
+  "gate_status": "NOT_EVALUATED",
+  "rationale": "The run was not gate-eligible, so no threshold was applied.",
+  "p0_status": "UNKNOWN",
+  "p1_status": "UNKNOWN",
+  "overall_status": "UNKNOWN",
+  "critical_open": 0,
+  "links": {
+    "trace_report_path": "test-artifacts/traceability/trace-7-3.md",
+    "trace_report_url": "",
+    "artifact_url": "",
+    "journey_evidence_url": ""
+  }
+}

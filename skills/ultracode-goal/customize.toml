@@ -19,8 +19,11 @@ deferred_work_path = "{project-root}/_bmad-output/implementation-artifacts/defer
 epic_branch_prefix = "ultracode/epic-"
 protected_branches = ["main", "master"]
 
-# --- Budget guardrails (runaway-proofing) ---
+# --- Turn guardrails (runaway-proofing) ---
 max_turns_per_story = 25
+# DEPRECATED: accepted but no-op. Nothing reads this key any more; the runaway
+# bound is turns only, via max_turns_per_story. Kept so existing overrides keep
+# resolving without error. Setting it changes nothing.
 story_token_budget = 1500000
 
 # --- Experimental --parallel worktree fan-out ---
