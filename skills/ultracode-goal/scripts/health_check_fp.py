@@ -24,8 +24,18 @@ Subcommands:
       Validate S against the 3 severities and T against the 6 stages; validate
       SLUG against ^[a-z0-9]+(-[a-z0-9]+)*$. Emit {"fp": ..., "tuple": ...}.
   seen --fp FP --cache PATH
-      Validate FP. Missing/empty/corrupt cache -> {"seen": false, "record": null}
-      (never crash). Found -> {"seen": true, "record": {...}}.
+      Validate FP. Emit {"seen": B, "status": S, "record": R}, where `seen` is
+      the SUPPRESSION verdict and not mere cache presence:
+        unseen        {"seen": false, "status": "unseen",       "record": null}
+        handled       {"seen": true,  "status": "handled",      "record": {...}}
+        regression    {"seen": false, "status": "regression",   "record": {...}}
+        unrecognized  {"seen": false, "status": "unrecognized", "record": {...}}
+      A record whose action is in SUPPRESSING_ACTIONS suppresses; a `resolved`
+      record does NOT, because a fresh sighting of a fixed defect is a
+      regression, not a duplicate. The record is still returned in that case so
+      the caller can link the original rather than file it as a first sighting.
+      An action this version does not know cannot be confirmed handled, so it
+      does not suppress either. Missing/empty/corrupt cache -> unseen (no crash).
   record --fp FP --cache PATH --issue-url URL --action A --date YYYY-MM-DD
       Validate FP + action. Create parent dirs. Merge-write (preserve other fps),
       atomic via temp file + os.replace. Emit {"written": true, "fp": FP}.
@@ -65,7 +75,16 @@ STAGES = (
     "gate",
     "finalize",
 )
-ACTIONS = ("created", "reacted", "commented", "queued")
+ACTIONS = ("created", "reacted", "commented", "queued", "resolved")
+
+# Which recorded actions SUPPRESS a later sighting of the same fingerprint.
+# Deliberately a literal tuple and NOT `ACTIONS` minus `resolved`: a disposition
+# added later then defaults to NOT suppressing until it is opted in here, and a
+# missing or unrecognized action (a hand-edited cache, or one written by a newer
+# module) does not suppress either. That is the fail-closed direction for a
+# health check: a duplicate report is closed by the dedup Action, while a
+# silenced regression is caught by nothing. When in doubt, report.
+SUPPRESSING_ACTIONS = ("created", "reacted", "commented", "queued")
 
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 FP_RE = re.compile(r"^fp-[0-9a-f]{7}$")
@@ -129,10 +148,27 @@ def cmd_seen(args: argparse.Namespace) -> int:
     cache = Path(args.cache).expanduser()
     data = _load_cache(cache)
     record = data.get(args.fp)
-    if isinstance(record, dict):
-        print(json.dumps({"seen": True, "record": record}))
+
+    if not isinstance(record, dict):
+        print(json.dumps({"seen": False, "status": "unseen", "record": None}))
+        return 0
+
+    action = record.get("action")
+    if action in SUPPRESSING_ACTIONS:
+        status = "handled"
+    elif action == "resolved":
+        # Fixed and closed out, so a fresh sighting is a REGRESSION, not a
+        # duplicate. The record rides along so the caller can link the original.
+        status = "regression"
     else:
-        print(json.dumps({"seen": False, "record": None}))
+        # Absent or unrecognized: we cannot confirm this was handled, so report.
+        status = "unrecognized"
+
+    print(
+        json.dumps(
+            {"seen": status == "handled", "status": status, "record": record}
+        )
+    )
     return 0
 
 

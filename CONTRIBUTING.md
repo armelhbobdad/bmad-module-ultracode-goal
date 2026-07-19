@@ -71,6 +71,17 @@ Every UCG run that reaches Finalize ends with a health-check reflection step tha
 - **Triage** by the `health-check` plus `fp-*` labels. The `fp-*` label is the dedup key; the `health-check` label scopes the queue.
 - **Maintainers must pre-create the labels** the loop and the Action depend on: `health-check`, `workflow-improvement`, `bug`, `friction`, `gap`, `duplicate`. The dedup Action assumes they exist.
 - If you skipped the terminal step in-session, ask the conductor to run the health check for that run, or file via the [Workflow Health Check](.github/ISSUE_TEMPLATE/workflow-health-check.md) template directly.
+- **When you fix a finding, record it as `resolved`.** The reporter's machine keeps a local seen-cache (default `~/.ultracode-goal/health-check-seen.json`) that suppresses a repeat report of a fingerprint it has already handled. Fixing the defect does not clear that entry, so without this step the fingerprint suppresses forever and a later *regression* of the same defect is silently swallowed. After the fix merges, and at the same moment you delete the local queue file:
+
+  ```bash
+  uv run skills/ultracode-goal/scripts/health_check_fp.py record \
+    --fp fp-XXXXXXX --cache ~/.ultracode-goal/health-check-seen.json \
+    --issue-url "<the resolving PR or issue URL, or empty>" \
+    --action resolved --date YYYY-MM-DD
+  ```
+
+  A `resolved` record does not suppress: the next sighting reports as a regression and links the original. Prefer this over deleting the entry, which restores the signal but throws away the fact that the defect was ever seen.
+- **Two limits worth knowing.** The cache is machine-local, so a `resolved` you record is not visible to other users; where the finding has a real issue URL, the shared truth is the issue's own open/closed state, and the health check consults it. And nothing detects a skipped `resolved`, so this remains a convention rather than an enforced step.
 
 ## Releasing
 
