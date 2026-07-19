@@ -94,6 +94,49 @@ def test_leaked_artifact_move_bullet_present():
 
 
 # --------------------------------------------------------------------------
+# Case 1b — the stale-hook disarm names WHERE the entries live and is asserted.
+# --------------------------------------------------------------------------
+def test_stale_hook_disarm_names_nesting_and_requires_assertion():
+    """A disarm that names no location can silently no-op and log a lie.
+
+    The entries are nested under a top-level `hooks` key, so a disarm written
+    against top-level `PreToolUse` / `Stop` keys matches nothing, changes
+    nothing, and reports success. Arming is assertion-required at step 5;
+    disarming is exactly as load-bearing and must be too.
+    """
+    block = _step2_block(_text())
+
+    # It must name the real nesting, not merely the file.
+    assert "hooks.PreToolUse" in block, "the disarm must name the PreToolUse nesting"
+    assert "hooks.Stop" in block, "the disarm must name the Stop nesting"
+    # The two-level shape: an outer matcher group holding an inner hooks[] array.
+    assert re.search(r"matcher group", block, re.I), (
+        "the disarm must say the outer element is a matcher group, so removal is two-level"
+    )
+    # The mirror of step 5's assertion, and it must land BEFORE the commit.
+    assert re.search(r"re-?read the .*resolved.* settings", block, re.I), (
+        "the disarm must require re-reading the resolved settings"
+    )
+    assert re.search(r"before.*remediation commit", block, re.I), (
+        "the disarm assertion must be required before any remediation commit"
+    )
+
+    # anti-vacuous: a disarm written the OLD way - naming the scripts but not
+    # where they live, and requiring no assertion - must fail every check above.
+    # Re-running the contract against that text is the twin; asserting that a
+    # stripped substring is absent would only restate the strip.
+    hollow = (
+        "Do not forge a marker: disarm the prior-run hooks first - remove the UCG "
+        "`guard_pretooluse.py` / `budget_stop.py` entries from `settings.local.json` - "
+        "then make the remediation commit."
+    )
+    assert "hooks.PreToolUse" not in hollow and "hooks.Stop" not in hollow
+    assert not re.search(r"matcher group", hollow, re.I)
+    assert not re.search(r"re-?read the .*resolved.* settings", hollow, re.I)
+    assert not re.search(r"before.*remediation commit", hollow, re.I)
+
+
+# --------------------------------------------------------------------------
 # Case 2 — fold-in source contract: mechanical_gaps + named gaps + re-run loop.
 # --------------------------------------------------------------------------
 def test_foldin_cites_formalize_mechanical_gaps():
