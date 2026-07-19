@@ -88,6 +88,18 @@ The subagent must return **ONLY this object — no prose, no document quotes bey
 
 Every `reds` entry is **RED** — it cannot be auto-remediated, because the fix is a human decision, and an unattended run guessing it produces confidently wrong work. A purely cosmetic gap belongs in `concerns`, never RED; recall-derived hypotheses are attributed under `advisories_checked` and are never themselves RED and never block launch. Record each RED finding with its source and the exact decision needed in `.decision-log.md`.
 
+**Mint a stable id for each RED, with the line number excluded.** Derive it from the finding's `kind` plus the **bare artifact path** — the subagent reports `source` as `<artifact path:line>`, so strip the `:line` suffix before minting and never mint from that raw field. Line numbers are **excluded** from the id on purpose: an operator's answer is recorded against the id, and a line-bearing id would evaporate the moment anyone edited above the finding. With the line stripped, a RED re-detected by a later scan **inherits its existing id** instead of arriving as something nobody has answered.
+
+**Then apply the resolved-RED override, fail-closed.** Read `{workflow.implementation_artifacts}/.decisions.json` — the answers an operator recorded when resolving a blocked run, shape `{"decisions": [{"id": …, "answer": …, "action": "close|defer"}]}` — and drop from this scan's reds every RED whose `id` is named by an entry whose `action` is `close`. An `action` of `defer` records an answer without resolving it: it clears nothing, and its RED still stands and still blocks. This is what closes the loop — a decision answered by the operator is not asked again at the next preflight.
+
+Three properties of that override, each load-bearing:
+
+- **Match by `id` only.** Never by `source`, never by `evidence` text, never by fuzzy `decision_needed` similarity. A text matcher would suppress a genuinely new RED that merely happens to quote the same line.
+- **An override naming no still-present RED is ignored.** A stale answer cannot pre-authorize a finding this scan has not made.
+- **An unreadable or unparseable `.decisions.json` clears nothing.** Every scanned RED stands and the gate blocks. A suppression file that cannot be read is not a suppression.
+
+**Persist the surviving reds as the typed RED sidecar.** Write them to `{workflow.implementation_artifacts}/.preflight-reds.json` in the shape `{"reds": [...]}` — **one** file, not per story and not per run, and deliberately **not** run-scoped, unlike the `.preflight-scan-<run-id>.json` retrieval channel above (that one is run-scoped precisely so a prior run's raw scan cannot be misread as this one's). This sidecar is the durable operator-facing record of what is still pending: an id that changed every run could not carry an answer across the very re-scan the line-free id exists to survive. Those survivors — and only those — are the semantic-scan reds the step-4 hard gate reads.
+
 ## 4. Hard gate
 
 **Launch only when ALL hold:**

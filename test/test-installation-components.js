@@ -282,6 +282,8 @@ async function testClaudeCodeOnly() {
   const SKILL_SRC = path.join(SKILLS_DIR, 'ultracode-goal');
   const shipped = [
     path.join(SKILL_SRC, 'skills', 'ucg-formalize', 'SKILL.md'),
+    path.join(SKILL_SRC, 'skills', 'ucg-status', 'SKILL.md'),
+    path.join(SKILL_SRC, 'skills', 'ucg-resolve', 'SKILL.md'),
     path.join(SKILL_SRC, 'scripts', 'formalize_check.py'),
     path.join(SKILL_SRC, 'scripts', 'merge_customization.py'),
   ];

@@ -45,14 +45,17 @@ _PREFLIGHT_ENUM = "undecided-product|undecided-architecture|contradiction|undefi
 # Where that literal legitimately lives: the semantic-scan return object, declared
 # once in preflight.md and mirrored verbatim by the formalize sub-skill that runs the
 # SAME scan (ucg-formalize/SKILL.md calls it "the live three-key contract the parent
-# references/preflight.md semantic scan uses"), plus the fixture pinning that mirror.
-# Those two extra sites predate the sidecar and are the same declaration, so they are
-# enumerated rather than silently tolerated -- the exact-set assertion below still reds
-# the moment a FOURTH site imports the literal.
+# references/preflight.md semantic scan uses"), plus the two fixtures that pin those
+# mirrors verbatim -- the second being the pre-edit copy of preflight's step-3 section,
+# which carries the enum only because it is a byte-for-byte capture of the section that
+# declares it. Every extra site is the SAME declaration, so they are enumerated rather
+# than silently tolerated -- the exact-set assertion below still reds the moment a new
+# site imports the literal as its own vocabulary.
 _ENUM_HOMES = {
     "references/preflight.md",
     "skills/ucg-formalize/SKILL.md",
     "scripts/tests/fixtures/ucg_formalize/subagent_two_key_contract.txt",
+    "scripts/tests/fixtures/preflight_step3_no_decisions_override.md",
 }
 
 

@@ -581,7 +581,7 @@ def test_skill_registered_in_help_csv_and_passes_validate_skills():
     assert len(header) == CSV_COLUMNS
 
     module_rows = [r for r in data if r[0] == MODULE_COLUMN]
-    assert len(module_rows) == 3, [r[1] for r in module_rows]
+    assert len(module_rows) == 4, [r[1] for r in module_rows]
 
     status_rows = [r for r in module_rows if r[1] == "ucg-status"]
     assert len(status_rows) == 1, "exactly one ucg-status row"
