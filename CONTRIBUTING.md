@@ -81,7 +81,7 @@ Every UCG run that reaches Finalize ends with a health-check reflection step tha
   ```
 
   A `resolved` record does not suppress: the next sighting reports as a regression and links the original. Prefer this over deleting the entry, which restores the signal but throws away the fact that the defect was ever seen.
-- **Two limits worth knowing.** The cache is machine-local, so a `resolved` you record is not visible to other users; where the finding has a real issue URL, the shared truth is the issue's own open/closed state, and the health check consults it. And nothing detects a skipped `resolved`, so this remains a convention rather than an enforced step.
+- **Two limits worth knowing.** The cache is machine-local, so a `resolved` you record is not visible to other users; where the finding has a real issue URL, the shared truth is the issue's own state, and the health check consults it in preference to the local record. It accepts only a *completed* close (or a merged PR) as a fix: closing as **not planned** deliberately does not count, since that is how the dedup Action closes duplicates and how a wontfix is closed. And nothing detects a skipped `resolved`, so this remains a convention rather than an enforced step.
 
 ## Releasing
 
