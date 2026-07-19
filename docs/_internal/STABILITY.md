@@ -26,7 +26,7 @@ The keys in the shipped `[workflow]` block of `customize.toml` (including `persi
 
 ### The headless five-key JSON emit shape
 
-Every headless (`-H`) exit point emits one object with exactly these five keys, always present, `null` when an artifact was not produced, `reason` carrying a one-line cause only when blocked:
+Every headless (`-H`) exit point emits one object with exactly these five keys, always present, `null` when an artifact was not produced, plus a conditional sixth, `reason`, carrying a one-line cause only when blocked. A **complete** emit omits `reason` entirely; it is not present-and-`null`, so read it only when `status` is `blocked`:
 
 ```json
 {"status": "complete|blocked",
@@ -34,10 +34,19 @@ Every headless (`-H`) exit point emits one object with exactly these five keys, 
  "decision_log": "<path>",
  "report": "<path or null>",
  "deferred_work": "<path or null>",
- "reason": "<one line when blocked, else null>"}
+ "reason": "<one line, present only when blocked; omitted on a complete emit>"}
 ```
 
-An automator parses this one schema regardless of where the run stopped. Changing a key name, adding or removing a key, or changing the `null`-when-absent guarantee is a contract change.
+An automator parses this one schema regardless of where the run stopped. Changing a key name, adding or removing a key, changing the `null`-when-absent guarantee, or making `reason` present on a complete emit is a contract change.
+
+### The headless result file
+
+A headless run writes that same object to `{workflow.implementation_artifacts}/run-result.json`, byte-identical to what it emitted on stdout, so an automator reads a pinned file path instead of scraping a transcript. Covered:
+
+- **The path**: the basename `run-result.json` directly inside the resolved `{workflow.implementation_artifacts}`, with no run-id suffix and no subdirectory.
+- **The contents**: the headless five-key emit shape above, unchanged.
+
+Two documented exceptions, neither of which is a contract break: a block that fires **before** `{workflow.implementation_artifacts}` resolves (the "not a BMAD project" stop) writes no file and leaves the stdout envelope as its sole output, and an **attended** run writes no file at all. The file is overwrite-in-place, so it carries no cross-run history, and under the experimental `--parallel` mode each worktree agent sees its own artifacts path, so no single `run-result.json` describes a fan-out run.
 
 ### The skill name and invocation phrases
 
@@ -74,7 +83,7 @@ Everything not enumerated above is `@internal` and may change in any `0.x` relea
 - **Reference file structure**: the `references/*.md` stage files' internal structure, step ordering, prose, and section headings. The stage *names* are referenced by the health-check fingerprint (see below) but the file contents are an authoring surface.
 - **Script internals**: the internal functions, regexes, and intermediate behavior of `preflight_check.py`, `gate_eval.py`, `health_check_fp.py`, and the hook scripts. The covered surface is `gate_eval.py`'s CLI and verdict vocabulary above; everything else (the `preflight_check.py` JSON shape, the fingerprint tuple format, the hook env-var names) is internal and may change.
 - **The experimental `--parallel` workflow**: `assets/execute-epic.workflow.js`, the `/ultracode-goal-execute` registration, its args binding, its return shape, and `parallel_max_concurrency`'s runtime behavior are explicitly experimental and excluded from the contract. See [parallel mode](../parallel-mode.md).
-- **`_bmad-output/` artifact layout**: run folders, the decision log, `run-report.md`, `run-status.json`, the deferred-work ledger, and the improvement queue are run outputs, not a downstream-consumable schema. The headless emit shape (covered above) is the supported way to locate these paths programmatically.
+- **`_bmad-output/` artifact layout**, with one exception: run folders, the decision log, `run-report.md`, `run-status.json`, the deferred-work ledger, and the improvement queue are run outputs, not a downstream-consumable schema. **`run-result.json` is the exception and is covered** (see [the headless result file](#the-headless-result-file)); it is the one artifact in that tree an automator may pin against. The headless emit shape (covered above) is the supported way to locate the rest of these paths programmatically.
 
 ## SemVer note
 

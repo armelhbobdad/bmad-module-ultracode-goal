@@ -122,6 +122,8 @@ If any fails: write the blockers — mechanical and semantic — to `.decision-l
 
 The log carries the full blocker list. A confirmed **formalize RED** (a formalize-subagent `reds[]` entry unioned into the no-RED clause by step 4) surfaces through this **identical** five-key channel as a semantic-scan RED — no formalize-specific key, no formalize-specific status string. `reason` is the **first blocker in the adapter's blocker-list order** — positional `blockers[0]` flattened to one line (reds carry no severity field), built by the one shared `scripts/headless_envelope.py` `build_headless_envelope` adapter so every headless exit serializes through a single envelope definition. The rich formalize verdict stays a separate script-layer object the adapter consumes; it never nests into the envelope.
 
+Pass `impl_artifacts={workflow.implementation_artifacts}` to that call: `scripts/headless_envelope.py` is also the **writer** of `{workflow.implementation_artifacts}/run-result.json`, and this block is a headless terminal like any other, so it leaves its envelope written on disk at that pinned path rather than only in the transcript. Same bytes as the stdout emit (the adapter serializes once), headless only, and best-effort — a failed write logs `WARN run-result-write-failed` and never converts this clean blocked exit into a crash.
+
 ## 5. Arm the environment (only when the gate passes)
 
 Do these in order; each must be asserted, not assumed:

@@ -100,7 +100,22 @@ This is a side effect on the way out, never a gate on the exit: a hook that erro
 
 ## Headless output
 
-In headless (`-H`), compose the final JSON, run the Workflow health check (below) in its unattended queue-only mode, then emit the JSON and stop. `status` is `complete` when the Epic-level gate advanced, or `blocked` when a story escalated. This is the **same five-canonical-key shape every headless exit point honors** (Stage 1 first-touch / already-done blocks, Stage 2 preflight block, and this Stage 6 final emit): the five keys `status`/`skill`/`decision_log`/`report`/`deferred_work` are **always present** (`report` and `deferred_work` `null` when not produced), so a caller parsing them never raises a KeyError. A **complete** emit is those five; a **blocked** exit appends a sixth, `reason` (the one-line cause):
+In headless (`-H`), build the final JSON **through the `scripts/headless_envelope.py` adapter** — never hand-composed here — run the Workflow health check (below) in its unattended queue-only mode, then emit the JSON and stop. `status` is `complete` when the Epic-level gate advanced, or `blocked` when a story escalated, and the adapter has one entry point per shape:
+
+```
+build_complete_envelope(<path to this run's .decision-log.md>, report=<run-report.md path or None>, deferred_work=<{workflow.deferred_work_path} or None>, impl_artifacts={workflow.implementation_artifacts})
+build_headless_envelope(<blocker list>, <path to this run's .decision-log.md>, impl_artifacts={workflow.implementation_artifacts})
+```
+
+**Both emits are also written to `{workflow.implementation_artifacts}/run-result.json` by `scripts/headless_envelope.py` itself, which is the writer of that file** — so an automator reads a file at a pinned path instead of scraping the transcript for the terminal verdict. The adapter serializes once and hands the same string to both sinks, so the file is byte-identical to what you emit on stdout: print exactly what it produced, do not re-serialize the dict yourself. The write is best-effort and never a gate on the exit — if it fails, the adapter logs `WARN run-result-write-failed` to `.decision-log.md` and the run still emits.
+
+Three constraints on that file:
+
+- **Headless only.** An attended run writes no `run-result.json`. An operator who found a stale one from an attended run would read it as a headless terminal, so do not "helpfully" write it in both modes.
+- **Path-pinned and overwrite-in-place**, exactly like `run-status.json`: a second run against the same `{workflow.implementation_artifacts}` overwrites the first run's result.
+- **No `--parallel` trust claim.** The fan-out's worktree agents each see their own `{workflow.implementation_artifacts}`, so there is no single `run-result.json` an automator can read for a fan-out run — the same scope note that binds `.baseline-<story>`, `run-status.json` and the escalation sidecars.
+
+The emitted object is the **same five-canonical-key shape every headless exit point honors** (Stage 1 first-touch / already-done blocks, Stage 2 preflight block, and this Stage 6 final emit): the five keys `status`/`skill`/`decision_log`/`report`/`deferred_work` are **always present** (`report` and `deferred_work` `null` when not produced), so a caller parsing them never raises a KeyError. A **complete** emit is those five; a **blocked** exit appends a sixth, `reason` (the one-line cause):
 
 ```json
 {"status": "complete",
@@ -110,7 +125,7 @@ In headless (`-H`), compose the final JSON, run the Workflow health check (below
  "deferred_work": "<path to {workflow.deferred_work_path}, or null>"}
 ```
 
-A blocked exit (a story escalated) emits the same five keys plus `reason`, with `report`/`deferred_work` `null` — the shape `references/preflight.md` and the `scripts/headless_envelope.py` adapter build (one shared envelope definition).
+A blocked exit (a story escalated) emits the same five keys plus `reason`, with `report`/`deferred_work` `null` — the shape `references/preflight.md` and the `scripts/headless_envelope.py` adapter build (one shared envelope definition), and it lands in the same `run-result.json` the complete emit does.
 
 ## Workflow health check (terminal)
 
