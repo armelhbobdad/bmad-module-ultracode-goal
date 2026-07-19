@@ -117,8 +117,12 @@ def test_step5_test_artifacts_value_matches_tea_resolved_root():
     entry = _entry_for(_step5(), _ENV_VAR)
     assert entry is not None
     assert _states_resolved_source(entry), "the value must come from config resolution"
-    # the doc's stated default is the resolver's default, spelled the same way
-    assert str(default.relative_to(root)) in entry
+    # The doc's stated default is the resolver's default, spelled the same way.
+    # Compare in POSIX form: the reference documents write paths with forward
+    # slashes on every platform, while str() on a Path renders the native
+    # separator, so a plain str() comparison passes on Linux and fails on
+    # Windows for a document that is perfectly correct.
+    assert default.relative_to(root).as_posix() in entry
     # and it states the two resolution rules that make the override cases above
     # land where they do
     assert "{project-root}" in entry and "substituted" in entry
