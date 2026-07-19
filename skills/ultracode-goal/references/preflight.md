@@ -151,6 +151,8 @@ This is the moment the human leaves the loop. Before the first unattended action
 - **The autonomy line:** state plainly — *"from here I will not ask you anything."*
 - **Kill switch:** Ctrl-C, or delete the Epic branch — and note that `/rewind` will not help (its checkpoints miss the Bash-driven changes that make up the run, the same reason the branch is the real undo).
 - **Where to watch:** the run's `.decision-log.md` (prose account); on the sequential spine, `{workflow.implementation_artifacts}/run-status.json` (the machine-readable heartbeat Execute updates as the spine advances); under `--parallel`, watch the workflow progress view (`/workflows`) and its run log instead — the fan-out's worktree agents do not write `run-status.json`.
+- **How the run ends:** the last thing every run does is the workflow health check — a terminal self-audit of the friction the run itself hit, so the workflow improves from having been used. **Attended, it presents every finding and halts** — the run comes back to you at the close, so "unattended" ends there rather than at the last story. **Headless, it queues its findings locally and never blocks the emit.**
+- **Optional diff viewer:** when `hunk` is detected on PATH, the surfaces that name a commit suggest `hunk show <commit>` to read one story's diff and `hunk diff {workflow.epic_branch_prefix}<epic-id>` to read the whole branch. Absent `hunk`, nothing is printed and behavior is unchanged — it is never installed, never checked for at launch, and its absence is never warned about.
 
 Then **one soft confirm** to cross the line. With `--yes`, skip the confirm and launch straight through — but **still print the briefing** so the operator has the record. Headless never reaches this subsection.
 
