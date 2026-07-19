@@ -7,6 +7,8 @@
 hook contract (run the hook as a subprocess, feed JSON on stdin)."""
 
 import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +37,10 @@ def _hermetic_git_env(monkeypatch):
     for var in _GIT_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", "/")
+    # Same reasoning for the test-artifacts root: a runner that happens to have
+    # it exported would silently arm the staged-acceptance-test check in tests
+    # that exist to prove the unset behavior.
+    monkeypatch.delenv("ULTRACODE_TEST_ARTIFACTS", raising=False)
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -51,18 +57,18 @@ def _init_repo(repo: Path, branch: str) -> None:
     _git(repo, "commit", "-q", "-m", "init")
 
 
-def _run_mutant_hook(
+def _hook_proc(
     hook_path: Path, event: dict, cwd: Path, env_extra: dict | None = None
-) -> tuple[int, dict | None]:
+) -> subprocess.CompletedProcess:
     """Run ANY copy of the hook through the real stdin/stdout contract.
 
     Same runner the shipped hook goes through, so a patched copy under tmp_path
     is exercised exactly like the original instead of via a lookalike harness.
+    Returns the raw process so callers that care about the stderr channel (as
+    distinct from the stdout decision channel) can inspect both.
     """
-    import os
-
     env = {**os.environ, **(env_extra or {})}
-    proc = subprocess.run(
+    return subprocess.run(
         [sys.executable, str(hook_path)],
         input=json.dumps(event),
         cwd=cwd,
@@ -70,6 +76,12 @@ def _run_mutant_hook(
         text=True,
         env=env,
     )
+
+
+def _run_mutant_hook(
+    hook_path: Path, event: dict, cwd: Path, env_extra: dict | None = None
+) -> tuple[int, dict | None]:
+    proc = _hook_proc(hook_path, event, cwd, env_extra)
     out = None
     if proc.stdout.strip():
         out = json.loads(proc.stdout)
@@ -834,3 +846,644 @@ def test_risk_unresolvable_impl_artifacts_fails_closed_for_claude_mem(tmp_path: 
     assert bcode == 0
     assert bout is None
 
+
+# ---------------------------------------------------------------------------
+# Un-skip proof: the staged CONTENT of the story's acceptance tests.
+#
+# In production the story's atdd-checklist names the acceptance-test files; the
+# guard reads each one's staged post-image (`git show :<path>`) and refuses a
+# commit while any still carries the skip marker. These tests drive the real
+# thing: a temp repo with real staged blobs and a real checklist on disk.
+#
+# Two obligations run through the whole section:
+#   - always stage something real, so the empty-index clause cannot deny first
+#     and make every assertion below pass against the wrong deny; and
+#   - assert on the deny MESSAGE, not merely on the exit code.
+# ---------------------------------------------------------------------------
+
+_ACCEPTANCE_REL = "tests/acceptance/login.spec.ts"
+_CHECKLIST_NAME = "atdd-checklist-STORY-1.md"
+
+# The clean blob deliberately carries the bare word "skip" in a position that is
+# NOT a skip marker (the describe name). That property is what makes a guard
+# widened to match the bare substring visibly over-fire; the allow-path test
+# asserts the property on its own fixture so a later tidy-up cannot quietly
+# remove it and turn the corresponding mutant into a no-op.
+_CLEAN_ACCEPTANCE = (
+    'describe("skip-free acceptance path", () => {\n'
+    '  test("logs the user in", async () => {\n'
+    "    expect(await login()).toBe(true);\n"
+    "  });\n"
+    "});\n"
+)
+_SKIPPED_ACCEPTANCE = (
+    'describe("acceptance path", () => {\n'
+    '  test.skip("logs the user in", async () => {\n'
+    "    expect(await login()).toBe(true);\n"
+    "  });\n"
+    "});\n"
+)
+
+
+def _checklist_body(*rels: str) -> str:
+    """A checklist in the shape the test-design stage writes: prose plus the
+    acceptance-test paths it maps each criterion onto."""
+    lines = ["# Acceptance checklist for STORY-1", ""]
+    for index, rel in enumerate(rels, start=1):
+        lines.append(f"- criterion {index} -> `{rel}` (red-phase, must be green)")
+    return "\n".join(lines) + "\n"
+
+
+def _production_repo(
+    tmp_path: Path,
+    *,
+    staged: dict[str, str] | None = None,
+    committed: dict[str, str] | None = None,
+    checklist: str | None = None,
+    artifacts_dirname: str = "test-artifacts",
+) -> tuple[Path, Path, Path]:
+    """A green-story repo plus a TEA test-artifacts root holding the checklist.
+
+    `committed` lands in HEAD first (so a re-add can be modelled), `staged` is
+    written and staged afterwards by an explicit `git add <path>`, the way the
+    guard requires staging to happen: in its own prior step.
+    """
+    repo, impl = _green_story_repo(tmp_path, stage=False)
+    tests_root = repo / artifacts_dirname
+    tests_root.mkdir(parents=True, exist_ok=True)
+    if checklist is not None:
+        (tests_root / _CHECKLIST_NAME).write_text(checklist)
+    for rel, body in (committed or {}).items():
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+        _git(repo, "add", rel)
+    if committed:
+        _git(repo, "commit", "-q", "-m", "prior story work")
+    for rel, body in (staged or {}).items():
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+        _git(repo, "add", rel)
+    return repo, impl, tests_root
+
+
+def _production_env(impl: Path, tests_root: Path) -> dict:
+    return {
+        "ULTRACODE_IMPL_ARTIFACTS": str(impl),
+        "ULTRACODE_TEST_ARTIFACTS": str(tests_root),
+    }
+
+
+def _reason(out: dict | None) -> str:
+    assert out is not None, "expected a decision on stdout"
+    return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_unskip_clean_staged_acceptance_test_allowed(tmp_path: Path) -> None:
+    # Fixture property this test's mutant depends on, asserted rather than
+    # assumed: the clean blob carries the bare word "skip" outside any marker.
+    assert "skip" in _CLEAN_ACCEPTANCE, "fixture must contain the bare substring"
+    assert "test.skip(" not in _CLEAN_ACCEPTANCE, "...but no real skip marker"
+
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 0, "un-skipped acceptance tests: the commit is a green boundary"
+    assert out is None
+
+
+def test_unskip_staged_skip_marker_denied_on_first_commit(tmp_path: Path) -> None:
+    # First commit for this file: it is a freshly added, all-plus blob with no
+    # prior version anywhere in history, so nothing could be diffed against.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "Un-skip proof" in _reason(out)
+
+
+def test_unskip_deny_message_names_clause_files_and_recovery(tmp_path: Path) -> None:
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+
+    _, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    reason = _reason(out)
+    assert "Un-skip proof" in reason  # names the failing clause...
+    assert "Empty-index guard" not in reason  # ...and is not the sibling clause
+    assert _ACCEPTANCE_REL in reason  # the offending file
+    assert "test.skip(" in reason  # what was found in it
+    assert "Un-skip every acceptance test" in reason  # the recovery
+    assert "restage" in reason and "SEPARATE tool call" in reason
+
+
+def test_unskip_inert_without_atdd_checklist(tmp_path: Path) -> None:
+    # In scope (the test-artifacts root resolves to a real directory) but the
+    # story has no checklist: the lighter profile, where acceptance tests are
+    # never generated. This exercises the checklist-missing branch itself.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={"story.txt": "story work"},
+        checklist=None,
+    )
+    assert tests_root.is_dir()
+    assert not (tests_root / _CHECKLIST_NAME).exists()
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 0
+    assert out is None
+
+
+def test_unskip_readded_skip_marker_denied(tmp_path: Path) -> None:
+    # The marker was absent in HEAD and is back in the staged blob. A diff-wise
+    # reading ("was a pre-existing marker removed?") waves this through; reading
+    # the staged content does not.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        committed={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    assert "Un-skip proof" in _reason(out)
+    assert _ACCEPTANCE_REL in _reason(out)
+
+
+def test_unskip_absent_marker_control_allowed(tmp_path: Path) -> None:
+    # Same history shape as the re-add above, minus the marker in the staged
+    # blob: the commit is allowed. The pair is what shows the clause keys on
+    # content presence rather than on the direction of the change.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        committed={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE + "// one more assertion\n"},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 0
+    assert out is None
+
+
+def test_unskip_guard_docstring_notes_js_vitest_only_token(tmp_path: Path) -> None:
+    src = _hook_source()
+    doc = src[src.index('"""'):src.index('"""', src.index('"""') + 3)]
+
+    def _states_the_caveat(text: str) -> bool:
+        return "test.skip(" in text and re.search(
+            r"JS/Vitest-specific|JS/Vitest specific", text
+        ) is not None
+
+    assert _states_the_caveat(doc), "the guard docstring must scope the token"
+    assert "pytest" in doc and "Go" in doc, "and name a stack it does not cover"
+
+    # Anti-vacuous: strip the caveat sentence and the same predicate fails, so
+    # the assertion is not satisfied by prose that predates this check.
+    caveat_start = doc.index("  Skip token matched:")
+    stripped = doc[:caveat_start]
+    assert not _states_the_caveat(stripped)
+
+
+def _env_unset_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A repo whose checklist and skip-carrying staged test sit at exactly the
+    path a cwd-derived test-artifacts fallback would resolve to.
+
+    Load-bearing: without the planted checklist, a resolver that invented that
+    fallback would find nothing, go inert for want of a checklist, and the
+    unset-env test would stay green while the defect shipped.
+    """
+    return _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+        artifacts_dirname="_bmad-output/test-artifacts",
+    )
+
+
+def test_unskip_inert_when_test_artifacts_env_unset(tmp_path: Path) -> None:
+    repo, impl, tests_root = _env_unset_repo(tmp_path)
+    # The fixture properties the corresponding mutant needs, asserted here:
+    assert tests_root == repo / "_bmad-output" / "test-artifacts"
+    assert (tests_root / _CHECKLIST_NAME).is_file()
+    assert "test.skip(" in (repo / _ACCEPTANCE_REL).read_text()
+
+    # Hooks armed by a run that predates this check inject no test-artifacts
+    # root. Out of scope must mean no decision at all, never a deny.
+    code, out = _run_hook(
+        _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 0
+    assert out is None
+
+
+def test_unskip_inert_note_goes_to_stderr_not_stdout(tmp_path: Path) -> None:
+    repo, impl, _ = _env_unset_repo(tmp_path)
+
+    proc = _hook_proc(
+        HOOK, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "", "stdout is the decision channel and stays clean"
+    assert "ULTRACODE_TEST_ARTIFACTS is unset" in proc.stderr
+    assert proc.stderr.count("Un-skip proof") == 1, "one note per invocation"
+
+
+def _function_source(src: str, name: str) -> str:
+    start = src.index(f"def {name}(")
+    return src[start:src.index("\ndef ", start + 1)]
+
+
+def _code_only(fn_src: str) -> str:
+    """The function's code with its docstring and comment lines removed."""
+    kept, in_doc = [], False
+    for line in fn_src.splitlines():
+        stripped = line.strip()
+        if in_doc:
+            if stripped.endswith('"""'):
+                in_doc = False
+            continue
+        if stripped.startswith('"""'):
+            if not (len(stripped) > 3 and stripped.endswith('"""')):
+                in_doc = True
+            continue
+        if stripped.startswith("#"):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _resolver_derives_a_path(hook_src: str) -> bool:
+    """True when the test-artifacts resolver invents a path from cwd instead of
+    returning None when the env var is unset."""
+    return "cwd" in _code_only(_function_source(hook_src, "_test_artifacts"))
+
+
+def test_unskip_test_artifacts_resolver_has_no_cwd_fallback() -> None:
+    src = _hook_source()
+    resolver = _function_source(src, "_test_artifacts")
+    assert "ULTRACODE_TEST_ARTIFACTS" in resolver
+    # No cwd is even in scope: unset must resolve to None, out of scope.
+    assert resolver.splitlines()[0] == "def _test_artifacts() -> Path | None:"
+    assert not _resolver_derives_a_path(src)
+    assert "return None" in _code_only(resolver)
+    # Anti-vacuous: the sibling resolver DOES carry the fallback shape this one
+    # must not, so the check is discriminating rather than trivially true.
+    assert "cwd" in _code_only(_function_source(src, "_impl_artifacts"))
+
+
+def test_unskip_unreadable_checklist_denies(tmp_path: Path) -> None:
+    # The staged blob is CLEAN: absent the read failure this commit is allowed,
+    # so the deny can only come from the unreadable checklist.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+    checklist = tests_root / _CHECKLIST_NAME
+    checklist.write_bytes(b"\xff\xfe not decodable \x00\x9c")
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    reason = _reason(out)
+    assert "Un-skip proof" in reason and "could not be read" in reason
+    assert "Empty-index guard" not in reason
+
+    # Second unreadable shape, exercised only where file modes actually bite
+    # (a root runner ignores them, and a conditional beats a silent skip).
+    checklist.write_text(_checklist_body(_ACCEPTANCE_REL))
+    checklist.chmod(0o000)
+    if not os.access(checklist, os.R_OK):
+        code, out = _run_hook(
+            _commit_event(repo), repo, _production_env(impl, tests_root)
+        )
+        assert code == 2
+        assert "could not be read" in _reason(out)
+    checklist.chmod(0o644)
+
+
+def test_unskip_git_show_failure_denies_naming_failure(tmp_path: Path) -> None:
+    # The checklist names a file that is not in the index at all, so the staged
+    # read cannot answer. Something else IS staged, so the empty-index clause
+    # passes and this deny is unambiguously the staged-read failure.
+    missing = "tests/acceptance/missing.spec.ts"
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={"story.txt": "story work"},
+        checklist=_checklist_body(missing),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    reason = _reason(out)
+    assert "Un-skip proof" in reason
+    assert "git show :" in reason and missing in reason  # names the failure
+    assert "Empty-index guard" not in reason
+
+
+def test_unskip_checklist_with_no_test_files_is_inert(tmp_path: Path) -> None:
+    # A real production story that ships no acceptance-test file (documentation,
+    # a refactor): its checklist enumerates nothing, and that is not a fault.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={"docs/notes.md": "prose only\n"},
+        checklist="# Acceptance checklist for STORY-1\n\nNo acceptance tests: docs only.\n",
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 0, "a doc-only story must not be blocked by the un-skip proof"
+    assert out is None
+
+
+# --- Executed mutants of the un-skip clause ---------------------------------
+# One mutation per branch, each on a COPY of the hook under tmp_path, each
+# proving the branch it neuters is the thing producing the behavior above.
+
+_UNSKIP_TOKEN_TEST = "        if _SKIP_TOKEN in blob:"
+_UNSKIP_DENY = "    if still_skipped:\n        _deny(\n"
+_UNSKIP_NO_CHECKLIST = (
+    "    if not checklist.is_file():\n"
+    "        return  # no acceptance tests for this story: nothing to prove"
+)
+_UNSKIP_NO_FILES = (
+    "    if not files:\n"
+    "        return  # checklist names no acceptance-test file (doc-only story)"
+)
+_UNSKIP_UNREADABLE = "    except (OSError, UnicodeDecodeError):\n        _deny(\n"
+_UNSKIP_UNREADABLE_STAGED = "        if not readable:\n            _deny(\n"
+_TEST_ARTIFACTS_DEF = "def _test_artifacts() -> Path | None:"
+_TEST_ARTIFACTS_TAIL = (
+    '    env = os.environ.get("ULTRACODE_TEST_ARTIFACTS")\n'
+    "    if env:\n"
+    "        return Path(env)\n"
+    "    return None"
+)
+_TEST_ARTIFACTS_CALL = "    tests_root = _test_artifacts()"
+
+
+def _write_mutant_multi(tmp_path: Path, name: str, edits: list[tuple[str, str]]) -> Path:
+    """Copy the shipped hook, apply several textual edits that together make ONE
+    behavioral change, return the copy."""
+    src = _hook_source()
+    for old, new in edits:
+        assert old in src, f"mutation anchor drifted out of the hook: {name}"
+        src = src.replace(old, new, 1)
+    path = tmp_path / f"mutant_{name}.py"
+    path.write_text(src, encoding="utf-8")
+    return path
+
+
+def test_mutant_bare_skip_substring_reds_clean_acceptance_commit(tmp_path: Path) -> None:
+    """Twin: widen the match from the `test.skip(` token to the bare substring
+    `skip`. The clean blob then denies, so the allow-path assertion reds — which
+    is what proves that assertion pins the token rather than passing because the
+    clause never ran."""
+    mutant = _write_mutant(
+        tmp_path, "bare_skip", _UNSKIP_TOKEN_TEST, '        if "skip" in blob:'
+    )
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, _production_env(impl, tests_root)
+    )
+
+    assert code == 2, "the allow-path assertion must red when the match widens"
+    assert "Un-skip proof" in _reason(out)
+
+
+def test_mutant_unskip_note_instead_of_deny_allows_skipped_commit(tmp_path: Path) -> None:
+    """Twin: swap the deny for the out-of-scope note-and-return path. The
+    freshly added, still-skipped blob is then allowed and both deny assertions
+    red."""
+    mutant = _write_mutant(
+        tmp_path,
+        "unskip_note",
+        _UNSKIP_DENY,
+        '    if still_skipped:\n        _note("mutant: note instead of deny")\n'
+        "        return\n        _deny(\n",
+    )
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, _production_env(impl, tests_root)
+    )
+
+    assert code == 0, "both staged-marker deny assertions must red"
+    assert out is None
+
+
+def test_mutant_missing_checklist_denies_reds_light_profile_commit(tmp_path: Path) -> None:
+    """Twin: fail closed when the checklist is absent instead of going inert.
+    The lighter profile's commit then denies, reddening exactly that inertness
+    assertion."""
+    mutant = _write_mutant(
+        tmp_path,
+        "checklist_missing_deny",
+        _UNSKIP_NO_CHECKLIST,
+        '    if not checklist.is_file():\n        _deny("mutant: missing checklist")',
+    )
+    repo, impl, tests_root = _production_repo(
+        tmp_path, staged={"story.txt": "story work"}, checklist=None
+    )
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, _production_env(impl, tests_root)
+    )
+
+    assert code == 2, "the checklist-missing inertness assertion must red"
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_mutant_diffwise_unskip_allows_readded_marker(tmp_path: Path) -> None:
+    """Twin: re-read the clause diff-wise — deny only when a marker present in
+    HEAD survives into the index. The re-add is then allowed (that assertion
+    reds) while the marker-absent control stays green, which is precisely the
+    misreading the pair exists to catch."""
+    mutant = _write_mutant(
+        tmp_path,
+        "diffwise",
+        "        if _SKIP_TOKEN in blob:\n            still_skipped.append(rel)",
+        "        head = subprocess.run(\n"
+        '            ["git", "show", f"HEAD:{rel}"],\n'
+        "            cwd=cwd or None, capture_output=True, text=True, timeout=10,\n"
+        "        )\n"
+        "        if _SKIP_TOKEN in blob and _SKIP_TOKEN in head.stdout:\n"
+        "            still_skipped.append(rel)",
+    )
+    readd_repo, readd_impl, readd_root = _production_repo(
+        tmp_path / "readd",
+        committed={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+    code, out = _run_mutant_hook(
+        mutant,
+        _commit_event(readd_repo),
+        readd_repo,
+        _production_env(readd_impl, readd_root),
+    )
+    assert code == 0, "the re-add deny assertion must red under a diff-wise reading"
+    assert out is None
+
+    control_repo, control_impl, control_root = _production_repo(
+        tmp_path / "control",
+        committed={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE + "// one more assertion\n"},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+    code, _ = _run_mutant_hook(
+        mutant,
+        _commit_event(control_repo),
+        control_repo,
+        _production_env(control_impl, control_root),
+    )
+    assert code == 0, "the marker-absent control stays green: it isolates nothing alone"
+
+
+def test_mutant_test_artifacts_cwd_fallback_reds_env_unset_inertness(tmp_path: Path) -> None:
+    """Twin: give the test-artifacts resolver the cwd-derived fallback its
+    sibling carries. The env-unset commit then resolves a root, finds the
+    planted checklist, and denies — reddening both the inertness assertion and
+    the source-shape one."""
+    edits = [
+        (_TEST_ARTIFACTS_DEF, "def _test_artifacts(cwd: str | None) -> Path | None:"),
+        (
+            _TEST_ARTIFACTS_TAIL,
+            '    env = os.environ.get("ULTRACODE_TEST_ARTIFACTS")\n'
+            "    if env:\n"
+            "        return Path(env)\n"
+            "    if cwd:\n"
+            '        return Path(cwd) / "_bmad-output" / "test-artifacts"\n'
+            "    return None",
+        ),
+        (_TEST_ARTIFACTS_CALL, "    tests_root = _test_artifacts(cwd)"),
+    ]
+    mutant = _write_mutant_multi(tmp_path, "cwd_fallback", edits)
+    repo, impl, _ = _env_unset_repo(tmp_path)
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 2, "the env-unset inertness assertion must red under a fallback"
+    assert "Un-skip proof" in _reason(out)
+    # ...and the source-shape assertion reds on sight of the same mutation.
+    assert _resolver_derives_a_path(mutant.read_text(encoding="utf-8"))
+
+    # The pre-existing green-story regression test plants no checklist, so under
+    # this same mutation it goes inert for want of one and stays green. It is a
+    # live regression witness, not a twin.
+    plain_repo, plain_impl = _green_story_repo(tmp_path / "plain", stage=True)
+    code, out = _run_mutant_hook(
+        mutant,
+        _commit_event(plain_repo),
+        plain_repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(plain_impl)},
+    )
+    assert code == 0
+    assert out is None
+
+
+def test_mutant_unreadable_checklist_note_allows_commit(tmp_path: Path) -> None:
+    """Twin: turn the unreadable-checklist deny into the inert note. Only the
+    unreadable-checklist assertion reds."""
+    mutant = _write_mutant(
+        tmp_path,
+        "unreadable_note",
+        _UNSKIP_UNREADABLE,
+        "    except (OSError, UnicodeDecodeError):\n"
+        '        _note("mutant: note instead of deny")\n        return\n        _deny(\n',
+    )
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        checklist=_checklist_body(_ACCEPTANCE_REL),
+    )
+    (tests_root / _CHECKLIST_NAME).write_bytes(b"\xff\xfe not decodable \x00\x9c")
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, _production_env(impl, tests_root)
+    )
+
+    assert code == 0, "the unreadable-checklist deny assertion must red"
+    assert out is None
+
+
+def test_mutant_git_show_failure_treated_as_empty_allows_commit(tmp_path: Path) -> None:
+    """Twin: read an unanswerable `git show :<path>` as an empty blob and carry
+    on. Only the staged-read-failure assertion reds."""
+    mutant = _write_mutant(
+        tmp_path,
+        "git_show_empty",
+        _UNSKIP_UNREADABLE_STAGED,
+        "        if not readable:\n            continue\n            _deny(\n",
+    )
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={"story.txt": "story work"},
+        checklist=_checklist_body("tests/acceptance/missing.spec.ts"),
+    )
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, _production_env(impl, tests_root)
+    )
+
+    assert code == 0, "the staged-read-failure deny assertion must red"
+    assert out is None
+
+
+def test_mutant_deny_on_empty_test_file_list_reds_doc_only_commit(tmp_path: Path) -> None:
+    """Twin: fail closed when the checklist enumerates no acceptance-test file.
+    The doc-only story's commit then denies — which is also why that case is
+    inert in the first place: every documentation and refactor commit would
+    otherwise brick."""
+    mutant = _write_mutant(
+        tmp_path,
+        "no_files_deny",
+        _UNSKIP_NO_FILES,
+        '    if not files:\n        _deny("mutant: checklist names no test file")',
+    )
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={"docs/notes.md": "prose only\n"},
+        checklist="# Acceptance checklist for STORY-1\n\nNo acceptance tests: docs only.\n",
+    )
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, _production_env(impl, tests_root)
+    )
+
+    assert code == 2, "the doc-only inertness assertion must red"
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"

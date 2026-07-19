@@ -10,7 +10,12 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
   2. No `git commit` until a "tests-ran" marker exists for the current story.
   3. No `git commit` while the staged index is empty (a commit that captures no
      work), or while the staged-index probe cannot answer (fail closed).
-  4. Cross-Session Recall gate: while a UCG run is active (a .mem-state.json
+  4. Un-skip proof: in production (an atdd-checklist for the current story is on
+     disk), no `git commit` while the STAGED CONTENT of any acceptance-test file
+     that checklist enumerates still contains `test.skip(`. This reads the blob
+     being committed, not a diff, so it also catches a story's first commit,
+     where there is no prior blob to compare against.
+  5. Cross-Session Recall gate: while a UCG run is active (a .mem-state.json
      latch is present), claude-mem stays advisory-only and fails closed — any
      claude-mem MCP call (and any filesystem reach into .claude-mem) is denied
      unless the latch is green (present + schema_ok + recall on). Outside a run
@@ -32,8 +37,21 @@ Config resolution (all optional, env wins so the conductor can inject per run):
   ULTRACODE_IMPL_ARTIFACTS      dir holding run state (story id + markers)
   ULTRACODE_STORY_ID            current story id; else read from
                                 <impl_artifacts>/.current-story
+  ULTRACODE_TEST_ARTIFACTS      TEA test-artifacts root; arms the un-skip proof.
+                                No default is derived here on purpose (see
+                                _test_artifacts): unset means the check is out
+                                of scope, never a deny.
   Marker file checked: <impl_artifacts>/.tests-ran-<story_id>
   State latch checked: <impl_artifacts>/.mem-state.json (Cross-Session Recall)
+  Checklist read: <test_artifacts>/atdd-checklist-<story_id>.md, keyed by the
+                  SAME story id the tests-ran marker uses (the id resolved by
+                  _current_story). A story_key/story_id drift here would make
+                  the un-skip proof silently inert, the worst failure mode a
+                  deny guard has.
+  Skip token matched: the literal `test.skip(`. That token is JS/Vitest-specific
+                  (the Playwright/Vitest form TEA's ATDD generates, which is
+                  web/JS-only today); a pytest or Go acceptance suite marks
+                  skips differently and this check would not see them.
 """
 
 import json
@@ -42,6 +60,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 DEFAULT_PROTECTED = ["main", "master"]
 
@@ -54,12 +73,12 @@ def _read_event() -> dict:
         return {}
 
 
-def _allow() -> None:
+def _allow() -> NoReturn:
     """No decision needed: stay silent, let the normal permission flow run."""
     sys.exit(0)
 
 
-def _deny(reason: str) -> None:
+def _deny(reason: str) -> NoReturn:
     print(
         json.dumps(
             {
@@ -74,6 +93,15 @@ def _deny(reason: str) -> None:
     # Belt-and-suspenders: clients that ignore JSON still block on exit 2.
     print(reason, file=sys.stderr)
     sys.exit(2)
+
+
+def _note(message: str) -> None:
+    """Say something on stderr and RETURN (no decision, no exit).
+
+    stdout is the decision channel: anything printed there is parsed as the
+    hook's verdict, so a path that reaches no decision must stay off it.
+    """
+    print(message, file=sys.stderr)
 
 
 def _protected_branches() -> list[str]:
@@ -134,6 +162,22 @@ def _impl_artifacts(cwd: str | None) -> Path | None:
     return None
 
 
+def _test_artifacts() -> Path | None:
+    """TEA test-artifacts root, from env ONLY.
+
+    Mirrors _impl_artifacts above but deliberately WITHOUT its cwd-derived
+    fallback. Hooks armed by a run that predates the un-skip proof inject no
+    ULTRACODE_TEST_ARTIFACTS; synthesizing a path here would pull every such
+    session into scope and brick its commits on a checklist it never wrote.
+    Unset means out of scope (an advisory note, never a deny); fail-closed
+    behavior applies only *within* scope, once the var is set.
+    """
+    env = os.environ.get("ULTRACODE_TEST_ARTIFACTS")
+    if env:
+        return Path(env)
+    return None
+
+
 def _current_story(impl: Path | None) -> str | None:
     sid = os.environ.get("ULTRACODE_STORY_ID")
     if sid:
@@ -166,6 +210,142 @@ def _git_writes(command: str) -> set[str]:
         if m and re.search(r"\bgit\b", segment):
             verbs.add(m.group("verb").lower())
     return verbs
+
+
+# --- Un-skip proof ----------------------------------------------------------
+# In production the story's atdd-checklist is the ground truth for which files
+# carry its acceptance tests. This clause reads the STAGED post-image of each of
+# them and refuses a commit that would capture a still-skipped acceptance test.
+# It asserts absence in the blob being committed, so it holds on a story's first
+# commit as well as on later ones; it is not a diff of "was the marker removed".
+
+_SKIP_TOKEN = "test.skip("
+
+# Path-shaped tokens naming a JS/TS acceptance-test file. Deliberately loose on
+# the leading segment ({project-root}/…, an absolute path, a bare relative one)
+# and strict on the extension, so prose around the paths is not mistaken for one.
+_TEST_FILE = re.compile(
+    r"""[^\s`'"()\[\],]+\.(?:spec|test)\.(?:[cm]?[jt]sx?)\b"""
+)
+
+
+def _checklist_test_files(text: str) -> list[str]:
+    """Every acceptance-test path the checklist names, in order, deduplicated."""
+    found: list[str] = []
+    for match in _TEST_FILE.finditer(text):
+        token = match.group(0)
+        if token not in found:
+            found.append(token)
+    return found
+
+
+def _repo_relative(raw: str, cwd: str | None) -> str:
+    """Normalize a checklist entry to the repo-relative form `git show :` needs.
+
+    Checklist entries may be `{project-root}`-prefixed or absolute; `git show :`
+    accepts neither. Anything that still cannot be made repo-relative is passed
+    through unchanged so the read fails loudly rather than being skipped.
+    """
+    text = raw.replace("\\", "/")
+    if "{project-root}" in text:
+        return text.split("{project-root}", 1)[1].lstrip("/")
+    if text.startswith("./"):
+        text = text[2:]
+    if text.startswith("/") and cwd:
+        try:
+            return str(Path(text).relative_to(Path(cwd)))
+        except ValueError:
+            return text
+    return text
+
+
+def _staged_blob(path: str, cwd: str | None) -> tuple[bool, str]:
+    """Return (readable, staged content) for one path via `git show :<path>`.
+
+    `:<path>` addresses the index, i.e. exactly the bytes this commit would
+    write. readable is False when the probe could not answer at all (git
+    missing, timeout, path not in the index): the caller fails closed on it.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "show", f":{path}"],
+            cwd=cwd or None,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+        return False, ""
+    if out.returncode != 0:
+        return False, ""
+    return True, out.stdout
+
+
+def _unskip_gate(cwd: str | None, story: str | None) -> None:
+    """Deny a commit whose staged acceptance tests still carry the skip marker.
+
+    Scope, in order:
+      - test-artifacts root unresolvable (env unset) -> out of scope, note only.
+      - no story id -> nothing to look up.
+      - no checklist for this story -> inert. That is the `--light` profile,
+        where acceptance tests are not generated at all.
+      - checklist present but unreadable -> deny (in scope, cannot verify).
+      - checklist naming no acceptance-test file -> inert. Doc-only and refactor
+        stories are legitimate and must not be blocked.
+    Every enumerated file is read from the index whether or not this commit
+    touched it: the checklist, not the diff, says what the story must deliver.
+    """
+    tests_root = _test_artifacts()
+    if tests_root is None:
+        _note(
+            "Un-skip proof: ULTRACODE_TEST_ARTIFACTS is unset, so the staged "
+            "acceptance-test check is out of scope for this commit and made no "
+            "decision. Inject it on the guard's hook command (preflight step 5) "
+            "to arm the check."
+        )
+        return
+    if not story:
+        return
+
+    checklist = tests_root / f"atdd-checklist-{story}.md"
+    if not checklist.is_file():
+        return  # no acceptance tests for this story: nothing to prove
+    try:
+        text = checklist.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        _deny(
+            "Un-skip proof: refusing `git commit` — the acceptance-test "
+            f"checklist {checklist} exists but could not be read, so the staged "
+            "acceptance tests cannot be verified un-skipped. Failing closed. "
+            "Repair or regenerate the checklist, then commit."
+        )
+
+    files = [_repo_relative(entry, cwd) for entry in _checklist_test_files(text)]
+    if not files:
+        return  # checklist names no acceptance-test file (doc-only story)
+
+    still_skipped: list[str] = []
+    for rel in files:
+        readable, blob = _staged_blob(rel, cwd)
+        if not readable:
+            _deny(
+                "Un-skip proof: refusing `git commit` — `git show :"
+                f"{rel}` failed, so the staged content of an acceptance-test "
+                f"file named by {checklist.name} could not be read. Failing "
+                "closed. Stage that file (`git add <path>`) in a prior, "
+                "SEPARATE tool call, or fix the path the checklist names."
+            )
+        if _SKIP_TOKEN in blob:
+            still_skipped.append(rel)
+    if still_skipped:
+        _deny(
+            "Un-skip proof: refusing `git commit` — the staged content of "
+            f"{', '.join(still_skipped)} still contains `{_SKIP_TOKEN}`, so this "
+            "commit would capture a story whose acceptance tests are skipped "
+            "rather than green. Un-skip every acceptance test the checklist "
+            f"({checklist.name}) enumerates, drive them to green, restage those "
+            "paths in a prior, SEPARATE tool call, then commit."
+        )
 
 
 # --- Cross-Session Recall gate ----------------------------------------------
@@ -363,6 +543,7 @@ def main() -> None:
                 "command string before it runs, so anything they would stage "
                 "does not exist yet at that point."
             )
+        _unskip_gate(cwd, story)
 
     _allow()
 
