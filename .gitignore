@@ -11,6 +11,8 @@ coverage/
 __pycache__/
 *.pyc
 
+data
+
 # Logs
 logs/
 *.log
@@ -71,3 +73,6 @@ build/
 
 # graphify knowledge-graph output (generated locally, not shipped)
 graphify-out
+
+# UCG
+_ucg-learn
