@@ -132,11 +132,22 @@ uv run {skill-root}/scripts/health_check_fp.py seen --fp {fp} --cache {seenCache
 → **`seen` is the suppression verdict, not mere cache presence.** Read `status`:
 
 - **`unseen`** (`seen: false`, `record: null`) — proceed.
-- **`handled`** (`seen: true`) — this user already handled this fingerprint on this machine and the defect is still open: skip submission silently and log `"fp-xxxxxxx: already handled on {record.date}, {record.issue_url} — skipping"`.
+- **`handled`** (`seen: true`) — this user already handled this fingerprint on this machine. Before suppressing, if `record.issue_url` is non-empty you **must** run the issue-state check below; it can override this verdict to `regression`. Otherwise skip submission silently and log `"fp-xxxxxxx: already handled on {record.date}, {record.issue_url} — skipping"`.
 - **`regression`** (`seen: false`, `record` present, `record.action` is `resolved`) — this fingerprint was fixed and closed out, so a fresh sighting is a **regression, not a duplicate**. Do NOT suppress. Proceed, and mark it so it can never be filed as a first sighting: title it `[health-check][{severity}][{fp}] {workflow}: REGRESSION — {short description}` and open the body with `Regression of {record.issue_url} (resolved {record.date}).` When `record.issue_url` is empty (the prior sighting only ever queued, so no issue exists), write `Regression of a previously resolved local finding (resolved {record.date}).` instead — the `{fp}` label still ties the two together server-side.
 - **`unrecognized`** (`seen: false`, `record` present) — the record carries an action this version does not know, so it cannot be confirmed handled. Proceed as an ordinary submission. Reporting a duplicate is self-healing (the dedup Action closes it); silencing a live defect is not.
 
-**The cache is machine-local.** It records what *this* user did on *this* machine, so a `resolved` written by whoever fixed the defect is not visible to anyone else. When `record.issue_url` is non-empty the shared source of truth is the issue itself, so prefer it: `gh issue view {record.issue_url} --json state` and treat `CLOSED` as `regression` even when the local record still says `created`/`reacted`/`commented`. If that call fails for any reason (offline, no auth, deleted issue), keep the local verdict rather than blocking — this is an advisory refinement, never a gate.
+**The issue-state check (required whenever `handled` carries an `issue_url`).** The cache is machine-local: it records what *this* user did on *this* machine, so a `resolved` written by whoever fixed the defect is invisible to everyone else. An issue's state is shared, so it is the better authority. Bound the call, because this is finalize's terminal step and a hung network must not stall it:
+
+```
+timeout 10 gh issue view {record.issue_url} --json state,stateReason --jq '.state + "/" + (.stateReason // "")'
+```
+
+- `CLOSED/COMPLETED`, or `MERGED` (the record points at the resolving PR) — override to `regression`, even though the local record says `created`/`reacted`/`commented`.
+- `CLOSED/NOT_PLANNED` — keep `handled`. **This is not a fix.** It is how the dedup Action closes a duplicate (`state_reason: 'not_planned'`) and how a maintainer closes a wontfix. Treating it as a fix would file a `REGRESSION` issue against a live defect that nobody ever fixed, every session, forever: the Action closes it as a duplicate, the cache re-records `created` against that newly closed duplicate, and the loop is stable.
+- `OPEN` — keep `handled`.
+- Any failure at all (timeout, offline, no auth, deleted issue, unparseable output) — keep `handled`. This refinement never blocks a run and never halts on error.
+
+`stateReason` is load-bearing, not decoration: `state` alone cannot tell a fix from an auto-closed duplicate.
 
 **3. Check GitHub CLI** with `gh auth status`. If it fails, fall through to §5c (offline fallback).
 

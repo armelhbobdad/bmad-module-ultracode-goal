@@ -343,6 +343,51 @@ def test_suppressing_actions_is_not_derived_from_actions():
     assert set(suppressing) < set(valid)
 
 
+# --- the stage's issue-state refinement -------------------------------------
+
+_HEALTH_CHECK_MD = (
+    Path(__file__).resolve().parents[2] / "references" / "health-check.md"
+)
+
+
+def test_issue_state_check_reads_state_reason_not_state_alone():
+    """`CLOSED` alone cannot tell a fix from an auto-closed duplicate.
+
+    The dedup Action closes duplicates with `state_reason: 'not_planned'`, so a
+    reporter who lost a race holds a record pointing at a CLOSED issue for a
+    defect nobody fixed. Keying on `state` alone flips that to `regression` and
+    files a REGRESSION issue against a live defect every session, forever.
+    """
+    body = _HEALTH_CHECK_MD.read_text(encoding="utf-8")
+
+    assert "--json state,stateReason" in body, (
+        "the issue-state check must read stateReason, not state alone"
+    )
+    assert "CLOSED/COMPLETED" in body, "only a completed close counts as a fix"
+    assert "CLOSED/NOT_PLANNED" in body, (
+        "the stage must say an auto-closed duplicate is NOT a fix"
+    )
+    # A PR link is what CONTRIBUTING invites when recording `resolved`, and
+    # `gh issue view` reports MERGED for one, never CLOSED.
+    assert "MERGED" in body, "a merged PR link must also trigger the regression path"
+    # Terminal step of finalize: an unbounded call can stall the run's last stage.
+    assert "timeout 10 gh issue view" in body, "the issue lookup must be bounded"
+
+
+def test_contributing_does_not_promise_a_bare_closed_counts_as_fixed():
+    """The contributor-facing note must not contradict the stage.
+
+    It is the doc that tells a maintainer how to close a finding out, so if it
+    implies any close counts, the stage's narrower rule reads as a bug.
+    """
+    body = (Path(__file__).resolve().parents[4] / "CONTRIBUTING.md").read_text(
+        encoding="utf-8"
+    )
+    assert "not planned" in body.lower(), (
+        "CONTRIBUTING must say a not-planned close does not count as a fix"
+    )
+
+
 # --- corrupt cache resilience ----------------------------------------------
 
 
