@@ -6,6 +6,7 @@
 """Exercise the PreToolUse guard's deny/allow paths via the real stdin/stdout
 hook contract (run the hook as a subprocess, feed JSON on stdin)."""
 
+import importlib.util
 import json
 import os
 import re
@@ -1487,3 +1488,376 @@ def test_mutant_deny_on_empty_test_file_list_reds_doc_only_commit(tmp_path: Path
 
     assert code == 2, "the doc-only inertness assertion must red"
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+# ---------------------------------------------------------------------------
+# Verb anchoring: `git` must be the segment's LEADING token.
+#
+# A verb merely MENTIONED (an echo, a log line, a here-string in a verification
+# command) is not a git write and must not burn a turn on a deny. The anchor is
+# taken AFTER stripping leading `VAR=val` assignments and known exec wrappers,
+# which is what keeps the fix from becoming a fail-open: an env- or
+# sudo-prefixed real commit still denies.
+#
+# Twins in this section come in two shapes. Behavioral ones run a patched COPY
+# of the hook under tmp_path (never the live file). Ones that must remove a
+# clause import the shipped module in-process and monkeypatch a single constant,
+# so the neutering is expressed against the real code rather than a hand-edited
+# lookalike.
+# ---------------------------------------------------------------------------
+
+_ECHO_MENTION = 'echo "remember to git commit once the suite is green"'
+
+
+def _load_guard_module():
+    spec = importlib.util.spec_from_file_location("ucg_guard_under_test", HOOK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def guard_module():
+    """The shipped hook imported in-process, fresh per test.
+
+    Fresh matters: monkeypatched constants must not leak between twins.
+    """
+    return _load_guard_module()
+
+
+def _bash_event(cwd: Path, command: str) -> dict:
+    return {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": str(cwd),
+    }
+
+
+def _protected_repo(tmp_path: Path, name: str = "protected") -> Path:
+    repo = tmp_path / name
+    repo.mkdir(parents=True)
+    _init_repo(repo, "main")
+    return repo
+
+
+def _unmarked_epic_repo(tmp_path: Path, name: str = "epic") -> tuple[Path, Path]:
+    """Epic branch, story known, tests-ran marker NOT yet written.
+
+    The turn-burning shape in practice: mid-story, a status or verification
+    command that happens to name the verb.
+    """
+    repo = tmp_path / name
+    repo.mkdir(parents=True)
+    _init_repo(repo, "ultracode/epic-42")
+    impl = repo / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_text("STORY-1")
+    return repo, impl
+
+
+def test_echo_mention_of_git_commit_is_allowed(tmp_path: Path) -> None:
+    """A mentioned verb is not a write, on either gated branch shape."""
+    protected = _protected_repo(tmp_path)
+    code, out = _run_hook(_bash_event(protected, _ECHO_MENTION), protected)
+    assert code == 0, "a mention on a protected branch is not a commit"
+    assert out is None
+
+    repo, impl = _unmarked_epic_repo(tmp_path)
+    code, out = _run_hook(
+        _bash_event(repo, _ECHO_MENTION), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 0, "nor is it one before the tests-ran marker exists"
+    assert out is None
+
+    # Same anchoring, second obligation: the verb is matched as a whole token,
+    # so the plumbing command the old trailing `\b` never actually excluded
+    # (`-` is itself a word boundary) is no longer read as a commit.
+    code, out = _run_hook(
+        _bash_event(protected, "git commit-tree -p HEAD -m x abc123"), protected
+    )
+    assert code == 0
+    assert out is None
+
+
+_TOKENIZE_BODY = "    return shlex.split(segment)"
+
+
+def test_anchoring_disabled_denies_echo_mention(tmp_path: Path) -> None:
+    """Twin: force the classifier down its fail-closed fallback branch.
+
+    The fallback is the legacy matches-anywhere scan, kept for segments that
+    cannot be tokenized. Driving a well-formed segment into it restores the old
+    behavior exactly, and the echo denies again — which is what proves the
+    allow above comes from the anchoring rather than from the guard never
+    looking at the command.
+    """
+    mutant = _write_mutant(
+        tmp_path,
+        "no_anchor",
+        _TOKENIZE_BODY,
+        '    raise ValueError("mutant: tokenizer disabled")',
+    )
+
+    protected = _protected_repo(tmp_path)
+    code, out = _run_mutant_hook(mutant, _bash_event(protected, _ECHO_MENTION), protected)
+    assert code == 2, "the protected-branch allow assertion must red without anchoring"
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    repo, impl = _unmarked_epic_repo(tmp_path)
+    code, out = _run_mutant_hook(
+        mutant,
+        _bash_event(repo, _ECHO_MENTION),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl)},
+    )
+    assert code == 2, "and so must the tests-ran allow assertion"
+    assert "Tests-ran guard" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_chained_real_commit_still_denied(tmp_path: Path) -> None:
+    """A real chained commit is caught by the per-segment classification."""
+    chained = "git add -A && git commit -m x"
+
+    protected = _protected_repo(tmp_path)
+    code, out = _run_hook(_bash_event(protected, chained), protected)
+    assert code == 2
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    repo, impl = _unmarked_epic_repo(tmp_path)
+    code, out = _run_hook(
+        _bash_event(repo, chained), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 2
+    assert "Tests-ran guard" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+_SEGMENT_SPLIT = (
+    '    for segment in re.split(r"&&|\\|\\||;|\\|", command):\n'
+    "        verbs |= _segment_write_verbs(segment, depth)"
+)
+_PREFIX_STRIP_TEST = (
+    "    while index < len(tokens) and _ASSIGNMENT.match(tokens[index]):"
+)
+
+
+def test_mutant_without_segment_split_allows_chained_commit(tmp_path: Path) -> None:
+    """Twin: classify the whole chained command as ONE segment.
+
+    Its leading token is `git`, but the subcommand in verb position is `add`,
+    so the real commit is allowed and the deny above reds. This is what makes
+    the per-segment split load-bearing rather than incidental.
+    """
+    mutant = _write_mutant(
+        tmp_path,
+        "no_split",
+        _SEGMENT_SPLIT,
+        "    verbs |= _segment_write_verbs(command, depth)",
+    )
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_mutant_hook(
+        mutant, _bash_event(protected, "git add -A && git commit -m x"), protected
+    )
+
+    assert code == 0, "the chained-commit deny assertion must red without the split"
+    assert out is None
+
+
+def test_mutant_unconditional_prefix_strip_allows_chained_commit(tmp_path: Path) -> None:
+    """Second, independent twin for the same deny: drop the membership test on
+    the leading-prefix strip, so `git` itself is consumed as if it were a
+    prefix and no segment ever anchors."""
+    mutant = _write_mutant(
+        tmp_path, "strip_all", _PREFIX_STRIP_TEST, "    while index < len(tokens):"
+    )
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_mutant_hook(
+        mutant, _bash_event(protected, "git add -A && git commit -m x"), protected
+    )
+
+    assert code == 0, "an unconditional strip consumes the anchor and allows the commit"
+    assert out is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["FOO=bar git commit -m x", "sudo git commit -m x"],
+)
+def test_assignment_and_sudo_prefixed_commit_denied(tmp_path: Path, command: str) -> None:
+    """The strip exists to prevent a fail-open, not to create one.
+
+    An assignment or wrapper prefix moves the anchor right; it does not excuse
+    the command from the guard.
+    """
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_hook(_bash_event(protected, command), protected)
+
+    assert code == 2, command
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "timeout 30 git commit -m x",
+        "nice -n 10 git commit -m x",
+        "sudo -u builder git commit -m x",
+        "ionice -c2 git commit -m x",
+        "stdbuf -oL git commit -m x",
+        "env -i FOO=b git commit -m x",
+        "sudo timeout 30 git push origin main",
+    ],
+)
+def test_arg_taking_wrapper_prefixed_commit_denied(tmp_path: Path, command: str) -> None:
+    """Wrappers that take their own operands are the real fail-open risk.
+
+    Dropping exactly one token per wrapper would leave `30`, `10`, `builder`
+    and friends in the leading position and wave every one of these through. A
+    LISTED wrapper failing open is not part of the accepted residual, so each
+    form is pinned here.
+    """
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_hook(_bash_event(protected, command), protected)
+
+    assert code == 2, command
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git -C /tmp/repo commit -m x",
+        "git --no-pager commit -m x",
+        'echo "$(git commit -m x)"',
+        "echo `git commit -m x`",
+    ],
+)
+def test_forms_that_still_reach_the_fail_closed_path_are_denied(
+    tmp_path: Path, command: str
+) -> None:
+    """Anchoring must not open holes it did not have to.
+
+    `git -C <path>` puts a path between the anchor and the verb, and a
+    substitution runs a command the tokenizer cannot see at all; both stay
+    denied (the first by skipping value-taking global options, the second by
+    falling back to the legacy scan).
+    """
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_hook(_bash_event(protected, command), protected)
+
+    assert code == 2, command
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_wrapper_strip_removed_allows_env_prefixed_commit(guard_module, monkeypatch) -> None:
+    """Twin: remove the assignment/wrapper strip and the prefixed commits pass.
+
+    Driven against the imported module rather than a hand-edited copy of the
+    live guard. The plain form still classifies as a commit under the same
+    mutation, so this proves the STRIP is what catches the prefixed forms, not
+    a classifier that happens to allow (or deny) everything.
+    """
+    prefixed = ["FOO=bar git commit -m x", "sudo git commit -m x"]
+    for command in prefixed:
+        assert guard_module._git_writes(command) == {"commit"}, command
+
+    monkeypatch.setattr(guard_module, "_EXEC_WRAPPERS", frozenset())
+    monkeypatch.setattr(guard_module, "_ASSIGNMENT", re.compile(r"(?!)"))
+
+    for command in prefixed:
+        assert guard_module._git_writes(command) == set(), (
+            f"without the strip, {command!r} must slip through: that is the "
+            "fail-open the strip exists to prevent"
+        )
+    assert guard_module._git_writes("git commit -m x") == {"commit"}, (
+        "the unprefixed form is untouched by the mutation, so the twin isolates "
+        "the strip rather than disabling the guard wholesale"
+    )
+
+
+def test_unlisted_wrapper_is_an_accepted_fail_open(guard_module, monkeypatch) -> None:
+    """Documented residual: a wrapper the list does not name is allowed through.
+
+    An unlisted wrapper leaves a non-`git` leading token, so the segment is not
+    classified as a git write. This is accepted rather than fixed, because the
+    alternative (treat any unknown leading token as a possible wrapper and scan
+    on) re-creates the matches-anywhere false positives this anchoring removes.
+
+    Two compensating nets stand behind the residual:
+      1. the tests-ran marker — a commit still needs a verified-green marker on
+         disk for the current story, which no wrapper prefix can conjure; and
+      2. the remote's branch protection — nothing reaches a protected branch
+         without review, whatever the local guard let past.
+
+    `timeout` stands in for an unlisted wrapper by being dropped from the list
+    for this test only. In shipped state it IS listed and the same shape denies:
+    that pole is held by test_arg_taking_wrapper_prefixed_commit_denied, and by
+    the shipped-state assertion below.
+    """
+    command = "timeout git commit -m x"
+    assert guard_module._git_writes(command) == {"commit"}, (
+        "shipped state: `timeout` is a listed wrapper, so this denies"
+    )
+
+    monkeypatch.setattr(
+        guard_module, "_EXEC_WRAPPERS", guard_module._EXEC_WRAPPERS - {"timeout"}
+    )
+
+    assert guard_module._git_writes(command) == set(), (
+        "accepted residual: an unlisted wrapper passes the guard. Compensating "
+        "nets: the tests-ran marker (no commit without a verified-green story "
+        "marker) and the remote's branch protection (nothing lands on a "
+        "protected branch unreviewed)."
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["sh -c 'git commit -m x'", 'bash -c "git commit -m x"'],
+)
+def test_shell_dash_c_payload_commit_denied(tmp_path: Path, command: str) -> None:
+    """The `-c` string payload is re-entered as a command in its own right."""
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_hook(_bash_event(protected, command), protected)
+
+    assert code == 2, command
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_dash_c_recursion_disabled_allows_payload_commit(guard_module, monkeypatch) -> None:
+    """Twin: with no shell recognized, nothing recurses into the `-c` payload
+    and the same commit is allowed, so the deny above reds."""
+    command = "sh -c 'git commit -m x'"
+    assert guard_module._git_writes(command) == {"commit"}
+
+    monkeypatch.setattr(guard_module, "_SHELL_WRAPPERS", frozenset())
+
+    assert guard_module._git_writes(command) == set(), (
+        "without the recursion the payload is just an opaque argument word"
+    )
+    assert guard_module._git_writes("git commit -m x") == {"commit"}, (
+        "and the direct form is unaffected: the twin removes the recursion only"
+    )
+
+
+def test_dash_c_payload_split_mid_quote_still_denies(tmp_path: Path) -> None:
+    """The segment split runs BEFORE the `-c` recursion, so a chained payload is
+    cut mid-quote into `sh -c 'git add -A` and `git commit'`.
+
+    Neither fragment tokenizes cleanly, so both take the fail-closed fallback
+    and the second one still reports the verb. Verified rather than assumed.
+    """
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_hook(
+        _bash_event(protected, "sh -c 'git add -A && git commit -m x'"), protected
+    )
+
+    assert code == 2
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]

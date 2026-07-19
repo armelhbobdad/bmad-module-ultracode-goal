@@ -57,6 +57,7 @@ Config resolution (all optional, env wins so the conductor can inject per run):
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -192,24 +193,179 @@ def _current_story(impl: Path | None) -> str | None:
     return None
 
 
-# git verbs that write history. `git commit` and `git push` are the targets;
-# a trailing word boundary keeps `git commit-tree`-style false positives out.
-_GIT_WRITE = re.compile(
+# --- git write detection ----------------------------------------------------
+# `git commit` and `git push` are the targets. A shell segment counts as a git
+# write only when `git` is its LEADING token — once leading `VAR=val`
+# assignments and known exec wrappers are stripped — and the subcommand it would
+# run is exactly one of those verbs. Anchoring on the leading token is what
+# keeps a verb merely MENTIONED (inside an `echo`, a log line, a here-string)
+# from being read as a real commit; matching the verb by exact token equality is
+# what keeps `git commit-tree`-style near-misses out, which a trailing `\b`
+# never did (`-` is itself a word boundary).
+
+_WRITE_VERBS = frozenset({"commit", "push"})
+
+# Legacy matches-anywhere scan. Kept ONLY as the fail-closed fallback for a
+# segment this tokenizer cannot honestly read (see _segment_write_verbs): for
+# those, biasing toward a deny beats guessing.
+_GIT_WRITE_ANYWHERE = re.compile(
     r"\bgit\b[^\n;&|]*?\b(?P<verb>commit|push)\b", re.IGNORECASE
 )
 
+# Commands that exec another command, so the real leading token sits further
+# right. Extendable on purpose: add a name here and its prefixed form anchors
+# too. A wrapper NOT on this list leaves a non-`git` leading token and its
+# segment is allowed through — the accepted residual, stated in
+# references/preflight.md rather than hidden.
+_EXEC_WRAPPERS = frozenset(
+    {
+        "env",
+        "command",
+        "sudo",
+        "time",
+        "nice",
+        "nohup",
+        "timeout",
+        "setsid",
+        "stdbuf",
+        "ionice",
+        "doas",
+    }
+)
+
+# Shells whose `-c` string payload is re-entered as a command in its own right.
+_SHELL_WRAPPERS = frozenset({"sh", "bash", "zsh", "dash"})
+
+# Global `git` options taking a SEPARATE value. The value must be skipped along
+# with the option, or `git -C <path> commit` would read <path> as the
+# subcommand and wave a real commit through.
+_GIT_VALUE_OPTIONS = frozenset(
+    {
+        "-C",
+        "-c",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--exec-path",
+        "--config-env",
+        "--super-prefix",
+    }
+)
+
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# Openers of a substitution that runs a command this tokenizer cannot see. A
+# segment carrying one takes the fail-closed path instead of being anchored.
+_SUBSTITUTION_MARKERS = ("$(", "`", "<(")
+
+# Depth cap on `sh -c` recursion: a bound, not a behavior anyone should rely on.
+_MAX_SHELL_DEPTH = 4
+
+
+def _tokenize(segment: str) -> list[str]:
+    """Split one shell segment into words; raises ValueError on bad quoting.
+
+    A named seam on purpose: it gives the fail-closed fallback below a single
+    trigger to catch, instead of scattering shlex handling through the caller.
+    """
+    return shlex.split(segment)
+
+
+def _strip_assignments(tokens: list[str]) -> list[str]:
+    """Drop the leading `VAR=val` prefix, so `FOO=bar git commit` still anchors."""
+    index = 0
+    while index < len(tokens) and _ASSIGNMENT.match(tokens[index]):
+        index += 1
+    return tokens[index:]
+
+
+def _git_subcommand(tokens: list[str]) -> str | None:
+    """The subcommand `git` would run, given the tokens that follow `git`."""
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in _GIT_VALUE_OPTIONS:
+            index += 2  # skip the option AND its separate value
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return token.lower()
+    return None
+
+
+def _shell_payload_verbs(tokens: list[str], depth: int) -> set[str]:
+    """Verbs written by the string payload of a `sh -c '…'`-style invocation."""
+    if depth >= _MAX_SHELL_DEPTH:
+        return set()
+    for index, token in enumerate(tokens):
+        if token == "-c" and index + 1 < len(tokens):
+            return _command_write_verbs(tokens[index + 1], depth + 1)
+    return set()
+
+
+def _token_write_verbs(tokens: list[str], depth: int) -> set[str]:
+    """Classify one tokenized segment: which write verbs would it actually run?"""
+    tokens = _strip_assignments(tokens)
+    if not tokens:
+        return set()
+    head = os.path.basename(tokens[0]).lower()
+    if head == "git":
+        verb = _git_subcommand(tokens[1:])
+        return {verb} if verb in _WRITE_VERBS else set()
+    if head in _SHELL_WRAPPERS:
+        return _shell_payload_verbs(tokens[1:], depth)
+    if head in _EXEC_WRAPPERS:
+        # Every wrapper has its own option grammar (`timeout 30 …`, `nice -n 10
+        # …`, `sudo -u u …`, `stdbuf -oL …`), and modelling them one by one is
+        # exactly how a LISTED wrapper turns into a fail-open. So hand the rest
+        # of the segment back to this same classifier from the first token that
+        # could start a command — biased toward finding the git, not toward
+        # parsing the wrapper.
+        for index in range(1, len(tokens)):
+            name = os.path.basename(tokens[index]).lower()
+            if name == "git" or name in _SHELL_WRAPPERS or name in _EXEC_WRAPPERS:
+                return _token_write_verbs(tokens[index:], depth)
+    return set()
+
+
+def _anywhere_write_verbs(segment: str) -> set[str]:
+    """Fail-closed fallback: the legacy scan for the verb anywhere in a segment."""
+    match = _GIT_WRITE_ANYWHERE.search(segment)
+    return {match.group("verb").lower()} if match else set()
+
+
+def _segment_write_verbs(segment: str, depth: int) -> set[str]:
+    if any(marker in segment for marker in _SUBSTITUTION_MARKERS):
+        # The real command hides inside the substitution; anchoring would read
+        # the outer word and allow it. Fall back rather than fail open.
+        return _anywhere_write_verbs(segment)
+    try:
+        tokens = _tokenize(segment)
+    except ValueError:
+        # Unbalanced quotes: there are no trustworthy tokens, so fall back to
+        # the legacy scan rather than wave the segment through. Letting the
+        # exception escape would exit non-zero, which is neither a clean allow
+        # nor a clean deny.
+        return _anywhere_write_verbs(segment)
+    return _token_write_verbs(tokens, depth)
+
+
+def _command_write_verbs(command: str, depth: int) -> set[str]:
+    verbs: set[str] = set()
+    # The `\|\|` alternative must precede `\|` so `||` is consumed whole.
+    for segment in re.split(r"&&|\|\||;|\|", command):
+        verbs |= _segment_write_verbs(segment, depth)
+    return verbs
+
 
 def _git_writes(command: str) -> set[str]:
-    """Return {'commit','push'} subset the command would perform.
+    """Return the {'commit','push'} subset the command would perform.
 
-    Scans each shell-segment so a chained `git add && git commit` is caught.
+    Classifies each shell segment independently, so a chained
+    `git add && git commit` is still caught.
     """
-    verbs: set[str] = set()
-    for segment in re.split(r"&&|\|\||;|\|", command):
-        m = _GIT_WRITE.search(segment)
-        if m and re.search(r"\bgit\b", segment):
-            verbs.add(m.group("verb").lower())
-    return verbs
+    return _command_write_verbs(command, 0)
 
 
 # --- Un-skip proof ----------------------------------------------------------
