@@ -63,7 +63,7 @@ Note this is fail-closed on purpose: a missing or unreadable gate artifact escal
 
 **Symptom.** A story stops re-looping; an escalation marker (`<impl-artifacts>/.escalation-<story>.md`) appears; the run surfaces a budget message.
 
-**What happened.** A runaway story is bounded three ways. The real in-loop bound is the literal "…or stop after N turns" clause inside the `/goal` condition. The gate's re-loop budget is deterministic: a `reloop` that would exceed `max_turns_per_story` or `story_token_budget` becomes an `escalate` instead. The **Stop** hook (`budget_stop.py`) is the defensive third layer: it counts turns and tokens and, on overrun, writes the escalation marker and lets the stop proceed.
+**What happened.** A runaway story is bounded three ways. The real in-loop bound is the literal "…or stop after N turns" clause inside the `/goal` condition. The gate's re-loop budget is deterministic: a `reloop` that would exceed `max_turns_per_story` becomes an `escalate` instead. The **Stop** hook (`budget_stop.py`) is the defensive third layer: it counts turns and, on overrun, writes the escalation marker and lets the stop proceed.
 
 **Its documented limitation.** A Stop hook fires only when Claude is *already* trying to stop: it **cannot interrupt a `/goal` condition mid-turn**. So at this layer the ceiling is advisory; the hard bounds are the in-condition turn clause and the gate re-loop budget. If a story keeps consuming budget, that is the signal to re-scope, split, or hand it off, not to raise the budget and hope.
 

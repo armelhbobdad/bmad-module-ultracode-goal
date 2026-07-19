@@ -28,13 +28,13 @@ These are the module's non-negotiables. Each exists because the documented mecha
 Two invariants must hold for every commit, and neither can live in memory, which is context the model may or may not weigh:
 
 - **`scripts/hooks/guard_pretooluse.py`** (PreToolUse): inspects each `git commit`/`git push`. It denies the command on a protected branch, and denies a `git commit` when no tests-ran marker (`<impl-artifacts>/.tests-ran-<story_id>`) exists for the current story. It returns a `deny` decision in the hook JSON and also exits 2 with the reason on stderr so older clients that ignore the JSON still block.
-- **`scripts/hooks/budget_stop.py`** (Stop): counts turns and accumulated tokens for the current story against `max_turns_per_story` / `story_token_budget`. On overrun it writes an escalation marker and surfaces a message, then **lets the stop proceed**. Its documented limitation: a Stop hook fires only when Claude is already trying to stop, so it cannot interrupt a `/goal` condition mid-turn. The in-condition "stop after N turns" clause and the gate's re-loop budget are the real bounds; this hook is the third, defensive layer.
+- **`scripts/hooks/budget_stop.py`** (Stop): counts turns for the current story against `max_turns_per_story`. On overrun it writes an escalation marker and surfaces a message, then **lets the stop proceed**. Its documented limitation: a Stop hook fires only when Claude is already trying to stop, so it cannot interrupt a `/goal` condition mid-turn. The in-condition "stop after N turns" clause and the gate's re-loop budget are the real bounds; this hook is the third, defensive layer.
 
-Both hooks read their config from env first (so the conductor injects per-run values) and fall back to hardcoded defaults (`main`/`master`, `25`, `1_500_000`, `ultracode/epic-`). Because of that fallback, a `customize.toml` override **silently no-ops at the enforcement layer** unless the conductor passes it through the hook env, so preflight injects `ULTRACODE_PROTECTED_BRANCHES`, `ULTRACODE_IMPL_ARTIFACTS`, `ULTRACODE_MAX_TURNS`, `ULTRACODE_TOKEN_BUDGET`, and `ULTRACODE_EPIC_BRANCH_PREFIX`.
+Both hooks read their config from env first (so the conductor injects per-run values) and fall back to hardcoded defaults (`main`/`master`, `25`, `ultracode/epic-`). Because of that fallback, a `customize.toml` override **silently no-ops at the enforcement layer** unless the conductor passes it through the hook env, so preflight injects `ULTRACODE_PROTECTED_BRANCHES`, `ULTRACODE_IMPL_ARTIFACTS`, `ULTRACODE_MAX_TURNS`, `ULTRACODE_EPIC_BRANCH_PREFIX`, and `ULTRACODE_TEST_ARTIFACTS`.
 
 ### 3. Budget enforcement
 
-A runaway story is bounded by three layers in order of authority: the **in-condition** "…or stop after N turns" clause inside the `/goal` condition (the real in-loop bound), the **gate re-loop budget** (a `reloop` that would exceed `max_turns_per_story` or `story_token_budget` becomes `escalate`), and the **Stop hook** as the defensive backstop described above. Rollback is git, not `/rewind` (an Epic branch off a protected branch, one commit per green story, worktree isolation under `--parallel`) because `/rewind` checkpoints miss the Bash-driven changes that make up the run.
+A runaway story is bounded by three layers in order of authority: the **in-condition** "…or stop after N turns" clause inside the `/goal` condition (the real in-loop bound), the **gate re-loop budget** (a `reloop` that would exceed `max_turns_per_story` becomes `escalate`), and the **Stop hook** as the defensive backstop described above. Rollback is git, not `/rewind` (an Epic branch off a protected branch, one commit per green story, worktree isolation under `--parallel`) because `/rewind` checkpoints miss the Bash-driven changes that make up the run.
 
 ## File layout
 
@@ -67,7 +67,7 @@ skills/ultracode-goal/
 │   ├── lib/mem_common.py          #   shared Cross-Session Recall primitives
 │   └── hooks/
 │       ├── guard_pretooluse.py    #   commit invariants (PreToolUse)
-│       └── budget_stop.py         #   turn/token budget (Stop)
+│       └── budget_stop.py         #   turn budget (Stop)
 ├── skills/
 │   └── ucg-formalize/             # Standalone readiness gate
 └── assets/
@@ -86,7 +86,7 @@ Configuration resolves in three layers, base → team → user, via `resolve_cus
 2. **Team**: `{project-root}/_bmad/custom/ultracode-goal.toml`.
 3. **User**: `{project-root}/_bmad/custom/ultracode-goal.user.toml`.
 
-Merge semantics: **scalars override**, **tables deep-merge**, **arrays append**. At activation the skill runs `resolve_customization.py --skill {skill-root} --key workflow`; if that fails, it resolves the three files itself in the same order. The shipped base layer defines the run's knobs: the TEA/artifact paths (`tea_config_path`, `trace_output_dir`, `implementation_artifacts`, `deferred_work_path`), the git guardrails (`epic_branch_prefix`, `protected_branches`), the budgets (`max_turns_per_story`, `story_token_budget`), the experimental `parallel_max_concurrency`, the `allowlist_commands`, and the `on_epic_complete` hook. Teams and users override without editing the shipped file. Remember that a budget or branch override only reaches the *enforcement* layer because preflight threads it into the hook env (see layer 2 above).
+Merge semantics: **scalars override**, **tables deep-merge**, **arrays append**. At activation the skill runs `resolve_customization.py --skill {skill-root} --key workflow`; if that fails, it resolves the three files itself in the same order. The shipped base layer defines the run's knobs: the TEA/artifact paths (`tea_config_path`, `trace_output_dir`, `implementation_artifacts`, `deferred_work_path`), the git guardrails (`epic_branch_prefix`, `protected_branches`), the turn budget (`max_turns_per_story`; `story_token_budget` remains as a deprecated no-op key), the experimental `parallel_max_concurrency`, the `allowlist_commands`, and the `on_epic_complete` hook. Teams and users override without editing the shipped file. Remember that a budget or branch override only reaches the *enforcement* layer because preflight threads it into the hook env (see layer 2 above).
 
 The three TOML layers merge once, but a branch or budget value then travels two ways: the conductor reads it directly, while the hooks only see it if preflight re-injects it as env:
 
