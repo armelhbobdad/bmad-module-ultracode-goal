@@ -51,12 +51,19 @@ def _init_repo(repo: Path, branch: str) -> None:
     _git(repo, "commit", "-q", "-m", "init")
 
 
-def _run_hook(event: dict, cwd: Path, env_extra: dict | None = None) -> tuple[int, dict | None]:
+def _run_mutant_hook(
+    hook_path: Path, event: dict, cwd: Path, env_extra: dict | None = None
+) -> tuple[int, dict | None]:
+    """Run ANY copy of the hook through the real stdin/stdout contract.
+
+    Same runner the shipped hook goes through, so a patched copy under tmp_path
+    is exercised exactly like the original instead of via a lookalike harness.
+    """
     import os
 
     env = {**os.environ, **(env_extra or {})}
     proc = subprocess.run(
-        [sys.executable, str(HOOK)],
+        [sys.executable, str(hook_path)],
         input=json.dumps(event),
         cwd=cwd,
         capture_output=True,
@@ -69,11 +76,18 @@ def _run_hook(event: dict, cwd: Path, env_extra: dict | None = None) -> tuple[in
     return proc.returncode, out
 
 
-def _commit_event(cwd: Path) -> dict:
+def _run_hook(event: dict, cwd: Path, env_extra: dict | None = None) -> tuple[int, dict | None]:
+    return _run_mutant_hook(HOOK, event, cwd, env_extra)
+
+
+def _commit_event(cwd: Path, command: str = "git commit -m wip") -> dict:
+    """A commit event. The default is the PLAIN commit form: staging is now a
+    prior, separate tool call, so a chained `git add … && git commit` has staged
+    nothing by the time the guard pre-evaluates this command string."""
     return {
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
-        "tool_input": {"command": "git add -A && git commit -m wip"},
+        "tool_input": {"command": command},
         "cwd": str(cwd),
     }
 
@@ -83,7 +97,9 @@ def test_protected_branch_denies_commit(tmp_path: Path) -> None:
     repo.mkdir()
     _init_repo(repo, "main")
 
-    code, out = _run_hook(_commit_event(repo), repo)
+    # chained form on purpose: the protected-branch clause must still see the
+    # `commit` verb inside a compound command (see _git_writes' segment split).
+    code, out = _run_hook(_commit_event(repo, "git add -A && git commit -m wip"), repo)
 
     assert code == 2  # defensive exit-code-2-blocks fallback
     assert out is not None
@@ -143,14 +159,25 @@ def test_epic_branch_commit_denied_without_tests_marker(tmp_path: Path) -> None:
     assert "STORY-1" in reason
 
 
-def test_epic_branch_commit_allowed_with_tests_marker(tmp_path: Path) -> None:
+def _green_story_repo(tmp_path: Path, *, stage: bool) -> tuple[Path, Path]:
+    """A repo on the epic branch with a tests-ran marker, optionally with work
+    staged by a prior separate call (what the guard now requires to commit)."""
     repo = tmp_path / "repo"
-    repo.mkdir()
+    repo.mkdir(parents=True)
     _init_repo(repo, "ultracode/epic-42")
     impl = repo / "impl"
     impl.mkdir()
     (impl / ".current-story").write_text("STORY-1")
     (impl / ".tests-ran-STORY-1").write_text("ok")
+    if stage:
+        (repo / "story.txt").write_text("story work")
+        _git(repo, "add", "-A")
+    return repo, impl
+
+
+def test_epic_branch_commit_allowed_with_tests_marker(tmp_path: Path) -> None:
+    # Staging happens in its own prior call, then the commit is a second call.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
 
     code, out = _run_hook(
         _commit_event(repo),
@@ -160,6 +187,282 @@ def test_epic_branch_commit_allowed_with_tests_marker(tmp_path: Path) -> None:
 
     assert code == 0  # green story boundary: allow, no decision JSON
     assert out is None
+
+
+def test_epic_branch_commit_allowed_with_nonempty_staged_index(tmp_path: Path) -> None:
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+
+    code, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl)},
+    )
+
+    assert code == 0  # something is staged: the commit captures real work
+    assert out is None
+
+
+def test_empty_staged_index_denied(tmp_path: Path) -> None:
+    # Clean tree: nothing was staged, so this commit would capture no work.
+    repo, impl = _green_story_repo(tmp_path, stage=False)
+
+    code, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl)},
+    )
+
+    assert code == 2
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_empty_index_deny_message_names_clause_and_recovery(tmp_path: Path) -> None:
+    repo, impl = _green_story_repo(tmp_path, stage=False)
+
+    _, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl)},
+    )
+
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Empty-index guard" in reason  # names the failing clause
+    assert "staged index is empty" in reason
+    # and all three recovery facts an agent needs to get itself unstuck
+    assert "SEPARATE tool call" in reason and "git add" in reason
+    assert "git commit -a" in reason
+    assert "commit-time pathspecs" in reason
+    assert "unsupported" in reason
+
+
+def test_staged_index_probe_failure_denies_commit(tmp_path: Path) -> None:
+    # The hook points at a directory that is not a git repo at all, so the
+    # staged-index probe exits 128 (it does NOT raise) and cannot answer.
+    nonrepo = tmp_path / "nonrepo"
+    nonrepo.mkdir()
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_text("STORY-1")
+    (impl / ".tests-ran-STORY-1").write_text("ok")
+
+    code, out = _run_hook(
+        _commit_event(nonrepo),
+        nonrepo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl)},
+    )
+
+    assert code == 2  # cannot inspect the index -> fail closed
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "Empty-index guard" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_staged_index_probe_missing_git_binary_denies_commit(tmp_path: Path) -> None:
+    # PATH carries no git, so the probe raises instead of returning. Work IS
+    # staged here: the deny must come from the unanswerable probe, not from a
+    # genuinely empty index.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+
+    code, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "PATH": str(empty_bin)},
+    )
+
+    assert code == 2  # probe raised -> fail closed
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "Empty-index guard" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# ---------------------------------------------------------------------------
+# Executed mutants of the guard itself.
+#
+# Each writes a patched COPY of the hook under tmp_path (never the shipped
+# file, which is live) and runs it through the same stdin/stdout contract. Each
+# mutation must red exactly the assertion(s) it belongs to and leave the others
+# green — that isolation is what makes the corresponding check load-bearing
+# rather than a shared alarm.
+# ---------------------------------------------------------------------------
+
+_PROBE_EXCEPT_BRANCH = (
+    "    except (OSError, subprocess.SubprocessError):\n"
+    "        return False  # git missing, timeout, ...: cannot answer -> fail closed"
+)
+_PROBE_EXIT_CODE_BRANCHES = (
+    "    if out.returncode == 0:\n"
+    "        return False  # nothing staged\n"
+    "    if out.returncode == 1:\n"
+    "        return True  # something staged\n"
+    "    return False  # any other exit code is a probe failure -> fail closed"
+)
+_EMPTY_INDEX_CALL_SITE = "        if not _staged_index_nonempty(cwd):\n"
+
+
+def _hook_source() -> str:
+    return HOOK.read_text(encoding="utf-8")
+
+
+def _write_mutant(tmp_path: Path, name: str, old: str, new: str) -> Path:
+    """Copy the shipped hook, apply one textual mutation, return the copy."""
+    src = _hook_source()
+    assert old in src, f"mutation anchor drifted out of the hook: {name}"
+    path = tmp_path / f"mutant_{name}.py"
+    path.write_text(src.replace(old, new, 1), encoding="utf-8")
+    return path
+
+
+def _empty_index_clause(src: str) -> str:
+    """The empty-index clause plus its call site, exactly as it sits in main()."""
+    start = src.index(_EMPTY_INDEX_CALL_SITE)
+    end = src.index("\n    _allow()", start)
+    return src[start:end + 1]
+
+
+def test_mutant_without_empty_index_clause_allows_empty_commit(tmp_path: Path) -> None:
+    """Twin: with the clause deleted, the empty-index commit is ALLOWED.
+
+    The ALLOW is the point — if the deny survived the clause's removal, the
+    clause would not be what produces it and the deny test would prove nothing.
+    """
+    clause = _empty_index_clause(_hook_source())
+    mutant = _write_mutant(tmp_path, "no_clause", clause, "")
+    repo, impl = _green_story_repo(tmp_path, stage=False)
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 0
+    assert out is None
+
+
+def test_mutant_unconditional_deny_reds_nonempty_index_commit(tmp_path: Path) -> None:
+    """Twin: deny every commit that reaches the clause, whatever is staged.
+
+    Only the allow-path assertion reds; every deny assertion still passes,
+    which is exactly why the allow path is load-bearing and not a restatement
+    of the deny. (Inverting the exit-code test instead would ALLOW the empty
+    index and red the deny too, isolating nothing.)
+    """
+    mutant = _write_mutant(
+        tmp_path, "always_deny", _EMPTY_INDEX_CALL_SITE, "        if True:\n"
+    )
+    staged_repo, staged_impl = _green_story_repo(tmp_path / "a", stage=True)
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(staged_repo), staged_repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(staged_impl)},
+    )
+    assert code == 2, "the allow-path assertion must red under an unconditional deny"
+
+    clean_repo, clean_impl = _green_story_repo(tmp_path / "b", stage=False)
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(clean_repo), clean_repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(clean_impl)},
+    )
+    assert code == 2, "the empty-index deny assertion stays green"
+
+    nonrepo = tmp_path / "nonrepo"
+    nonrepo.mkdir()
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(nonrepo), nonrepo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(clean_impl)},
+    )
+    assert code == 2, "the exit-128 probe-failure assertion stays green"
+
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(staged_repo), staged_repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(staged_impl), "PATH": str(empty_bin)},
+    )
+    assert code == 2, "the raising-probe assertion stays green"
+
+
+def test_mutant_probe_exception_fails_open_allows_commit(tmp_path: Path) -> None:
+    """Twin (exception half): the except branch reports "something is staged",
+    the fail-OPEN shape _current_branch uses. Only the raising-probe assertion
+    reds; the exit-128 one does not, because a non-repo cwd returns 128 without
+    ever entering the except branch."""
+    mutant = _write_mutant(
+        tmp_path,
+        "except_open",
+        _PROBE_EXCEPT_BRANCH,
+        "    except (OSError, subprocess.SubprocessError):\n        return True",
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "PATH": str(empty_bin)},
+    )
+    assert code == 0, "the raising-probe assertion must red under a fail-open except"
+    assert out is None
+
+    # ... while the exit-128 path never reaches the except branch and still denies.
+    nonrepo = tmp_path / "nonrepo"
+    nonrepo.mkdir()
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(nonrepo), nonrepo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 2, "the exit-128 assertion stays green: no exception is raised there"
+
+    # and the plain allow/deny pair is untouched
+    clean_repo, clean_impl = _green_story_repo(tmp_path / "b", stage=False)
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(clean_repo), clean_repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(clean_impl)},
+    )
+    assert code == 2, "the empty-index deny assertion stays green"
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 0, "the allow-path assertion stays green"
+
+
+def test_mutant_probe_unknown_exit_code_fails_open_allows_commit(tmp_path: Path) -> None:
+    """Twin (exit-code half): read "anything not 0" as staged, so 128 becomes a
+    legitimate allow. Only the exit-128 assertion reds — the raising-probe one
+    stays green (the except branch is untouched), as do the plain allow (exit 1)
+    and deny (exit 0) paths. That is what makes this an independent proof of the
+    exit-code obligation rather than a second copy of the exception twin."""
+    mutant = _write_mutant(
+        tmp_path,
+        "exitcode_open",
+        _PROBE_EXIT_CODE_BRANCHES,
+        "    return out.returncode != 0",
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    nonrepo = tmp_path / "nonrepo"
+    nonrepo.mkdir()
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(nonrepo), nonrepo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 0, "the exit-128 assertion must red when 128 is read as staged"
+    assert out is None
+
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(repo), repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "PATH": str(empty_bin)},
+    )
+    assert code == 2, "the raising-probe assertion stays green: the except branch is untouched"
+
+    clean_repo, clean_impl = _green_story_repo(tmp_path / "b", stage=False)
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(clean_repo), clean_repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(clean_impl)},
+    )
+    assert code == 2, "the empty-index deny assertion stays green (exit 0)"
+    code, _ = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+    assert code == 0, "the allow-path assertion stays green (exit 1)"
 
 
 def test_non_git_bash_is_allowed(tmp_path: Path) -> None:

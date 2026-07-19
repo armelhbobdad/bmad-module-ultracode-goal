@@ -8,7 +8,9 @@
 Enforces invariants that must NOT live in memory (context, not enforcement):
   1. No `git commit`/`git push` while on a protected branch.
   2. No `git commit` until a "tests-ran" marker exists for the current story.
-  3. Cross-Session Recall gate: while a UCG run is active (a .mem-state.json
+  3. No `git commit` while the staged index is empty (a commit that captures no
+     work), or while the staged-index probe cannot answer (fail closed).
+  4. Cross-Session Recall gate: while a UCG run is active (a .mem-state.json
      latch is present), claude-mem stays advisory-only and fails closed — any
      claude-mem MCP call (and any filesystem reach into .claude-mem) is denied
      unless the latch is green (present + schema_ok + recall on). Outside a run
@@ -94,6 +96,33 @@ def _current_branch(cwd: str | None) -> str | None:
         return None
     branch = out.stdout.strip()
     return branch or None
+
+
+def _staged_index_nonempty(cwd: str | None) -> bool:
+    """True only when something is provably staged for the next commit.
+
+    `git diff --cached --quiet` implies `--exit-code`: 0 means nothing is
+    staged, 1 means something is, and any other code (128 outside a repo, for
+    one) means the probe could not answer. Unlike _current_branch above, which
+    swallows the same failures and fails OPEN by returning None, this one fails
+    CLOSED: an unanswerable probe reports "nothing staged" so the caller blocks
+    the commit rather than waving through a commit it could not inspect.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=cwd or None,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False  # git missing, timeout, ...: cannot answer -> fail closed
+    if out.returncode == 0:
+        return False  # nothing staged
+    if out.returncode == 1:
+        return True  # something staged
+    return False  # any other exit code is a probe failure -> fail closed
 
 
 def _impl_artifacts(cwd: str | None) -> Path | None:
@@ -322,6 +351,17 @@ def main() -> None:
                 f"for the current story ({story or 'unknown'}). Run the story's "
                 f"test/lint/build to green and write {target} before committing. "
                 "Commit only at a verified-green story boundary."
+            )
+        if not _staged_index_nonempty(cwd):
+            _deny(
+                "Empty-index guard: refusing `git commit` — the staged index is "
+                "empty (or could not be read), so this commit would capture no "
+                "work. Stage this story's paths in a prior, SEPARATE tool call "
+                "(`git add <this story's paths>`), then commit as a second, "
+                "distinct tool call. `git commit -a` and commit-time pathspecs "
+                "are unsupported inside a story loop: the guard evaluates the "
+                "command string before it runs, so anything they would stage "
+                "does not exist yet at that point."
             )
 
     _allow()
