@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1.0",
+  "evaluated_at": "2026-07-01T00:00:00.000Z",
+  "repo": "sample-repo",
+  "target": {
+    "type": "story",
+    "id": "7-2",
+    "label": "Story 7-2: sample production story"
+  },
+  "collection_status": "COLLECTED",
+  "gate_basis": "priority_thresholds",
+  "gate_status": "FAIL",
+  "rationale": "One criterion's acceptance test is red; coverage is short of the threshold.",
+  "p0_status": "NOT_MET",
+  "p1_status": "NOT_MET",
+  "overall_status": "NOT_MET",
+  "critical_open": 1,
+  "links": {
+    "trace_report_path": "test-artifacts/traceability/trace-7-2.md",
+    "trace_report_url": "",
+    "artifact_url": "",
+    "journey_evidence_url": ""
+  }
+}

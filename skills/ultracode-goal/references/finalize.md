@@ -31,6 +31,21 @@ Produce a report (write it as a peer of `.decision-log.md` in the run folder, e.
 - A pointer to the deferred-work ledger and its open-item count.
 - Cross-Session Recall: consulted / wrote / skipped, plus the outbox tombstone count when the drain ran.
 
+## Gate trail
+
+Write the per-story evidence trail as **`gate-trail.md`, a peer of `run-report.md`** in the run folder — the same folder that holds `.decision-log.md`, never `{workflow.implementation_artifacts}`. Where the run report is prose you compose, this one is synthesized by script from artifacts the run already wrote, so a reader can audit a green Epic without re-running it. Every story gets a section whose table traces five columns: acceptance criterion → planned test → result → gate verdict → commit.
+
+```
+uv run {skill-root}/scripts/gate_trail.py --run-dir <this run's folder> --profile <light|production> --impl-artifacts {workflow.implementation_artifacts} --trace-output <the trace artifacts dir> --story <id>… --repo {project-root}
+```
+
+Pass `--story` once per in-scope story **in sprint order** — the order is what turns the recorded baselines into commit ranges (each story's range ends at the next story's baseline, and at `HEAD` for the last one). The script prints the path it wrote; name that path in the run report.
+
+Two properties are load-bearing, so do not "improve" them:
+
+- **It renders verdicts, it never forms one.** The verdict cell is the verdict the run already recorded, or the gate artifact's `gate_status` mapped through the gate's own table. The production AND ran once, when the gate decided; re-running it here would be a second, later judgment on the same story. A story whose verdict was not `advance` is shown as it was decided — never quietly green.
+- **It fails soft.** Every source is optional: a missing or unreadable checklist, trace report, gate file or baseline renders `n/a` in its cell and the trail continues. This is the opposite of the gate, which fails closed, and deliberately so — the trail has no authority, and failing closed here would turn a reporting bug into a blocked run. Under `--light` there is no acceptance checklist by design, so those sections synthesize from the hand-authored trace report and gate decision instead.
+
 ## Cross-Session Recall write (optional)
 
 Read `{workflow.implementation_artifacts}/.mem-state.json`. Act only on its latched state.
