@@ -37,6 +37,14 @@ renders `n/a` in its cell and the synthesis continues. This is the opposite of
 authority and must not advance on evidence it could not read, while this report
 has none - failing closed here would turn a reporting bug into a blocked run.
 
+That covers the SOURCES, not the invocation. The story list is an argument, not
+an artifact to be read: with no ids this script would write a well-formed
+document carrying no sections at all, an evidence trail that traces nothing and
+that the stage then names in the run report as delivered evidence. So the ids
+are refused up front - exit 2, nothing written - which is the invocation-error
+lane `--run-dir` and `--profile` already occupy, and costs a re-issued command
+rather than a run.
+
 Gate-artifact resolution is imported from `gate_eval.py` rather than
 re-implemented, so the trail always describes the same file that decided.
 
@@ -491,7 +499,8 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         dest="stories",
-        help="A story id, repeatable, in sprint order.",
+        required=True,
+        help="A story id, repeatable, in sprint order. At least one is required.",
     )
     parser.add_argument("--impl-artifacts", help="Directory holding the recorded baselines.")
     parser.add_argument("--trace-output", help="Directory holding the trace and gate artifacts.")
@@ -507,6 +516,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--epic", help="Epic id for the heading. Defaults to the run folder name.")
     parser.add_argument("--repo", default=".", help="Repository root for the commit range.")
     args = parser.parse_args(argv)
+
+    # The same invocation-error lane, for the same error wearing a value.
+    # `required=True` catches "no ids at all"; a blank id otherwise renders an
+    # anonymous `## Story ` section of nothing but `n/a` - a story that reads as
+    # gated and empty rather than as never named.
+    if any(not story.strip() for story in args.stories):
+        parser.error("--story values must be non-empty story ids")
 
     run_dir = Path(args.run_dir)
     trace_output = Path(args.trace_output) if args.trace_output else None
