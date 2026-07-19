@@ -90,11 +90,11 @@ Do not recompute TEA thresholds or re-judge `gate_status` — read it as given. 
 
 - **`reloop`** (gate_status FAIL, or a production signal downgraded an advance) → run `bmad-correct-course` to diagnose and adjust, then re-run the story (back through Execute, `references/execute.md`) — **within the remaining turn budget**. Re-run the gate after. If the re-loop would exceed `{workflow.max_turns_per_story}`, treat it as `escalate` instead.
 
-- **`escalate`** (gate_status NOT_EVALUATED — the gate could not be read — or budget exhausted on a FAIL) → **stop.** Do not advance, do not defer the failing item. Record the reason and the verdict JSON in `.decision-log.md`. In an attended run, surface the blocker to the user. In headless, this is a `blocked` outcome — emit the JSON in Stage 6 (`references/finalize.md`).
+- **`escalate`** (gate_status NOT_EVALUATED — the gate could not be read — or budget exhausted on a FAIL) → **stop.** Do not advance, do not defer the failing item. Record the reason and the verdict JSON in `.decision-log.md`, and write the typed escalation sidecar `{workflow.implementation_artifacts}/escalation-<story_id>.json` (shape in `references/execute.md`, under "Escalation sidecar") so the pending decision is readable without the transcript. In an attended run, surface the blocker to the user. In headless, this is a `blocked` outcome — emit the JSON in Stage 6 (`references/finalize.md`).
 
 **INVARIANT — a P0/critical FAIL never defers.** A failing gate (or a P0/P1/overall threshold miss) is `reloop` or `escalate`, never `defer`. Only non-gate-blocking work (CONCERNS, non-critical findings, parked decisions) is allowed onto the ledger. If you find yourself about to write a FAIL or a critical finding to the ledger, you are violating the gate — re-loop within budget or escalate instead.
 
-If any orchestrated sub-skill blocks on interactive input mid-run, treat it as `escalate` for that story — write the escalation marker and stop; do not answer its prompt blind.
+If any orchestrated sub-skill blocks on interactive input mid-run, treat it as `escalate` for that story — write the typed escalation sidecar `{workflow.implementation_artifacts}/escalation-<story_id>.json` and stop; do not answer its prompt blind.
 
 ## Deferred-work ledger schema
 
