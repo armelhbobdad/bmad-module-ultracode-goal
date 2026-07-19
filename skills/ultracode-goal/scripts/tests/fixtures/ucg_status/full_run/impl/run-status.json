@@ -1,0 +1,20 @@
+{
+  "epic": "sample",
+  "story": "beta",
+  "index": 2,
+  "total": 3,
+  "last_verdict": "advance",
+  "last_reasons": [
+    "gate read from gate-decision-beta.json",
+    "gate_status PASS -> advance"
+  ],
+  "reloop_count": 0,
+  "stories": [
+    {"story": "alpha", "phase": "gated", "verdict": "advance", "dev_attempts": 1, "reloop_count": 0},
+    {"story": "beta", "phase": "gated", "verdict": "advance", "dev_attempts": 2, "reloop_count": 1},
+    {"story": "gamma", "phase": "pending", "verdict": null, "dev_attempts": 0, "reloop_count": 0}
+  ],
+  "budget_used": {"turns": 7, "max_turns": 25},
+  "profile": "light",
+  "updated": "2026-07-19T19:15:32.615805Z"
+}

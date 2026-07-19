@@ -309,8 +309,8 @@ async function testHelpCatalogRegistration() {
 
     catalogText = await fs.readFile(catalogPath, 'utf8');
     const ucgRowCount = catalogText.split('\n').filter((l) => l.startsWith('UltraCode Goal,')).length;
-    // _meta + 2 capability rows (ultracode-goal + ucg-formalize); anti-zombie keeps the set stable across reinstall (not 6).
-    assert(ucgRowCount === 3, 'reinstall is anti-zombie: _meta + 2 capability rows, no duplication', `found ${ucgRowCount}`);
+    // _meta + 3 capability rows (ultracode-goal + ucg-formalize + ucg-status); anti-zombie keeps the set stable across reinstall (not 8).
+    assert(ucgRowCount === 4, 'reinstall is anti-zombie: _meta + 3 capability rows, no duplication', `found ${ucgRowCount}`);
 
     // Uninstall path: UCG rows removed, foreign rows survive
     const touched = await removeHelpEntries(projectDir, ['UltraCode Goal']);
