@@ -71,6 +71,14 @@ build/
 **/.memlog.md
 .claude/.story-automator-active
 
+# Test fixtures are tracked even when they mimic a local-only artifact. A fixture
+# that reproduces a run folder has to contain the same dot-prefixed files a real
+# run writes, and the patterns above would otherwise swallow it: `git add` on an
+# ignored path is a silent no-op, so the fixture stays behind, the suite passes
+# locally, and CI fails on a clean checkout with nothing to read.
+!skills/ultracode-goal/scripts/tests/fixtures/**/.decision-log.md
+!skills/ultracode-goal/scripts/tests/fixtures/**/.memlog.md
+
 # graphify knowledge-graph output (generated locally, not shipped)
 graphify-out
 
