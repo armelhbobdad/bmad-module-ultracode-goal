@@ -134,6 +134,52 @@ jobs:
       - name: Validate fixture tracking
         run: npm run validate:fixtures
 
+      - name: Test docs link rewriting
+        run: npm run test:rehype
+
+  # Builds the real site and resolves every emitted href against the file tree.
+  # Separate from `validate` on purpose: it needs a full Astro build, which the
+  # Windows half of that matrix would only duplicate at twice the cost, and the
+  # defect class it guards (route rewriting) is platform-independent.
+  #
+  # Builds with the deployed base so the checked output is byte-for-byte what
+  # ships: GITHUB_REPOSITORY gives site-url.js the right base, and vars.SITE_URL
+  # overrides it to match the deploy workflow exactly. The route bug this guards
+  # is visible at any base, but checking the deployed one also catches
+  # base-prefix mistakes that only exist off a root deployment.
+  docs-links:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 mirrors the deploy workflow. Starlight's `lastUpdated`
+      # reads git history, so a shallow clone builds a different site than the
+      # one that ships, and validating a different artifact defeats the point.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install website dependencies
+        run: npm ci --prefix website
+
+      - name: Build documentation
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: npm run docs:build
+
+      - name: Validate documentation links
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: node tools/validate-docs-links.js --strict --require-build
+
   python:
     strategy:
       fail-fast: false
