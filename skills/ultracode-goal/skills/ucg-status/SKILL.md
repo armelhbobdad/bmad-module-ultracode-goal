@@ -57,6 +57,11 @@ Add `--run-dir <the run folder>` when the operator named a specific run, so the 
 carries that run's decision-log tail. The runs index in the render lists the folders
 available to name.
 
+Pass `--runs-root <dir>` when the operator named a different runs root - runs kept under
+a non-default output root, or another checkout's runs read from here. The invocation
+above spells out the module's default, and no `customize.toml` scalar carries it, so this
+flag is where an operator whose runs live elsewhere says so. Only the runs index moves.
+
 `--impl-artifacts` is required and the renderer refuses to run without it (exit 2, nothing
 rendered). Every **source** it reads is optional: an absent, empty or unparseable file
 renders `n/a` and the render continues. That split is deliberate and matches the rest of
