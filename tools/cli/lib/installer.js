@@ -15,6 +15,24 @@ const { writeManifest } = require('./manifest');
 // Dev-only artifacts never shipped into a user's project
 const DEV_ARTIFACTS = new Set(['.analysis', '.decision-log.md', '__pycache__', '.pytest_cache', '.DS_Store', 'Thumbs.db']);
 
+/**
+ * The predicate deciding what `copySrcFiles` ships from src into the install.
+ *
+ * Module-scoped and exported rather than inlined, because the parity check in
+ * `skill-parity.js` has to walk the SOURCE tree with the exact same rule the
+ * installer used. If the two ever disagree, every file the installer skipped
+ * reads as drift and the check cries wolf. One definition, two callers.
+ *
+ * Reads nothing off `this`, so hoisting it is behaviour-preserving.
+ */
+function shippedCopyFilter(src) {
+  const base = path.basename(src);
+  if (DEV_ARTIFACTS.has(base)) return false;
+  // Skip pytest suites — dev-only, not needed at runtime
+  if (base === 'tests' && path.basename(path.dirname(src)) === 'scripts') return false;
+  return true;
+}
+
 // The four planning-workflow fragments Step 6b enrolls. Each maps to a
 // real BMAD skill whose presence is probed before merging, and to a fragment
 // under skills/ultracode-goal/assets/ucg-awareness/{skill}.toml.
@@ -304,13 +322,7 @@ class Installer {
    * filtering out dev/test artifacts that have no place in a user's project.
    */
   async copySrcFiles(ucgDir) {
-    const copyFilter = (src) => {
-      const base = path.basename(src);
-      if (DEV_ARTIFACTS.has(base)) return false;
-      // Skip pytest suites — dev-only, not needed at runtime
-      if (base === 'tests' && path.basename(path.dirname(src)) === 'scripts') return false;
-      return true;
-    };
+    const copyFilter = shippedCopyFilter;
 
     // Copy skill directories — each is a self-contained skill.
     // skills/reports/ is the BMad Builder's report output folder (a sibling
@@ -397,4 +409,4 @@ class Installer {
   }
 }
 
-module.exports = { Installer, STEP6B_PLANNING_FRAGMENTS };
+module.exports = { Installer, STEP6B_PLANNING_FRAGMENTS, shippedCopyFilter };

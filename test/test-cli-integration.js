@@ -500,6 +500,195 @@ async function testIdeSkillInstallation() {
   console.log('');
 }
 
+/**
+ * Skill parity: `status` must be able to tell a stale copy from a current one.
+ *
+ * The presence checks it had before cannot. A run once opened with the loaded
+ * copy one merge behind source, its formalize kernel missing a readiness guard
+ * outright, and `status` reported every integrity row `present` throughout.
+ *
+ * Every case below mutates a REAL install and asserts the verdict flips, because
+ * a parity check that only ever reports `ok` is the false green it replaces.
+ */
+async function testSkillParityDetection() {
+  console.log(`${colors.yellow}Test Suite: Skill Parity Detection${colors.reset}\n`);
+
+  const projectDir = await makeTempDir('parity');
+
+  try {
+    const { Installer } = require('../tools/cli/lib/installer');
+    const { getStatus } = require('../tools/cli/commands/status');
+    const installer = new Installer();
+
+    const restore = suppressConsole();
+    await installer.install({
+      projectDir,
+      ucgFolder: '_bmad/ucg',
+      project_name: 'parity-test',
+      ides: ['claude-code'],
+      install_learning: false,
+      _action: 'fresh',
+    });
+    restore();
+
+    const moduleSkill = path.join(projectDir, '_bmad/ucg/ultracode-goal');
+    const ideSkill = path.join(projectDir, '.claude/skills/ultracode-goal');
+
+    // (a) A fresh install is byte-clean on every copy.
+    let status = await getStatus(projectDir);
+    assert(status.skillParity?.module.ok === true, 'fresh install: module copy matches source');
+    assert(status.skillParity.ides.length > 0, 'fresh install: at least one IDE copy compared');
+    assert(
+      status.skillParity.ides.every((entry) => entry.ok === true),
+      'fresh install: every IDE copy matches source',
+      JSON.stringify(status.skillParity.ides.map((e) => ({ ide: e.ide, missing: e.missing, drifted: e.drifted }))),
+    );
+    assert(status.versionMatch === true, 'fresh install: installed VERSION matches the CLI');
+
+    // (b) Content drift is detected, and attributed to the copy that drifted.
+    await fs.appendFile(path.join(moduleSkill, 'scripts/gate_eval.py'), '\n# drift\n');
+    status = await getStatus(projectDir);
+    assert(status.skillParity.module.ok === false, 'edited script: module copy reports drift');
+    assert(
+      status.skillParity.module.drifted.includes('scripts/gate_eval.py'),
+      'edited script: names the drifted file',
+      JSON.stringify(status.skillParity.module.drifted),
+    );
+    assert(
+      status.skillParity.ides.every((entry) => entry.ok === true),
+      'edited script: the IDE copy is unaffected (drift is per-copy, not smeared)',
+    );
+
+    // (c) A deleted reference is detected as missing, in the copy it was deleted from.
+    await fs.remove(path.join(ideSkill, 'references/gate.md'));
+    status = await getStatus(projectDir);
+    const ide = status.skillParity.ides.find((entry) => entry.ide === 'claude-code');
+    assert(ide.ok === false, 'deleted reference: IDE copy reports not-ok');
+    assert(ide.missing.includes('references/gate.md'), 'deleted reference: names the missing file', JSON.stringify(ide.missing));
+
+    // (d) FALSE-POSITIVE GUARD. Runtime bytecode inside an installed copy must
+    // never read as drift, or the check cries wolf on any machine that ran the
+    // suite and gets ignored.
+    await fs.ensureDir(path.join(moduleSkill, 'scripts/__pycache__'));
+    await fs.writeFile(path.join(moduleSkill, 'scripts/__pycache__/gate_eval.cpython-312.pyc'), 'x');
+    status = await getStatus(projectDir);
+    assert(
+      !status.skillParity.module.extra.some((rel) => rel.includes('__pycache__')),
+      'bytecode in an installed copy is not reported as drift',
+      JSON.stringify(status.skillParity.module.extra),
+    );
+
+    // (e) A stale CONTENT file (deleted from source, still installed) fails,
+    // because it stays loadable and inflates the raw reference count.
+    await fs.writeFile(path.join(moduleSkill, 'references/retired-stage.md'), '# gone from source\n');
+    status = await getStatus(projectDir);
+    assert(
+      status.skillParity.module.extraContent.includes('references/retired-stage.md'),
+      'stale reference file is reported as extra content',
+    );
+    assert(status.skillParity.module.ok === false, 'stale reference file fails parity');
+
+    // (f) A non-content extra is reported but does NOT fail, so a stray runtime
+    // write cannot brick the signal.
+    await fs.remove(path.join(moduleSkill, 'references/retired-stage.md'));
+    await fs.writeFile(path.join(moduleSkill, 'scratch.txt'), 'runtime residue\n');
+    status = await getStatus(projectDir);
+    assert(status.skillParity.module.extra.includes('scratch.txt'), 'non-content extra is reported');
+    assert(!status.skillParity.module.extraContent.includes('scratch.txt'), 'non-content extra is not counted as failing content');
+
+    // (g) Version parity is an INDEPENDENT signal from content parity.
+    await fs.writeFile(path.join(projectDir, '_bmad/ucg/VERSION'), '0.0.1');
+    status = await getStatus(projectDir);
+    assert(status.versionMatch === false, 'a behind VERSION file flips versionMatch');
+
+    // (h) An absent copy is "not installed", never a silent pass.
+    await fs.remove(ideSkill);
+    status = await getStatus(projectDir);
+    const gone = status.skillParity.ides.find((entry) => entry.ide === 'claude-code');
+    assert(gone.present === false, 'absent IDE copy reports present: false');
+    assert(gone.ok === null, 'absent IDE copy reports ok: null, never true');
+
+    // (i) NEVER A FALSE GREEN. The walk records I/O failures instead of absorbing
+    // them, and an incomplete walk yields ok:null (unverifiable) rather than a
+    // verdict it cannot support.
+    //
+    // Every assertion here is `ok !== true`, deliberately, because that is the
+    // only property that holds on BOTH platforms. `chmod` is a no-op on Windows,
+    // so an "unreadable" tree is read fine there and the same staleness surfaces
+    // as ok:false, while POSIX reports ok:null. Asserting the exact value would
+    // pin a platform, not the guarantee.
+    //
+    // The tampered file sits under assets/, NOT references/ or scripts/. That is
+    // the case an earlier probe of mine missed: only content paths make `extra`
+    // fail, so a tampered non-content file inside an unreadable source subtree
+    // used to come back a clean ok:true.
+    const { compareTrees } = require('../tools/cli/lib/skill-parity');
+    const fcSrc = path.join(projectDir, 'fc-src');
+    const fcInst = path.join(projectDir, 'fc-inst');
+    await fs.ensureDir(path.join(fcSrc, 'assets'));
+    await fs.ensureDir(path.join(fcSrc, 'references'));
+    await fs.writeFile(path.join(fcSrc, 'assets/module.yaml'), 'name: x\n');
+    await fs.writeFile(path.join(fcSrc, 'references/a.md'), 'A\n');
+    await fs.copy(fcSrc, fcInst);
+    assert((await compareTrees(fcSrc, fcInst, 'module')).ok === true, 'unverifiable probe: identical trees are ok');
+
+    await fs.writeFile(path.join(fcInst, 'assets/module.yaml'), 'name: TAMPERED\n');
+    assert((await compareTrees(fcSrc, fcInst, 'module')).ok === false, 'unverifiable probe: a tampered non-content file is not ok');
+
+    for (const locked of [path.join(fcSrc, 'assets'), path.join(fcInst, 'assets')]) {
+      await fs.chmod(locked, 0o000);
+      let verdict;
+      try {
+        verdict = await compareTrees(fcSrc, fcInst, 'module');
+      } finally {
+        await fs.chmod(locked, 0o755);
+      }
+      assert(verdict.ok !== true, `unreadable dir never reads as a clean install (${path.basename(path.dirname(locked))})`);
+    }
+
+    // A single unreadable FILE must not abort the command. It used to throw out
+    // of compareTrees, past the caller, and kill every other status row with it.
+    const lockedFile = path.join(fcInst, 'references/a.md');
+    await fs.chmod(lockedFile, 0o000);
+    let fileVerdict = null;
+    let threw = false;
+    try {
+      fileVerdict = await compareTrees(fcSrc, fcInst, 'module');
+    } catch {
+      threw = true;
+    } finally {
+      await fs.chmod(lockedFile, 0o644);
+    }
+    assert(!threw, 'an unreadable file does not throw out of compareTrees');
+    assert(fileVerdict && fileVerdict.ok !== true, 'an unreadable file never reads as a clean install');
+
+    // An absent SOURCE tree must not read as a clean install either.
+    assert(
+      (await compareTrees(path.join(projectDir, 'no-such-source'), fcInst, 'module')).ok !== true,
+      'absent source tree never reads as a clean install',
+    );
+
+    // And getStatus itself must survive a permission-damaged install rather than
+    // trading every other row for one unreadable byte.
+    const damaged = path.join(moduleSkill, 'scripts/gate_eval.py');
+    await fs.chmod(damaged, 0o000);
+    let survived = null;
+    try {
+      survived = await getStatus(projectDir);
+    } catch {
+      survived = null;
+    } finally {
+      await fs.chmod(damaged, 0o644);
+    }
+    assert(survived !== null, 'getStatus survives an unreadable file in the install');
+    assert(survived && survived.installedVersion !== undefined, 'getStatus still reports the other rows');
+  } finally {
+    await fs.remove(projectDir);
+  }
+
+  console.log('');
+}
+
 async function testManifestAccuracy() {
   console.log(`${colors.yellow}Test Suite 5: Manifest Accuracy${colors.reset}\n`);
 
@@ -1797,6 +1986,7 @@ async function runTests() {
   await testStep6bUcgAwareness();
   await testStep6bDeclineNoOp();
   await testReinstallAntiZombie();
+  await testSkillParityDetection();
   await testBannerGeometry();
 
   console.log(`${colors.cyan}========================================`);

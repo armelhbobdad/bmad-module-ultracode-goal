@@ -189,4 +189,4 @@ async function removeAllUcgSkills(projectDir) {
   return removed;
 }
 
-module.exports = { installSkillsToIdes, getAvailablePlatforms, removeAllUcgSkills, loadPlatforms };
+module.exports = { installSkillsToIdes, getAvailablePlatforms, removeAllUcgSkills, loadPlatforms, ARTIFACT_FILTER, UCG_SKILLS };
