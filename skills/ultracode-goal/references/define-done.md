@@ -14,6 +14,8 @@ Run `bmad-testarch-test-design` in **Epic-Level Mode** for the Epic. This is the
 
 Epic-Level Mode is selected by the presence of `sprint-status.yaml` (preflight reports `sprint_status_present`); if test-design prompts for system-vs-epic, choose **epic**. Force **Create** mode if it offers Resume/Validate/Edit — those are interactive and stall an unattended run.
 
+**Test-design runs on any stack — do not skip it on a non-web module.** The framework fitness caveat in `references/preflight.md` is scoped to TEA's *browser generators*: ATDD in this stage, and the automate→trace pair at the gate. Test-design is not one of them — it is risk-and-priority analysis over the planning corpus, and its output is a document, not a browser harness. So a `pytest` or `npm-test` module gets the same risk matrix and priorities a web module does. Reading the caveat as "the whole TEA chain is web-only" is what produces an empty test-design directory and leaves the ACs with no risk backbone to sharpen against; when the *browser* steps genuinely cannot run, the substitution is gate.md's hand-authored trace artifacts, never a skipped test-design.
+
 A `CONCERNS`-grade gap in the test plan (e.g. an `UNKNOWN` NFR threshold that does not block any P0 story) appends to `{workflow.deferred_work_path}` and the Epic keeps moving. A genuine red gap — no risk coverage for a P0 flow — is not deferrable; resolve it before proceeding to per-story work.
 
 ## Per Story — Create then ATDD
@@ -30,7 +32,7 @@ For every **in-scope** story, in sprint order:
 
    Force **Create** mode (not Resume/Validate/Edit) for the same unattended reason.
 
-**In `--light`:** run step 1 (`bmad-create-story`) but **skip step 2 (`bmad-testarch-atdd`)** — `--light` produces no executable red-phase acceptance tests. The story file and its acceptance criteria become the Definition-of-Done and the oracle `bmad-testarch-trace` resolves the Stage 5 gate against, mirroring gate.md's `--light` branch (which runs only `bmad-testarch-trace`). The per-Epic test-design above still runs in `--light`: trace needs its risk matrix and priorities regardless of profile. Sharpen the ACs here exactly as you would for production — under `--light` they are the *only* machine-checkable DoD a story gets, so vague ACs leave the trace gate nothing to resolve against.
+**In `--light`:** run step 1 (`bmad-create-story`) but **skip step 2 (`bmad-testarch-atdd`)** — `--light` produces no executable red-phase acceptance tests. The story file and its acceptance criteria become the Definition-of-Done and the oracle `bmad-testarch-trace` resolves the Stage 5 gate against, mirroring gate.md's `--light` branch (which runs only `bmad-testarch-trace`). The per-Epic test-design above still runs in `--light`: `bmad-testarch-trace` consumes its risk scores and P0–P3 priorities when they are available, and they are the backbone you sharpen the ACs against in either profile. Sharpen the ACs here exactly as you would for production — under `--light` they are the *only* machine-checkable DoD a story gets, so vague ACs leave the trace gate nothing to resolve against.
 
 ## Exit condition (testable)
 
