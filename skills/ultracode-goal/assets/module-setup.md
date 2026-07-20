@@ -24,7 +24,7 @@ Both merge scripts use an anti-zombie pattern — existing entries for this modu
 1. Read `assets/module.yaml` for module metadata (the `code` field, `ultracode-goal`, is the module identifier)
 2. Check if `{project-root}/_bmad/config.yaml` exists — if an `ultracode-goal` section is already present, inform the user this is an update (re-registration)
 
-If the user provides arguments (e.g. `accept all defaults`, `--headless`, or inline values like `user name is Armel`), map any provided values to config keys, use defaults for the rest, and skip interactive prompting. Still display the full confirmation summary at the end.
+If the user provides arguments (e.g. `accept all defaults`, `-H`, or inline values like `user name is Ada`), map any provided values to config keys, use defaults for the rest, and skip interactive prompting. Still display the full confirmation summary at the end.
 
 ## Collect Configuration
 
