@@ -6,7 +6,12 @@
 """UltraCode-Goal PreToolUse guard (Claude Code hook).
 
 Enforces invariants that must NOT live in memory (context, not enforcement):
-  1. No `git commit`/`git push` while on a protected branch.
+  1. No `git commit`/`git push` while on a protected branch. The branch is read
+     from the hook event's `cwd`, i.e. the session's working directory, NOT the
+     repository the command targets, so a `cd /other/repo && git commit` is
+     denied while the session's own repo sits on a protected branch. Deliberate
+     for now (it errs toward denying), but it is the reason a legitimate commit
+     in an unrelated checkout can be refused.
   2. No `git commit` until a "tests-ran" marker exists for the current story.
   3. Marker freshness: no `git commit` unless that marker carries a
      `baseline=<sha>` line matching, character for character, the SHA the story
