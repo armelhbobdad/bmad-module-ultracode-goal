@@ -8,11 +8,19 @@ name: Quality & Validation
 # - CLI integration tests (install/update/uninstall flows)
 # - Skill structure validation
 # - File reference validation
+# - Fixture tracking (no test fixture may be matched by a .gitignore rule)
 # - Python script tests (pytest via uv)
 
 "on":
   pull_request:
     branches: ["**"]
+  # Also on push to main. Two independently green PRs merged close together are
+  # never validated as a PAIR by the pull_request trigger alone, because each ran
+  # against its own base. This repo has already been bitten by that (a stacked
+  # merge-order trap), and the only check on the merged result was a manual local
+  # run someone had to remember to do.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -120,6 +128,11 @@ jobs:
 
       - name: Validate file references
         run: npm run validate:refs
+
+      # Needs the full history-free checkout to still carry .gitignore, which it
+      # does; this reads ignore RULES, not history.
+      - name: Validate fixture tracking
+        run: npm run validate:fixtures
 
   python:
     strategy:
