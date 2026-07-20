@@ -368,9 +368,32 @@ def _segment_write_verbs(segment: str, depth: int) -> set[str]:
 
 def _command_write_verbs(command: str, depth: int) -> set[str]:
     verbs: set[str] = set()
-    # The `\|\|` alternative must precede `\|` so `||` is consumed whole.
-    for segment in re.split(r"&&|\|\||;|\|", command):
-        verbs |= _segment_write_verbs(segment, depth)
+    # Classified under BOTH separator sets, unioned. Neither alone is safe:
+    #
+    #   - Without the newline, `printf ok > .tests-ran-1\ngit commit -m x` is one
+    #     segment led by `printf`, which anchors to nothing and waves through a
+    #     real commit — bypassing the protected-branch, tests-ran, freshness AND
+    #     empty-index gates in a single Bash call.
+    #   - With ONLY the newline set, the split is quote-blind, so a newline inside
+    #     a quoted argument that sits between `git` and its verb
+    #     (`git -c foo.bar="a\nb" commit -m x`, and every other
+    #     `_GIT_VALUE_OPTIONS` form) tears the command into two fragments that
+    #     each fail to tokenize and each miss the newline-anchored fallback
+    #     regex — a real commit, allowed.
+    #
+    # Unioning makes the result a strict SUPERSET of what the separator-only set
+    # detects, so this cannot classify less than it did before the newline was
+    # added. That property is what is being bought here, and it is why this is a
+    # union rather than one cleverer regex: a quote-aware splitter would be a
+    # second hand-rolled shell parser whose every disagreement with `shlex` is a
+    # new fail-open, and getting it wrong in the do-not-split direction silently
+    # restores the newline bypass above.
+    #
+    # The `\|\|` alternative must precede `\|` so `||` is consumed whole. `\r`
+    # rides along with `\n` for CRLF-authored commands.
+    for separators in (r"&&|\|\||;|\|", r"&&|\|\||;|\||\n|\r"):
+        for segment in re.split(separators, command):
+            verbs |= _segment_write_verbs(segment, depth)
     return verbs
 
 
