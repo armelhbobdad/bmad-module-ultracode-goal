@@ -45,6 +45,11 @@ z*/
 
 _bmad
 _bmad-output
+
+# Module validation reports: local review artifacts, kept off the shipped surface
+# (.npmignore already excludes them from the package). Matches 71bce7a.
+skills/reports/
+
 .clinerules
 .augment
 .crush
