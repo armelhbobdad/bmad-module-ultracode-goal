@@ -22,7 +22,7 @@ UCG installs Claude Code hooks at preflight so that a set of invariants is enfor
 **What UCG installs:**
 
 - A **`PreToolUse` guard** that validates story markers and git state before a tool runs. It enforces six invariants:
-  1. denies a `git commit`/`git push` on a protected branch;
+  1. denies a `git commit`/`git push` on a protected branch. "Protected branch" means the branch of the directory **Claude Code is running in**, not the repository the command targets, so a `cd /elsewhere && git commit` is denied whenever the session's own repo sits on `main`, even when the other repo is on a feature branch;
   2. denies a `git commit` until a "tests-ran" marker exists for the current story;
   3. denies a `git commit` unless that marker's `baseline=<sha>` matches the SHA the story recorded at start (so a marker replayed from an earlier code state is rejected);
   4. denies a `git commit` while the staged index is empty, or while the staged-index probe cannot answer;
