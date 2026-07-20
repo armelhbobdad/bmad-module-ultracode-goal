@@ -137,3 +137,30 @@ With `-H`, the run is non-interactive: infer scope, default to production (unles
 ```
 
 An automator parses one schema regardless of where the run stopped; a blocked-before-report exit returns `report` and `deferred_work` as `null` rather than omitting them.
+
+### Reading the result in CI
+
+A headless run also leaves that same object on disk at `{workflow.implementation_artifacts}/run-result.json`, written by the `scripts/headless_envelope.py` adapter, byte-identical to what it emitted on stdout. Read the file: it is a pinned path with a parsed schema, where a transcript is neither. The one case with no file is a block that fires before the artifacts path resolves (the "not a BMAD project" stop, where there is no config to resolve it from), and that is a valid blocked terminal, not a harness failure:
+
+```bash
+result="$IMPL_ARTIFACTS/run-result.json"
+
+if [ -f "$result" ]; then
+  envelope=$(cat "$result")
+else
+  # No file: the run blocked before the artifacts path resolved. A parseable blocked
+  # envelope on stdout is a valid blocked terminal here, so fall back to it (parsed as
+  # JSON, never scraped) and only fail the job if nothing parses.
+  envelope=$(printf '%s\n' "$run_output" | jq -R 'fromjson? // empty' | jq -s 'last // empty')
+  [ -n "$envelope" ] || { echo "no parseable envelope"; exit 2; }
+fi
+
+status=$(printf '%s' "$envelope" | jq -r '.status')
+case "$status" in
+  complete) exit 0 ;;
+  blocked)  printf '%s' "$envelope" | jq -r '"blocked: " + .reason'; exit 1 ;;
+  *)        echo "unknown status: $status"; exit 2 ;;
+esac
+```
+
+The file is overwrite-in-place, so a second run against the same artifacts path replaces the first run's result, and under experimental `--parallel` each worktree agent sees its own artifacts path: there is no single `run-result.json` for a fan-out run. An attended run writes no file at all.

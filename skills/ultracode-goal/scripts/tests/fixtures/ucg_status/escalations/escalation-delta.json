@@ -1,0 +1,4 @@
+{"source": ".escalation-delta.md",
+ "kind": "budget-overrun",
+ "decision_needed": "re-scope, split, or hand off the story",
+ "evidence": "Story turn budget exceeded (turns 28/25)."}

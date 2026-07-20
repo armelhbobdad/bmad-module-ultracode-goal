@@ -1,0 +1,1 @@
+**Attended runs also get a ticker.** Each time you write the heartbeat, print one line into the transcript — `epic-7 ▸ story 3/6 — last verdict: advance` — so the watching human sees motion without opening a JSON file. Skip the ticker in headless (`-H`): the file is the interface there, and transcript prose has no reader.

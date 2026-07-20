@@ -48,6 +48,8 @@ Two properties are load-bearing, so do not "improve" them:
 - **It renders verdicts, it never forms one.** The verdict cell is the verdict the run already recorded, or the gate artifact's `gate_status` mapped through the gate's own table. The production AND ran once, when the gate decided; re-running it here would be a second, later judgment on the same story. A story whose verdict was not `advance` is shown as it was decided — never quietly green.
 - **It fails soft.** Every source is optional: a missing or unreadable checklist, trace report, gate file or baseline renders `n/a` in its cell and the trail continues. This is the opposite of the gate, which fails closed, and deliberately so — the trail has no authority, and failing closed here would turn a reporting bug into a blocked run. Under `--light` there is no acceptance checklist by design, so those sections synthesize from the hand-authored trace report and gate decision instead.
 
+**Optional diff viewer — detect, then degrade to silence.** The trail's commit column names a sha per story and the run report names the Epic branch, but neither opens a diff. When `hunk` is detected on PATH (`which hunk`), the run report may point at what it already names: `hunk show <commit>` for one story's commit, `hunk diff <epic-branch>` for the run as a whole, so a reader auditing the evidence can open a diff without reconstructing the range by hand. Absent `hunk`, print nothing — no suggestion and no warning that it is missing, and both surfaces read exactly as they did before. It is a render affordance and nothing else: do not add it to `{workflow.allowlist_commands}`, do not add a preflight check for it, and never let it reach a machine surface — not the gate verdict JSON, not the headless envelope, not the terminal `run-status.json`. Those are parsed by callers that will not have it installed.
+
 ## Cross-Session Recall write (optional)
 
 Read `{workflow.implementation_artifacts}/.mem-state.json`. Act only on its latched state.
@@ -72,9 +74,32 @@ Read `{workflow.implementation_artifacts}/.mem-state.json`. Act only on its latc
 
 **Always, both paths** — **remove** `{workflow.implementation_artifacts}/.mem-state.json` as part of close-out. No active run means the hook stops gating claude-mem; an orphaned latch would deny the user's own usage between runs.
 
+## Knowledge-graph refresh (optional)
+
+Resolve the mode exactly as the hooks below resolve theirs:
+`python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.graphify_integration`
+
+Two values, and no others. `off` is the shipped default and a complete no-op — no probe, no delegation, no decision-log line, no output; there is nothing to read further in this section. `refresh` refreshes the project's knowledge graph on the way out, so the next session starts from a current one instead of a stale one.
+
+**Probe first, and degrade to silence.** Two preconditions, both required: graphify resolves on PATH (`command -v graphify`), and a prior `graphify-out/manifest.json` exists under `{project-root}` to increment from. If either is missing there is nothing to refresh — do nothing, print nothing, and write no `.decision-log.md` entry, so the run stays byte-identical to an `off` run. A "skipped it" log line is exactly the difference that would break that, so do not add one. Absence is silent; failure is logged. They are different events.
+
+The manifest precondition is not defensive padding. Refresh means refresh: with no manifest there is nothing to increment from, and a cold rebuild walks the whole corpus and spends API budget, which is the opposite of what a bounded step on the way out may do. A first-ever run in this mode therefore refreshes nothing and says nothing.
+
+**With both preconditions met, delegate one incremental rebuild from `{project-root}`** — graphify writes `graphify-out/` relative to the current working directory:
+
+```
+timeout 300 graphify . --update
+```
+
+`--update` re-extracts only what changed against the recorded manifest, so graphify's own manifest diff *is* the changed-path scoping: the run does not enumerate the Epic's paths, and there is no surface that would accept them. Never a cold full build.
+
+The delegation is hard time-boxed by the `timeout 300` prefix above and is **not retried**. On a non-zero exit or a timeout, log one `WARN graphify-refresh-failed` line to `.decision-log.md` and move on.
+
+**This never gates.** It is advisory-only in the same sense Cross-Session Recall is — it can add an artifact to the developer's machine, and it can change nothing else. A graphify failure, timeout or absence **never changes the gate verdict** and **never changes the terminal envelope**: the run's outcome (complete, blocked or partial-complete), the recorded run-status and the emitted JSON are unchanged whether this step ran, failed, or never fired at all. This section is the only site that calls graphify — no preflight step, no per-story step and no gate step does.
+
 ## Record the terminal run-status
 
-Execute maintains the heartbeat `{workflow.implementation_artifacts}/run-status.json` as the spine advances (shape: `{epic, story, index, total, last_verdict, reloop_count, profile, updated}`). At close, write its **terminal** state — the final story/index, the `last_verdict` (`advance` when the Epic completed, the escalating story's verdict when blocked, or the last in-scope story's `advance` for a `partial-complete` run — a deliberate strict subset of the Epic delivered with no Epic-level gate), and a fresh `updated` timestamp — so a poller reading the file after the run sees the settled outcome, not a stale mid-run snapshot.
+Execute maintains the heartbeat `{workflow.implementation_artifacts}/run-status.json` as the spine advances (shape: `{epic, story, index, total, last_verdict, last_reasons, reloop_count, stories, budget_used, profile, updated}`). At close, write its **terminal** state — the final story/index, the `last_verdict` (`advance` when the Epic completed, the escalating story's verdict when blocked, or the last in-scope story's `advance` for a `partial-complete` run — a deliberate strict subset of the Epic delivered with no Epic-level gate), and a fresh `updated` timestamp — so a poller reading the file after the run sees the settled outcome, not a stale mid-run snapshot. **Write the whole shape, not a subset.** This write overwrites the file, so a narrower object silently strips keys a poller was reading mid-run: carry `last_reasons`, `stories` and `budget_used` through from the last heartbeat rather than dropping them off the artifact at the moment the run settles.
 
 ## Surface the deferred-work ledger
 
@@ -88,9 +113,34 @@ When the Epic advanced, run: `python3 {project-root}/_bmad/scripts/resolve_custo
 
 If the resolved `{workflow.on_epic_complete}` is non-empty, follow it as the final terminal instruction (a prompt to run or a shell command) before exiting.
 
+## Escalation hook
+
+The mirror of the epic-complete hook at the opposite terminal. This hook fires **only on a `blocked` run** — a story escalated and the Epic never advanced — and never on a clean advance, so an operator who walked away learns that the run stopped being able to make progress on its own.
+
+Execute may already have pinged when it first observed the escalation marker, so this site is deduped against that same run-scoped marker, `{workflow.implementation_artifacts}/.on-escalation-fired-<run-id>`, **check-then-write**, at that byte-identical path — `<run-id>` is the run id minted at Stage 1, carried forward verbatim. If the marker is already present, skip silently: the other fire site already pinged for this run. If it is absent, run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_escalation`
+
+When the resolved `{workflow.on_escalation}` is non-empty, follow it as an instruction (a prompt to run or a shell command), stating alongside it **the escalating story id** and the path to that story's typed `escalation-<story_id>.json` sidecar as the context it carries, and only then write the fired-marker. A resolved-empty value is a silent no-op — nothing fires and no fired-marker is written — so an empty hook can never suppress a later real one.
+
+This is a side effect on the way out, never a gate on the exit: a hook that errors, hangs or is missing must not change the emitted JSON, the status, or the run-status already recorded. Under `--parallel` this is the only reachable fire site, since the fan-out's worktree agents each see their own `{workflow.implementation_artifacts}`; that is sufficient, because Finalize always runs in the conductor.
+
 ## Headless output
 
-In headless (`-H`), compose the final JSON, run the Workflow health check (below) in its unattended queue-only mode, then emit the JSON and stop. `status` is `complete` when the Epic-level gate advanced, or `blocked` when a story escalated. This is the **same five-canonical-key shape every headless exit point honors** (Stage 1 first-touch / already-done blocks, Stage 2 preflight block, and this Stage 6 final emit): the five keys `status`/`skill`/`decision_log`/`report`/`deferred_work` are **always present** (`report` and `deferred_work` `null` when not produced), so a caller parsing them never raises a KeyError. A **complete** emit is those five; a **blocked** exit appends a sixth, `reason` (the one-line cause):
+In headless (`-H`), build the final JSON **through the `scripts/headless_envelope.py` adapter** — never hand-composed here — run the Workflow health check (below) in its unattended queue-only mode, then emit the JSON and stop. `status` is `complete` when the Epic-level gate advanced, or `blocked` when a story escalated, and the adapter has one entry point per shape:
+
+```
+build_complete_envelope(<path to this run's .decision-log.md>, report=<run-report.md path or None>, deferred_work=<{workflow.deferred_work_path} or None>, impl_artifacts={workflow.implementation_artifacts})
+build_headless_envelope(<blocker list>, <path to this run's .decision-log.md>, impl_artifacts={workflow.implementation_artifacts})
+```
+
+**Both emits are also written to `{workflow.implementation_artifacts}/run-result.json` by `scripts/headless_envelope.py` itself, which is the writer of that file** — so an automator reads a file at a pinned path instead of scraping the transcript for the terminal verdict. The adapter serializes once and hands the same string to both sinks, so the file is byte-identical to what you emit on stdout: print exactly what it produced, do not re-serialize the dict yourself. The write is best-effort and never a gate on the exit — if it fails, the adapter logs `WARN run-result-write-failed` to `.decision-log.md` and the run still emits.
+
+Three constraints on that file:
+
+- **Headless only.** An attended run writes no `run-result.json`. An operator who found a stale one from an attended run would read it as a headless terminal, so do not "helpfully" write it in both modes.
+- **Path-pinned and overwrite-in-place**, exactly like `run-status.json`: a second run against the same `{workflow.implementation_artifacts}` overwrites the first run's result.
+- **No `--parallel` trust claim.** The fan-out's worktree agents each see their own `{workflow.implementation_artifacts}`, so there is no single `run-result.json` an automator can read for a fan-out run — the same scope note that binds `.baseline-<story>`, `run-status.json` and the escalation sidecars.
+
+The emitted object is the **same five-canonical-key shape every headless exit point honors** (Stage 1 first-touch / already-done blocks, Stage 2 preflight block, and this Stage 6 final emit): the five keys `status`/`skill`/`decision_log`/`report`/`deferred_work` are **always present** (`report` and `deferred_work` `null` when not produced), so a caller parsing them never raises a KeyError. A **complete** emit is those five; a **blocked** exit appends a sixth, `reason` (the one-line cause):
 
 ```json
 {"status": "complete",
@@ -100,7 +150,7 @@ In headless (`-H`), compose the final JSON, run the Workflow health check (below
  "deferred_work": "<path to {workflow.deferred_work_path}, or null>"}
 ```
 
-A blocked exit (a story escalated) emits the same five keys plus `reason`, with `report`/`deferred_work` `null` — the shape `references/preflight.md` and the `scripts/headless_envelope.py` adapter build (one shared envelope definition).
+A blocked exit (a story escalated) emits the same five keys plus `reason`, with `report`/`deferred_work` `null` — the shape `references/preflight.md` and the `scripts/headless_envelope.py` adapter build (one shared envelope definition), and it lands in the same `run-result.json` the complete emit does.
 
 ## Workflow health check (terminal)
 

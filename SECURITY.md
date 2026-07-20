@@ -22,7 +22,7 @@ UCG installs Claude Code hooks at preflight so that two invariants are enforced 
 **What UCG installs:**
 
 - A **`PreToolUse` guard** that validates story markers and git state before a tool runs: it denies a `git commit`/`git push` on a protected branch, and denies a `git commit` until a "tests-ran" marker exists for the current story.
-- A **`Stop` hook** that tracks the per-story turn and token budget and surfaces an escalation when the run overruns `max_turns_per_story` / `story_token_budget`. This hook records the overrun and lets the stop proceed; it never blocks.
+- A **`Stop` hook** that tracks the per-story turn budget and surfaces an escalation when the run overruns `max_turns_per_story`. This hook records the overrun and lets the stop proceed; it never blocks.
 
 **Where they live:** in your **machine-local, gitignored `.claude/settings.local.json`**, auto-merged at preflight. They are never written to a committed file and never travel with the repo.
 
@@ -33,7 +33,7 @@ UCG installs Claude Code hooks at preflight so that two invariants are enforced 
 
 Both declare `dependencies = []`. They read a JSON event on stdin, inspect git/local state, and emit a JSON decision: no network calls, no third-party packages.
 
-**How to inspect them:** read the two scripts. They are plain Python with a documented hook contract in their module docstrings. Confirm for yourself that the only thing the guard does is deny commits on protected branches and before tests, and the only thing the budget hook does is count turns and tokens.
+**How to inspect them:** read the two scripts. They are plain Python with a documented hook contract in their module docstrings. Confirm for yourself that the only thing the guard does is deny commits on protected branches and before tests, and the only thing the budget hook does is count turns.
 
 **How to remove them:** delete the corresponding `PreToolUse` and `Stop` hook entries from `.claude/settings.local.json`. Because the file is machine-local and gitignored, nothing else in your repo depends on them.
 
