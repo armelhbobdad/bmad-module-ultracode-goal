@@ -38,8 +38,8 @@ refused up front (exit 2, nothing rendered), because a render rooted at a
 directory nobody named would describe some other run, or no run, while looking
 exactly like a real answer.
 
-    python3 status_render.py --impl-artifacts DIR [--run-dir DIR] \
-        [--runs-root DIR] [--repo DIR]
+    python3 status_render.py --impl-artifacts DIR [--deferred-work FILE] \
+        [--run-dir DIR] [--runs-root DIR] [--repo DIR]
 """
 
 from __future__ import annotations

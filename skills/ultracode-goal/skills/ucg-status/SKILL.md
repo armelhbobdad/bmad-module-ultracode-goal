@@ -50,8 +50,15 @@ some other run, or no run, while looking exactly like a real answer.
 ## 1. Run the renderer
 
 ```
-uv run {skill-root}/scripts/status_render.py --impl-artifacts {workflow.implementation_artifacts} --runs-root {project-root}/_bmad-output/ultracode-goal --repo {project-root}
+uv run {skill-root}/scripts/status_render.py --impl-artifacts {workflow.implementation_artifacts} --deferred-work {workflow.deferred_work_path} --runs-root {project-root}/_bmad-output/ultracode-goal --repo {project-root}
 ```
+
+`--deferred-work` carries the scalar Conventions told you to resolve. The two paths are
+independent in the parent `customize.toml`, and the renderer defaults the ledger to
+`deferred-work.md` *inside* `--impl-artifacts` when the flag is absent — so omitting it on
+a project that moved the ledger renders `n/a`, or a different checkout's ledger, while
+looking exactly like a clean read. Pass it and the render reads the same ledger the gate writes,
+the same way `references/finalize.md` threads that scalar to `mem_observation.py`.
 
 Add `--run-dir <the run folder>` when the operator named a specific run, so the render
 carries that run's decision-log tail. The runs index in the render lists the folders

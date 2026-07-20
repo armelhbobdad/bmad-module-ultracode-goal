@@ -140,7 +140,11 @@ An automator parses one schema regardless of where the run stopped; a blocked-be
 
 ### Reading the result in CI
 
-A headless run also leaves that same object on disk at `{workflow.implementation_artifacts}/run-result.json`, written by the `scripts/headless_envelope.py` adapter, byte-identical to what it emitted on stdout. Read the file: it is a pinned path with a parsed schema, where a transcript is neither. The one case with no file is a block that fires before the artifacts path resolves (the "not a BMAD project" stop, where there is no config to resolve it from), and that is a valid blocked terminal, not a harness failure:
+A headless run also leaves that same object on disk at `{workflow.implementation_artifacts}/run-result.json`, written by the `scripts/headless_envelope.py` adapter, byte-identical to what it emitted on stdout. Read the file: it is a pinned path with a parsed schema, where a transcript is neither. A headless run deletes any prior `run-result.json` as soon as it resolves the artifacts path, before it does any stage work, so the file's presence means one thing exactly: **this** run reached a terminal. Without that clearing step, a run still in flight (or one killed partway) would leave a previous run's `complete` sitting at the pinned path, and a job that tests for the file would report success for work that never finished.
+
+That guarantee starts the moment the path resolves. A block that fires before then neither writes nor clears, so it is the one case where a prior run's file can still be sitting there; the snippet below prefers a parseable envelope from stdout for exactly that reason.
+
+Absence has three causes, and two of them are terminals. The run blocked before the artifacts path resolved (the "not a BMAD project" stop, where there is no config to resolve it from), which is a valid blocked terminal rather than a harness failure; or the run reached a terminal but the write failed, since the write is best effort and never converts a clean exit into a crash (`WARN run-result-write-failed` in `.decision-log.md` is the tell); or the run never reached a terminal at all. The branch below handles all three, because the first two still print a parseable envelope on stdout and an unfinished run does not:
 
 ```bash
 result="$IMPL_ARTIFACTS/run-result.json"
@@ -148,9 +152,10 @@ result="$IMPL_ARTIFACTS/run-result.json"
 if [ -f "$result" ]; then
   envelope=$(cat "$result")
 else
-  # No file: the run blocked before the artifacts path resolved. A parseable blocked
-  # envelope on stdout is a valid blocked terminal here, so fall back to it (parsed as
-  # JSON, never scraped) and only fail the job if nothing parses.
+  # No file: either the run blocked before the artifacts path resolved, or it never
+  # reached a terminal. An absent file plus a parseable blocked envelope on stdout is
+  # a valid blocked terminal, so fall back to it (parsed as JSON, never scraped); an
+  # unfinished run leaves nothing that parses, so it exits 2 below.
   envelope=$(printf '%s\n' "$run_output" | jq -R 'fromjson? // empty' | jq -s 'last // empty')
   [ -n "$envelope" ] || { echo "no parseable envelope"; exit 2; }
 fi
@@ -163,4 +168,4 @@ case "$status" in
 esac
 ```
 
-The file is overwrite-in-place, so a second run against the same artifacts path replaces the first run's result, and under experimental `--parallel` each worktree agent sees its own artifacts path: there is no single `run-result.json` for a fan-out run. An attended run writes no file at all.
+The file is overwrite-in-place, and a headless run additionally clears any prior copy at startup, so a second run against the same artifacts path never leaves the first run's result readable once it begins. Under experimental `--parallel` each worktree agent sees its own artifacts path: there is no single `run-result.json` for a fan-out run. An attended run writes no file at all, and does not clear one either, since an operator reads the outcome from the conversation and the report and may still be consulting a previous result.

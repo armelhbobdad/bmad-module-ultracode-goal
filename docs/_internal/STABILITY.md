@@ -46,7 +46,9 @@ A headless run writes that same object to `{workflow.implementation_artifacts}/r
 - **The path**: the basename `run-result.json` directly inside the resolved `{workflow.implementation_artifacts}`, with no run-id suffix and no subdirectory.
 - **The contents**: the headless five-key emit shape above, unchanged.
 
-Two documented exceptions, neither of which is a contract break: a block that fires **before** `{workflow.implementation_artifacts}` resolves (the "not a BMAD project" stop) writes no file and leaves the stdout envelope as its sole output, and an **attended** run writes no file at all. The file is overwrite-in-place, so it carries no cross-run history, and under the experimental `--parallel` mode each worktree agent sees its own artifacts path, so no single `run-result.json` describes a fan-out run.
+- **The guarantee**: once a headless run resolves `{workflow.implementation_artifacts}` it clears any prior `run-result.json`, before any stage work. From that point on the file's presence means **this** run reached a terminal. The guarantee is scoped to that moment, so a consumer should still prefer a parseable stdout envelope when the file is absent.
+
+Four documented exceptions, none of which is a contract break: a block that fires **before** `{workflow.implementation_artifacts}` resolves (the "not a BMAD project" stop) neither writes nor clears, so it leaves the stdout envelope as its sole output and is the one case where a prior run's file can survive; a terminal whose best-effort write failed leaves no file while still printing its envelope; a headless run that has not yet reached a terminal (still running, crashed, or killed) has no file, because startup cleared any prior one; and an **attended** run writes no file at all and clears none. The file is overwrite-in-place, so it carries no cross-run history, and under the experimental `--parallel` mode each worktree agent sees its own artifacts path, so no single `run-result.json` describes a fan-out run.
 
 ### The skill name and invocation phrases
 
