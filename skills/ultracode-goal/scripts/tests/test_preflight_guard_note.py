@@ -85,3 +85,41 @@ def test_guard_note_carries_fp_id_and_no_plan_ids():
     # ...and the predicate's second conjunct is discriminating on its own. The
     # probe below is a synthetic id-shaped string, never a citation of a real one.
     assert not _carries_fp_id_and_no_plan_ids(_live_note() + " (see FR-0)")
+
+
+def test_note_does_not_promise_the_false_positive_class_is_gone():
+    """The anchoring narrowed the class; it did not eliminate it.
+
+    Reproduced live: markdown prose names identifiers in backticks and an
+    apostrophe is unbalanced quoting, so both fallbacks fire on ordinary run-log
+    text about a commit, and a line LEADING with the verb is a genuine
+    verb-leading segment. A note read as "mentions are safe now" walks a
+    conductor into that repeatedly.
+    """
+    note = _live_note()
+    assert re.search(r"narrowed it|not.{0,20}eliminat", note, re.I), (
+        "the note must say the residual class survives the anchoring"
+    )
+    assert re.search(r"backtick", note, re.I), (
+        "backticks are the highest-frequency trigger in markdown prose and must "
+        "be named, not left as a generic substitution caveat"
+    )
+
+
+def test_note_names_the_tool_choice_that_avoids_the_class():
+    """A caveat with no action is friction restated. The rule is the payload."""
+    assert re.search(r"Write/Edit", _live_note()), (
+        "the note must name the escape: prose written with the file tools is "
+        "never evaluated, because the guard sees Bash commands only"
+    )
+
+
+def test_over_promising_note_is_rejected():
+    """Anti-vacuous: a note asserting the class is closed must fail both checks."""
+    over_promising = (
+        "The guard anchors on each segment's leading **token**, after stripping "
+        "`VAR=val` assignments, so a verb mentioned in an echo is no longer "
+        "denied and the false-positive class is gone."
+    )
+    assert not re.search(r"narrowed it|not.{0,20}eliminat", over_promising, re.I)
+    assert not re.search(r"Write/Edit", over_promising)
