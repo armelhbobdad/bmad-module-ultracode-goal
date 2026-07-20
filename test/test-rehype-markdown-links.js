@@ -117,6 +117,15 @@ async function main() {
     assert.strictEqual(rewrite(rehypeMarkdownLinks, './index.md', TOP), '/ucg/');
   });
 
+  test('a page merely ENDING in "index.md" is not treated as an index', () => {
+    // Regression: endsWith('index.md') matched any such filename and sliced
+    // off the last 8 characters, so these silently became '/ucg/my' and
+    // '/ucg/re'. Only a whole basename is an index.
+    assert.strictEqual(rewrite(rehypeMarkdownLinks, './myindex.md', TOP), '/ucg/myindex/');
+    assert.strictEqual(rewrite(rehypeMarkdownLinks, 'reindex.md', TOP), '/ucg/reindex/');
+    assert.strictEqual(rewrite(rehypeMarkdownLinks, './guide/subindex.md', TOP), '/ucg/guide/subindex/');
+  });
+
   // --- absolute forms --------------------------------------------------
 
   test('/docs/ prefix is stripped and based', () => {

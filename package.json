@@ -94,6 +94,7 @@
     "markdownlint-cli2": "^0.19.1",
     "prettier": "^3.7.4",
     "prettier-plugin-packagejson": "^2.5.19",
+    "unist-util-visit": "5.1.0",
     "yaml": "^2.7.0",
     "yaml-eslint-parser": "^1.2.3"
   },

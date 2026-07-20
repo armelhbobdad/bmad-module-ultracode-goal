@@ -174,9 +174,11 @@ export default function rehypeMarkdownLinks(options = {}) {
       let resolved = resolveAgainst(pageDir, target);
 
       // 'index.md' is the directory itself; anything else keeps its own segment.
-      resolved = resolved.endsWith('index.md')
-        ? resolved.slice(0, -'index.md'.length)
-        : `${resolved.slice(0, -'.md'.length)}/`;
+      // Match the whole basename, not a suffix: 'myindex.md' and 'reindex.md'
+      // both END with 'index.md' but are ordinary pages, and treating them as
+      // an index silently truncated them to '/my' and '/re'.
+      const isIndex = resolved === 'index.md' || resolved.endsWith('/index.md');
+      resolved = isIndex ? resolved.slice(0, -'index.md'.length) : `${resolved.slice(0, -'.md'.length)}/`;
 
       // Collapse any doubled slash from an empty resolution (root index.md).
       const route = `${normalizedBase}${resolved}`.replace(/\/{2,}/g, '/');

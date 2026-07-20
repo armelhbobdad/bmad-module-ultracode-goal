@@ -110,6 +110,51 @@ function pathPortion(href) {
 const MD_LINK = /\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 
 /**
+ * Blank out code so a link that is merely *shown* is not read as a real one.
+ *
+ * `MD_LINK` is a regex over raw text, so it cannot tell a link from a picture
+ * of a link. Without this, documenting the link convention itself, e.g. a
+ * ```markdown block containing [label](./example.md), fails the build as a
+ * broken link, and the only way to appease it is to create the placeholder
+ * file. (`tools/validate-file-refs.js` does NOT do this, so it carries the
+ * same latent false positive; worth fixing there too if it ever fires.)
+ *
+ * Fences are tracked line by line rather than matched as a pair, so an
+ * unterminated fence blanks to end of file instead of silently reverting to
+ * prose scanning. Inline spans are only stripped outside a fence, so a stray
+ * backtick inside a block cannot pair with one outside it. Line count is
+ * preserved, which keeps byte offsets usable if this ever reports positions.
+ *
+ * @param {string} text - Raw Markdown
+ * @returns {string} The same text with fenced blocks and code spans blanked
+ */
+function blankCode(text) {
+  let fence = null;
+
+  return text
+    .split('\n')
+    .map((line) => {
+      const marker = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+
+      if (fence) {
+        // A closing fence is the same character, and at least as long.
+        if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length) {
+          fence = null;
+        }
+        return '';
+      }
+      if (marker) {
+        fence = marker[1];
+        return '';
+      }
+
+      // Inline spans: a run of N backticks closes on a run of N.
+      return line.replaceAll(/(`+)[^`]*\1/g, ' ');
+    })
+    .join('\n');
+}
+
+/**
  * Check that every relative `.md` target in docs/ exists on disk.
  *
  * Deliberately does NOT enforce a `./` prefix. The plugin accepts bare links,
@@ -122,7 +167,7 @@ function checkSource() {
   for (const file of files) {
     const rel = path.relative(PROJECT_ROOT, file);
     const dir = path.dirname(file);
-    const text = fs.readFileSync(file, 'utf8');
+    const text = blankCode(fs.readFileSync(file, 'utf8'));
 
     for (const match of text.matchAll(MD_LINK)) {
       const target = pathPortion(match[1]);
@@ -199,10 +244,51 @@ async function resolveBase() {
 }
 
 /**
- * Verify every internal href in the built site resolves to a real file.
+ * Every URL a page asks the browser to fetch: navigations AND subresources.
+ *
+ * `href` alone is not the whole surface. A missing `src` is the same defect
+ * with a worse symptom: the browser fetches it without the user clicking, and
+ * a 404 script or image degrades the page silently. This matters here because
+ * assets under `website/public/` are copied verbatim and referenced by
+ * hand-written string paths (see `mermaid-lightbox.js` in astro.config.mjs),
+ * so renaming one leaves a green build and a dead reference on every page.
+ *
+ * `srcset` is a comma-separated candidate list where each entry is a URL
+ * optionally followed by a width/density descriptor, so it is split apart.
+ * The build emits no `srcset` today, only SVGs, but adding one raster image
+ * to the docs would change that without touching this file.
+ *
+ * @param {string} html - Full page source
+ * @returns {Array<{attr: string, url: string}>} References, in document order
+ */
+function assetUrls(html) {
+  const refs = [];
+
+  // `src` here never matches `srcset=`, which continues with `set=`.
+  for (const match of html.matchAll(/\s(href|src)="([^"]*)"/g)) {
+    refs.push({ attr: match[1], url: match[2] });
+  }
+
+  for (const match of html.matchAll(/\ssrcset="([^"]*)"/g)) {
+    for (const candidate of match[1].split(',')) {
+      const url = candidate.trim().split(/\s+/)[0];
+      if (url) {
+        refs.push({ attr: 'srcset', url });
+      }
+    }
+  }
+
+  return refs;
+}
+
+/**
+ * Verify every internal reference in the built site resolves to a real file.
+ *
+ * Covers navigations (`href`) and subresources (`src`, `srcset`) alike: both
+ * are URLs the page promises the browser it can fetch.
  *
  * A route ending in `/` must have an `index.html`; anything else must exist
- * as a file. Relative hrefs are resolved against the page's own directory,
+ * as a file. Relative URLs are resolved against the page's own directory,
  * which is precisely how a browser resolves them, and precisely the step that
  * the earlier page-relative bug failed.
  *
@@ -221,9 +307,7 @@ function checkBuilt(base) {
 
     const seen = new Set();
 
-    for (const match of html.matchAll(/\shref="([^"]*)"/g)) {
-      const href = match[1];
-
+    for (const { attr, url: href } of assetUrls(html)) {
       if (!href || href.startsWith('#') || EXTERNAL.test(href) || seen.has(href)) {
         continue;
       }
@@ -241,7 +325,7 @@ function checkBuilt(base) {
         if (base !== '/' && target.startsWith(base)) {
           withoutBase = `/${target.slice(base.length)}`;
         } else if (base !== '/') {
-          report(rel, `absolute href is missing the base path ${base}: ${href}`);
+          report(rel, `absolute ${attr} is missing the base path ${base}: ${href}`);
           continue;
         }
         resolved = path.join(BUILD_DIR, withoutBase);
@@ -251,14 +335,14 @@ function checkBuilt(base) {
 
       // Never let a link escape the build root.
       if (!resolved.startsWith(BUILD_DIR)) {
-        report(rel, `href escapes the site root: ${href}`);
+        report(rel, `${attr} escapes the site root: ${href}`);
         continue;
       }
 
       const candidate = target.endsWith('/') || !path.extname(resolved) ? path.join(resolved, 'index.html') : resolved;
 
       if (!fs.existsSync(candidate)) {
-        report(rel, `href resolves to nothing: ${href} (looked for ${path.relative(BUILD_DIR, candidate)})`);
+        report(rel, `${attr} resolves to nothing: ${href} (looked for ${path.relative(BUILD_DIR, candidate)})`);
       }
     }
   }
@@ -283,6 +367,7 @@ async function main() {
 
   let builtCount = 0;
   const haveBuild = fs.existsSync(BUILD_DIR);
+  let missingRequiredBuild = false;
 
   if (haveBuild) {
     const base = await resolveBase();
@@ -302,6 +387,7 @@ async function main() {
       console.log('     npm run docs:build');
     }
   } else if (REQUIRE_BUILD) {
+    missingRequiredBuild = true;
     report('build/site', 'no build found, and --require-build was given. Run `npm run docs:build` first.');
   } else {
     console.log('Built pass:   SKIPPED (no build/site). This pass is what catches route bugs.');
@@ -355,7 +441,10 @@ async function main() {
     console.log('Astro nor markdownlint will fail on it. That is why this check exists.\n');
   }
 
-  if (STRICT) {
+  // --require-build is a fail-closed contract in its own right: the flag exists
+  // to turn the skipped built pass into an error, so honouring it must not
+  // depend on --strict also being passed. Everything else stays advisory.
+  if (STRICT || missingRequiredBuild) {
     process.exit(1);
   }
 }
