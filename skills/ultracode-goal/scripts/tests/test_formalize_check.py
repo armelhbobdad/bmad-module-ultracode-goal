@@ -687,5 +687,224 @@ def test_mutant_without_ac_less_gap_reads_ready(tmp_path):
     assert out["checks"]["stories_with_ac"] == 0
 
 
+# ---------------------------------------------------------------------------
+# The same empty-set fail-open one step FURTHER OUT: a PARTIALLY seeded Epic.
+# The empty-set guard asks "are there zero story files?"; it never asks "do the
+# files cover the in-scope keys?". Observed live at 7 of 8 story files, where the
+# kernel returned a clean `ready` while one in-scope story had no file at all.
+# ---------------------------------------------------------------------------
+
+_KEYS = ("7-1-kernel", "7-2-adapter", "7-3-renderer")
+
+
+def _story_body(key: str) -> str:
+    return (
+        f"# Story {key}\n\n## Acceptance Criteria\n\n"
+        f"1. Running `pytest tests/test_{key.split('-')[-1]}.py::test_it` exits 0, and the\n"
+        f"   anti-vacuous twin `test_it_missing_reds` fails when the config is removed.\n"
+        f"   gate-ability: mechanical.\n"
+    )
+
+
+def _seeded_project(tmp_path, seeded: tuple[str, ...], label: str):
+    """An Epic-7 project with THREE in-scope keys and a chosen subset seeded.
+
+    The only variable across the tests below is which story files exist; the
+    sprint-status always names all three, so coverage is the sole difference.
+    """
+    root = tmp_path / label
+    planning = root / "planning-artifacts"
+    impl = root / "impl-artifacts"
+    planning.mkdir(parents=True)
+    impl.mkdir(parents=True)
+    (planning / "prd-fixture.md").write_text("# PRD\n", encoding="utf-8")
+    (planning / "architecture-fixture.md").write_text("# Architecture\n", encoding="utf-8")
+    (impl / "sprint-status.yaml").write_text(
+        "generated: fixture\ndevelopment_status:\n  epic-7: in-progress\n"
+        + "".join(f"  {k}: backlog\n" for k in _KEYS),
+        encoding="utf-8",
+    )
+    for key in seeded:
+        (impl / f"{key}.md").write_text(_story_body(key), encoding="utf-8")
+    return root
+
+
+def test_partially_seeded_story_set_is_remediable_not_ready(tmp_path):
+    # The fail-open this closes, reproduced from the live sighting: SOME story
+    # files resolve, so the empty-set guard stays silent, the per-story loop
+    # iterates only over the stories that exist, and the Epic scores a clean
+    # zero-gap `ready` while an in-scope story has no file and therefore no
+    # acceptance criteria for the launch gate to read.
+    out = _run_project(_seeded_project(tmp_path, _KEYS[:2], "partial"))
+
+    assert out["verdict"] == "remediable"
+    assert out["ready"] is False
+    # The two seeded stories still scan normally: this is a COVERAGE gap, not a
+    # claim that the resolved stories are bad.
+    assert out["checks"]["stories_with_ac"] == 2
+
+    gaps = [g for g in out["mechanical_gaps"] if g["kind"] == "story_keys_uncovered"]
+    assert len(gaps) == 1
+    gap = gaps[0]
+    assert gap["severity"] == "high"
+    # Remediable: the create-story scaffold generates the missing story files.
+    assert gap["remediable"] is True
+    # The detail NAMES the missing id, which is what makes the gap actionable
+    # rather than merely true.
+    assert "7-3-renderer" in gap["detail"]
+    assert "7-1-kernel" not in gap["detail"]
+    assert "7-2-adapter" not in gap["detail"]
+    assert "1 of 3" in gap["detail"]
+
+    # It counts toward the budget like every other gap, which is what moves the
+    # verdict off `ready`.
+    assert out["mechanical_budget"] == len(out["mechanical_gaps"])
+
+
+def test_fully_seeded_story_set_emits_no_coverage_gap(tmp_path):
+    # Anti-vacuous twin (data): the SAME project with all three story files
+    # present fires ZERO coverage gaps, proving the gap keys on the UNCOVERED
+    # key and not merely on running the kernel over this project shape.
+    out = _run_project(_seeded_project(tmp_path, _KEYS, "full"))
+
+    assert all(g["kind"] != "story_keys_uncovered" for g in out["mechanical_gaps"])
+    assert out["checks"]["stories_with_ac"] == 3
+    assert out["verdict"] == "ready"
+
+
+def test_empty_story_set_reports_only_the_empty_set_gap(tmp_path):
+    # Disjointness: with NO story files the pre-existing empty-set gap fires and
+    # the coverage gap does NOT, so a zero-story Epic is reported once rather
+    # than twice. Regression guard on the `if story_paths and uncovered` scope.
+    out = _run_project(_seeded_project(tmp_path, (), "empty"))
+
+    kinds = [g["kind"] for g in out["mechanical_gaps"]]
+    assert "no_in_scope_stories" in kinds
+    assert "story_keys_uncovered" not in kinds
+    assert out["verdict"] == "remediable"
+
+
+def test_epic_prefix_files_do_not_cover_unrelated_keys(tmp_path):
+    # The crux of the matching rule. `_story_files` resolves ANY file starting
+    # with the Epic prefix (`7-`), so a naive coverage check that merely counted
+    # resolved files against the key count would call this Epic fully seeded: two
+    # keys, two `7-` files. But `7-9-stray` is not one of the in-scope keys, and
+    # `7-2-adapter` still has no file. Coverage must be per KEY, not a count.
+    root = _seeded_project(tmp_path, ("7-1-kernel",), "stray")
+    (root / "impl-artifacts" / "7-9-stray.md").write_text(_story_body("7-9-stray"), encoding="utf-8")
+
+    out = _run_project(root)
+
+    gaps = [g for g in out["mechanical_gaps"] if g["kind"] == "story_keys_uncovered"]
+    assert len(gaps) == 1, "a prefix-sharing stray file must not vacuously cover a key"
+    assert "7-2-adapter" in gaps[0]["detail"]
+    assert "7-3-renderer" in gaps[0]["detail"]
+    assert "2 of 3" in gaps[0]["detail"]
+
+
+def test_number_only_filename_covers_its_key(tmp_path):
+    """The permissive direction, and the false positive it exists to prevent.
+
+    `bmad-create-story` writes `{story_key}.md` from whatever the operator
+    supplied, so asking for story `7-2` yields `7-2.md` while sprint-planning's
+    generated key is `7-2-adapter`. `_story_files` resolves that file via the
+    Epic-prefix arm and the kernel reads and AC-grades it. A coverage rule keyed
+    on the full slug would report an already-scanned file as missing and refuse
+    to launch a genuinely seeded Epic - reporting `stories_with_ac: 3` and
+    "3 of 3 resolve no story file" in the same payload.
+    """
+    root = _seeded_project(tmp_path, (), "number_only")
+    impl = root / "impl-artifacts"
+    for key in _KEYS:
+        number = key.split("-")[0] + "-" + key.split("-")[1]
+        (impl / f"{number}.md").write_text(_story_body(key), encoding="utf-8")
+
+    out = _run_project(root)
+
+    assert all(g["kind"] != "story_keys_uncovered" for g in out["mechanical_gaps"]), (
+        "a number-only filename is the documented convention (stories share the "
+        "Epic's NUMBER prefix); the slug is not a contract"
+    )
+    assert out["checks"]["stories_with_ac"] == 3
+    assert out["verdict"] == "ready"
+
+
+def test_higher_numbered_file_does_not_cover_a_lower_key(tmp_path):
+    """The boundary, and the false NEGATIVE a bare prefix test would reintroduce.
+
+    `"7-10-late.md".startswith("7-1")` is True, so an unanchored prefix rule
+    lets a higher-numbered story vacuously cover a lower one. Story `7-1` would
+    then reach an unattended launch with no file and no acceptance criteria,
+    which is the exact fail-open this check exists to close.
+    """
+    root = tmp_path / "boundary"
+    planning = root / "planning-artifacts"
+    impl = root / "impl-artifacts"
+    planning.mkdir(parents=True)
+    impl.mkdir(parents=True)
+    (planning / "prd-fixture.md").write_text("# PRD\n", encoding="utf-8")
+    (planning / "architecture-fixture.md").write_text("# Architecture\n", encoding="utf-8")
+    # Bare-numeric keys, the shape that makes the collision reachable.
+    (impl / "sprint-status.yaml").write_text(
+        "generated: fixture\ndevelopment_status:\n  epic-7: in-progress\n"
+        "  7-1: backlog\n  7-10: backlog\n",
+        encoding="utf-8",
+    )
+    # Only the HIGHER-numbered story is seeded.
+    (impl / "7-10-late.md").write_text(_story_body("7-10-late"), encoding="utf-8")
+
+    out = _run_project(root)
+
+    gaps = [g for g in out["mechanical_gaps"] if g["kind"] == "story_keys_uncovered"]
+    assert len(gaps) == 1, "7-10's file must not vacuously cover key 7-1"
+    assert "7-1" in gaps[0]["detail"]
+    assert "1 of 2" in gaps[0]["detail"]
+    assert out["verdict"] == "remediable"
+
+
+_COVERAGE_GUARD = "    if story_paths and uncovered:\n"
+
+
+def test_mutant_without_coverage_gap_reads_ready(tmp_path):
+    """Twin for test_partially_seeded_story_set_is_remediable_not_ready.
+
+    Concrete mutation: neutralize the coverage guard in build_verdict
+    (`if story_paths and uncovered:` -> `if False:`) on a COPY of the script, so
+    no gap is appended. The partially seeded project then reports `ready` with
+    mechanical_budget 0 - the exact pre-fix fail-open observed live at 7 of 8
+    story files - which reds the verdict/budget assertions in the named test
+    above. If `remediable` survived this mutation, the guard would not be what
+    produces it and the named test would prove nothing.
+    """
+    src = SCRIPT.read_text(encoding="utf-8")
+    assert _COVERAGE_GUARD in src, "mutation anchor drifted out of formalize_check.py"
+    mutant_dir = tmp_path / "src"
+    mutant_dir.mkdir()
+    mutant = mutant_dir / "mutant_formalize_check.py"
+    mutant.write_text(src.replace(_COVERAGE_GUARD, "    if False:\n", 1), encoding="utf-8")
+
+    root = _seeded_project(tmp_path, _KEYS[:2], "partial_mutant")
+    proc = subprocess.run(
+        [
+            sys.executable, str(mutant), "--epic", "7",
+            "--project-root", str(root),
+            "--planning-artifacts", str(root / "planning-artifacts"),
+            "--impl-artifacts", str(root / "impl-artifacts"),
+            "--tea-config", str(root / "tea" / "config.yaml"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+
+    assert out["verdict"] == "ready"
+    assert out["mechanical_budget"] == 0
+    assert out["mechanical_gaps"] == []
+    # And the tell that made this dangerous: it looked healthy. Two stories
+    # scanned green while a third in-scope story had no file at all.
+    assert out["checks"]["stories_with_ac"] == 2
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

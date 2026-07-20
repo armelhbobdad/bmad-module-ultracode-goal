@@ -359,6 +359,56 @@ def _story_files(impl_artifacts: Path, epic: str, story_keys: list[str]) -> list
     return files
 
 
+_STORY_NUMBER = re.compile(r"^(\d+-\d+)")
+
+
+def _uncovered_story_keys(story_paths: list[Path], story_keys: list[str]) -> list[str]:
+    """In-scope keys with no story file of their own, in `story_keys` order.
+
+    Matches on the key's STORY NUMBER (`5-8`), not its whole slug, and requires
+    a boundary after it. Both halves of that are load-bearing.
+
+    The number, not the slug, because the number is the only naming rule this
+    module actually documents: "Stories for an Epic share its number prefix"
+    (ingest-and-scope.md). The slug is not a contract - `bmad-create-story`
+    writes `{story_key}.md` from whatever the operator supplied, so an operator
+    who asked for story `2-4` gets `2-4.md` while sprint-planning's generated
+    key is `2-4-<kebab-title>`. Requiring the full slug would report a file that
+    the kernel had already resolved, read and AC-graded as "no story file", and
+    refuse to launch an Epic that is genuinely seeded. Matching the number keeps
+    this check no stricter than the convention the module publishes.
+
+    The boundary, because a bare prefix test lets a HIGHER-numbered story cover a
+    lower one: `1-10-foo.md` starts with `1-1`, so key `1-1` would read covered
+    and reach an unattended launch with no file and no acceptance criteria -
+    reintroducing, for bare-numeric keys, the exact fail-open this check exists
+    to close.
+
+    A key whose slug carries no leading story number (an alpha-keyed track) has
+    no number to match on, so it falls back to the whole-key prefix rather than
+    being silently treated as covered.
+    """
+    names = [p.name.lower() for p in story_paths]
+
+    def _covered(key: str) -> bool:
+        low = key.lower()
+        match = _STORY_NUMBER.match(low)
+        if match is None:
+            return any(name.startswith(low) for name in names)
+        number = match.group(1)
+        for name in names:
+            if not name.startswith(number):
+                continue
+            rest = name[len(number) :]
+            # End of name, or a separator. Anything else means a different,
+            # longer story number (`1-10` vs `1-1`).
+            if rest == "" or rest[0] in "-._":
+                return True
+        return False
+
+    return [key for key in story_keys if not _covered(key)]
+
+
 def _split_ac_blocks(text: str) -> list[tuple[int, str]]:
     """Split a story body into (start_line, block_text) per acceptance criterion.
 
@@ -782,6 +832,44 @@ def build_verdict(
                 "detail": "No in-scope story files found for Epic %s under "
                 "impl-artifacts: %s" % (epic, _rel(impl_artifacts, project_root)),
                 # The create-story scaffold generates the missing story files.
+                "remediable": True,
+                "source": _rel(impl_artifacts, project_root),
+            }
+        )
+
+    # The SAME fail-open one step further out: the guard above asks "are there
+    # zero story files?", never "do the files COVER the in-scope keys?". A
+    # PARTIALLY seeded Epic - a create-story pass that died halfway, or story
+    # files authored for most of the sprint but not all - resolves a non-empty
+    # story set, iterates the per-story checks over only the stories that exist,
+    # and scores a clean zero-gap `ready`. The uncovered story then reaches the
+    # launch gate with no file and therefore no acceptance criteria, and an
+    # unattended run implements it by guessing, which is the single failure the
+    # readiness gate exists to prevent.
+    #
+    # Scoped deliberately so the two guards stay disjoint and neither
+    # double-reports: this one fires only when SOME story files resolved (the
+    # zero case is already the gap above) and only when the rollup actually named
+    # keys (with no keys there is nothing to compare against, and inventing a gap
+    # from an unknown denominator would block legitimate runs).
+    uncovered = _uncovered_story_keys(story_paths, story_keys)
+    if story_paths and uncovered:
+        mechanical_gaps.append(
+            {
+                "id": "story_keys_uncovered",
+                "kind": "story_keys_uncovered",
+                "severity": "high",
+                "detail": "Epic %s is partially seeded: %d of %d in-scope stories resolve no story "
+                "file under impl-artifacts: %s. Unresolved: %s"
+                % (
+                    epic,
+                    len(uncovered),
+                    len(story_keys),
+                    _rel(impl_artifacts, project_root),
+                    ", ".join(uncovered),
+                ),
+                # The create-story scaffold generates the missing story files,
+                # exactly as it does for the empty set.
                 "remediable": True,
                 "source": _rel(impl_artifacts, project_root),
             }
