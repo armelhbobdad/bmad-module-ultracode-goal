@@ -3,9 +3,9 @@ title: Parallel Mode
 description: "The experimental --parallel worktree fan-out for Stage 4: how stories run isolated and converge on one epic gate, how concurrency is bounded, and the known limits to expect."
 ---
 
-> **Experimental, opt-in.** `--parallel` is an additive execution path. The sequential `/goal` spine ([how it works](how-it-works.md), Stage 4) is the **default and recommended** path. Use `--parallel` only when you understand the known limits below, and expect to fall back to the spine.
+> **Experimental, opt-in.** `--parallel` is an additive execution path. The sequential `/goal` spine ([how it works](./how-it-works.md), Stage 4) is the **default and recommended** path. Use `--parallel` only when you understand the known limits below, and expect to fall back to the spine.
 
-When the operator passes `--parallel`, Stage 4 fans the Epic out across worktree-isolated per-story agents instead of driving them one at a time on the spine. This page covers what it does, how concurrency is bounded, and, honestly, where it is not yet validated. It is sourced from [`../skills/ultracode-goal/assets/execute-epic.workflow.js`](../skills/ultracode-goal/assets/execute-epic.workflow.js) and [`references/execute.md`](../skills/ultracode-goal/references/execute.md).
+When the operator passes `--parallel`, Stage 4 fans the Epic out across worktree-isolated per-story agents instead of driving them one at a time on the spine. This page covers what it does, how concurrency is bounded, and, honestly, where it is not yet validated. It is sourced from [`../skills/ultracode-goal/assets/execute-epic.workflow.js`](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/skills/ultracode-goal/assets/execute-epic.workflow.js) and [`references/execute.md`](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/skills/ultracode-goal/references/execute.md).
 
 ## What it does
 
@@ -43,7 +43,7 @@ flowchart TD
 
 Stories are batched to `parallel_max_concurrency` (default 8): each batch fans out in parallel, batches run sequentially, and a worktree commit on its own story branch is the per-story unit of work. The "merge back" is the epic-level trace gate consolidating the landed branches into one verdict object, not a mid-run interactive step, since the fan-out takes no input once launched.
 
-Critically, this path **shares the sequential spine's truth sources**: the same `gate_eval.py` reading TEA's `gate-decision.json` (never the model, never the transcript-only `/goal` evaluator), and the same PreToolUse + Stop hooks merged at preflight enforce the invariants. The verdict mapping is owned by `gate_eval.py`; the spawned agents return its stdout fields verbatim and must not recompute TEA thresholds. See the [gate model](gate-model.md).
+Critically, this path **shares the sequential spine's truth sources**: the same `gate_eval.py` reading TEA's `gate-decision.json` (never the model, never the transcript-only `/goal` evaluator), and the same PreToolUse + Stop hooks merged at preflight enforce the invariants. The verdict mapping is owned by `gate_eval.py`; the spawned agents return its stdout fields verbatim and must not recompute TEA thresholds. See the [gate model](./gate-model.md).
 
 ## Concurrency
 
@@ -51,7 +51,7 @@ The cap on simultaneous worktree agents is `parallel_max_concurrency`: **default
 
 ## No mid-run input
 
-The fan-out takes **no interactive input once launched**: every gate and every blocker must be resolved at preflight or not at all. This is exactly why the [preflight](how-it-works.md) hard gate requires a post-remediation budget of zero before launch: there is no opportunity to answer a question mid-run, so a run that would have needed an answer must refuse to launch instead.
+The fan-out takes **no interactive input once launched**: every gate and every blocker must be resolved at preflight or not at all. This is exactly why the [preflight](./how-it-works.md) hard gate requires a post-remediation budget of zero before launch: there is no opportunity to answer a question mid-run, so a run that would have needed an answer must refuse to launch instead.
 
 ## Known limits: be honest
 
@@ -65,4 +65,4 @@ This path leans on workflow↔skill interplay the platform docs leave under-spec
 
 If dynamic workflows are unavailable (wrong Claude Code version, the workflows feature off, or the saved command does not resolve), the skill **falls back to the sequential `/goal` spine** and logs a one-line note in `.decision-log.md` recording why `--parallel` degraded. The Epic still ships; it just ships sequentially. This is the safety net behind the recommendation to treat the spine as the default: choosing `--parallel` never risks the Epic, only the mode.
 
-See [troubleshooting](troubleshooting.md) for what to check when `--parallel` does not behave, and [architecture](architecture.md) for how the workflow asset fits the conductor model.
+See [troubleshooting](./troubleshooting.md) for what to check when `--parallel` does not behave, and [architecture](./architecture.md) for how the workflow asset fits the conductor model.

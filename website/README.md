@@ -89,4 +89,4 @@ manually from the Actions tab.
 ## Links
 
 - Repository: <https://github.com/armelhbobdad/bmad-module-ultracode-goal>
-- BMAD Method: <https://bmad-method.org>
+- BMAD Method: <https://docs.bmad-method.org>
