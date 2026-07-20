@@ -122,3 +122,49 @@ def test_mutant_step4_without_staging_sentence_reds_only_step4():
     assert _SEPARATE_STAGING_RE.search(_step5(mutated)), (
         "the step-5 control must stay green under the same mutation"
     )
+
+
+# ---------------------------------------------------------------------------
+# Decision-log prose goes through Write/Edit, not a Bash heredoc.
+#
+# Stages 4 and 6 require a log of what happened, and what happened IS commit
+# behaviour, so the log quotes the verbs. A heredoc carrying that prose is a
+# Bash command string: a line leading with the verb is a verb-leading segment,
+# and a backticked identifier or an apostrophe routes the segment down the
+# fail-closed matches-anywhere path. The guard never sees Write/Edit, so the
+# tool choice removes the collision rather than phrasing around it.
+# ---------------------------------------------------------------------------
+
+_LOG_TOOL_RE = re.compile(
+    r"`\.decision-log\.md`.{0,40}Write/Edit.{0,40}never a Bash heredoc", re.DOTALL
+)
+
+
+def test_step4_routes_decision_log_prose_to_the_file_tools():
+    assert _LOG_TOOL_RE.search(_step4()), (
+        "step 4 must direct decision-log appends to Write/Edit rather than a "
+        "Bash heredoc: it is the shape that collides with the commit guard"
+    )
+
+
+def test_step4_states_why_the_heredoc_collides():
+    """A bare 'use Write/Edit' reads as style. The reason is what makes it stick."""
+    block = _step4()
+    assert re.search(r"guard (never sees|evaluates)", block, re.I), (
+        "the rule must name the mechanism: the guard evaluates Bash strings and "
+        "never sees the file tools"
+    )
+
+
+def test_mutant_step4_without_log_tool_rule_reds():
+    """Anti-vacuous twin: strip the sentence and the assertion must fail."""
+    text = _text()
+    original = _step4(text)
+    mutated_block = re.sub(
+        r"\*\*Append `\.decision-log\.md` with Write/Edit.*?mean to run\.",
+        "", original, flags=re.DOTALL,
+    )
+    assert mutated_block != original, "decision-log tool sentence anchor drifted"
+    assert not _LOG_TOOL_RE.search(mutated_block), (
+        "with the sentence stripped, the assertion must fail"
+    )

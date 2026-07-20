@@ -2027,8 +2027,9 @@ def test_chained_real_commit_still_denied(tmp_path: Path) -> None:
 
 
 _SEGMENT_SPLIT = (
-    '    for segment in re.split(r"&&|\\|\\||;|\\|", command):\n'
-    "        verbs |= _segment_write_verbs(segment, depth)"
+    '    for separators in (r"&&|\\|\\||;|\\|", r"&&|\\|\\||;|\\||\\n|\\r"):\n'
+    "        for segment in re.split(separators, command):\n"
+    "            verbs |= _segment_write_verbs(segment, depth)"
 )
 _PREFIX_STRIP_TEST = (
     "    while index < len(tokens) and _ASSIGNMENT.match(tokens[index]):"
@@ -2146,6 +2147,193 @@ def test_forms_that_still_reach_the_fail_closed_path_are_denied(
 
     assert code == 2, command
     assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# ---------------------------------------------------------------------------
+# A NEWLINE separates commands exactly as `;` does.
+#
+# Before this was in the split regex, a command whose first line was anything
+# other than `git` classified as ONE segment with a non-git leading token, so
+# `_git_writes` returned the empty set and main() took the `_allow()` short
+# circuit at the top — bypassing the protected-branch, tests-ran-marker, marker
+# freshness AND empty-index gates together. Multi-line Bash is ordinary, and
+# `printf ok > .tests-ran-<story>` + commit is the exact shape the marker gate
+# exists to forbid, so this was a total bypass rather than a corner case.
+# ---------------------------------------------------------------------------
+
+_NEWLINE_BYPASSES = [
+    # the marker gate defeated by the story writing its own marker
+    "printf ok > .tests-ran-1\ngit commit -m x",
+    # the plain shape: any non-git first line
+    'echo hi\ngit commit -m "x"',
+    # CRLF-authored
+    "echo hi\r\ngit commit -m x",
+    # the verb on a later line still anchors that line
+    "echo one\necho two\ngit push origin HEAD",
+]
+
+
+@pytest.mark.parametrize("command", _NEWLINE_BYPASSES)
+def test_newline_separated_commit_is_classified(guard_module, command: str) -> None:
+    """A commit/push on its own line is a git write like any other."""
+    assert guard_module._git_writes(command), (
+        f"newline-separated git write went unclassified: {command!r}"
+    )
+
+
+@pytest.mark.parametrize("command", _NEWLINE_BYPASSES)
+def test_newline_split_removed_reopens_the_bypass(
+    guard_module, monkeypatch, command: str
+) -> None:
+    """Twin: drop `\\n`/`\\r` from the separators and every shape above fails open.
+
+    Driven by re-implementing `_command_write_verbs` over the OLD separator set
+    rather than by editing a copy of the file, so the twin isolates the split
+    itself. The ALLOW is the assertion: if these still classified without the
+    newline alternative, the parametrize above would be proving nothing.
+    """
+
+    def old_split(cmd: str, depth: int) -> set:
+        verbs: set = set()
+        for segment in re.split(r"&&|\|\||;|\|", cmd):
+            verbs |= guard_module._segment_write_verbs(segment, depth)
+        return verbs
+
+    monkeypatch.setattr(guard_module, "_command_write_verbs", old_split)
+
+    assert guard_module._command_write_verbs(command, 0) == set(), (
+        f"pre-fix code must fail open on {command!r}, else this is a vacuous test"
+    )
+
+
+def test_newline_bypass_denies_end_to_end(tmp_path: Path) -> None:
+    """The bypass reached main(), so pin it there too, not just at the classifier.
+
+    On a protected branch the first gate to fire is the protected-branch deny.
+    """
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_hook(
+        _bash_event(protected, "printf ok > .tests-ran-1\ngit commit -m x"), protected
+    )
+
+    assert code == 2
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_newline_split_does_not_deny_a_multi_line_mention(guard_module) -> None:
+    """The split must not turn ordinary multi-line prose into a deny.
+
+    A line is only a git write when `git` leads it, so a mention sitting mid-line
+    stays allowed. This is the fail-open direction's counterweight: the newline
+    alternative widens what is CLASSIFIED, never what is matched inside a line.
+
+    The probe deliberately carries BOTH words on a mid-line, and carries them in
+    a line that also contains `git`, so it cannot pass merely by lacking a token
+    to match — an earlier draft omitted `git` entirely and could never have
+    failed.
+    """
+    mention = "echo one\necho 'we ran git commit already'\necho two"
+    assert "git" in mention and "commit" in mention, "probe must contain both tokens"
+    assert guard_module._git_writes(mention) == set()
+
+
+# ---------------------------------------------------------------------------
+# A newline INSIDE a quoted argument is not a separator.
+#
+# The newline split is quote-blind, so on its own it tears
+# `git -c foo.bar="a<NL>b" commit -m x` into `git -c foo.bar="a` and
+# `b" commit -m x`. Each fragment has unbalanced quotes, so `_tokenize` raises
+# and each falls back to `_anywhere_write_verbs` — whose regex is newline-bounded
+# (`[^\n;&|]*?`) and therefore cannot span the tear either. `git` sits in one
+# fragment and the verb in the other, so BOTH detection paths miss and a real
+# commit is allowed.
+#
+# Classifying under both separator sets and unioning is what closes this: the
+# separator-only pass keeps the command whole, where `shlex` balances the quotes
+# and the verb anchors normally. Every case below must therefore deny.
+# ---------------------------------------------------------------------------
+
+_QUOTED_NEWLINE_WRITES = [
+    'git -c foo.bar="a\nb" commit -m x',
+    'git -c foo.bar="a\nb" push origin HEAD',
+    'git -C "/tmp/a\nb" commit -m x',
+    'git --git-dir="a\nb" commit -m x',
+    'git --work-tree="a\nb" commit -m x',
+    'git -c foo.bar="a\rb" commit -m x',
+    'sh -c \'git -c foo.bar="a\nb" commit -m x\'',
+    # the ordinary multi-line commit message, which must not regress either
+    'git commit -m "line one\nline two"',
+]
+
+
+@pytest.mark.parametrize("command", _QUOTED_NEWLINE_WRITES)
+def test_newline_inside_a_quoted_argument_still_classifies(
+    guard_module, command: str
+) -> None:
+    assert guard_module._git_writes(command), (
+        f"a real git write was allowed through: {command!r}"
+    )
+
+
+@pytest.mark.parametrize("command", _QUOTED_NEWLINE_WRITES[:6])
+def test_newline_only_split_would_fail_open(guard_module, monkeypatch, command: str) -> None:
+    """Twin: split on the newline set ALONE and these real writes are allowed.
+
+    This is the regression that shipping the newline alternative on its own
+    introduced, pinned so the union cannot be simplified back into it.
+    """
+
+    def newline_only(cmd: str, depth: int) -> set:
+        verbs: set = set()
+        for segment in re.split(r"&&|\|\||;|\||\n|\r", cmd):
+            verbs |= guard_module._segment_write_verbs(segment, depth)
+        return verbs
+
+    monkeypatch.setattr(guard_module, "_command_write_verbs", newline_only)
+
+    assert guard_module._command_write_verbs(command, 0) == set(), (
+        f"newline-only split must fail open on {command!r}, else this is vacuous"
+    )
+
+
+def test_quoted_newline_commit_denies_end_to_end(tmp_path: Path) -> None:
+    """The fail-open reached main() and landed a real commit, so pin it there."""
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_hook(
+        _bash_event(protected, 'git -c foo.bar="a\nb" commit -m x'), protected
+    )
+
+    assert code == 2
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_union_is_a_superset_of_the_separator_only_classification(guard_module) -> None:
+    """The property the union exists to guarantee, asserted directly.
+
+    Whatever the pre-newline separator set detected, the shipped classifier must
+    still detect. Stated as a property over every shape this file exercises, so a
+    future narrowing of either pass reds here rather than in one hand-picked case.
+    """
+
+    def separator_only(cmd: str) -> set:
+        verbs: set = set()
+        for segment in re.split(r"&&|\|\||;|\|", cmd):
+            verbs |= guard_module._segment_write_verbs(segment, 0)
+        return verbs
+
+    for command in _QUOTED_NEWLINE_WRITES + _NEWLINE_BYPASSES + [
+        "git commit -m x",
+        "git add -A && git commit -m x",
+        "FOO=bar git commit -m x",
+        "sudo git commit -m x",
+        _ECHO_MENTION,
+    ]:
+        assert separator_only(command) <= guard_module._git_writes(command), (
+            f"the shipped classifier detects LESS than the separator-only pass "
+            f"on {command!r}: that is a fail-open regression"
+        )
 
 
 def test_wrapper_strip_removed_allows_env_prefixed_commit(guard_module, monkeypatch) -> None:
