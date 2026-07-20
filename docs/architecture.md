@@ -17,17 +17,17 @@ Because it is a conductor, the truth of "is this done" lives in the artifacts it
 
 ## The three enforcement layers
 
-These are the module's non-negotiables. Each exists because the documented mechanics make the intuitive shortcut wrong (see [why](why-ultracode-goal.md)).
+These are the module's non-negotiables. Each exists because the documented mechanics make the intuitive shortcut wrong (see [why](./why-ultracode-goal.md)).
 
 ### 1. Deterministic gate truth
 
-`scripts/gate_eval.py` reads TEA's `gate-decision.json` and maps its gate status to a routing verdict (`PASS`/`WAIVED` → advance, `CONCERNS` → defer, `FAIL` → reloop, `NOT_EVALUATED` → escalate). It never re-derives TEA's thresholds and never reads the transcript. The `/goal` evaluator that drives execution can only see what the run surfaces, it cannot open the gate file, so it is structurally incapable of being the completion authority. The script is. In production, two extra signals can only downgrade an `advance`, never lift a lower verdict. See the [gate model](gate-model.md) for the full mapping diagram, thresholds, and the fail-closed contract.
+`scripts/gate_eval.py` reads TEA's `gate-decision.json` and maps its gate status to a routing verdict (`PASS`/`WAIVED` → advance, `CONCERNS` → defer, `FAIL` → reloop, `NOT_EVALUATED` → escalate). It never re-derives TEA's thresholds and never reads the transcript. The `/goal` evaluator that drives execution can only see what the run surfaces, it cannot open the gate file, so it is structurally incapable of being the completion authority. The script is. In production, two extra signals can only downgrade an `advance`, never lift a lower verdict. See the [gate model](./gate-model.md) for the full mapping diagram, thresholds, and the fail-closed contract.
 
 ### 2. Hooks as invariants
 
-Two invariants must hold for every commit, and neither can live in memory, which is context the model may or may not weigh:
+A set of invariants must hold before the runtime lets a tool call through, and none of them can live in memory, which is context the model may or may not weigh:
 
-- **`scripts/hooks/guard_pretooluse.py`** (PreToolUse): inspects each `git commit`/`git push`. It denies the command on a protected branch, and denies a `git commit` when no tests-ran marker (`<impl-artifacts>/.tests-ran-<story_id>`) exists for the current story. It returns a `deny` decision in the hook JSON and also exits 2 with the reason on stderr so older clients that ignore the JSON still block.
+- **`scripts/hooks/guard_pretooluse.py`** (PreToolUse): inspects each `git commit`/`git push` and enforces six invariants. It denies the command on a protected branch; denies a `git commit` when no tests-ran marker (`<impl-artifacts>/.tests-ran-<story_id>`) exists for the current story; denies it when that marker's `baseline=<sha>` does not match the SHA the story recorded at start; denies it when the staged index is empty or unreadable; and denies it, when armed with `ULTRACODE_TEST_ARTIFACTS`, while the staged content of a checklist-enumerated acceptance test still contains `test.skip(`. A sixth invariant is not about git at all: it runs for every tool call, and while a run is active it denies claude-mem MCP calls and filesystem reach into `.claude-mem` unless the Cross-Session Recall latch is green. It returns a `deny` decision in the hook JSON and also exits 2 with the reason on stderr so older clients that ignore the JSON still block. The marker, freshness, staged-index, and recall-latch checks fail **closed**, denying on an input they cannot read. Two do not: the protected-branch check fails **open** when `git rev-parse` cannot report a branch, and the un-skip proof is out of scope entirely when `ULTRACODE_TEST_ARTIFACTS` is unset.
 - **`scripts/hooks/budget_stop.py`** (Stop): counts turns for the current story against `max_turns_per_story`. On overrun it writes an escalation marker and surfaces a message, then **lets the stop proceed**. Its documented limitation: a Stop hook fires only when Claude is already trying to stop, so it cannot interrupt a `/goal` condition mid-turn. The in-condition "stop after N turns" clause and the gate's re-loop budget are the real bounds; this hook is the third, defensive layer.
 
 Both hooks read their config from env first (so the conductor injects per-run values) and fall back to hardcoded defaults (`main`/`master`, `25`, `ultracode/epic-`). Because of that fallback, a `customize.toml` override **silently no-ops at the enforcement layer** unless the conductor passes it through the hook env, so preflight injects `ULTRACODE_PROTECTED_BRANCHES`, `ULTRACODE_IMPL_ARTIFACTS`, `ULTRACODE_MAX_TURNS`, `ULTRACODE_EPIC_BRANCH_PREFIX`, and `ULTRACODE_TEST_ARTIFACTS`.
@@ -56,7 +56,9 @@ skills/ultracode-goal/
 ├── scripts/                       # Deterministic truth (run via `uv`)
 │   ├── preflight_check.py         #   mechanical preflight facts + blocker budget
 │   ├── gate_eval.py               #   gate status -> verdict (the completion authority)
+│   ├── gate_trail.py              #   per-story evidence trail (gate-trail.md) at finalize
 │   ├── formalize_check.py         #   readiness kernel behind the /ucg-formalize gate
+│   ├── status_render.py           #   read-side render behind /ucg-status
 │   ├── headless_envelope.py       #   the one five-key headless-envelope adapter
 │   ├── health_check_fp.py         #   health-check fingerprint + seen-cache plumbing
 │   ├── mem_observation.py         #   Cross-Session Recall write path (build/spill/drain)
@@ -69,14 +71,16 @@ skills/ultracode-goal/
 │       ├── guard_pretooluse.py    #   commit invariants (PreToolUse)
 │       └── budget_stop.py         #   turn budget (Stop)
 ├── skills/
-│   └── ucg-formalize/             # Standalone readiness gate
+│   ├── ucg-formalize/             # Standalone readiness gate
+│   ├── ucg-resolve/               # Decide-surface for a blocked or escalated run
+│   └── ucg-status/                # Read-only status view over a run
 └── assets/
     ├── execute-epic.workflow.js   # EXPERIMENTAL --parallel worktree fan-out
     ├── module.yaml · module-setup.md · module-help.csv   # install metadata
     └── ucg-awareness/             # shift-left planning customization fragments
 ```
 
-`SKILL.md` carries the routing and the contract; the `references/*.md` files carry each stage's procedure and testable routing conditions; the `scripts/*.py` files carry the deterministic facts the model cannot fudge (the gate, preflight, readiness kernel, hooks, and the install-time/recall plumbing); the `skills/ucg-formalize/` subskill is the standalone readiness gate; and the `assets/` hold the experimental `--parallel` workflow plus install metadata and the planning-customization fragments. See [how it works](how-it-works.md) for the stages and [parallel mode](parallel-mode.md) for the workflow asset.
+`SKILL.md` carries the routing and the contract; the `references/*.md` files carry each stage's procedure and testable routing conditions; the `scripts/*.py` files carry the deterministic facts the model cannot fudge (the gate, preflight, readiness kernel, hooks, and the install-time/recall plumbing); the `skills/` subskills are the operator-facing surfaces (`ucg-formalize` the standalone readiness gate, `ucg-resolve` the decide-surface for a stopped run, `ucg-status` the read-only run view); and the `assets/` hold the experimental `--parallel` workflow plus install metadata and the planning-customization fragments. See [how it works](./how-it-works.md) for the stages and [parallel mode](./parallel-mode.md) for the workflow asset.
 
 ## Customization resolution
 
@@ -108,4 +112,4 @@ flowchart LR
 
 ## Why the hooks live in settings.local.json
 
-The PreToolUse and Stop hooks are auto-merged into `{project-root}/.claude/settings.local.json` (machine-local, gitignored, honored after the workspace trust dialog), not into a committed settings file or memory. The reasoning: these hooks are **enforcement, not context**. A committed hook would impose this module's commit guard on every contributor and every unrelated session in the repo; a hook in memory would not block a commit at all. The machine-local file scopes enforcement to the machine actually running the unattended Epic, and the gitignore keeps it out of shared history. The skill re-merges them every run (idempotently) and asserts they are active before the run goes unattended; it does not assume a prior run left them in place. Because the file is machine-local and executes on your machine, review what is merged; see [SECURITY.md](../SECURITY.md).
+The PreToolUse and Stop hooks are auto-merged into `{project-root}/.claude/settings.local.json` (machine-local, gitignored, honored after the workspace trust dialog), not into a committed settings file or memory. The reasoning: these hooks are **enforcement, not context**. A committed hook would impose this module's commit guard on every contributor and every unrelated session in the repo; a hook in memory would not block a commit at all. The machine-local file scopes enforcement to the machine actually running the unattended Epic, and the gitignore keeps it out of shared history. The skill re-merges them every run (idempotently) and asserts they are active before the run goes unattended; it does not assume a prior run left them in place. Because the file is machine-local and executes on your machine, review what is merged; see [SECURITY.md](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/SECURITY.md).

@@ -3,7 +3,7 @@ title: Gate Model
 description: How gate_eval.py turns TEA's gate-decision.json into a fail-closed advance, defer, reloop, or escalate verdict.
 ---
 
-Completion in UltraCode Goal is decided by a deterministic artifact read, not by judgment. `scripts/gate_eval.py` reads TEA's `gate-decision.json` and returns a routing verdict the skill executes. This page documents the verdict mapping, the production AND, the thresholds, the fail-closed contract, and why the `/goal` evaluator alone is insufficient, all traced to [`../skills/ultracode-goal/scripts/gate_eval.py`](../skills/ultracode-goal/scripts/gate_eval.py).
+Completion in UltraCode Goal is decided by a deterministic artifact read, not by judgment. `scripts/gate_eval.py` reads TEA's `gate-decision.json` and returns a routing verdict the skill executes. This page documents the verdict mapping, the production AND, the thresholds, the fail-closed contract, and why the `/goal` evaluator alone is insufficient, all traced to [`../skills/ultracode-goal/scripts/gate_eval.py`](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/skills/ultracode-goal/scripts/gate_eval.py).
 
 ## What the gate reads
 
@@ -148,4 +148,4 @@ The same `PASS` gate, but with a test review scoring 74, downgrades to `reloop`;
 
 ## Why the `/goal` evaluator alone is insufficient
 
-The `/goal` loop that drives Execute ends with an evaluator confirming the success condition, but that evaluator only sees the transcript. It cannot open `gate-decision.json`. So it can confirm "the tests I was shown printed green" but not "TEA's deterministic gate read PASS against the traceability matrix and the NFR thresholds." Letting it be the completion authority would let the run grade itself from its own notes. `gate_eval.py` reads the file the model cannot author, which is exactly why it, and not the transcript evaluator, decides. See [why](why-ultracode-goal.md) and the routing detail in [`references/gate.md`](../skills/ultracode-goal/references/gate.md).
+The `/goal` loop that drives Execute ends with an evaluator confirming the success condition, but that evaluator only sees the transcript. It cannot open `gate-decision.json`. So it can confirm "the tests I was shown printed green" but not "TEA's deterministic gate read PASS against the traceability matrix and the NFR thresholds." Letting it be the completion authority would let the run grade itself from its own notes. `gate_eval.py` reads the file the model cannot author, which is exactly why it, and not the transcript evaluator, decides. See [why](./why-ultracode-goal.md) and the routing detail in [`references/gate.md`](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/skills/ultracode-goal/references/gate.md).

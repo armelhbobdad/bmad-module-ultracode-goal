@@ -6,17 +6,17 @@
 
 **Run a BMAD Epic autonomously to a machine-checked Definition-of-Done.**
 
-[![Requires Claude Code](https://img.shields.io/badge/requires-Claude%20Code-D97757?logo=claude&logoColor=white)](https://www.anthropic.com/claude-code)
+[![Requires Claude Code](https://img.shields.io/badge/requires-Claude%20Code-D97757?logo=claude&logoColor=white)](https://claude.com/product/claude-code)
 [![Quality & Validation](https://github.com/armelhbobdad/bmad-module-ultracode-goal/actions/workflows/quality.yaml/badge.svg)](https://github.com/armelhbobdad/bmad-module-ultracode-goal/actions/workflows/quality.yaml)
 [![npm](https://img.shields.io/npm/v/bmad-module-ultracode-goal)](https://www.npmjs.com/package/bmad-module-ultracode-goal)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/license/MIT)
 [![BMAD Module](https://img.shields.io/badge/BMAD-module-blue)](https://github.com/bmad-code-org/BMAD-METHOD)
 [![Python Version](https://img.shields.io/badge/python-%3E%3D3.10-blue?logo=python&logoColor=white)](https://www.python.org)
 [![uv](https://img.shields.io/badge/uv-package%20manager-blueviolet?logo=uv)](https://docs.astral.sh/uv/)
 [![Docs](https://img.shields.io/badge/docs-online-green)](https://armelhbobdad.github.io/bmad-module-ultracode-goal/)
 [![GitHub stars](https://img.shields.io/github/stars/armelhbobdad/bmad-module-ultracode-goal?style=social)](https://github.com/armelhbobdad/bmad-module-ultracode-goal/stargazers)
 
-**Built for [Claude Code](https://www.anthropic.com/claude-code), and only Claude Code.** UCG composes `/goal`, Auto Mode, Auto Memory, and runtime hooks; the autonomous run itself requires Claude Code.
+**Built for [Claude Code](https://claude.com/product/claude-code), and only Claude Code.** UCG composes `/goal`, Auto Mode, Auto Memory, and runtime hooks; the autonomous run itself requires Claude Code.
 
 _UCG is a standalone [BMAD](https://github.com/bmad-code-org/BMAD-METHOD) module that delivers a BMAD Epic end to end without a babysitter. It preflights to a remediated green light, turns acceptance criteria into executable tests with the Test Architect (TEA), and advances a story only when a deterministic script reads `PASS` from TEA's gate artifact, not when the model decides it feels done._
 
@@ -61,7 +61,7 @@ The `gate_status` comes straight from TEA's artifact: `gate_eval.py` never re-de
 
 ## Install
 
-Requires [Claude Code](https://www.anthropic.com/claude-code) (the runtime UCG conducts), [Node.js](https://nodejs.org/) >= 22, [Python](https://www.python.org/) >= 3.10, [uv](https://docs.astral.sh/uv/), plus `git` and `gh` on PATH.
+Requires [Claude Code](https://claude.com/product/claude-code) (the runtime UCG conducts), [Node.js](https://nodejs.org/) >= 22, [Python](https://www.python.org/) >= 3.10, [uv](https://docs.astral.sh/uv/), plus `git` and `gh` on PATH.
 
 ```bash
 npx bmad-module-ultracode-goal install
@@ -103,7 +103,7 @@ UCG's closest peer is [bmad-loop](https://github.com/bmad-code-org/bmad-loop) (f
 
 You don't have to take the gate's word for it. The deterministic pieces ship with a test suite, and you can run the evaluator on a real artifact yourself.
 
-Run the Python suite (450+ tests across the preflight, gate, hook, readiness, memory, and customization scripts):
+Run the Python suite (600+ tests across the preflight, gate, hook, readiness, memory, and customization scripts):
 
 ```bash
 uv run --with pytest pytest skills/ultracode-goal/scripts/tests/ -v
@@ -148,8 +148,8 @@ UCG is a conductor over primitives it does not replace. It builds on:
 | Tool                                                                   | Role in UCG                                                                    |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | [BMAD Method](https://github.com/bmad-code-org/BMAD-METHOD)            | The epic toolbox UCG orchestrates (sprint planning, story creation, dev, review) |
-| [TEA Test Architect](https://github.com/bmad-code-org/BMAD-METHOD)     | Machine-checked quality gates: test-design, ATDD, NFR, trace; the gate artifact |
-| [Claude Code](https://www.anthropic.com/claude-code)                   | `/goal`, Auto Mode, Auto Memory, hooks, and git worktrees, the primitives UCG composes |
+| [TEA Test Architect](https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise) | Machine-checked quality gates: test-design, ATDD, NFR, trace; the gate artifact |
+| [Claude Code](https://claude.com/product/claude-code)                   | `/goal`, Auto Mode, Auto Memory, hooks, and git worktrees, the primitives UCG composes |
 
 ## Contributing
 

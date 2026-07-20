@@ -3,7 +3,7 @@ title: Troubleshooting
 description: Maps the real failure modes of an autonomous Epic run (preflight refusals, gate escalations, silent hooks, budget overruns, resume, and parallel fallback) to what the run does and what you do.
 ---
 
-Real failure modes, sourced from the skill's stage files and scripts, with what the run does about each and what you do. For the design behind these behaviors see [how it works](how-it-works.md), [the gate model](gate-model.md), and [architecture](architecture.md).
+Real failure modes, sourced from the skill's stage files and scripts, with what the run does about each and what you do. For the design behind these behaviors see [how it works](./how-it-works.md), [the gate model](./gate-model.md), and [architecture](./architecture.md).
 
 Start from the symptom you observed and follow it to the section that explains it:
 
@@ -47,7 +47,7 @@ The decision log carries the full blocker list with what each needs to clear. Re
 - **The TEA trace gate did not run.** In production, Stage 5 must backfill evidence first (`bmad-testarch-automate` → `bmad-testarch-trace` → `bmad-testarch-nfr`) before the gate; `bmad-testarch-trace` is what writes the gate decision. If it didn't run, there is nothing to read.
 - **Wrong `trace_output_dir`.** The script reads the directory passed as `--trace-output` (resolved from `{workflow.trace_output_dir}`). If TEA wrote elsewhere, or the output dirs were never pre-created at preflight, the artifact is real but in a different place. Confirm `trace_output_dir` matches where TEA actually wrote.
 
-Note this is fail-closed on purpose: a missing or unreadable gate artifact escalates rather than being assumed green. The slim file's *absence alone* is not the problem: the script falls back to the summary, and that fallback is explicitly not a failure. See the [gate model](gate-model.md) for how the artifact resolves into a `gate_status` and the full verdict mapping.
+Note this is fail-closed on purpose: a missing or unreadable gate artifact escalates rather than being assumed green. The slim file's *absence alone* is not the problem: the script falls back to the summary, and that fallback is explicitly not a failure. See the [gate model](./gate-model.md) for how the artifact resolves into a `gate_status` and the full verdict mapping.
 
 ## Hooks not firing
 
@@ -57,7 +57,7 @@ Note this is fail-closed on purpose: a missing or unreadable gate artifact escal
 
 - **Older Claude Code.** The hook returns a `deny` decision in the hook JSON and *also* exits 2 with the reason on stderr precisely so older clients that ignore the JSON still block. If neither path fired, the client may not be honoring PreToolUse hooks at all. Update Claude Code.
 - **`settings.local.json` not merged.** The hooks are merged into `{project-root}/.claude/settings.local.json` at preflight, and the skill asserts they are active before going unattended. If the file wasn't merged (or the workspace trust dialog wasn't accepted), the hooks aren't loaded. Re-run preflight; verify the two hook entries are present in the resolved settings.
-- **A `customize.toml` override that silently no-ops.** Both hooks read config from env first and fall back to hardcoded defaults (`main`/`master`, `25`, `1_500_000`, `ultracode/epic-`). A `protected_branches` or budget override in `customize.toml` only reaches the hook if preflight injected it into the hook env (`ULTRACODE_PROTECTED_BRANCHES`, etc.). If your custom protected branch isn't being guarded, the override didn't reach the enforcement layer. Confirm preflight passed it through.
+- **A `customize.toml` override that silently no-ops.** Both hooks read config from env first and fall back to hardcoded defaults (`main`/`master`, `25`, `ultracode/epic-`). A `protected_branches` or turn-budget override in `customize.toml` only reaches the hook if preflight injected it into the hook env (`ULTRACODE_PROTECTED_BRANCHES`, etc.). If your custom protected branch isn't being guarded, the override didn't reach the enforcement layer. Confirm preflight passed it through.
 
 ## Budget exhausted mid-story
 
@@ -75,4 +75,4 @@ Note this is fail-closed on purpose: a missing or unreadable gate artifact escal
 
 ## `--parallel` issues
 
-`--parallel` is experimental and opt-in; the sequential spine is the default. If dynamic workflows are unavailable (wrong Claude Code version, the feature off, or the saved command doesn't resolve), the skill **automatically falls back to the spine** and logs why in `.decision-log.md`; the Epic still ships. For the known limits (shared Auto Memory across worktrees, the under-documented workflow↔skill interplay, no `run-status.json` heartbeat), see [parallel mode](parallel-mode.md).
+`--parallel` is experimental and opt-in; the sequential spine is the default. If dynamic workflows are unavailable (wrong Claude Code version, the feature off, or the saved command doesn't resolve), the skill **automatically falls back to the spine** and logs why in `.decision-log.md`; the Epic still ships. For the known limits (shared Auto Memory across worktrees, the under-documented workflow↔skill interplay, no `run-status.json` heartbeat), see [parallel mode](./parallel-mode.md).

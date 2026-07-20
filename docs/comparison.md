@@ -78,6 +78,6 @@ They are not mutually exclusive. Both read the same `sprint-status.yaml` and BMA
 Both tools change weekly, so re-check before you rely on anything above:
 
 - bmad-loop: its [README](https://github.com/bmad-code-org/bmad-loop), [docs/FEATURES.md](https://github.com/bmad-code-org/bmad-loop/blob/main/docs/FEATURES.md), and [docs/ROADMAP.md](https://github.com/bmad-code-org/bmad-loop/blob/main/docs/ROADMAP.md).
-- UCG: [How It Works](how-it-works.md) and the [Gate Model](gate-model.md).
+- UCG: [How It Works](./how-it-works.md) and the [Gate Model](./gate-model.md).
 
 This snapshot was re-cut on 2026-07-12 against bmad-loop v0.8.1 (released 2026-07-05) and UCG v0.5.1; the previous snapshot (2026-06-28, bmad-auto v0.7.4 and UCG v0.4.0) predates the rename.

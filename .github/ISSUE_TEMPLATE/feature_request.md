@@ -6,9 +6,6 @@ labels: enhancement
 assignees: ''
 ---
 
-**Have you discussed this in Discussions first?**
-We encourage discussing feature ideas in [GitHub Discussions](https://github.com/armelhbobdad/bmad-module-ultracode-goal/discussions) before opening an issue.
-
 **Is your feature request related to a problem?**
 A clear and concise description of what the problem is. Example: "I'm always frustrated when..."
 

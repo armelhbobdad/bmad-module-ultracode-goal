@@ -57,7 +57,7 @@ What the sanitizer **does** before any advisory is surfaced:
 What it honestly does **not** do:
 
 - It is **not** a complete secret scrubber: redaction is high-precision pattern matching, not a guarantee that nothing sensitive ever survives.
-- It does **not** vote. Advisories carry only a mechanical `recurred` field (`yes`/`no`/`unknown`); there are no LLM self-grades, and nothing recall surfaces is ever an input to `gate_eval.py`. The gate reads TEA's `gate-decision.json` and only that. See the [gate model](gate-model.md).
+- It does **not** vote. Advisories carry only a mechanical `recurred` field (`yes`/`no`/`unknown`); there are no LLM self-grades, and nothing recall surfaces is ever an input to `gate_eval.py`. The gate reads TEA's `gate-decision.json` and only that. See the [gate model](./gate-model.md).
 - It does **not** keep working when claude-mem looks wrong. If the capability contract fails (a missing tool, a malformed probe, a breaking schema change) the latch records recall as absent and the hook denies claude-mem calls for the run. Fail closed, never fail open.
 
 ## Turning it on

@@ -31,7 +31,7 @@ It ships on evidence, not speculation. The trigger is a **first real observed tr
 
 ## Wall-clock budget envelope
 
-The budget guardrails today are **turn count** and **token count** per story. There is no per-turn timing signal available, so UCG cannot currently enforce a wall-clock envelope ("stop this story after N minutes"). Adding a time-based budget waits on a timing signal the run can actually read.
+The budget guardrail today is **turn count** per story (`max_turns_per_story`); the older `story_token_budget` key is accepted but no-op. There is no per-turn timing signal available, so UCG cannot currently enforce a wall-clock envelope ("stop this story after N minutes"). Adding a time-based budget waits on a timing signal the run can actually read.
 
 ## Health-check autosubmit telemetry review
 
