@@ -89,8 +89,10 @@ skills/ultracode-goal/
 Configuration resolves in three layers, base → team → user, via `resolve_customization.py`:
 
 1. **Base**: `customize.toml` in the skill root (the shipped `[workflow]` block). In an installed project that file is `{project-root}/_bmad/ucg/ultracode-goal/customize.toml`, a verbatim copy of the shipped one; it is the layer to read (every knob is there with its comment), not the layer to edit.
-2. **Team**: `{project-root}/_bmad/custom/ultracode-goal.toml`.
-3. **User**: `{project-root}/_bmad/custom/ultracode-goal.user.toml`.
+2. **Team**: `{project-root}/_bmad/custom/ultracode-goal.toml`, committed.
+3. **User**: `{project-root}/_bmad/custom/ultracode-goal.user.toml`, gitignored by the `*.user.toml` rule that ships in `_bmad/custom/.gitignore`.
+
+   Neither override file is created by any installer, and a missing one is not an error: the resolver loads it non-required and treats absence as an empty table, so a fresh project resolves the base layer alone. You create them when you first need to override something. Do not mistake them for the `config.toml` and `config.user.toml` already sitting in that directory: those are BMAD's own configuration, and a UCG knob written there resolves to nothing.
 
 Merge semantics: **scalars override**, **tables deep-merge**, **arrays append**. At activation the skill runs `resolve_customization.py --skill {skill-root} --key workflow`; if that fails, it resolves the three files itself in the same order. The shipped base layer defines the run's knobs: the TEA/artifact paths (`tea_config_path`, `trace_output_dir`, `implementation_artifacts`, `deferred_work_path`), the git guardrails (`epic_branch_prefix`, `protected_branches`), the turn budget (`max_turns_per_story`; `story_token_budget` remains as a deprecated no-op key), the experimental `parallel_max_concurrency`, the `allowlist_commands`, the two lifecycle hooks (`on_epic_complete`, `on_escalation`), the [health check](./health-check.md) family (`health_check_repo`, `health_check_seen_cache`, `health_check_queue_path`, `health_check_autosubmit`), and the two optional third-party integrations, both off by default: [`cross_session_recall`](./cross-session-recall.md) and [`graphify_integration`](./knowledge-graph-refresh.md). Teams and users override without editing the shipped file. Remember that a budget or branch override only reaches the *enforcement* layer because preflight threads it into the hook env (see layer 2 above).
 

@@ -25,7 +25,7 @@ You also need a graph to refresh. Build one once yourself (`graphify .`), which 
 
 ## Turning it on
 
-Set the knob in your project's `_bmad/custom/ultracode-goal.toml` (the same file the other knobs use):
+Set the knob in your project's `_bmad/custom/ultracode-goal.toml`. **No installer creates that file**, so on most projects you are creating it: `_bmad/custom/` exists already, but the `config.toml` sitting in it belongs to BMAD's own configuration, and putting a UCG knob there does nothing.
 
 ```toml
 [workflow]
