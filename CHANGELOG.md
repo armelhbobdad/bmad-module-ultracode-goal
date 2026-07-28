@@ -31,6 +31,51 @@ All notable changes to this project will be documented in this file. The format 
 
 - **`story_token_budget`** is deprecated and is now a no-op. The key is still shipped in `customize.toml`, still accepted, and still resolves, so existing team and user overrides keep working and nothing errors; it simply has no effect. Nothing reads it any more: the Stop hook counts turns only, and the preflight stage no longer injects a token budget into the hook environment. The runaway bound is `max_turns_per_story`, enforced by the "stop after N turns" clause in the run condition and by the gate's re-loop budget, with the Stop hook as the advisory recorder. Use `max_turns_per_story` instead.
 
+## [1.0.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v0.5.1...v1.0.0) (2026-07-28)
+
+### Features
+
+* **execute:** record the per-story baseline SHA at step 0 ([375e6d7](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/375e6d7d6c9bdbb554a32623fd5eabc7f1e2ebd8))
+* **finalize:** synthesize a per-story gate trail ([bcc8d76](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/bcc8d762ca46e12ce84091c7fb1b0d693f188dac))
+* **guard:** deny a commit whose staged index is empty ([4b4dc07](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/4b4dc0794f54bba27ff88b61f6da2139bd1dc63d))
+* **guard:** deny a production commit whose staged acceptance tests stay skipped ([1514780](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/15147808ff56a334429b370ea24779bbf5792606))
+* **guard:** require the tests-ran marker to embed the recorded baseline ([d6b1d7c](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/d6b1d7c605f4815bf2aeecdecad43ee3c39c5f03))
+* **ucg-comms:** per-story gate verdict in the ticker, health check in the briefing ([f76c313](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/f76c31339fa2f6a3cc4e749f207c81043b94d795))
+* **ucg-execute:** richer run-status heartbeat with machine-derived provenance ([9e5dc6b](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/9e5dc6bdb84f494b8f22ff28cf1d0c2d2c6d4f18))
+* **ucg-execute:** typed escalation sidecar promoted solely by Execute ([7c699a7](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/7c699a7540b0d8062ae25030e722a0cb307d96e7))
+* **ucg-finalize:** optional knowledge-graph refresh, finalize-only and advisory ([5a8da51](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/5a8da51e80ad865f450c6410070e1df92152d7e3))
+* **ucg-headless:** path-pinned run-result.json for every terminal exit ([0f7dc28](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/0f7dc28482f1668da97e5d0819ef3b3f2aca65a5))
+* **ucg-resolve:** decide-surface that closes the preflight red loop ([a49af3b](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/a49af3badb84e338bbb0acd9e0029727298182b1))
+* **ucg-status:** compare installed skill copies against source, not just presence ([f2303e3](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/f2303e3009e5b9efa902ea938ef33b7e045483a3))
+* **ucg-status:** read-only run renderer built from files alone ([43b3e7e](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/43b3e7e8b12b46d15c9d752745976d92f1ecccbd))
+* **ucg:** on_escalation lifecycle hook, fired once per blocked run ([631a6fa](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/631a6fafb3f0ba07c79dbfebbe66e252917d8f61))
+* **ucg:** per-invocation work bound, one story per process, and the done sync it needs ([580014f](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/580014fbe9f82f21c4f0c16408d32338a26dd985))
+
+### Bug Fixes
+
+* **ci:** track the run-folder fixtures the ignore rules were swallowing ([a54553a](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/a54553a7cfbe0a321ab5db40a3362ec0d0c600e4))
+* **deps:** exact-pin the five remaining direct runtime deps ([ee77ebb](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/ee77ebb640d77e0e984cac4bb7af559d666430aa))
+* **docs-site:** emit root-absolute routes, and guard the built output ([c02eb5b](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/c02eb5bc32b26599cfaa56dda3010260ac362614))
+* **docs-site:** unbreak CI, and close four review findings ([adb6108](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/adb610885db13fc68b562e37412bd465fee32b79))
+* **docs:** repair broken site links and correct stale claims ([66dd14d](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/66dd14d998fee959d4d4646646a9071c721b478f))
+* **gate,formalize:** close two empty-set fail-opens in the completion checks ([6ecbfcd](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/6ecbfcd55b9d564cd7205372166728e763074799))
+* **guard:** anchor the git verb instead of matching it anywhere ([d8e4384](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/d8e438461d44a31903b0857faa6119286ef53a70))
+* **tools:** mark ucg-npx-wrapper.js executable ([372cc28](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/372cc28895bafcd2f6e8485d5806de624e619f5f))
+* **ucg-define-done:** test-design is not a browser generator, do not skip it ([43c7946](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/43c7946ba0439992005e0ac8e3b054f42c818c7d))
+* **ucg-execute:** write run-log prose with the file tools, not a Bash heredoc ([ed3a563](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/ed3a5632f7fa891e11d2cf27ab55d30d62d2ae59))
+* **ucg-finalize:** the gate trail refuses to render with no story named ([f8d059d](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/f8d059d11880cfffb678ec12c5db44d6c6e52e4e))
+* **ucg-formalize:** a partially seeded Epic no longer reads ready ([3fbc6d4](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/3fbc6d4bd9a8b37e130db5b4121bb6ca264937ad))
+* **ucg-formalize:** a story that declares no acceptance criteria is not ready ([9a2a245](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/9a2a24564407c1ebd3e39d4021e905591a13b1f7))
+* **ucg-guard:** a newline separates commands, so the segment split must honour it ([3f2455f](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/3f2455f769b0e02e898a1d065b482d5549d29800))
+* **ucg-health-check:** a fixed finding no longer suppresses its own regression ([693909b](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/693909ba4f4778fa30f44c7f2e415f52f9f117a5))
+* **ucg-health-check:** an auto-closed duplicate is not a fix ([9955c75](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/9955c7534e49163e2b0598423a66cac5fbd02385))
+* **ucg-preflight:** step 2 owns the git_branch remediation ([44e7fc3](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/44e7fc3ec99a0a7319f70b29612d436ab36dfd10))
+* **ucg:** allowlist git rev-parse and git diff for unattended runs ([35259ec](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/35259ecb1afd44981f5417daa38d9db992d45ed3))
+* **ucg:** correct help-catalog registration accuracy and completeness ([62579a0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/62579a0067f8ae15d308723642ab8fd94ce45daf))
+* **ucg:** gate the real-signal driver test to POSIX ([43e38fc](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/43e38fcb7a29a38eb1ff0ae4f909b11e7f0c121c))
+* **ucg:** harden the per-story driver's terminal read, signal handling, and recall latch ([76f36ed](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/76f36ed1e7fdf8eaab8516072a7d4464702f2f8b)), closes [#60](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/60)
+* **ucg:** quality-scan fixes across all four skills, RED identity into code ([11354f3](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/11354f308413af8509b3ce13e1b6e03f4665029c))
+* **ucg:** the session kill must not name SIGKILL, which Windows does not have ([97cb1d2](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/97cb1d2c70e20ae719cbe26632a0edf00764ea36))
 ## [0.5.1](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v0.5.0...v0.5.1) (2026-07-12)
 
 ### Bug Fixes
