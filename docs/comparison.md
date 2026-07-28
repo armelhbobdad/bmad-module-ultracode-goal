@@ -30,7 +30,7 @@ The consequence cascades: bmad-loop is a tool you run beside any supported agent
 | Deferred work | A triage-and-execute **sweep** engine plus a decisions workflow | An append-only ledger surfaced at finalize; no execute engine |
 | Escalation | Typed (CRITICAL / PREFERENCE) plus an interactive resolve agent | An escalate verdict and a machine-readable blocked report (the headless envelope); resume from the decision log |
 | Isolation | In place by default; opt-in git worktree per story or bundle, merged back locally | None by default (stories run sequentially in one session); an experimental `--parallel` mode fans stories out into git worktrees |
-| Extensibility | A plugin system (observe, veto, mutate) with bundled TEA and Unity plugins | `customize.toml` knobs and planning-shaping fragments |
+| Extensibility | A plugin system (observe, veto, mutate) with bundled TEA and Unity plugins | `customize.toml` knobs, planning-shaping fragments, and two optional third-party integrations, both off by default and neither able to touch a gate verdict: [claude-mem recall](./cross-session-recall.md) and a [graphify knowledge-graph refresh](./knowledge-graph-refresh.md) |
 | Self-improvement | Not shipped | A health check that files deduplicated GitHub issues about its own friction |
 | Maturity | First-party (bmad-code-org); v0.9.0; rich docs; CI + test suite | Community module; v0.5.1; docs site; CI + test suite |
 | License | MIT | MIT |
