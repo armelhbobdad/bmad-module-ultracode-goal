@@ -51,7 +51,7 @@ These must exist before the first `main`-dispatch release. Order matters.
 
 ### 1. Required-check contexts must exist
 
-Branch-protection rulesets can only require status checks that have reported at least once. Open any PR (or dispatch `quality.yaml` manually) so these seven contexts exist:
+Branch-protection rulesets can only require status checks that have reported at least once. Open any PR (or dispatch `quality.yaml` manually) so these eight contexts exist:
 
 ```text
 prettier
@@ -61,7 +61,10 @@ validate (ubuntu-latest)
 validate (windows-latest)
 python (ubuntu-latest)
 python (windows-latest)
+docs-links
 ```
+
+This list is the setup seed, not the source of truth: the ruleset is. Whenever `quality.yaml` gains or renames a job, add the new context to the ruleset as well, or `main` silently loses that protection while every release still passes (the wait-for-checks step below reads the ruleset, so it waits only on what the ruleset names).
 
 ### 2. Main-branch ruleset
 
