@@ -59,6 +59,8 @@ skills/ultracode-goal/
 │   ├── gate_trail.py              #   per-story evidence trail (gate-trail.md) at finalize
 │   ├── formalize_check.py         #   readiness kernel behind the /ucg-formalize gate
 │   ├── status_render.py           #   read-side render behind /ucg-status
+│   ├── red_ids.py                 #   preflight-RED identity (the resolve join key)
+│   ├── drive_epic.py              #   one `claude -p` per story (--max-stories work bound)
 │   ├── headless_envelope.py       #   the one five-key headless-envelope adapter
 │   ├── health_check_fp.py         #   health-check fingerprint + seen-cache plumbing
 │   ├── mem_observation.py         #   Cross-Session Recall write path (build/spill/drain)

@@ -80,6 +80,7 @@ Invoke the skill in natural language: "run this epic autonomously," "execute thi
 - `--yes`: skip Stage 1's open-floor invite and the launch confirm. It **never** skips the hard preflight gate.
 - `-H`: headless: run non-interactively and emit the five-key status JSON at every exit point.
 - `--retro`: run the close-out retrospective (interactive runs offer it anyway; headless runs it only when this flag is passed).
+- `--max-stories N`: drive at most **N** stories in this invocation, then finish normally through the report and the terminal JSON. It bounds the work, not the scope: the Epic's in-scope set is untouched, so the next invocation resumes where this one stopped. `scripts/drive_epic.py` uses it to run one story per process, so a long Epic's context dies with each story.
 
 See [How It Works](./docs/how-it-works.md) for the full six-stage walkthrough, routing conditions, and the headless contract.
 
