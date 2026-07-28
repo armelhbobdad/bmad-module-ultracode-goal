@@ -11,7 +11,7 @@
 [![npm](https://img.shields.io/npm/v/bmad-module-ultracode-goal)](https://www.npmjs.com/package/bmad-module-ultracode-goal)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/license/MIT)
 [![BMAD Module](https://img.shields.io/badge/BMAD-module-blue)](https://github.com/bmad-code-org/BMAD-METHOD)
-[![Python Version](https://img.shields.io/badge/python-%3E%3D3.10-blue?logo=python&logoColor=white)](https://www.python.org)
+[![Python Version](https://img.shields.io/badge/python-%3E%3D3.11-blue?logo=python&logoColor=white)](https://www.python.org)
 [![uv](https://img.shields.io/badge/uv-package%20manager-blueviolet?logo=uv)](https://docs.astral.sh/uv/)
 [![Docs](https://img.shields.io/badge/docs-online-green)](https://armelhbobdad.github.io/bmad-module-ultracode-goal/)
 [![GitHub stars](https://img.shields.io/github/stars/armelhbobdad/bmad-module-ultracode-goal?style=social)](https://github.com/armelhbobdad/bmad-module-ultracode-goal/stargazers)
@@ -61,7 +61,7 @@ The `gate_status` comes straight from TEA's artifact: `gate_eval.py` never re-de
 
 ## Install
 
-Requires [Claude Code](https://claude.com/product/claude-code) (the runtime UCG conducts), [Node.js](https://nodejs.org/) >= 22, [Python](https://www.python.org/) >= 3.10, [uv](https://docs.astral.sh/uv/), plus `git` and `gh` on PATH.
+Requires [Claude Code](https://claude.com/product/claude-code) (the runtime UCG conducts), [Node.js](https://nodejs.org/) >= 22, [Python](https://www.python.org/) >= 3.11, [uv](https://docs.astral.sh/uv/), plus `git` and `gh` on PATH.
 
 ```bash
 npx bmad-module-ultracode-goal install

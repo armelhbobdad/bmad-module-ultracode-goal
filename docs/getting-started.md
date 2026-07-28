@@ -13,7 +13,7 @@ UltraCode Goal conducts BMAD and TEA skills and runs deterministic Python under 
 |------|--------------|---------|
 | Claude Code | **The runtime: non-negotiable.** UCG composes `/goal`, Auto Mode, Auto Memory, and runtime hooks, which only exist in Claude Code; the autonomous run cannot execute anywhere else | <https://claude.com/product/claude-code> |
 | Node.js >= 22 | Installation, `npx` commands | <https://nodejs.org> |
-| Python >= 3.10 | The deterministic gate, preflight, and hook scripts (run via `uv`) | <https://www.python.org> |
+| Python >= 3.11 | The deterministic gate, preflight, and hook scripts (run via `uv`) | <https://www.python.org> |
 | `uv` | Running the module's Python scripts with automatic dependency management | <https://docs.astral.sh/uv/> |
 | `git` | Epic-branch isolation and per-story commits (the real rollback) | <https://git-scm.com> |
 | `gh` (GitHub CLI) | Submitting or queuing [health-check](./health-check.md) findings | <https://cli.github.com> |
