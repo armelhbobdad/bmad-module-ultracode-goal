@@ -49,6 +49,25 @@ From there the run is autonomous: it defines done with TEA, executes each story 
 | `--yes` | Skips Stage 1's open-floor invite and the launch confirm. The launch briefing still prints. **Never** skips the hard preflight gate. |
 | `-H` | Headless. Runs non-interactively, never prompts (an unresolvable secret becomes a red blocker, not a question), and emits one JSON object at every exit point. |
 | `--retro` | Runs the close-out retrospective (`bmad-retrospective`). Interactive runs offer it at Epic close anyway; headless runs it only when `--retro` is passed. |
+| `--max-stories N` | Bounds this **invocation** to N stories, then finalizes normally (report, ledger, terminal JSON). It is a work bound, not a scope narrowing: in-scope stays every not-`done` story, so the next invocation resumes at the story this one stopped before. No Epic-level gate is authored while stories remain. See [one story per process](#one-story-per-process). |
+
+## One story per process
+
+A headless run drives every remaining story in one Claude Code session, and that session's context only grows: by the fifth story it carries four stories of transcript it will never need again. `scripts/drive_epic.py` moves that boundary into the process table. It spawns one `claude -p` per story under `--max-stories 1`, so each story's context dies with the process that held it:
+
+```bash
+uv run .claude/skills/ultracode-goal/scripts/drive_epic.py \
+  --epic 7 \
+  --impl-artifacts _bmad-output/implementation-artifacts \
+  --profile light \
+  --dry-run
+```
+
+Run it from your project root. The path above is the Claude Code skill copy the installer writes; the module copy under your resolved UCG folder (`_bmad/ucg/ultracode-goal/scripts/drive_epic.py` by default) is the same file, and in a clone of this repository it is `skills/ultracode-goal/scripts/drive_epic.py`.
+
+Drop `--dry-run` to actually spawn. Point `--impl-artifacts` at the directory holding your `sprint-status.yaml`; the driver refuses to start if it is not there, since that is the sprint plan it reads. That directory also has to be the one your config resolves `implementation_artifacts` to, because the spawned session writes its terminal `run-result.json` where the config says, not where the driver was pointed. The driver cannot check that half for you: it would have to re-implement the skill's own config resolution to do it.
+
+The driver is read-only on your tree with exactly one exception: it deletes the pinned `run-result.json` before each spawn, so the file's presence means *that* spawn reached a terminal. It stops on anything it cannot verify, and says why: no readable terminal, a `blocked` envelope (with the reason), a status it does not recognize, a `complete` whose story did not reach `done`, or a session that outran `--session-timeout` (2 hours by default; `0` disables it). Useful flags: `--limit N` caps how many sessions it spawns, `--permission-mode` defaults to `acceptEdits` and refuses `bypassPermissions` unless you also pass `--allow-full-autonomy`, and `--skill-command` overrides the invocation string for a plugin-marketplace install (`/bmad-module-ultracode-goal:ultracode-goal`).
 
 ## Hook security
 
