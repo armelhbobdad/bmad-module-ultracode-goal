@@ -33,6 +33,11 @@ All notable changes to this project will be documented in this file. The format 
 
 - **`story_token_budget`** is deprecated and is now a no-op. The key is still shipped in `customize.toml`, still accepted, and still resolves, so existing team and user overrides keep working and nothing errors; it simply has no effect. Nothing reads it any more: the Stop hook counts turns only, and the preflight stage no longer injects a token budget into the hook environment. The runaway bound is `max_turns_per_story`, enforced by the "stop after N turns" clause in the run condition and by the gate's re-loop budget, with the Stop hook as the advisory recorder. Use `max_turns_per_story` instead.
 
+## [1.0.1](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v1.0.0...v1.0.1) (2026-07-28)
+
+### Bug Fixes
+
+* **ucg-finalize:** delegate `graphify update .`, not a flag that does nothing ([1bb7664](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/1bb766489daa695e2f1e93bfbfb3c60ea8408bc3))
 ## [1.0.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v0.5.1...v1.0.0) (2026-07-28)
 
 ### Features
