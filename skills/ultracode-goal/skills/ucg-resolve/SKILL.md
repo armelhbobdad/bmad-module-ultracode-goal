@@ -201,7 +201,9 @@ Record each answer and its disposition in `.decision-log.md` as you apply it.
 `/ucg-resolve` defines no resume of its own. Once the pass is done, hand back to the
 resume the module already has: **re-enter Execute at the first story whose last verdict is
 not advance**; advanced stories are not re-run; and **re-assert** — never rebuild — the
-Epic branch, both hooks, the allowlist, and the in-flight story's baseline marker.
+Epic branch, both hooks, the allowlist, the `.mem-state.json` recall latch, and the
+in-flight story's baseline marker. The latch belongs on that list here more than anywhere:
+this skill is reached from a blocked run, whose Stage 6 already deleted it.
 
 That rule is not restated here in a second form. It already lives in the module's Execute
 reference and in the parent skill's Resume paragraph, and a second copy would become a
