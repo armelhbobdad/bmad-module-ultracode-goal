@@ -53,9 +53,10 @@ kill) never reached it. Deleting immediately BEFORE the spawn is what makes
 presence mean one thing and one thing only: *this* spawn reached a terminal. If
 the delete fails and the file survives, the drive stops rather than reading it.
 
-FAIL-CLOSED AT EVERY DECISION, and there are five of them:
+FAIL-CLOSED AT EVERY DECISION, and there are six of them:
 
   | after a spawn                            | driver does           |
+  | a forwarded signal reached the driver    | STOP (`signalled`)    |
   | the session outran `--session-timeout`   | KILL it, STOP         |
   | no result file, or it will not parse     | STOP (`no-terminal`)  |
   | `status` is `blocked`                    | STOP, surface `reason`|
@@ -130,7 +131,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -198,8 +199,10 @@ STOP_NO_TERMINAL = "no-terminal"
 STOP_BLOCKED = "blocked"
 STOP_UNKNOWN_STATUS = "unknown-status"
 STOP_NO_PROGRESS = "no-progress"
+STOP_SIGNALLED = "signalled"
 
-# The stops that mean "this invocation finished its work", i.e. exit 0.
+# The stops that mean "this invocation finished its work", i.e. exit 0. A
+# signalled stop is deliberately NOT one: the operator interrupted the drive.
 CLEAN_STOPS = frozenset({STOP_ALL_DONE, STOP_LIMIT, STOP_DRY_RUN})
 
 # `build_rollup` keys epics by their bare numeric prefix (`7`), because that is
@@ -274,7 +277,15 @@ def read_result(impl_artifacts: Path) -> dict | None:
     """
     try:
         text = result_path(impl_artifacts).read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError covers UnicodeDecodeError, which is NOT an OSError and is
+        # reachable rather than theoretical: the adapter serializes with
+        # `ensure_ascii=False`, so a legitimate terminal can carry multi-byte
+        # UTF-8, and this driver SIGKILLs a session that outran its ceiling -
+        # possibly mid-write. A truncated multi-byte sequence read back here
+        # would raise straight out of the drive, replacing the fail-closed
+        # `no-terminal` stop this function documents with a traceback, at the
+        # one moment the operator most needs the summary line.
         return None
     try:
         loaded = json.loads(text)
@@ -344,6 +355,32 @@ def build_command(
 # the driver is trying to clean up a wedged session.
 _KILL_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
+# Every signal that stops the driver must be handed on, for the same reason the
+# SIGINT forwarder exists: `start_new_session` detaches the session, so a signal
+# that kills the driver reaches nothing else, and `--session-timeout` is enforced
+# solely by the driver's own `proc.wait(timeout=...)` - it dies with the driver.
+# SIGINT is the interactive kill switch; SIGTERM is a plain `kill`, a `timeout N`
+# wrapper, systemd, or a cancelled CI job; SIGHUP is a closed terminal or a
+# dropped ssh session, which is exactly how an overnight drive ends. Forwarding
+# only the first leaves the other two orphaning a session that keeps committing
+# under `acceptEdits` with no wall clock at all. Resolved by name, never
+# referenced directly, because SIGHUP is POSIX-only (see `_KILL_SIGNAL`).
+_FORWARDED_SIGNALS = tuple(
+    sig
+    for sig in (getattr(signal, name, None) for name in ("SIGINT", "SIGTERM", "SIGHUP"))
+    if sig is not None
+)
+
+# Set by the forwarder, read by the drive loop. Forwarding alone kills the
+# SESSION; this is what stops the DRIVE, and without it handling these signals
+# is strictly worse than leaving them at their default disposition. The default
+# terminated the driver outright. A handler that returns does not: the `wait()`
+# the signal interrupted simply resumes (PEP 475), the terminal the dying
+# session had already written reads as an ordinary completion, and the loop
+# spawns the NEXT story - so `kill <driver>` would start a fresh unattended
+# session under `acceptEdits` instead of ending the run.
+_STOPPED_BY_SIGNAL: int | None = None
+
 
 def _terminate(proc: subprocess.Popen, sig: int) -> None:
     """Signal the whole session, not just the process that named it.
@@ -388,9 +425,11 @@ def spawn(command: list[str], cwd: Path, timeout: int | None = None) -> int | No
     `run`'s timeout handling kills the direct child ONLY, which is the wrong
     process (see `_terminate`). Owning the wait is what buys the group kill.
     The cost of `start_new_session` is that the session no longer shares the
-    driver's terminal process group, so a Ctrl-C at the driver would not reach
-    it - hence the SIGINT forwarder, which hands the interrupt on and leaves the
-    operator's kill switch working exactly as it did before.
+    driver's terminal process group, so a signal sent to the driver would not
+    reach it - hence the forwarder, installed for every signal in
+    `_FORWARDED_SIGNALS`. It hands each one on, leaving the operator's kill
+    switch working exactly as it did before and, more importantly, making sure
+    that whatever stops the driver also stops the session it was timing.
     """
     try:
         proc = subprocess.Popen(command, cwd=str(cwd), start_new_session=True)
@@ -399,13 +438,37 @@ def spawn(command: list[str], cwd: Path, timeout: int | None = None) -> int | No
         # the caller's fail-closed read stops the drive on the next line.
         return 127
 
-    def _forward(signum, _frame):  # pragma: no cover - needs a real interrupt
+    def _forward(signum, _frame):
+        global _STOPPED_BY_SIGNAL
+        if _STOPPED_BY_SIGNAL is not None:
+            # Asked twice. The first signal was forwarded and the session is
+            # still up, so it is absorbing or ignoring that signal and the
+            # polite path would leave the operator waiting out the remaining
+            # ceiling - up to `DEFAULT_SESSION_TIMEOUT`, or forever under
+            # `--session-timeout 0`. Escalate: hard-kill the whole group, then
+            # let this signal take the driver at its default disposition, so
+            # the second Ctrl-C (or `kill`) ends things the way an operator
+            # expects. The group kill goes FIRST so dying here still cannot
+            # orphan the session.
+            _terminate(proc, _KILL_SIGNAL)
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+            return
+        _STOPPED_BY_SIGNAL = signum
         _terminate(proc, signum)
 
-    try:
-        previous = signal.signal(signal.SIGINT, _forward)
-    except ValueError:  # pragma: no cover - not the main thread
-        previous = None
+    previous: list[tuple[int, Any]] = []
+    for sig in _FORWARDED_SIGNALS:
+        try:
+            if signal.getsignal(sig) is signal.SIG_IGN:
+                # Inherited SIG_IGN is a decision the environment already made -
+                # `nohup` ignores SIGHUP precisely so a long drive survives a
+                # dropped terminal. Installing over it would revoke that for the
+                # duration of every spawn, i.e. for almost the whole drive.
+                continue
+            previous.append((sig, signal.signal(sig, _forward)))
+        except (ValueError, OSError):  # pragma: no cover - not the main thread
+            pass
 
     try:
         return proc.wait(timeout=timeout or None)
@@ -414,8 +477,9 @@ def spawn(command: list[str], cwd: Path, timeout: int | None = None) -> int | No
         proc.wait()
         return None
     finally:
-        if previous is not None:
-            signal.signal(signal.SIGINT, previous)
+        for sig, handler in previous:
+            if handler is not None:
+                signal.signal(sig, handler)
 
 
 # --------------------------------------------------------------------------
@@ -462,6 +526,9 @@ def drive(
     reads a structure rather than scraping the progress lines.
     """
     stream = sys.stdout if out is None else out
+
+    global _STOPPED_BY_SIGNAL
+    _STOPPED_BY_SIGNAL = None
 
     def say(line: str) -> None:
         print(f"{PREFIX}: {line}", file=stream)
@@ -599,6 +666,27 @@ def drive(
         say(f"[{len(driven) + 1}] {target} - spawning: {shlex.join(command)}")
         code = spawn(command, project_root, session_timeout)
         driven.append(target)
+
+        if _STOPPED_BY_SIGNAL is not None:
+            # Checked BEFORE the terminal is read, because a session killed by
+            # the forwarded signal may already have written a perfectly good
+            # `complete` envelope. Reading it first would advance the story and
+            # start the next spawn - turning the operator's stop request into a
+            # new unattended session.
+            try:
+                name = signal.Signals(_STOPPED_BY_SIGNAL).name
+            except ValueError:  # pragma: no cover - a signum outside the enum
+                name = str(_STOPPED_BY_SIGNAL)
+            detail = f"{target}: {name} received, session terminated"
+            say(f"stopped: {STOP_SIGNALLED} - {detail}")
+            return _summary(
+                epic_key=epic_key,
+                driven=driven,
+                advanced=advanced,
+                skipped=skipped,
+                stopped_because=STOP_SIGNALLED,
+                detail=detail,
+            )
 
         if code is None:
             detail = f"{target}: no exit within {session_timeout}s, session killed"

@@ -626,6 +626,30 @@ def test_json_that_is_not_an_object_is_no_terminal(project, monkeypatch):
     assert summary["stopped_because"] == drive_epic.STOP_NO_TERMINAL
 
 
+def test_undecodable_bytes_at_the_pinned_path_are_no_terminal(project, monkeypatch):
+    """`read_result` promises "unreadable" lands on None; UnicodeDecodeError is unreadable.
+
+    It is a ValueError, not an OSError, so an OSError-only guard let it raise
+    straight out of the drive - no summary line, no `driven`/`advanced` account,
+    a traceback instead of the fail-closed stop every other malformed terminal
+    gets. Reachable rather than theoretical: the adapter serializes with
+    `ensure_ascii=False`, so a real terminal can carry multi-byte UTF-8, and
+    this driver SIGKILLs a session that outran its ceiling - possibly partway
+    through that write. These are the trailing bytes of a truncated one.
+    """
+
+    def fake(command, cwd, timeout=None):
+        project["result"].parent.mkdir(parents=True, exist_ok=True)
+        project["result"].write_bytes(b'{"status": "compl\xc3')
+        return 0
+
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
+    )
+    assert summary["stopped_because"] == drive_epic.STOP_NO_TERMINAL
+
+
 # --- the wall clock -----------------------------------------------------------
 
 
@@ -821,6 +845,135 @@ def test_the_kill_signal_is_resolved_once_and_never_named_directly():
         getattr(signal, "SIGKILL", None),
         signal.SIGTERM,
     )
+
+
+def test_every_signal_that_stops_the_driver_is_forwarded(tmp_path):
+    """SIGINT alone left SIGTERM and SIGHUP orphaning the session.
+
+    `start_new_session` detaches the spawn, and `--session-timeout` is enforced
+    only by the driver's own `proc.wait`, so a signal that kills the driver and
+    is not forwarded leaves a `claude` session running under `acceptEdits` with
+    no wall clock at all - the overnight-ssh-drops case. SIGHUP is POSIX-only,
+    so the tuple is resolved by name for the same reason `_KILL_SIGNAL` is.
+    """
+    names = {s.name for s in drive_epic._FORWARDED_SIGNALS}
+    assert {"SIGINT", "SIGTERM"} <= names
+    if hasattr(signal, "SIGHUP"):
+        assert "SIGHUP" in names
+
+    body = SCRIPT.read_text(encoding="utf-8").split('"""', 2)[-1]
+    assert "signal.SIGHUP" not in body, (
+        "signal.SIGHUP does not exist on Windows; resolve it by name"
+    )
+
+
+def test_a_forwarded_signal_stops_the_drive_instead_of_spawning_the_next_story(
+    project, monkeypatch, capsys
+):
+    """Forwarding kills the session; this is what stops the DRIVE.
+
+    The regression this pins is worse than the bug it replaced. A handler that
+    merely forwards and returns leaves the driver alive: `wait()` resumes, the
+    terminal the dying session had ALREADY written reads as an ordinary
+    `complete`, the story shows `done`, and the loop spawns the next story - so
+    `kill <driver>` would start a fresh unattended session under `acceptEdits`.
+    The spawn count is the assertion that bites.
+    """
+
+    def fake(command, cwd, timeout=None):
+        # Exactly the ordering finalize.md prescribes: the session writes its
+        # terminal and advances the row, and is only then killed mid-teardown.
+        project["impl"].mkdir(parents=True, exist_ok=True)
+        project["result"].write_text(json.dumps(complete_envelope()), encoding="utf-8")
+        statuses = current_statuses(project["impl"])
+        statuses[STORY_A] = "done"
+        write_sprint_status(project["impl"], statuses)
+        setattr(drive_epic, "_STOPPED_BY_SIGNAL", signal.SIGTERM)
+        return -15
+
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    monkeypatch.setattr(drive_epic, "_STOPPED_BY_SIGNAL", None)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_SIGNALLED
+    assert summary["driven"] == [STORY_A]
+    assert summary["advanced"] == [], "a signalled stop must not bank the kill as progress"
+    assert drive_epic.STOP_SIGNALLED in capsys.readouterr().out
+    assert drive_epic.STOP_SIGNALLED not in drive_epic.CLEAN_STOPS
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason=(
+        "os.kill on Windows does not deliver a signal - it calls TerminateProcess, "
+        "which kills the test runner outright instead of invoking the handler. The "
+        "forwarder is a POSIX mechanism (see _terminate's killpg fallback)."
+    ),
+)
+def test_a_real_signal_sets_the_flag_and_kills_the_session(tmp_path, monkeypatch):
+    """Pins the PRODUCER half against a real signal, not a hand-set global.
+
+    Without this, deleting the two lines in `_forward` that set the flag leaves
+    the whole suite green - and re-lands the regression the flag exists to stop
+    (session killed, its already-written terminal read as a clean completion,
+    next story spawned). The consumer test hand-sets the global, so it cannot
+    catch that. A real signal is deterministic here and costs under a second.
+    """
+    monkeypatch.setattr(drive_epic, "_STOPPED_BY_SIGNAL", None)
+
+    import threading
+
+    timer = threading.Timer(0.4, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    timer.start()
+    try:
+        code = drive_epic.spawn(
+            [sys.executable, "-c", "import time; time.sleep(30)"], tmp_path, timeout=None
+        )
+    finally:
+        timer.cancel()
+
+    assert drive_epic._STOPPED_BY_SIGNAL == signal.SIGTERM, (
+        "_forward must record the signal; without it the drive banks the kill as progress"
+    )
+    assert code == -signal.SIGTERM, "the forwarded signal must reach the session's group"
+
+
+def test_the_signal_flag_does_not_leak_between_drives(project, monkeypatch):
+    """A stale flag from a previous drive would stop the next one on spawn 1."""
+    monkeypatch.setattr(drive_epic, "_STOPPED_BY_SIGNAL", signal.SIGTERM)
+    fake = FakeSession(project, [(complete_envelope(), STORY_A)])
+    summary = run_drive(project, monkeypatch, fake)
+    assert summary["stopped_because"] != drive_epic.STOP_SIGNALLED
+
+
+def test_an_inherited_sig_ign_is_not_clobbered(tmp_path):
+    """`nohup` ignores SIGHUP so a long drive survives a dropped terminal.
+
+    Installing the forwarder over that would revoke the immunity for the
+    duration of every spawn, i.e. for almost the whole drive.
+    """
+    if not hasattr(signal, "SIGHUP"):  # pragma: no cover - POSIX-only check
+        return
+    previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        drive_epic.spawn([sys.executable, "-c", "raise SystemExit(0)"], tmp_path)
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
+def test_forwarded_handlers_are_restored_after_a_spawn(tmp_path):
+    """The driver borrows the process's handlers; it must hand them back.
+
+    Installing three and restoring one would leave the operator's own SIGTERM
+    and SIGHUP dispositions pointing at a forwarder for a process that has
+    already exited, for the rest of the drive.
+    """
+    before = {sig: signal.getsignal(sig) for sig in drive_epic._FORWARDED_SIGNALS}
+    drive_epic.spawn([sys.executable, "-c", "raise SystemExit(0)"], tmp_path)
+    assert {sig: signal.getsignal(sig) for sig in drive_epic._FORWARDED_SIGNALS} == before
 
 
 def test_the_real_spawn_returns_the_child_exit_code(tmp_path):
