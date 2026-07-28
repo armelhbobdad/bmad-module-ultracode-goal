@@ -339,6 +339,12 @@ def build_command(
     ]
 
 
+# The hardest signal this platform has. SIGKILL is POSIX-only - Windows has no
+# such name, and reaching for it there is an AttributeError at the exact moment
+# the driver is trying to clean up a wedged session.
+_KILL_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+
 def _terminate(proc: subprocess.Popen, sig: int) -> None:
     """Signal the whole session, not just the process that named it.
 
@@ -404,7 +410,7 @@ def spawn(command: list[str], cwd: Path, timeout: int | None = None) -> int | No
     try:
         return proc.wait(timeout=timeout or None)
     except subprocess.TimeoutExpired:
-        _terminate(proc, signal.SIGKILL)
+        _terminate(proc, _KILL_SIGNAL)
         proc.wait()
         return None
     finally:

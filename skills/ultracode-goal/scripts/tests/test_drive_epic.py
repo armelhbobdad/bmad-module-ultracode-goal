@@ -804,6 +804,25 @@ def test_a_skill_command_that_is_not_a_slash_command_is_refused(project, monkeyp
 REAL = pytest.mark.skipif(not hasattr(os, "killpg"), reason="POSIX process groups")
 
 
+def test_the_kill_signal_is_resolved_once_and_never_named_directly():
+    """SIGKILL is POSIX-only, and CI runs Windows.
+
+    The first cut of the timeout reached for `signal.SIGKILL` at the call site
+    and died on Windows with AttributeError at the exact moment it was trying to
+    clean up a wedged session - the one place a crash is least affordable. The
+    constant resolves it once, at import, with a fallback; this pins that no
+    later edit quietly reintroduces the direct reference.
+    """
+    body = SCRIPT.read_text(encoding="utf-8").split('"""', 2)[-1]
+    assert "signal.SIGKILL" not in body, (
+        "signal.SIGKILL does not exist on Windows; use _KILL_SIGNAL"
+    )
+    assert drive_epic._KILL_SIGNAL in (
+        getattr(signal, "SIGKILL", None),
+        signal.SIGTERM,
+    )
+
+
 def test_the_real_spawn_returns_the_child_exit_code(tmp_path):
     assert drive_epic.spawn([sys.executable, "-c", "raise SystemExit(3)"], tmp_path) == 3
 
@@ -857,4 +876,4 @@ def test_the_ceiling_kills_the_whole_session_not_just_the_process_it_named(tmp_p
     finally:
         if pidfile.exists():
             with contextlib.suppress(ValueError, OSError):
-                os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                os.kill(int(pidfile.read_text()), drive_epic._KILL_SIGNAL)
