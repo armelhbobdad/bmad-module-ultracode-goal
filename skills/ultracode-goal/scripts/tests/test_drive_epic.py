@@ -904,6 +904,14 @@ def test_a_forwarded_signal_stops_the_drive_instead_of_spawning_the_next_story(
     assert drive_epic.STOP_SIGNALLED not in drive_epic.CLEAN_STOPS
 
 
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason=(
+        "os.kill on Windows does not deliver a signal - it calls TerminateProcess, "
+        "which kills the test runner outright instead of invoking the handler. The "
+        "forwarder is a POSIX mechanism (see _terminate's killpg fallback)."
+    ),
+)
 def test_a_real_signal_sets_the_flag_and_kills_the_session(tmp_path, monkeypatch):
     """Pins the PRODUCER half against a real signal, not a hand-set global.
 
@@ -913,8 +921,6 @@ def test_a_real_signal_sets_the_flag_and_kills_the_session(tmp_path, monkeypatch
     next story spawned). The consumer test hand-sets the global, so it cannot
     catch that. A real signal is deterministic here and costs under a second.
     """
-    if not hasattr(signal, "SIGTERM"):  # pragma: no cover - POSIX-only check
-        return
     monkeypatch.setattr(drive_epic, "_STOPPED_BY_SIGNAL", None)
 
     import threading
