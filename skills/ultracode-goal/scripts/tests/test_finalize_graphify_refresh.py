@@ -10,7 +10,9 @@ no-op) and `refresh`. In `refresh` mode the terminal stage delegates ONE
 incremental rebuild of the project's `graphify-out/` and nothing else: the
 delegation is hard time-boxed, a failure is logged once and never retried, and an
 absent graphify is a SILENT no-op that leaves the run byte-identical to an `off`
-run.
+run. The delegation is graphify's `update` subcommand, which re-extracts code
+files against the existing graph with no LLM call, so an unattended exit step
+spends no API budget and makes no network request.
 
 Two halves, and the second is what makes the first mean anything:
 
@@ -29,9 +31,11 @@ section, every backticked BARE lowercase word is read here as a mode literal, an
 the set must be exactly `{off, refresh}` — that is what makes the closed enum
 mechanically checkable, so a re-added `query` (or any third mode) reds. Spell
 non-mode bare words in that section without backticks; every other token the
-section needs (`--update`, `command -v graphify`, `graphify-out/manifest.json`,
+section needs (`graphify update`, `command -v graphify`, `graphify-out/graph.json`,
 `WARN graphify-refresh-failed`, `.decision-log.md`) already carries a character
-that excludes it.
+that excludes it. That is why the delegation is written as `graphify update` and
+never as a bare `update`: the bare form would be read as a third mode literal and
+red the closed-enum assertion, which is the convention working, not fighting.
 
 Anti-vacuous twin: `fixtures/finalize_no_graphify_section.md` is a verbatim
 pre-edit snapshot of `references/finalize.md`, taken before this contract landed.
@@ -172,7 +176,7 @@ _SECTION_CHECKS = {
     "pins off as a complete no-op": lambda s: "complete no-op" in s,
     # detect-and-degrade
     "names the PATH probe": lambda s: "command -v graphify" in s,
-    "names the manifest precondition": lambda s: "graphify-out/manifest.json" in s,
+    "names the graph precondition": lambda s: "graphify-out/graph.json" in s,
     "absence writes no decision-log entry": lambda s: (
         "write no `.decision-log.md` entry" in s
     ),
@@ -184,7 +188,10 @@ _SECTION_CHECKS = {
     ),
     "separates absence from failure": lambda s: "Absence is silent; failure is logged." in s,
     # incremental, never a cold build
-    "delegates the incremental path": lambda s: "--update" in s,
+    "delegates the `update` subcommand": lambda s: any(
+        re.search(r"\bgraphify update \.$", line) for line in _delegation_lines(s)
+    ),
+    "pins the no-LLM property": lambda s: "no LLM call" in s,
     "refuses a cold full build": lambda s: "Never a cold full build." in s,
     # bounding
     "time-boxes the delegation": lambda s: any(
@@ -306,7 +313,7 @@ def test_absent_graphify_degrades_silently():
 
     for name in (
         "names the PATH probe",
-        "names the manifest precondition",
+        "names the graph precondition",
         "absence writes no decision-log entry",
         "absence leaves the run byte-identical",
         "separates absence from failure",
@@ -318,7 +325,7 @@ def test_absent_graphify_degrades_silently():
     # fall into an unbounded cold crawl on a machine that happens to have the
     # tool installed.
     assert "both required" in section, (
-        "the section must state the probe and the manifest are BOTH required"
+        "the section must state the probe and the graph are BOTH required"
     )
     assert "If either is missing" in section
 
@@ -352,7 +359,7 @@ def test_silence_assertion_is_not_satisfied_by_the_probe_prose():
     # ... while the detection prose stays green, so the red is attributable to
     # the byte-identity property and not to a garbled probe
     assert _SECTION_CHECKS["names the PATH probe"](mutant)
-    assert _SECTION_CHECKS["names the manifest precondition"](mutant)
+    assert _SECTION_CHECKS["names the graph precondition"](mutant)
 
 
 # --- AC-3: incremental, and finalize is the sole call site -------------------
@@ -364,16 +371,30 @@ def test_refresh_is_incremental_and_finalize_only():
     lines = _delegation_lines(section)
     assert len(lines) == 1, f"expected exactly one delegation command, got {lines}"
     delegation = lines[0]
-    assert "graphify" in delegation and "--update" in delegation, (
-        f"the delegation must be the incremental path: {delegation!r}"
+    assert re.search(r"\bgraphify update \.$", delegation), (
+        f"the delegation must be the no-LLM incremental subcommand: {delegation!r}"
     )
     assert _SECTION_CHECKS["refuses a cold full build"](section)
+    assert _SECTION_CHECKS["pins the no-LLM property"](section)
 
-    # Every shipped graphify command in the section is the incremental one, so a
-    # second, cold-build command cannot be smuggled in beside it.
-    for line in lines:
-        if "graphify" in line:
-            assert "--update" in line, f"non-incremental graphify command shipped: {line!r}"
+    # One line, and the WHOLE line. The fullmatch is what carries this: the
+    # anchored search above inspects only the tail, so it accepts a chained
+    # smuggle, and a loop re-checking the same single line with a WEAKER pattern
+    # is a test that cannot fail. `graphify extract` is the LLM path and a
+    # bare-path `graphify .` aliases straight to it, so either one chained ahead
+    # of the update would dispatch semantic extraction from an unattended exit.
+    assert re.fullmatch(r"timeout \d+ graphify update \.", delegation), (
+        f"the delegation must be exactly the no-LLM incremental subcommand: {delegation!r}"
+    )
+
+    # Positive control for that fullmatch: the smuggle it exists to reject has to
+    # actually fail it, and the weaker form has to actually let it through, or
+    # the assertion above is decoration.
+    smuggle = "timeout 300 graphify extract . && graphify update ."
+    assert re.search(r"\bgraphify update \.$", smuggle), "control is not a valid smuggle"
+    assert not re.fullmatch(r"timeout \d+ graphify update \.", smuggle), (
+        "the fullmatch does not reject a chained `graphify extract`"
+    )
 
     # Position: after the run's other optional integration, and well before the
     # true terminal step. finalize.md forbids acting between the health-check
@@ -412,7 +433,7 @@ def test_graphify_sweep_catches_a_planted_call(tmp_path: Path):
     planted = tmp_path / "execute.md"
     planted.write_text(
         "Step 7. Refresh the graph before the gate:\n\n"
-        "```\ntimeout 300 graphify . --update\n```\n",
+        "```\ntimeout 300 graphify update .\n```\n",
         encoding="utf-8",
     )
     assert _files_naming_graphify([planted]) == ["execute.md"], (
@@ -482,8 +503,8 @@ def test_refresh_delegation_command_survives_the_timeout_mutation():
     assert not re.match(r"^timeout \d+ ", _delegation_lines(mutant)[0])
     # ... while the command itself is intact, so no deleted or garbled command
     # can explain the failure
-    assert "graphify" in mutant_line and "--update" in mutant_line
-    assert _SECTION_CHECKS["delegates the incremental path"](mutant)
+    assert re.search(r"\bgraphify update \.$", mutant_line)
+    assert _SECTION_CHECKS["delegates the `update` subcommand"](mutant)
     assert _SECTION_CHECKS["logs one WARN line on failure"](mutant)
     assert _SECTION_CHECKS["does not retry"](mutant)
 

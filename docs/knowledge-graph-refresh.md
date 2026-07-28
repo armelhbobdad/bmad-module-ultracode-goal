@@ -7,7 +7,7 @@ description: The optional graphify integration - UCG refreshes your project's kn
 
 ## What it does
 
-A knowledge graph of your codebase goes stale the moment a run lands eight stories of new code. With `graphify_integration = "refresh"`, Stage 6 Finalize spends one incremental rebuild refreshing it, so the next session starts from a current graph instead of a stale one.
+A knowledge graph of your codebase goes stale the moment a run lands eight stories of new code and the documents that came with them, which is exactly what a UCG run produces. With `graphify_integration = "refresh"`, Stage 6 Finalize spends one incremental, local rebuild, so the next session starts from a current picture instead of a stale one. It refreshes what can be parsed and leaves what needs a model alone; [what it runs](#what-it-runs-and-where-it-writes) draws that line precisely.
 
 Finalize is the only call site. No preflight step, no per-story step, and nothing in the gate path calls graphify or reads its output. See [how it works](./how-it-works.md) for where Stage 6 sits.
 
@@ -21,7 +21,7 @@ uv tool install graphifyy   # or: pipx install graphifyy. The command is `graphi
 
 > graphify is a third-party tool maintained independently of this module. We don't bundle, endorse, or install it; the refresh simply uses it when you already have it.
 
-You also need a graph to refresh. Build one once yourself (`graphify .`), which is the condition the second precondition below is really asking about.
+You also need a graph to refresh, since this step updates one and never builds one. Build it once yourself (`graphify .`, which is the full pipeline and does use an LLM backend), and the run keeps its parsed layer current after that.
 
 ## Turning it on
 
@@ -39,17 +39,19 @@ The `[workflow]` table header matters: the resolver extracts the `workflow` bloc
 ## Three things to know before you turn it on
 
 - **The values are `off` and `refresh`, not `on` and `off`.** `cross_session_recall` sits directly above it in the shipped file and takes `on`, so copying that shape here produces `"on"`, which is not a legal value and leaves the step off.
-- **A first-ever enable does nothing, deliberately.** Two preconditions are both required: `graphify` resolves on `PATH`, and a `graphify-out/manifest.json` already exists under the project root to increment from. Refresh means refresh: with no manifest there is nothing to increment, and a cold build walks the whole corpus and spends API budget, which is not something a bounded exit step may do. Build the graph once yourself, and the run keeps it current from then on.
+- **A first-ever enable does nothing, deliberately.** Two preconditions are both required: `graphify` resolves on `PATH`, and a `graphify-out/graph.json` already exists under the project root to update. Refresh means refresh: with no graph there is nothing to update, and building one from nothing walks the whole corpus, which is not something a bounded exit step may do. Build the graph once yourself, and the run keeps its parsed layer current from then on.
 - **Absence is silent, failure is logged.** When either precondition is missing, the run is byte-identical to an `off` run: no probe output, no decision-log line, nothing. When the pass does run and then fails or exceeds its 300 second time box, Finalize logs one `WARN graphify-refresh-failed` line to `.decision-log.md` and moves on. It is never retried.
 
-## What it sends, and where it writes
+## What it runs, and where it writes
 
-Read this before enabling it on a private codebase.
+The delegation is exactly one command, `graphify update .`, time-boxed to 300 seconds and never retried. That subcommand re-extracts the graph's **parsed layer** against what is on disk, using tree-sitter: **no LLM call, no API key, no network request, no token spend** at the end of a run you were not watching.
 
-graphify extracts code locally (tree-sitter, no network call), but non-code files go to an LLM. When the changed slice includes documents, papers, or images, graphify sends their content to whichever backend it auto-detects from your environment: `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `MOONSHOT_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, Azure, Bedrock, or a local Ollama. Two consequences worth planning for:
+The parsed layer is everything graphify has an extractor for: your source code, plus the Markdown family (`.md`, `.mdx`, `.qmd`, `.skill`). So an Epic's new modules and the story and documentation files it wrote are both picked up. What stays as the last full build left it is the **semantic** layer: images, PDFs and papers, and anything an LLM derived from a document. That pass is the one that would send your files to a model provider and spend your API budget, which is exactly what an unattended exit step should not decide to do. Run it yourself, on your own terms, when you want it.
 
-- **A refresh can spend API budget**, on your key, at the end of a run you were not watching. A slice of pure code changes spends nothing and needs no key.
-- **With no backend configured and a non-code file in the slice, graphify exits non-zero**, so the refresh fails and the only thing you see is the `WARN graphify-refresh-failed` line. That is the failure to suspect first if the graph never seems to update.
+One behaviour worth knowing, because it is the opposite of what people expect:
+
+- **Deleting code shrinks the graph, and nothing warns.** That is correct: the rebuild accounts for sources that are gone and writes the smaller graph, exit 0.
+- **What graphify refuses is an unexplained loss**, where nodes vanish while their source is still sitting on disk. An Epic that adds a `.gitignore` rule, or otherwise narrows what gets scanned, produces exactly that. Then graphify declines the write, exits non-zero, and you get a `WARN graphify-refresh-failed` line with the graph left intact. Whether to re-run `graphify update . --force` is a decision the run does not make for you.
 
 The output is a `graphify-out/` directory at your project root, not in the run folder, so it is not part of the run's evidence and nothing in the gate path reads it. It regenerates on every refresh and holds a `graph.json`, a `graph.html`, a report, and a cache, so **add `graphify-out/` to your `.gitignore`**: UCG commits each green story, and an untracked-but-not-ignored tree at the repo root is exactly what a story commit should never sweep up.
 

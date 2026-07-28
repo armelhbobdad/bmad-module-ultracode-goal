@@ -81,17 +81,21 @@ Resolve the mode exactly as the hooks below resolve theirs:
 
 Two values, and no others. `off` is the shipped default and a complete no-op — no probe, no delegation, no decision-log line, no output; there is nothing to read further in this section. `refresh` refreshes the project's knowledge graph on the way out, so the next session starts from a current one instead of a stale one.
 
-**Probe first, and degrade to silence.** Two preconditions, both required: graphify resolves on PATH (`command -v graphify`), and a prior `graphify-out/manifest.json` exists under `{project-root}` to increment from. If either is missing there is nothing to refresh — do nothing, print nothing, and write no `.decision-log.md` entry, so the run stays byte-identical to an `off` run. A "skipped it" log line is exactly the difference that would break that, so do not add one. Absence is silent; failure is logged. They are different events.
+**Probe first, and degrade to silence.** Two preconditions, both required: graphify resolves on PATH (`command -v graphify`), and a prior `graphify-out/graph.json` exists under `{project-root}` to update. If either is missing there is nothing to refresh — do nothing, print nothing, and write no `.decision-log.md` entry, so the run stays byte-identical to an `off` run. A "skipped it" log line is exactly the difference that would break that, so do not add one. Absence is silent; failure is logged. They are different events.
 
-The manifest precondition is not defensive padding. Refresh means refresh: with no manifest there is nothing to increment from, and a cold rebuild walks the whole corpus and spends API budget, which is the opposite of what a bounded step on the way out may do. A first-ever run in this mode therefore refreshes nothing and says nothing.
+The graph precondition is not defensive padding. Refresh means refresh: with no graph there is nothing to update, and building one from nothing walks the whole corpus, which is the opposite of what a bounded step on the way out may do. A first-ever run in this mode therefore refreshes nothing and says nothing.
 
 **With both preconditions met, delegate one incremental rebuild from `{project-root}`** — graphify writes `graphify-out/` relative to the current working directory:
 
 ```
-timeout 300 graphify . --update
+timeout 300 graphify update .
 ```
 
-`--update` re-extracts only what changed against the recorded manifest, so graphify's own manifest diff *is* the changed-path scoping: the run does not enumerate the Epic's paths, and there is no surface that would accept them. Never a cold full build.
+`graphify update` is the subcommand that re-extracts the graph's **parsed layer** against what is on disk, with no LLM call: no API key, no network, no token spend at the end of an unattended run. Never a cold full build. That layer is everything graphify has a tree-sitter extractor for, which is the source code plus the Markdown family (`.md`, `.mdx`, `.qmd`, `.skill`), so an Epic's new modules *and* the story and doc files it wrote are both picked up. What it does not run is the semantic pass: images, PDFs and papers, and any LLM-derived layer over a document, stay as the last full build left them, because that path spends API budget and a bounded exit step may not take it unattended.
+
+Deleting code shrinks the graph, and that is the correct outcome, not a failure: the rebuild accounts for sources that are gone from disk and writes the smaller graph, exit 0, no `WARN`. What graphify refuses is an **unexplained** loss, where nodes disappear but their source is still on disk, which is what an Epic that adds a `.gitignore` rule or otherwise narrows the scan corpus produces. That refusal exits non-zero, so the `WARN` below records it and the graph is left untouched; whether to re-run with `--force` is a decision this step does not get to make.
+
+Pass no other flags. Unlike `graphify extract`, this subcommand rejects an unknown option with a usage error instead of ignoring it, so a flag that stops being real fails loudly here rather than silently doing nothing.
 
 The delegation is hard time-boxed by the `timeout 300` prefix above and is **not retried**. On a non-zero exit or a timeout, log one `WARN graphify-refresh-failed` line to `.decision-log.md` and move on.
 
