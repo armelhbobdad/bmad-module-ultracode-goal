@@ -121,6 +121,7 @@ export default defineConfig({
             { label: 'Gate Model', slug: 'gate-model' },
             { label: 'Health Check', slug: 'health-check' },
             { label: 'Cross-Session Recall', slug: 'cross-session-recall' },
+            { label: 'Knowledge-Graph Refresh', slug: 'knowledge-graph-refresh' },
             { label: 'Troubleshooting', slug: 'troubleshooting' },
             { label: 'UCG vs bmad-loop', slug: 'comparison' },
           ],

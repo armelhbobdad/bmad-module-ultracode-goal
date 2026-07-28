@@ -138,6 +138,7 @@ The docs are organized into three buckets: **Why** (start here), **Try** (do stu
 - **[Gate Model](./docs/gate-model.md)**: how `gate_eval.py` maps `gate_status` to a verdict, and the production AND-signals.
 - **[Health Check](./docs/health-check.md)**: the terminal self-improvement loop: what it sends, privacy, and how to disable it.
 - **[Cross-Session Recall](./docs/cross-session-recall.md)**: the optional claude-mem integration: touchpoints, trust model, and how to enable it.
+- **[Knowledge-Graph Refresh](./docs/knowledge-graph-refresh.md)**: the optional graphify integration: preconditions, what it sends where, and what it never touches.
 - **[Troubleshooting](./docs/troubleshooting.md)**: real failure modes and their remediations.
 
 Every run that reaches Finalize ends with a self-improvement check that can file a deduplicated GitHub issue with your approval, so **please let runs finish through Finalize**, or [open an issue](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose) directly. If UCG shipped an epic while you slept, a ⭐ helps others find it.
