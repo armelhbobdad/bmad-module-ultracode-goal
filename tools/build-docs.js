@@ -120,6 +120,7 @@ function generateLlmsTxt(outputDir) {
     `- **[Architecture](${SITE_URL}/architecture/)** - The conductor model, the three enforcement layers, the file layout, and customization resolution`,
     `- **[Gate Model](${SITE_URL}/gate-model/)** - How gate evaluation maps TEA's gate status to a verdict, the thresholds, and the fail-closed contract`,
     `- **[Health Check](${SITE_URL}/health-check/)** - The terminal self-improvement reflection, the privacy model, and how to disable it`,
+    `- **[Operating Tips](${SITE_URL}/operating-tips/)** - Field notes from real drives: the driver's stop reasons, sequencing by row order, and the verification traps`,
     `- **[Troubleshooting](${SITE_URL}/troubleshooting/)** - Real failure modes and their remediations`,
     '',
     '---',

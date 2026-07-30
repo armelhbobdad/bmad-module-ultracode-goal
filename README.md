@@ -139,7 +139,9 @@ The docs are organized into three buckets: **Why** (start here), **Try** (do stu
 - **[Health Check](./docs/health-check.md)**: the terminal self-improvement loop: what it sends, privacy, and how to disable it.
 - **[Cross-Session Recall](./docs/cross-session-recall.md)**: the optional claude-mem integration: touchpoints, trust model, and how to enable it.
 - **[Knowledge-Graph Refresh](./docs/knowledge-graph-refresh.md)**: the optional graphify integration: preconditions, what it sends where, and what it never touches.
+- **[Operating Tips](./docs/operating-tips.md)**: field notes from real drives: the driver's stop reasons, sequencing by row order, and the verification traps.
 - **[Troubleshooting](./docs/troubleshooting.md)**: real failure modes and their remediations.
+- **[UCG vs bmad-loop](./docs/comparison.md)**: a side-by-side comparison with bmad-code-org's bmad-loop orchestrator.
 
 Every run that reaches Finalize ends with a self-improvement check that can file a deduplicated GitHub issue with your approval, so **please let runs finish through Finalize**, or [open an issue](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose) directly. If UCG shipped an epic while you slept, a ⭐ helps others find it.
 

@@ -64,5 +64,6 @@ The docs split into three buckets: **Why** (start here), **Try** (do stuff), and
 - [Health Check](./health-check.md): the terminal self-improvement reflection: what it sends, the privacy model, and how to disable it.
 - [Cross-Session Recall](./cross-session-recall.md): the optional claude-mem integration and its trust model.
 - [Knowledge-Graph Refresh](./knowledge-graph-refresh.md): the optional graphify integration, its preconditions, and what it sends where.
+- [Operating Tips](./operating-tips.md): field notes from real drives: the driver's stop reasons, why row order is the only sequencing mechanism, and the verification traps.
 - [Troubleshooting](./troubleshooting.md): real failure modes and their remediations.
 - [UCG vs bmad-loop](./comparison.md): a side-by-side comparison with bmad-code-org's bmad-loop orchestrator (formerly bmad-auto).
