@@ -5,6 +5,8 @@ description: Maps the real failure modes of an autonomous Epic run (preflight re
 
 Real failure modes, sourced from the skill's stage files and scripts, with what the run does about each and what you do. For the design behind these behaviors see [how it works](./how-it-works.md), [the gate model](./gate-model.md), and [architecture](./architecture.md).
 
+For the operator's side of a run that is technically working and still not doing what you meant, see [operating tips](./operating-tips.md). It covers the driver stop reasons that need a decision, why row order is the only sequencing mechanism, and the verification traps that produce confident false greens.
+
 Start from the symptom you observed and follow it to the section that explains it:
 
 ```mermaid
@@ -19,9 +21,11 @@ flowchart TD
     B -->|"yes"| BUD["See: Budget exhausted mid-story"]
     B -->|"no"| R{"Run was interrupted, want to continue"}
     R -->|"yes"| RES["See: Resume after an interruption"]
-    R -->|"no"| PAR["See: --parallel issues"]
+    R -->|"no"| D{"A drive stopped and you cannot tell why"}
+    D -->|"yes"| OPS["See: operating tips, the driver's stop reasons"]
+    D -->|"no"| PAR["See: --parallel issues"]
     classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
-    class PRE,GATE,HOOK,BUD,RES,PAR accent
+    class PRE,GATE,HOOK,BUD,RES,OPS,PAR accent
 ```
 
 ## Preflight can't reach budget-zero

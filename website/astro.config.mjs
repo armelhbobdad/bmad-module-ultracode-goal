@@ -122,6 +122,7 @@ export default defineConfig({
             { label: 'Health Check', slug: 'health-check' },
             { label: 'Cross-Session Recall', slug: 'cross-session-recall' },
             { label: 'Knowledge-Graph Refresh', slug: 'knowledge-graph-refresh' },
+            { label: 'Operating Tips', slug: 'operating-tips' },
             { label: 'Troubleshooting', slug: 'troubleshooting' },
             { label: 'UCG vs bmad-loop', slug: 'comparison' },
           ],
