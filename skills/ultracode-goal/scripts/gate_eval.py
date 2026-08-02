@@ -168,6 +168,25 @@ def _per_story_slim(trace_output: Path, story: str | None) -> Path | None:
     return None
 
 
+# The `workflowType` values a trace report must declare. A report that declares
+# neither is skipped by the hint loop, so it can carry no gate decision.
+_TRACE_WORKFLOW_TYPES = ("testarch-trace", "trace")
+
+
+def _declares_trace_report(report: Path) -> bool:
+    """True iff this markdown file declares itself a trace report.
+
+    Unreadable counts as NOT a trace report: the file could contribute no hint
+    either way, and this predicate gates a fail-closed branch, so the safe
+    answer is the one that keeps the branch reachable.
+    """
+    try:
+        fm = _frontmatter(report.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return False
+    return fm.get("workflowType") in _TRACE_WORKFLOW_TYPES
+
+
 def _resolve_gate_file(trace_output: Path, story: str | None = None) -> Path | None:
     """Locate the slim gate-decision file, honoring a trace-report hint.
 
@@ -181,7 +200,29 @@ def _resolve_gate_file(trace_output: Path, story: str | None = None) -> Path | N
     reports = sorted(trace_output.glob("*.md"))
     scoped_slim = _per_story_slim(trace_output, story)
     if story and story.strip():
-        scoped = [r for r in reports if _stem_matches_story(r.stem, story)]
+        # A markdown file merely NAMED for this story is not a trace report, and
+        # letting one count here suppresses the fail-closed branch below.
+        # `references/gate.md` tells the non-web author to write
+        # `nfr-assessment-<id>.md` and `test-review-<id>.md` into this same
+        # directory, and both match `_stem_matches_story`. So a story that
+        # produced its NFR and review but never authored its trace pair looked
+        # "present": `scoped` was non-empty, the fail-closed return was skipped,
+        # neither file carries a `gateDecisionFile` hint, and resolution fell
+        # through to the UNSCOPED `gate-decision.json` / `e2e-trace-summary.json`
+        # - handing an artifact-less story a PASS. Measured: the same directory
+        # with the NFR named `nfr-assessment.md` fails closed, and with it named
+        # `nfr-assessment-1-2.md` returns PASS.
+        #
+        # Declared trace reports only, therefore - the same predicate the hint
+        # loop below already applies before honoring a hint, and the same one
+        # `gate_trail.py` applies when it picks a story's trace report. A file
+        # that would contribute no hint must not buy the story a pass out of the
+        # fail-closed branch either.
+        scoped = [
+            r
+            for r in reports
+            if _stem_matches_story(r.stem, story) and _declares_trace_report(r)
+        ]
         if scoped:
             reports = scoped
         elif scoped_slim is not None:
@@ -198,7 +239,7 @@ def _resolve_gate_file(trace_output: Path, story: str | None = None) -> Path | N
             fm = _frontmatter(report.read_text(encoding="utf-8"))
         except OSError:
             continue
-        if fm.get("workflowType") not in ("testarch-trace", "trace"):
+        if fm.get("workflowType") not in _TRACE_WORKFLOW_TYPES:
             continue
         for key in _FRONTMATTER_GATE_KEYS:
             hint = fm.get(key)

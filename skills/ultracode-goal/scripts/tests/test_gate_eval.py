@@ -818,3 +818,77 @@ def test_mutant_without_own_slim_clause_reports_another_epics_pass(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_an_nfr_named_for_a_story_does_not_buy_it_out_of_fail_closed(tmp_path):
+    """A markdown file merely NAMED for a story is not a trace report.
+
+    `references/gate.md` tells the non-web author to write
+    `nfr-assessment-<id>.md` and `test-review-<id>.md` into the same directory as
+    the trace pair, and both match the id-component test. So a story that
+    produced its NFR and review but never authored its trace pair looked
+    "present" to the resolver: `scoped` was non-empty, the fail-closed return was
+    skipped, neither file carries a `gateDecisionFile` hint, and resolution fell
+    through to the UNSCOPED summary - handing an artifact-less story a PASS.
+
+    That is the same fail-open class as the neighbour's-gate defect, reached by a
+    different door, and the per-story naming rule makes the door mandatory.
+    """
+    write_trace_report(tmp_path, "trace-1-1.md", "gate-decision-1-1.json")
+    write_named_slim(tmp_path, "gate-decision-1-1.json", "CONCERNS")
+    # The always-written summary, carrying someone else's PASS.
+    (tmp_path / "e2e-trace-summary.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+    # Story 1-2: NFR and review present, trace pair absent.
+    (tmp_path / "nfr-assessment-1-2.md").write_text(
+        "**Overall Status:** PASS\n", encoding="utf-8"
+    )
+    (tmp_path / "test-review-1-2.md").write_text(
+        "**Quality Score**: 95/100\n**Recommendation**: Approve\n", encoding="utf-8"
+    )
+
+    result = run_gate(tmp_path, profile="light", story="1-2")
+    assert result["gate_status"] == "NOT_EVALUATED"
+    assert result["verdict"] == "escalate"
+    assert any("no trace report or gate decision" in r for r in result["reasons"])
+
+
+def test_a_declared_trace_report_still_scopes_normally(tmp_path):
+    """The narrowing must not stop a real trace report from scoping.
+
+    Same directory shape as above, except story 1-2 DID author its trace pair.
+    """
+    write_trace_report(tmp_path, "trace-1-1.md", "gate-decision-1-1.json")
+    write_named_slim(tmp_path, "gate-decision-1-1.json", "FAIL", p0="NOT_MET")
+    write_trace_report(tmp_path, "trace-1-2.md", "gate-decision-1-2.json")
+    write_named_slim(tmp_path, "gate-decision-1-2.json", "PASS")
+    (tmp_path / "nfr-assessment-1-2.md").write_text(
+        "**Overall Status:** PASS\n", encoding="utf-8"
+    )
+
+    result = run_gate(tmp_path, profile="light", story="1-2")
+    assert result["gate_status"] == "PASS"
+    assert any("gate-decision-1-2.json" in r for r in result["reasons"])
+
+
+def test_an_undeclared_trace_report_no_longer_suppresses_fail_closed(tmp_path):
+    """A `trace-<id>.md` with no workflowType contributes no hint either way.
+
+    gate.md says such a report "is skipped", and the hint loop already skips it -
+    so before this change it could suppress the fail-closed branch while being
+    unable to resolve anything, which is the worst of both.
+    """
+    write_trace_report(tmp_path, "trace-9-1.md", "gate-decision-9-1.json")
+    write_named_slim(tmp_path, "gate-decision-9-1.json", "PASS")
+    (tmp_path / "trace-9-2.md").write_text("# no frontmatter at all\n", encoding="utf-8")
+    # The generic summary is what an un-narrowed resolver falls through TO. Without
+    # it the story reaches NOT_EVALUATED by a different route and the test passes
+    # either way, discriminating nothing.
+    (tmp_path / "e2e-trace-summary.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+
+    result = run_gate(tmp_path, profile="light", story="9-2")
+    assert result["gate_status"] == "NOT_EVALUATED"
+    assert result["verdict"] == "escalate"
