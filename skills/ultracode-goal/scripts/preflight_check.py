@@ -191,12 +191,38 @@ def _read_toml_or_yaml_flags(tea_config: Path) -> dict:
         key = key.strip()
         if key not in TEA_FLAG_KEYS:
             continue
-        value = value.strip().strip('"').strip("'")
+        value = _strip_inline_comment(value).strip().strip('"').strip("'")
         if value.lower() in ("true", "false"):
             flags[key] = value.lower() == "true"
         else:
             flags[key] = value
     return flags
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Drop a YAML inline comment from a scalar, respecting a quoted value.
+
+    The sibling `_parse_development_status` already does this, because a
+    hand-written config routinely annotates its keys. This reader did not, so
+    `test_artifacts: <path>  # where TEA writes` resolved to a directory whose
+    name literally carried "  # where TEA writes". `ULTRACODE_TEST_ARTIFACTS`
+    then pointed nowhere, the guard's un-skip proof found no
+    `atdd-checklist-<story>.md` to read, and it enforced nothing — while
+    preflight still reported green. An inert control, not a cosmetic parse bug.
+    `tea_execution_mode` was corrupted the same way, so the forced-Create check
+    compared against `create  # forced`.
+
+    Whitespace-preceded rather than a bare `split("#")`, which is what YAML
+    actually specifies, so a `#` inside a value survives.
+    """
+    value = value.strip()
+    if value[:1] in ('"', "'"):
+        quote = value[0]
+        end = value.find(quote, 1)
+        if end != -1:
+            return value[: end + 1]
+        return value
+    return re.sub(r"\s+#.*$", "", value)
 
 
 def _tea_artifacts_root(project_root: Path, tea_flags: dict) -> Path:

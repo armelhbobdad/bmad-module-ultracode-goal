@@ -943,3 +943,131 @@ def test_shipped_surfaces_cite_no_plan_identifiers(path: Path):
         text = text.split("# House rules:")[0]
     for pattern in (r"\bFR-\d", r"\bAD-\d", r"\bNFR-\d", r"\bOQ-\d", r"\bINV-\d", r"\bAC-\d"):
         assert not re.search(pattern, text), f"{path.name} cites {pattern}"
+
+
+# ---------------------------------------------------------------------------
+# The two remaining ways `belongs()` could be disarmed, both of which handed an
+# undriven story somebody else's PASS.
+# ---------------------------------------------------------------------------
+
+
+def _declared_trace(trace: Path, story: str) -> None:
+    (trace / f"trace-{story}.md").write_text(
+        "---\nworkflowType: testarch-trace\n"
+        f"gateDecisionFile: gate-decision-{story}.json\n---\n# t\n",
+        encoding="utf-8",
+    )
+
+
+def _slim(trace: Path, story: str, status: str) -> None:
+    (trace / f"gate-decision-{story}.json").write_text(
+        json.dumps({"gate_status": status}), encoding="utf-8"
+    )
+
+
+def test_alphanumeric_child_story_never_inherits_the_epic_rollups_pass(tmp_path):
+    """`numeric_prefix('92-7f-never-driven')` is `92` — the EPIC id, not a shorter
+    spelling of the story.
+
+    The epic roll-up writes `trace-92.md` / `gate-decision-92.json` into the same
+    shared directory, so the truncated scope matched a real artifact set and a
+    story nobody ever drove rendered the epic's PASS as its own verdict.
+    """
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    # the epic roll-up, PASS
+    _declared_trace(trace, "92")
+    _slim(trace, "92", "PASS")
+    # a genuinely driven sibling, so the directory is per-story-named
+    _declared_trace(trace, "92-1a")
+    _slim(trace, "92-1a", "CONCERNS")
+
+    status, source = gate_trail.gate_status_for(trace, "92-7f-never-driven")
+
+    assert (status, source) == (None, None), (
+        "an undriven child story resolved %r from %r" % (status, source)
+    )
+
+
+def test_the_epic_rollup_still_resolves_its_own_gate(tmp_path):
+    """Control for the test above. Narrowing the prefix scope must not make the
+    epic's own roll-up unresolvable — without this, the assertion above would
+    also pass on a build that simply stopped resolving anything."""
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    _declared_trace(trace, "92")
+    _slim(trace, "92", "PASS")
+    _declared_trace(trace, "92-1a")
+    _slim(trace, "92-1a", "CONCERNS")
+
+    assert gate_trail.gate_status_for(trace, "92") == ("PASS", "gate-decision-92.json")
+    assert gate_trail.gate_status_for(trace, "92-1a") == (
+        "CONCERNS",
+        "gate-decision-92-1a.json",
+    )
+
+
+def test_slug_suffixed_story_still_resolves_through_the_prefix_fallback(tmp_path):
+    """The fallback the prefix scope exists FOR must survive the narrowing.
+
+    `4-1-some-slug` keeps a complete `<epic>-<story>` prefix, so it still resolves
+    `gate-decision-4-1.json`. This is the case the scope was added for.
+    """
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    _declared_trace(trace, "4-1")
+    _slim(trace, "4-1", "PASS")
+
+    assert gate_trail.gate_status_for(trace, "4-1-some-slug") == (
+        "PASS",
+        "gate-decision-4-1.json",
+    )
+
+
+def test_a_story_with_only_an_nfr_file_does_not_claim_a_trace_report(tmp_path):
+    """`own_trace` disarms `belongs()` entirely, so it must mean what it says.
+
+    `references/gate.md` ORDERS the non-web author to write `nfr-assessment-<id>.md`
+    into this same directory. Computed from any id-matching `*.md`, `own_trace`
+    was true for a story that produced only that file — and the always-written
+    `e2e-trace-summary.json` was then accepted as its gate.
+    """
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    (trace / "e2e-trace-summary.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+    # a driven sibling, so the directory is not the isolated single-story shape
+    _declared_trace(trace, "92-1a")
+    _slim(trace, "92-1a", "CONCERNS")
+    # the undriven story wrote ONLY its NFR file - no workflowType frontmatter
+    (trace / "nfr-assessment-92-7f.md").write_text(
+        "# NFR\n\n**Overall Status:** PASS\n", encoding="utf-8"
+    )
+
+    status, source = gate_trail.gate_status_for(trace, "92-7f")
+
+    assert (status, source) == (None, None), (
+        "a story with only an NFR file resolved %r from %r" % (status, source)
+    )
+
+
+def test_a_story_with_a_real_trace_report_still_resolves_the_shared_summary(tmp_path):
+    """Control for the test above: with a DECLARED trace report of its own, the
+    story legitimately reaches the shared summary. The narrowing must remove only
+    the NFR-only case, not the mechanism."""
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    (trace / "e2e-trace-summary.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+    _declared_trace(trace, "92-1a")
+    _slim(trace, "92-1a", "CONCERNS")
+    # this story DID write a declared trace report, but no slim gate file
+    (trace / "trace-92-7f.md").write_text(
+        "---\nworkflowType: testarch-trace\n---\n# t\n", encoding="utf-8"
+    )
+
+    status, _source = gate_trail.gate_status_for(trace, "92-7f")
+
+    assert status == "PASS"

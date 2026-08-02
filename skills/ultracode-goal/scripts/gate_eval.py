@@ -283,6 +283,16 @@ def _resolve_gate_file(trace_output: Path, story: str | None = None) -> Path | N
     # the right story even when no trace report points at it.
     if scoped_slim is not None:
         return scoped_slim
+    if story and _is_per_story_named(trace_output):
+        # The SAME fail-closed rule as the branch above, applied to the last
+        # resort. That `return None` is guarded by `elif`, so it is reachable
+        # only when `scoped` is EMPTY — a story that authored a DECLARED trace
+        # report but no resolvable gate file (no `gateDecisionFile` hint, and no
+        # per-story slim file) skipped it entirely and landed here, where the
+        # unscoped `gate-decision.json` is a NEIGHBOUR's, or the epic roll-up's,
+        # verdict. Having written a trace report must not buy a story a pass out
+        # of the fail-closed lane that a story with no artifacts at all gets.
+        return None
     return trace_output / "gate-decision.json"
 
 
@@ -339,6 +349,27 @@ def load_gate(trace_output: Path, reasons: list[str], story: str | None = None) 
         }
 
     summary_file = _resolve_summary_file(trace_output, story)
+    if (
+        story
+        and summary_file.name == "e2e-trace-summary.json"
+        and _is_per_story_named(trace_output)
+    ):
+        # The summary fallback is the same unscoped read, one file along. In a
+        # per-story-named directory the GENERIC summary belongs to no story in
+        # particular and is written for the whole run, so handing it back as
+        # this story's gate is the neighbour's-verdict fail-open wearing a
+        # different filename. A per-story-named summary is still honored above.
+        reasons.append(
+            f"story {story} has no per-story gate decision or summary in {trace_output}; "
+            "the directory is named per story, so the shared e2e-trace-summary.json "
+            "was not read as this story's gate"
+        )
+        return {
+            "gate_status": "NOT_EVALUATED",
+            "p0_status": None,
+            "p1_status": None,
+            "overall_status": None,
+        }
     if summary_file.is_file():
         reasons.append(
             f"{gate_file.name} absent; gate read from {summary_file.name} (not a failure)"
@@ -421,6 +452,18 @@ def apply_production_and(
         nfr_status = _scan_nfr_overall_status(nfr_path.read_text(encoding="utf-8"))
         if nfr_status == "FAIL":
             reasons.append("nfr overallStatus is FAIL")
+            failed = True
+        elif nfr_status == "NOT_ASSESSED":
+            # NOT_ASSESSED is in the scanner's alternation, so it parses cleanly
+            # and never reached the `is None` branch below: it read as "present
+            # and not FAIL" and PASSED the AND. But it is the NFR audit saying
+            # the NFRs were never evaluated - strictly weaker evidence than a
+            # file this reader cannot parse, which already fails closed two
+            # branches down. Advancing a story on it inverted the contract.
+            reasons.append(
+                f"nfr Overall Status is NOT_ASSESSED in {nfr_path.name}; "
+                "treated as failing (the NFRs were never evaluated)"
+            )
             failed = True
         elif nfr_status is None:
             reasons.append(f"nfr Overall Status not found in {nfr_path.name}; treated as failing")

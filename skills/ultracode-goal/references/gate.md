@@ -44,7 +44,7 @@ Write a PASS only when the story is demonstrably done to its profile's Definitio
 **Overall Status:** PASS
 ```
 
-`PASS` | `CONCERNS` | `FAIL` (the key may also be written `overallStatus:`). A `FAIL` — or a status the scanner cannot find — downgrades `advance`→`reloop`.
+`PASS` | `CONCERNS` | `FAIL` | `NOT_ASSESSED` (the key may also be written `overallStatus:`). A `FAIL`, a `NOT_ASSESSED`, or a status the scanner cannot find all downgrade `advance`→`reloop`. `NOT_ASSESSED` is listed because TEA emits it and the scanner recognises it: it parses cleanly, so it never reaches the cannot-find branch, and it means the NFRs were never evaluated — strictly weaker evidence than a file the reader cannot parse, which already fails closed. Write it honestly rather than reaching for `CONCERNS` to keep a story moving; `CONCERNS` is a `defer` and claims the NFRs *were* assessed.
 
 `test-review.md` — the reader needs two fields:
 

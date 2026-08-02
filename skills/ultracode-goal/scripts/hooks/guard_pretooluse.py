@@ -256,6 +256,42 @@ _EXEC_WRAPPERS = frozenset(
 # Shells whose `-c` string payload is re-entered as a command in its own right.
 _SHELL_WRAPPERS = frozenset({"sh", "bash", "zsh", "dash"})
 
+# Shell keywords and group openers that occupy the command position inside a
+# compound command. Without these, `then git commit`, `do git commit` and
+# `( git commit )` lead with a token that is neither `git` nor any wrapper, so
+# the segment classified as "no git write" and skipped EVERY commit gate.
+# Stripping them is biased toward finding the `git`, exactly as _EXEC_WRAPPERS
+# is: a keyword consumed here can only ever make the guard see more, never less.
+_SHELL_KEYWORDS = frozenset(
+    {
+        "if",
+        "then",
+        "elif",
+        "else",
+        "fi",
+        "for",
+        "while",
+        "until",
+        "do",
+        "done",
+        "case",
+        "esac",
+        "select",
+        "function",
+        "coproc",
+        "!",
+        "{",
+        "}",
+        "(",
+        ")",
+    }
+)
+
+# Group openers can also sit glued to the command name (`(git commit -m x)` is
+# a valid subshell), where they are part of the first token rather than a token
+# of their own.
+_GROUP_OPENERS = "({"
+
 # Global `git` options taking a SEPARATE value. The value must be skipped along
 # with the option, or `git -C <path> commit` would read <path> as the
 # subcommand and wave a real commit through.
@@ -324,9 +360,32 @@ def _shell_payload_verbs(tokens: list[str], depth: int) -> set[str]:
     return set()
 
 
+def _strip_leading_noise(tokens: list[str]) -> list[str]:
+    """Drop leading `VAR=val` assignments, shell keywords and group openers.
+
+    Applied repeatedly because they nest: `if ! FOO=1 git commit …` puts three
+    different kinds of noise ahead of the verb. Every strip here can only turn
+    an unclassifiable segment into a classifiable one, so this direction is
+    fail-closed by construction.
+    """
+    while True:
+        stripped = _strip_assignments(tokens)
+        if stripped:
+            head = stripped[0]
+            bare = head.lstrip(_GROUP_OPENERS)
+            if bare != head:
+                # `(git commit …)` — opener glued to the command name.
+                stripped = ([bare] + stripped[1:]) if bare else stripped[1:]
+            elif head.lower() in _SHELL_KEYWORDS:
+                stripped = stripped[1:]
+        if stripped == tokens:
+            return stripped
+        tokens = stripped
+
+
 def _token_write_verbs(tokens: list[str], depth: int) -> set[str]:
     """Classify one tokenized segment: which write verbs would it actually run?"""
-    tokens = _strip_assignments(tokens)
+    tokens = _strip_leading_noise(tokens)
     if not tokens:
         return set()
     head = os.path.basename(tokens[0]).lower()
@@ -394,9 +453,24 @@ def _command_write_verbs(command: str, depth: int) -> set[str]:
     # new fail-open, and getting it wrong in the do-not-split direction silently
     # restores the newline bypass above.
     #
-    # The `\|\|` alternative must precede `\|` so `||` is consumed whole. `\r`
-    # rides along with `\n` for CRLF-authored commands.
-    for separators in (r"&&|\|\||;|\|", r"&&|\|\||;|\||\n|\r"):
+    #   - Neither of those two sets matches a LONE `&`, which is a real bash
+    #     separator (background-then-continue), so `npm run build & git commit`
+    #     stayed ONE segment led by `npm` and was waved through. It gets its own
+    #     set rather than an `&` bolted onto the two above, for the same reason
+    #     the newline did: splitting on `&` is quote-blind too, so
+    #     `git -c a.b='x&y' commit -m z` would tear into two fragments that each
+    #     fail to tokenize AND each miss the fallback regex (fragment one has no
+    #     verb, fragment two has no `git`) — turning a deny into an allow. Added
+    #     as a third member of the union, it can only ever classify MORE.
+    #
+    # The `\|\|` alternative must precede `\|` so `||` is consumed whole, and
+    # `&&` must precede `&` for the same reason. `\r` rides along with `\n` for
+    # CRLF-authored commands.
+    for separators in (
+        r"&&|\|\||;|\|",
+        r"&&|\|\||;|\||\n|\r",
+        r"&&|\|\||;|\||&|\n|\r",
+    ):
         for segment in re.split(separators, command):
             verbs |= _segment_write_verbs(segment, depth)
     return verbs

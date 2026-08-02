@@ -481,9 +481,22 @@ def _collect_declared_ids(
         # The story file stem (e.g. 1-2-floor) is a declared story id.
         stem = Path(rel).stem
         declared.add(_norm_id(stem))
-        for match in _FR_DECL_RE.finditer(body):
+        # A CITATION is not a DECLARATION. Harvesting over the whole body meant
+        # the `traces:` row was itself scanned, so `- traces: FR-99` declared
+        # FR-99 and then resolved against it: every _INDEX_TOKEN_RE shape except
+        # the story key (`\d+-\d+…`) is also matched by _FR_DECL_RE or
+        # _VER_DECL_RE, so a dangling `path::node`, `*.py`, `STORY-*`, `VER-*`
+        # or FR/NFR/ADR/AD/INV/R citation could never be reported orphaned.
+        # Only the story-key shape survived — and that shape always takes the
+        # `regenerable` mechanical arm, which left the JUDGMENT arm dead code.
+        # Prose and `Verification:` mentions still declare; the citation row no
+        # longer declares the thing it is citing.
+        declaring = "\n".join(
+            line for line in body.splitlines() if not _INDEX_CITATION_RE.search(line)
+        )
+        for match in _FR_DECL_RE.finditer(declaring):
             declared.add(_norm_id(match.group(1)))
-        for match in _VER_DECL_RE.finditer(body):
+        for match in _VER_DECL_RE.finditer(declaring):
             declared.add(_norm_id(match.group(1)))
     if prd_text:
         for match in _FR_DECL_RE.finditer(prd_text):
@@ -814,6 +827,33 @@ def build_verdict(
             }
         )
     else:
+        # PRESENT-BUT-UNPARSED is its own fail-open, distinct from absent.
+        # `_safe_read_text` returns None only on OSError/decode failure, so an
+        # EMPTY or structurally unparseable rollup returns "" and lands here.
+        # `_not_done_story_keys` then yields an empty in-scope set, which
+        # silences BOTH guards below at once: story files still resolve through
+        # the epic-prefix glob so `no_in_scope_stories` never fires, and
+        # `story_keys_uncovered` is scoped `if story_paths and uncovered` with
+        # `uncovered` computed against that empty set. The kernel returned
+        # `ready` with `mechanical_budget: 0` on an Epic missing a story file —
+        # the exact partial-seed fail-open `story_keys_uncovered` exists to
+        # close. A rollup with rows for other epics, or a legitimately all-done
+        # Epic, still parses non-empty, so neither pays for this.
+        if not _parse_development_status(sprint_text):
+            mechanical_gaps.append(
+                {
+                    "id": "sprint_status_unparsed",
+                    "kind": "missing_impl_artifact",
+                    "severity": "high",
+                    "detail": "sprint-status.yaml is present but yields no "
+                    "development_status rows, so the in-scope story set is empty "
+                    "and every per-story check below would pass vacuously: %s"
+                    % _rel(impl_artifacts / "sprint-status.yaml", project_root),
+                    # bmad-sprint-planning regenerates the rollup deterministically.
+                    "remediable": True,
+                    "source": _rel(impl_artifacts / "sprint-status.yaml", project_root),
+                }
+            )
         story_keys = _not_done_story_keys(sprint_text, epic)
 
     # --- per-story / per-AC scan ---
