@@ -1275,8 +1275,14 @@ def test_intent_to_add_is_read_off_the_columns_not_sniffed(tmp_path):
     _git(root, "add", "base.txt")
     _git(root, "commit", "-qm", "seed")
 
-    # The hazards: intent-to-add, including the two names that defeat sniffing.
-    for name in ("plain.rs", "a -> b.txt", "has space.rs", "caf\u00e9.rs"):
+    # The hazards: intent-to-add, including the names that defeat sniffing.
+    # `a -> b.txt` is POSIX-only: Windows forbids `>` in a filename, so the file
+    # cannot be created there at all. Its parsing is covered unconditionally by
+    # test_an_arrow_in_a_filename_is_not_a_rename below.
+    hazards = ["plain.rs", "has space.rs", "caf\u00e9.rs"]
+    if os.name != "nt":
+        hazards.append("a -> b.txt")
+    for name in hazards:
         (root / name).write_text("precious\n", encoding="utf-8")
         _git(root, "add", "-N", name)
     # The safe neighbours: genuinely staged, modified, untracked, and a rename.
@@ -1290,7 +1296,7 @@ def test_intent_to_add_is_read_off_the_columns_not_sniffed(tmp_path):
     )
     found = drive_epic.intent_to_add_paths(drive_epic.porcelain_entries(porcelain))
 
-    assert sorted(found) == sorted(["plain.rs", "a -> b.txt", "has space.rs", "caf\u00e9.rs"])
+    assert sorted(found) == sorted(hazards)
     # Every name it reports is a file that actually exists - the property the
     # arrow-split and the octal escapes each broke.
     for name in found:
@@ -1302,6 +1308,26 @@ def test_intent_to_add_is_read_off_the_columns_not_sniffed(tmp_path):
     assert sorted(triage["intent_to_add"]) == sorted(found)
     for name in triage["intent_to_add"]:
         assert (root / name).is_file(), f"triage named {name!r}, which is not on disk"
+
+
+def test_an_arrow_in_a_filename_is_not_a_rename():
+    """A path whose NAME contains " -> " must not be split as a rename.
+
+    Synthetic rather than git-produced, and that is sound HERE specifically:
+    `-z` is NUL-delimited and never quotes, so this string is byte-for-byte what
+    git emits. (A hand-written *line-based* fixture would not be sound - the
+    C-quoting is exactly what the old parser got wrong.) It has to be synthetic
+    because Windows forbids `>` in a filename, so the file cannot exist there,
+    while the parsing bug is platform-independent.
+
+    The pre-fix parser returned `b.txt`: a real, different, plausible file. The
+    operator backs that up, sees the true hazard unflagged, reverts it, and git
+    truncates it to zero bytes exiting 0.
+    """
+    payload = " A a -> b.txt\0 A plain.rs\0"
+    entries = drive_epic.porcelain_entries(payload)
+    assert entries == [(" ", "A", "a -> b.txt"), (" ", "A", "plain.rs")]
+    assert drive_epic.intent_to_add_paths(entries) == ["a -> b.txt", "plain.rs"]
 
 
 def test_a_rename_entry_does_not_shift_the_parse(tmp_path):
