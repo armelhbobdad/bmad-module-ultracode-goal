@@ -118,6 +118,53 @@ def project(tmp_path: Path) -> dict:
     return {"root": root, "impl": impl, "result": impl / envelope.RESULT_FILENAME}
 
 
+def _git(repo: Path, *args: str) -> str:
+    """Run git against a fixture repo, immune to the developer's own config.
+
+    `-c commit.gpgsign=false` is not optional: a contributor with a global
+    `commit.gpgsign=true` (or a `gpg.format=ssh` with no key reachable in CI)
+    gets a signing failure on every fixture commit, and the whole git-backed
+    half of this file ERRORS rather than fails - on their machine only. This
+    repo has shipped that class of CI-portability defect before.
+    """
+    import subprocess
+
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "-c", "commit.gpgsign=false", *args],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+    )
+    return proc.stdout.strip()
+
+
+@pytest.fixture
+def git_project(tmp_path: Path) -> dict:
+    """A project whose root is a REAL git repo, with one commit.
+
+    The plain `project` fixture is not a repo, so the post-stop triage correctly
+    finds git unreadable and refuses to retry. That is the right fail-closed
+    default and it is pinned by its own test, but every retry behaviour needs a
+    tree the triage can actually read.
+    """
+    root = tmp_path / "repo"
+    impl = root / "_bmad-output" / "impl"
+    write_sprint_status(impl, {DONE_STORY: "done", STORY_A: "ready-for-dev", STORY_B: "backlog"})
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+    # Real projects gitignore the run artifacts, and the triage excludes them
+    # from its safety judgment either way (the driver deletes run-result.json
+    # itself, so a tracked one would dirty the tree on every single lap).
+    (root / ".gitignore").write_text("_bmad-output/\n", encoding="utf-8")
+    _git(root, "add", ".gitignore")
+    (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(root, "add", "seed.txt")
+    _git(root, "commit", "-qm", "seed")
+    return {"root": root, "impl": impl, "result": impl / envelope.RESULT_FILENAME}
+
+
 class FakeSession:
     """A stand-in for one `claude -p` process, playing a scripted terminal.
 
@@ -138,10 +185,18 @@ class FakeSession:
         *,
         code: int | None = 0,
         spin_cap: int | None = None,
+        dirty: bool = False,
+        commit: bool = False,
+        intent_to_add: bool = False,
     ):
         self.project = project
         self.script = list(script)
         self.code = code
+        # What this session leaves behind in the TREE, which is what the
+        # post-stop triage reads and what the retry decision turns on.
+        self.dirty = dirty
+        self.commit = commit
+        self.intent_to_add = intent_to_add
         # A driver that lost its anti-spin rule would call this forever. The cap
         # converts that regression into a NAMED failure instead of a CI job that
         # hangs until somebody kills it - verified: with the rule removed the
@@ -170,6 +225,17 @@ class FakeSession:
 
         step = self.script[0] if len(self.script) == 1 else self.script.pop(0)
         payload, advance = step
+
+        root = self.project["root"]
+        if self.dirty:
+            (root / "half_written.rs").write_text("fn incomplete() {\n", encoding="utf-8")
+        if self.intent_to_add:
+            (root / "rescue_me.rs").write_text("fn precious() {}\n", encoding="utf-8")
+            _git(root, "add", "-N", "rescue_me.rs")
+        if self.commit:
+            (root / "landed.rs").write_text("fn landed() {}\n", encoding="utf-8")
+            _git(root, "add", "landed.rs")
+            _git(root, "commit", "-qm", "the story's work")
 
         if advance:
             statuses = current_statuses(self.project["impl"])
@@ -1030,3 +1096,461 @@ def test_the_ceiling_kills_the_whole_session_not_just_the_process_it_named(tmp_p
         if pidfile.exists():
             with contextlib.suppress(ValueError, OSError):
                 os.kill(int(pidfile.read_text()), drive_epic._KILL_SIGNAL)
+
+
+# --- The in-flight abort: retry, but only over a tree that is safe -----------
+#
+# A `claude -p` killed by the API layer exits non-zero having written no
+# terminal, so it lands on `no-terminal`, NOT on `signalled` (that branch fires
+# only when a signal reached the DRIVER). Measured live before this suite was
+# written: driving a fake spawn that exits 1 without writing a result produces
+# `stopped_because == "no-terminal"` and leaves `_STOPPED_BY_SIGNAL` None.
+
+
+def test_an_abort_over_a_clean_unmoved_tree_is_retried_and_lands(git_project, monkeypatch):
+    """Nothing landed, so the same story is safe to re-spawn - and it works.
+
+    This is the whole measured shape: eleven of twenty-two spawns in one session
+    died in flight, and every row that was retried landed on a later attempt
+    against identical state with no change of method. The operator was the retry
+    loop eight times.
+    """
+    fake = FakeSession(
+        git_project,
+        [
+            (None, None),  # dies in flight, writes no terminal
+            (complete_envelope(), STORY_A),  # the retry lands
+            (complete_envelope(), STORY_B),
+        ],
+        code=1,
+    )
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=git_project["root"], impl_artifacts=git_project["impl"]
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_ALL_DONE
+    assert summary["advanced"] == [STORY_A, STORY_B]
+    # Three spawns, but only two stories driven: the retry is the SAME story.
+    assert len(fake.calls) == 3
+    assert summary["driven"] == [STORY_A, STORY_B]
+
+
+def test_an_abort_over_a_dirty_tree_is_never_retried(git_project, capsys, monkeypatch):
+    """A retry across a dirty tree is how already-green work gets destroyed."""
+    fake = FakeSession(git_project, [(None, None)], code=1, dirty=True)
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=git_project["root"], impl_artifacts=git_project["impl"]
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_NO_TERMINAL
+    assert len(fake.calls) == 1, "a dirty tree must not be re-spawned over"
+    assert "not retried" in (summary["detail"] or "")
+    out = capsys.readouterr().out
+    assert "tree DIRTY" in out
+    assert "do NOT re-drive over this tree" in out
+
+
+def test_an_abort_after_a_commit_is_never_retried_and_says_so(git_project, capsys, monkeypatch):
+    """Clean tree with HEAD ADVANCED means the work committed.
+
+    This is the $24 case: the drive had already committed and died in close-out,
+    so the only thing missing was a status flip, and the driver reported it as a
+    failure. Re-driving it would redo a delivered story.
+    """
+    fake = FakeSession(git_project, [(None, None)], code=1, commit=True)
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=git_project["root"], impl_artifacts=git_project["impl"]
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_NO_TERMINAL
+    assert len(fake.calls) == 1
+    out = capsys.readouterr().out
+    assert "tree CLEAN and HEAD ADVANCED" in out
+    assert "only close-out is missing" in out
+    assert "Do NOT re-drive this story" in out
+
+
+def test_the_retry_budget_is_capped_and_the_cap_surfaces(git_project, monkeypatch):
+    """Three consecutive deaths needed an operator; the cap is what says so."""
+    fake = FakeSession(git_project, [(None, None)], code=1)
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC,
+        project_root=git_project["root"],
+        impl_artifacts=git_project["impl"],
+        max_abort_retries=2,
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_NO_TERMINAL
+    assert len(fake.calls) == 3, "the original attempt plus exactly two retries"
+    assert "2 retry attempt(s)" in (summary["detail"] or "")
+
+
+def test_max_abort_retries_zero_restores_stop_on_first_abort(git_project, monkeypatch):
+    fake = FakeSession(git_project, [(None, None)], code=1)
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC,
+        project_root=git_project["root"],
+        impl_artifacts=git_project["impl"],
+        max_abort_retries=0,
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_NO_TERMINAL
+    assert len(fake.calls) == 1
+
+
+def test_the_retry_budget_is_per_story_not_per_drive(git_project, monkeypatch):
+    """A budget spent on one row must not leave the next unable to survive."""
+    fake = FakeSession(
+        git_project,
+        [
+            (None, None),                     # story A dies
+            (complete_envelope(), STORY_A),   # A's retry lands
+            (None, None),                     # story B dies
+            (complete_envelope(), STORY_B),   # B's retry lands, on B's OWN budget
+        ],
+        code=1,
+    )
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC,
+        project_root=git_project["root"],
+        impl_artifacts=git_project["impl"],
+        max_abort_retries=1,
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_ALL_DONE
+    assert summary["advanced"] == [STORY_A, STORY_B]
+    assert len(fake.calls) == 4
+
+
+def test_no_git_means_no_retry(project, monkeypatch):
+    """Fail-closed: without git the triage cannot establish a safe tree."""
+    fake = FakeSession(project, [(None, None)], code=1)
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_NO_TERMINAL
+    assert len(fake.calls) == 1
+
+
+def test_a_blocked_stop_also_prints_the_triage(git_project, capsys, monkeypatch):
+    """The triage attaches to EVERY non-clean stop, not only the retryable one.
+
+    Attaching it selectively is how a killed spawn's state went unreported in
+    the first place.
+    """
+    fake = FakeSession(git_project, [(blocked_envelope("a story escalated"), None)])
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    drive_epic.drive(
+        epic=EPIC, project_root=git_project["root"], impl_artifacts=git_project["impl"]
+    )
+
+    assert "triage:" in capsys.readouterr().out
+
+
+# --- The intent-to-add hazard, in code rather than an operator's memory ------
+
+
+def test_intent_to_add_is_read_off_the_columns_not_sniffed(tmp_path):
+    """Built from REAL `git status --porcelain -z`, not hand-written strings.
+
+    A hand-written fixture is what let two parsing bugs through: the arrow-split
+    and the C-quoting. Both only appear in git's actual output, so the oracle has
+    to be git. Every path here is one that exists on disk, and the assertion is
+    that the function names exactly the hazardous ones - no more, no fewer.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+    (root / "base.txt").write_text("base\n", encoding="utf-8")
+    _git(root, "add", "base.txt")
+    _git(root, "commit", "-qm", "seed")
+
+    # The hazards: intent-to-add, including the two names that defeat sniffing.
+    for name in ("plain.rs", "a -> b.txt", "has space.rs", "caf\u00e9.rs"):
+        (root / name).write_text("precious\n", encoding="utf-8")
+        _git(root, "add", "-N", name)
+    # The safe neighbours: genuinely staged, modified, untracked, and a rename.
+    (root / "staged.rs").write_text("x\n", encoding="utf-8")
+    _git(root, "add", "staged.rs")
+    (root / "base.txt").write_text("edited\n", encoding="utf-8")
+    (root / "untracked.rs").write_text("x\n", encoding="utf-8")
+
+    porcelain = drive_epic._git_out(
+        root, "status", "--porcelain", "-z", "--untracked-files=all"
+    )
+    found = drive_epic.intent_to_add_paths(drive_epic.porcelain_entries(porcelain))
+
+    assert sorted(found) == sorted(["plain.rs", "a -> b.txt", "has space.rs", "caf\u00e9.rs"])
+    # Every name it reports is a file that actually exists - the property the
+    # arrow-split and the octal escapes each broke.
+    for name in found:
+        assert (root / name).is_file(), f"{name!r} is not on disk"
+
+    # And the CALLER must ask git for that shape. Asserting only against a
+    # hand-passed -z string would leave post_stop_triage free to drop the flag.
+    triage = drive_epic.post_stop_triage(root, drive_epic.head_sha(root))
+    assert sorted(triage["intent_to_add"]) == sorted(found)
+    for name in triage["intent_to_add"]:
+        assert (root / name).is_file(), f"triage named {name!r}, which is not on disk"
+
+
+def test_a_rename_entry_does_not_shift_the_parse(tmp_path):
+    """A rename carries a trailing origPath field; consuming it is required.
+
+    Miss it and every entry after a rename is read one field out of step.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+    (root / "base.txt").write_text("b\n", encoding="utf-8")
+    _git(root, "add", "base.txt")
+    _git(root, "commit", "-qm", "seed")
+    _git(root, "mv", "base.txt", "renamed.txt")
+    (root / "zz_after.rs").write_text("x\n", encoding="utf-8")
+    _git(root, "add", "-N", "zz_after.rs")
+
+    entries = drive_epic.porcelain_entries(
+        drive_epic._git_out(root, "status", "--porcelain", "-z", "--untracked-files=all")
+    )
+    paths = [p for _, _, p in entries]
+    assert "renamed.txt" in paths
+    assert "base.txt" not in paths, "the origPath field must be consumed, not re-parsed"
+    assert drive_epic.intent_to_add_paths(entries) == ["zz_after.rs"]
+
+
+def test_the_triage_names_intent_to_add_paths_with_the_truncation_warning(git_project, capsys, monkeypatch):
+    fake = FakeSession(git_project, [(None, None)], code=1, intent_to_add=True)
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    drive_epic.drive(
+        epic=EPIC, project_root=git_project["root"], impl_artifacts=git_project["impl"]
+    )
+
+    out = capsys.readouterr().out
+    assert "intent-to-add: rescue_me.rs" in out
+    assert "TRUNCATES these to zero bytes" in out
+
+
+def test_the_triage_never_writes_to_the_tree(git_project):
+    """The driver's read-only property must survive the triage.
+
+    Driven directly rather than through a drive, because the fake session writes
+    to the tree on purpose - so a before/after around the whole drive would be
+    measuring the fake, not the triage.
+    """
+    root = git_project["root"]
+    (root / "half_written.rs").write_text("fn incomplete() {\n", encoding="utf-8")
+    (root / "rescue_me.rs").write_text("fn precious() {}\n", encoding="utf-8")
+    _git(root, "add", "-N", "rescue_me.rs")
+
+    before = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+    head_before = _git(root, "rev-parse", "HEAD")
+    porcelain_before = _git(root, "status", "--porcelain")
+
+    triage = drive_epic.post_stop_triage(root, head_before, git_project["impl"])
+    drive_epic.render_triage(triage)
+
+    assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()) == before
+    assert _git(root, "rev-parse", "HEAD") == head_before
+    assert _git(root, "status", "--porcelain") == porcelain_before
+    # And the intent-to-add file still has its bytes.
+    assert (root / "rescue_me.rs").read_text(encoding="utf-8") == "fn precious() {}\n"
+
+
+def test_the_cli_exposes_max_abort_retries():
+    parser_help = drive_epic.main.__doc__ or ""
+    del parser_help  # the flag is asserted through argparse, not the docstring
+    import io, contextlib as _c
+
+    buf = io.StringIO()
+    with _c.redirect_stdout(buf), pytest.raises(SystemExit):
+        drive_epic.main(["--help"])
+    text = buf.getvalue()
+    assert "--max-abort-retries" in text
+    assert "re-spawn over work in progress" in " ".join(text.split())
+
+
+def test_run_artifacts_do_not_count_as_a_dirty_tree(git_project, monkeypatch):
+    """The driver's own artifacts are not story work, and treating them as such
+    would kill the retry outright in any project that tracks `_bmad-output/`.
+
+    The driver DELETES the pinned terminal file before every single spawn, so a
+    tracked one leaves the tree dirty by the driver's own hand, permanently and
+    on every lap. Found by writing the retry tests against a repo that had no
+    `.gitignore`: the retry never fired, and the reason was the driver's own
+    footprint.
+    """
+    root = git_project["root"]
+    # Track the run-artifacts dir, the case a real project usually gitignores.
+    (root / ".gitignore").write_text("", encoding="utf-8")
+    git_project["impl"].mkdir(parents=True, exist_ok=True)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "track the run artifacts")
+    (git_project["impl"] / "run-result.json").write_text("{}", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "a terminal from a prior run")
+
+    fake = FakeSession(
+        git_project,
+        [(None, None), (complete_envelope(), STORY_A), (complete_envelope(), STORY_B)],
+        code=1,
+    )
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=root, impl_artifacts=git_project["impl"]
+    )
+
+    # The driver's delete of the tracked terminal made the tree dirty, and the
+    # retry still fired because that path is the driver's, not the story's.
+    assert summary["stopped_because"] == drive_epic.STOP_ALL_DONE
+    assert len(fake.calls) == 3
+
+
+def test_the_report_still_lists_run_artifacts_it_excluded(git_project):
+    """Excluded from the JUDGMENT, never hidden from the operator."""
+    root = git_project["root"]
+    (git_project["impl"] / "stray.txt").write_text("x", encoding="utf-8")
+    (root / ".gitignore").write_text("", encoding="utf-8")
+
+    triage = drive_epic.post_stop_triage(
+        root, _git(root, "rev-parse", "HEAD"), git_project["impl"]
+    )
+    assert triage["tree_clean"] is False, ".gitignore itself is a real dirty path"
+    assert any("_bmad-output" in p for p in triage["run_artifact_paths"])
+    assert not any("_bmad-output" in p for p in triage["dirty_paths"])
+
+
+@pytest.fixture
+def unborn_project(tmp_path: Path) -> dict:
+    """A git repo with NO commits: a greenfield project, HEAD unborn.
+
+    `git init` with nothing committed yet is a shape this module advertises
+    itself as able to run on, and `git rev-parse HEAD` fails there.
+    """
+    root = tmp_path / "repo"
+    impl = root / "_bmad-output" / "impl"
+    write_sprint_status(impl, {DONE_STORY: "done", STORY_A: "ready-for-dev", STORY_B: "backlog"})
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+    # NOT a .gitignore: an unborn HEAD has no commit to carry one, so a
+    # .gitignore would sit untracked and make the tree dirty - which would make
+    # every test below pass for the wrong reason (dirty-work-in-tree), never
+    # reaching the head-unknown reading they exist to pin.
+    exclude = root / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text("_bmad-output/\n", encoding="utf-8")
+    return {"root": root, "impl": impl, "result": impl / envelope.RESULT_FILENAME}
+
+
+def test_an_unreadable_pre_spawn_head_is_never_read_as_nothing_landed(unborn_project, monkeypatch):
+    """Unknown is not unmoved, and the difference costs paid sessions.
+
+    `head_sha` returns None on an unborn HEAD. Folding that into "unmoved" let a
+    session make the project's FIRST commit, die before writing its terminal, and
+    be re-driven twice over work already on disk - the exact case the retry gate
+    says must never be retried.
+    """
+    fake = FakeSession(unborn_project, [(None, None)], code=1, commit=True)
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=unborn_project["root"], impl_artifacts=unborn_project["impl"]
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_NO_TERMINAL
+    assert len(fake.calls) == 1, "an unknown pre-spawn HEAD must not be retried over"
+    # And the session really did commit, so a retry would have re-driven it.
+    assert _git(unborn_project["root"], "rev-parse", "HEAD")
+
+
+def test_the_head_unknown_reading_says_so_rather_than_claiming_unmoved(unborn_project):
+    """The report must not print a sha as "UNMOVED" that HEAD never previously had."""
+    (unborn_project["root"] / "landed.rs").write_text("fn landed() {}\n", encoding="utf-8")
+    _git(unborn_project["root"], "add", "landed.rs")
+    _git(unborn_project["root"], "commit", "-qm", "the story's first-ever commit")
+
+    triage = drive_epic.post_stop_triage(unborn_project["root"], None, unborn_project["impl"])
+    assert triage["reading"] == "head-unknown"
+    assert triage["head_moved"] is None
+
+    rendered = " ".join(drive_epic.render_triage(triage))
+    assert "UNREADABLE" in rendered
+    assert "UNMOVED" not in rendered, "unknown must not be reported as unmoved"
+    assert "nothing landed" not in rendered
+
+
+def test_limit_bounds_paid_spawns_including_retries(git_project, monkeypatch):
+    """`--limit` is the operator's SPEND bound, so a retry consumes it.
+
+    Bounding distinct stories instead would let `--limit N` start
+    N*(1+max_abort_retries) sessions - here 2 stories under `--limit 2` could
+    have spawned up to six.
+    """
+    fake = FakeSession(git_project, [(None, None)], code=1, spin_cap=10)
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC,
+        project_root=git_project["root"],
+        impl_artifacts=git_project["impl"],
+        limit=2,
+        max_abort_retries=5,
+    )
+
+    assert len(fake.calls) == 2, "two paid sessions, because --limit said two"
+    assert summary["stopped_because"] == drive_epic.STOP_LIMIT
+
+
+def test_the_spawn_index_counts_every_paid_session(git_project, monkeypatch, capsys):
+    """A retry that reprinted `[1]` would undercount what the operator paid for."""
+    fake = FakeSession(
+        git_project, [(None, None), (complete_envelope(), STORY_A), (complete_envelope(), STORY_B)],
+        code=1,
+    )
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    drive_epic.drive(
+        epic=EPIC, project_root=git_project["root"], impl_artifacts=git_project["impl"]
+    )
+    out = capsys.readouterr().out
+    for index in ("[1]", "[2]", "[3]"):
+        assert index in out, f"missing spawn index {index}"
+
+
+def test_the_no_progress_stop_is_triaged_too(git_project, monkeypatch, capsys):
+    """The anti-spin stop is where the tree matters MOST.
+
+    A session that claimed `complete` while the sprint row stayed put is exactly
+    the shape where the work may have committed and only the `done` sync is
+    missing - the case an operator most needs told about.
+    """
+    fake = FakeSession(git_project, [(complete_envelope(), None)], commit=True)
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=git_project["root"], impl_artifacts=git_project["impl"]
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_NO_PROGRESS
+    out = capsys.readouterr().out
+    assert "triage:" in out
+    assert "HEAD ADVANCED" in out, "the commit the session made must be surfaced"
+
+
+def test_pre_spawn_stops_carry_no_triage(project, monkeypatch):
+    """Nothing ran on this lap, so there is no post-spawn tree to describe."""
+    fake = FakeSession(project, [(complete_envelope(), STORY_A)])
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic="epic-999", project_root=project["root"], impl_artifacts=project["impl"]
+    )
+    assert summary["stopped_because"] == drive_epic.STOP_EPIC_NOT_FOUND
+    assert len(fake.calls) == 0

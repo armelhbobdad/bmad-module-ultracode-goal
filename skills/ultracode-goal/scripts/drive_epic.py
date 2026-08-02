@@ -58,7 +58,8 @@ FAIL-CLOSED AT EVERY DECISION, and there are six of them:
   | after a spawn                            | driver does           |
   | a forwarded signal reached the driver    | STOP (`signalled`)    |
   | the session outran `--session-timeout`   | KILL it, STOP         |
-  | no result file, or it will not parse     | STOP (`no-terminal`)  |
+  | no result file, or it will not parse     | RETRY once or twice,  |
+  |                                          | else STOP (`no-terminal`)|
   | `status` is `blocked`                    | STOP, surface `reason`|
   | `status` is neither `complete`/`blocked`  | STOP (`unknown-status`)|
   | `status` is `complete`, story not `done` | STOP (`no-progress`)  |
@@ -71,6 +72,49 @@ a session per lap and reporting progress the whole time. A drive that cannot
 show the story moved is not a drive that should keep going. The advance is read
 back out of sprint-status.yaml, not out of the envelope: the envelope says what
 the session thinks it did, the sprint plan says what actually changed.
+
+THE ONE RETRY, AND WHY IT IS ONLY THIS ONE. A `claude -p` subprocess can be
+terminated in flight by the API layer; the child exits non-zero having written
+no terminal, so it lands on `no-terminal`, NOT on `signalled` - that branch
+fires only when a signal reached the DRIVER, which is a person interrupting.
+Measured across one 22-spawn session: eleven such deaths, at 4 / 6 / 14 / 20 /
+53 / 80 / 95 / 154 / 175 / 222 turns. No turn-count pattern, no story pattern,
+and the same row landing on the next attempt against identical state. There is
+nothing to detect in advance and nothing to avoid, so the only useful response
+is to try again - which an operator did eight times by hand, and which is the
+only reason that epic advanced.
+
+Every OTHER stop keeps its single-shot fail-closed behaviour, because each of
+them means something specific that a second identical spawn cannot change.
+
+POST-STOP TRIAGE, AND IT IS THE RETRY'S PRECONDITION rather than a convenience.
+A killed spawn leaves wildly different states: a clean tree with HEAD advanced
+means the work COMMITTED and only close-out is missing; a dirty tree may hold a
+suite that is already green, or half a module worth reverting. The driver used
+to report none of it, so an unattended loop discarded the first kind and would
+re-spawn over the second. Every non-clean stop now prints a triage block, and a
+retry is taken ONLY on the one reading that means nothing landed (clean tree,
+HEAD unmoved). It reports and never decides: committing another session's
+unfinished work needs judgment about whether the SUBJECT is complete, not merely
+whether it compiles.
+
+The triage is read-only git (`status`, `rev-parse`), so the read-only property
+above is unchanged. It calls out intent-to-add paths BY NAME, because such an
+entry carries a BLANK index column and `A` in the worktree column, so the
+obvious `^A ` match - which reads the index column - misses every one of them,
+and `git checkout -- <path>` then truncates one to zero bytes and exits 0.
+
+The status read is `--porcelain -z`, and that is not cosmetic. Without `-z` git
+C-QUOTES any path holding a space or a non-ASCII byte, so a file named
+`a -> b.txt` arrives quoted and splits on its own arrow, and `café.rs` arrives
+as octal escapes. Both then name a file that does not exist, inside the very
+warning that tells an operator which files to back up before reverting. Under
+`-z` nothing is quoted and the bytes are the path.
+
+An UNREADABLE pre-spawn HEAD (an unborn HEAD: `git init` with no commit yet) is
+its own reading, never "nothing landed". Folding it into "unmoved" let a session
+make a project's first-ever commit, die before its terminal, and be re-driven
+over work already on disk.
 
 `bypassPermissions` IS REFUSED unless `--allow-full-autonomy` is also passed.
 The default stays `acceptEdits`. This is a second flag rather than a warning
@@ -113,7 +157,7 @@ an operator has to diagnose a session that died.
         [--project-root DIR] [--profile production|light] \\
         [--permission-mode MODE] [--allow-full-autonomy] \\
         [--session-timeout SECONDS] [--skill-command CMD] \\
-        [--limit N] [--dry-run] [--claude-bin PATH]
+        [--max-abort-retries N] [--limit N] [--dry-run] [--claude-bin PATH]
 
 Exit 0 when the invocation finished its work (the Epic has no not-done story
 left, or `--limit` was reached, or it was a dry run), 1 on any fail-closed stop,
@@ -171,6 +215,18 @@ PROFILES = (PROFILE_PRODUCTION, PROFILE_LIGHT)
 # matters for an unattended loop. 0 disables the ceiling for anyone who would
 # rather babysit than risk a false kill on a slow first story.
 DEFAULT_SESSION_TIMEOUT = 7200
+
+# How many times one story may be re-spawned after a spawn died leaving no
+# terminal. Two, because two was sufficient for every case measured across a
+# 22-spawn session; the one row that died three times running needed an operator,
+# and a cap is what surfaces that rather than hiding it behind an eleventh
+# attempt. 0 disables the retry and restores the stop-on-first-abort behaviour.
+#
+# The bound is per STORY and it is small on purpose. A retry is only ever taken
+# over a tree the triage found clean with HEAD unmoved, so it cannot destroy
+# work, but a generous cap would still let a genuinely broken invocation - a bad
+# `--skill-command`, a missing binary - burn N sessions before saying so.
+DEFAULT_MAX_ABORT_RETRIES = 2
 
 # Verified against Claude Code 2.1.220. Validated here rather than left to the
 # CLI so a typo costs one exit-2 line instead of N spawned sessions that each
@@ -487,6 +543,218 @@ def spawn(command: list[str], cwd: Path, timeout: int | None = None) -> int | No
 # --------------------------------------------------------------------------
 
 
+def _git_out(repo: Path, *args: str) -> str | None:
+    """A git command's stdout, or None when git is absent or the call failed.
+
+    Fail-soft on purpose: the triage below is a REPORT, and a report that
+    crashed the driver would be worse than the silence it replaces.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
+        )
+    except (OSError, ValueError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def head_sha(repo: Path) -> str | None:
+    """The repo's current HEAD, or None when it cannot be read."""
+    out = _git_out(repo, "rev-parse", "HEAD")
+    return out.strip() if out and out.strip() else None
+
+
+def porcelain_entries(porcelain_z: str) -> list[tuple[str, str, str]]:
+    """Parse `git status --porcelain -z` into (index_col, worktree_col, path).
+
+    ``-z`` IS LOAD-BEARING, not a style choice. Without it git C-QUOTES any path
+    carrying a space or a non-ASCII byte, so `a -> b.txt` arrives as
+    ``" A \\"a -> b.txt\\""`` and `café.rs` as ``" A \\"caf\\\\303\\\\251.rs\\""``.
+    Both were mis-read here: the first was split on its own ` -> ` and reported
+    as `b.txt`, the second reported with its octal escapes intact. Each names a
+    file that DOES NOT EXIST, inside the warning that tells an operator which
+    files to back up before a destructive revert. Under ``-z`` git never quotes
+    and the bytes are the path.
+
+    Fields are NUL-separated. A rename or copy is followed by ONE extra field
+    holding the original path, which is consumed here rather than mistaken for
+    the next entry.
+    """
+    fields = porcelain_z.split("\0")
+    out: list[tuple[str, str, str]] = []
+    index = 0
+    while index < len(fields):
+        field = fields[index]
+        index += 1
+        if len(field) < 4:
+            continue
+        x, y, path = field[0], field[1], field[3:]
+        if x in "RC" or y in "RC":
+            index += 1  # the origPath field that trails a rename/copy
+        if path:
+            out.append((x, y, path))
+    return out
+
+
+def intent_to_add_paths(entries: list[tuple[str, str, str]]) -> list[str]:
+    """Paths staged with `git add -N`, which `git checkout --` TRUNCATES.
+
+    THE COLUMNS ARE THE POINT. An intent-to-add entry has a BLANK index column
+    and ``A`` in the worktree column, so the obvious ``^A `` match - which reads
+    the index column - misses every one of them. A `git checkout -- <path>`
+    against one then rewrites it to ZERO BYTES and exits 0, silently, because
+    the index entry it restores from is empty.
+
+    Read off the parsed columns rather than sniffed out of the raw line, because
+    every string-sniffing shortcut here has a filename that defeats it.
+
+    This lives in code rather than in an operator's memory because it is a
+    destructive-data hazard that fires exactly when someone is cleaning up after
+    a crash, which is when they are least likely to be reading carefully.
+    """
+    return [path for x, y, path in entries if x == " " and y == "A"]
+
+
+def _relative_to_repo(repo: Path, path: Path) -> str | None:
+    """`path` as a repo-relative POSIX prefix, or None when it is outside."""
+    try:
+        rel = Path(os.path.relpath(Path(path).resolve(), Path(repo).resolve()))
+    except (OSError, ValueError):
+        return None
+    text = rel.as_posix()
+    return None if text == "." or text.startswith("..") else text
+
+
+def post_stop_triage(repo: Path, head_before: str | None, run_artifacts: Path | None = None) -> dict:
+    """Describe the tree a killed spawn left behind. REPORT, never decide.
+
+    A spawn that dies mid-flight leaves one of several very different states and
+    the right response differs for each: a clean tree with HEAD advanced means
+    the work committed and only close-out is missing; a dirty tree may hold work
+    that is already green, or a half-written module worth reverting. The driver
+    used to say nothing at all, so an unattended loop discarded the first kind
+    and re-spawned over the second.
+
+    Deliberately does NOT auto-rescue. Committing another session's unfinished
+    work needs judgment about whether the SUBJECT is complete, not merely whether
+    it compiles, and that judgment is not the driver's. Reporting "tree clean,
+    HEAD advanced, story not marked" already turns a lost session into a one-line
+    fix, which is the whole of the available win.
+
+    Read-only: `status` and `rev-parse` only. The driver's hands stay off the
+    tree, which is the property that makes it safe to point at a run in flight.
+
+    AN UNREADABLE `head_before` IS ITS OWN READING, never "nothing landed". The
+    sample is taken before the spawn and fails on an unborn HEAD - a greenfield
+    `git init` project with nothing committed yet, which is a shape this module
+    is advertised to run on. Folding that into "unmoved" let a session commit the
+    story's first-ever commit, die before its terminal, and be re-driven twice
+    over work already on disk. Unknown is not unmoved.
+    """
+    # `-uall` because the default COLLAPSES an untracked directory to a single
+    # `?? _bmad-output/` entry, which no per-file prefix test can match - so the
+    # run-artifacts exclusion below silently missed the commonest case, and the
+    # report named a directory where an operator needs the files.
+    porcelain = _git_out(repo, "status", "--porcelain", "-z", "--untracked-files=all")
+    head_after = head_sha(repo)
+    triage = {
+        "git_available": porcelain is not None and head_after is not None,
+        "tree_clean": None,
+        "head_before": head_before,
+        "head_after": head_after,
+        "head_moved": None,
+        "dirty_paths": [],
+        "run_artifact_paths": [],
+        "intent_to_add": [],
+        "reading": "unknown",
+    }
+    if porcelain is None or head_after is None:
+        return triage
+
+    # The RUN ARTIFACTS are not story work, and counting them as such would kill
+    # the retry outright in any project that does not gitignore them. The driver
+    # deletes the pinned terminal file there itself before every spawn, so if
+    # that file is tracked the tree is dirty by the driver's own hand,
+    # permanently and on every lap. Excluded from the safety judgment, still
+    # listed in the report.
+    ignored = _relative_to_repo(repo, run_artifacts) if run_artifacts is not None else None
+
+    def is_run_artifact(path: str) -> bool:
+        return bool(ignored) and (path == ignored or path.startswith(f"{ignored}/"))
+
+    entries = porcelain_entries(porcelain)
+    story_dirty = [(x, y, p) for x, y, p in entries if not is_run_artifact(p)]
+    triage["tree_clean"] = not story_dirty
+    triage["dirty_paths"] = [f"{x}{y} {p}" for x, y, p in story_dirty]
+    triage["run_artifact_paths"] = [f"{x}{y} {p}" for x, y, p in entries if is_run_artifact(p)]
+    triage["intent_to_add"] = [
+        p for p in intent_to_add_paths(entries) if not is_run_artifact(p)
+    ]
+    if head_before is not None:
+        triage["head_moved"] = head_before != head_after
+
+    if head_before is None:
+        # Unknown, and therefore not safe: see the docstring.
+        triage["reading"] = "head-unknown"
+    elif triage["tree_clean"] and triage["head_moved"]:
+        triage["reading"] = "committed-close-out-missing"
+    elif triage["tree_clean"]:
+        triage["reading"] = "nothing-landed"
+    else:
+        triage["reading"] = "dirty-work-in-tree"
+    return triage
+
+
+def render_triage(triage: dict) -> list[str]:
+    """The triage block's lines, in the order an operator needs to read them."""
+    if not triage.get("git_available"):
+        return ["triage: git unreadable here, so the tree state is unknown"]
+
+    reading = triage["reading"]
+    lines: list[str] = []
+    if reading == "head-unknown":
+        lines.append(
+            "triage: HEAD before the spawn was UNREADABLE (an unborn HEAD, or git "
+            f"declined), so whether anything landed cannot be told. Tree is "
+            f"{'clean' if triage['tree_clean'] else 'DIRTY'} at "
+            f"{(triage['head_after'] or '?')[:7]}. Inspect before re-driving; not retried."
+        )
+    elif reading == "committed-close-out-missing":
+        lines.append(
+            "triage: tree CLEAN and HEAD ADVANCED "
+            f"({(triage['head_before'] or '?')[:7]} -> {(triage['head_after'] or '?')[:7]}) "
+            "- the work committed and only close-out is missing; verify the subject, "
+            "then set the sprint row to done. Do NOT re-drive this story."
+        )
+    elif reading == "nothing-landed":
+        lines.append(
+            "triage: tree CLEAN and HEAD UNMOVED "
+            f"({(triage['head_after'] or '?')[:7]}) - nothing landed; this story is safe to re-drive."
+        )
+    else:
+        lines.append(
+            f"triage: tree DIRTY, {len(triage['dirty_paths'])} path(s), HEAD "
+            + ("ADVANCED" if triage["head_moved"] else "UNMOVED")
+            + f" ({(triage['head_after'] or '?')[:7]}) - the spawn may have left work that is "
+            "already green. Run the project's build-and-pass command before deciding, and do "
+            "NOT re-drive over this tree."
+        )
+        for path in triage["dirty_paths"][:20]:
+            lines.append(f"  dirty: {path}")
+        if len(triage["dirty_paths"]) > 20:
+            lines.append(f"  dirty: ... and {len(triage['dirty_paths']) - 20} more")
+
+    if triage["intent_to_add"]:
+        lines.append(
+            f"  DANGER: {len(triage['intent_to_add'])} intent-to-add path(s) below. "
+            "`git checkout -- <path>` TRUNCATES these to zero bytes and exits 0. "
+            "Back them up and verify the copies before reverting anything."
+        )
+        for path in triage["intent_to_add"]:
+            lines.append(f"  intent-to-add: {path}")
+    return lines
+
+
 def _summary(
     *,
     epic_key: str | None,
@@ -518,6 +786,7 @@ def drive(
     limit: int | None = None,
     claude_bin: str = DEFAULT_CLAUDE_BIN,
     dry_run: bool = False,
+    max_abort_retries: int = DEFAULT_MAX_ABORT_RETRIES,
     out: TextIO | None = None,
 ) -> dict:
     """Spawn one session per not-done story until something says stop.
@@ -604,6 +873,11 @@ def drive(
     skipped = done_ids(stories)
     driven: list[str] = []
     advanced: list[str] = []
+    retry_target: str | None = None
+    attempts_spent = 0
+    # Every `claude -p` this invocation started, retries included. `driven` is
+    # the distinct stories taken on; the two diverge the moment a retry fires.
+    spawns_run = 0
     command = build_command(claude_bin, epic, permission_mode, skill_command, profile)
 
     say(
@@ -639,7 +913,11 @@ def drive(
                 stopped_because=STOP_ALL_DONE,
             )
 
-        if limit is not None and len(driven) >= limit:
+        # Counted in SPAWNS, not distinct stories. A retry is a paid `claude -p`
+        # session like any other, so bounding `len(driven)` - which a retry pops
+        # back down - would let `--limit N` spend up to N*(1+max_abort_retries)
+        # sessions. `--limit` is the operator's spend bound; it counts what runs.
+        if limit is not None and spawns_run >= limit:
             say(f"stopped: {STOP_LIMIT} - {limit} spawn(s) run, {len(pending)} story(ies) left")
             return _summary(
                 epic_key=epic_key,
@@ -651,6 +929,11 @@ def drive(
             )
 
         target = pending[0]
+        # Per STORY, not per drive: a retry budget spent on one row must not
+        # leave the next row unable to survive its own first abort.
+        if target != retry_target:
+            retry_target = target
+            attempts_spent = 0
 
         if not clear_result(impl_artifacts):
             say(f"stopped: {STOP_STALE_RESULT} - could not delete {result_path(impl_artifacts)}")
@@ -663,9 +946,33 @@ def drive(
                 detail=f"could not delete {result_path(impl_artifacts)}",
             )
 
-        say(f"[{len(driven) + 1}] {target} - spawning: {shlex.join(command)}")
+        head_before = head_sha(project_root)
+        spawns_run += 1
+        say(f"[{spawns_run}] {target} - spawning: {shlex.join(command)}")
         code = spawn(command, project_root, session_timeout)
         driven.append(target)
+
+        def stop(because: str, detail: str) -> dict:
+            """Stop, but describe the tree first.
+
+            Every POST-SPAWN stop routes through here so the triage cannot be
+            attached to some exits and forgotten on others - which is how a
+            killed spawn's already-green work went unreported in the first place.
+            The pre-spawn stops (no sprint status, epic not found, a stale
+            terminal that survived its delete) deliberately do not: nothing has
+            run on this lap, so there is no post-spawn tree to describe.
+            """
+            say(f"stopped: {because} - {detail}")
+            for line in render_triage(post_stop_triage(project_root, head_before, impl_artifacts)):
+                say(line)
+            return _summary(
+                epic_key=epic_key,
+                driven=driven,
+                advanced=advanced,
+                skipped=skipped,
+                stopped_because=because,
+                detail=detail,
+            )
 
         if _STOPPED_BY_SIGNAL is not None:
             # Checked BEFORE the terminal is read, because a session killed by
@@ -677,77 +984,70 @@ def drive(
                 name = signal.Signals(_STOPPED_BY_SIGNAL).name
             except ValueError:  # pragma: no cover - a signum outside the enum
                 name = str(_STOPPED_BY_SIGNAL)
-            detail = f"{target}: {name} received, session terminated"
-            say(f"stopped: {STOP_SIGNALLED} - {detail}")
-            return _summary(
-                epic_key=epic_key,
-                driven=driven,
-                advanced=advanced,
-                skipped=skipped,
-                stopped_because=STOP_SIGNALLED,
-                detail=detail,
-            )
+            return stop(STOP_SIGNALLED, f"{target}: {name} received, session terminated")
 
         if code is None:
-            detail = f"{target}: no exit within {session_timeout}s, session killed"
-            say(f"stopped: {STOP_SESSION_TIMEOUT} - {detail}")
-            return _summary(
-                epic_key=epic_key,
-                driven=driven,
-                advanced=advanced,
-                skipped=skipped,
-                stopped_because=STOP_SESSION_TIMEOUT,
-                detail=detail,
+            return stop(
+                STOP_SESSION_TIMEOUT,
+                f"{target}: no exit within {session_timeout}s, session killed",
             )
 
         result = read_result(impl_artifacts)
         if result is None:
-            say(f"stopped: {STOP_NO_TERMINAL} - {target} exited {code} leaving no readable result")
-            return _summary(
-                epic_key=epic_key,
-                driven=driven,
-                advanced=advanced,
-                skipped=skipped,
-                stopped_because=STOP_NO_TERMINAL,
-                detail=f"{target}: exit {code}, no readable {headless_envelope.RESULT_FILENAME}",
-            )
+            # A spawn that DIED IN FLIGHT lands here, not on `signalled`. The
+            # signal branch above fires only when a signal reached the DRIVER;
+            # an API-level abort of the `claude -p` subprocess kills the child,
+            # which exits non-zero having written no terminal. Measured: eleven
+            # of twenty-two spawns in one session, at 4 / 6 / 14 / 20 / 53 / 80 /
+            # 95 / 154 / 175 / 222 turns - no turn-count pattern, no story
+            # pattern, and the same row succeeding on the next attempt against
+            # identical state. There is nothing to detect in advance and nothing
+            # to avoid, so the only available response is to try again.
+            #
+            # BOUNDED, AND ONLY OVER A TREE THAT IS SAFE TO RE-SPAWN OVER. A
+            # retry across a dirty tree is how work that was already green gets
+            # destroyed, so the triage is the precondition, not a nicety: retry
+            # only when the tree is clean AND HEAD has not moved, which is the
+            # one reading that means nothing landed. A clean tree with HEAD
+            # ADVANCED is the opposite case - the work committed and only
+            # close-out is missing - and re-driving it would redo a delivered
+            # story.
+            triage = post_stop_triage(project_root, head_before, impl_artifacts)
+            retryable = triage["reading"] == "nothing-landed"
+            if retryable and attempts_spent < max_abort_retries:
+                attempts_spent += 1
+                say(
+                    f"{target}: exit {code}, no terminal written - tree clean and HEAD "
+                    f"unmoved, so nothing landed; retrying "
+                    f"({attempts_spent} of {max_abort_retries})"
+                )
+                driven.pop()  # the retry is the same story, not a second one
+                continue
+            detail = f"{target}: exit {code}, no readable {headless_envelope.RESULT_FILENAME}"
+            if attempts_spent:
+                detail += f" (after {attempts_spent} retry attempt(s))"
+            elif not retryable:
+                detail += " (not retried: the tree is not in a safe re-spawn state)"
+            return stop(STOP_NO_TERMINAL, detail)
 
         status = result.get("status")
         if status == STATUS_BLOCKED:
             reason = str(result.get("reason") or "").strip() or "(no reason recorded)"
-            say(f"stopped: {STOP_BLOCKED} - {target}: {reason}")
-            return _summary(
-                epic_key=epic_key,
-                driven=driven,
-                advanced=advanced,
-                skipped=skipped,
-                stopped_because=STOP_BLOCKED,
-                detail=f"{target}: {reason}",
-            )
+            return stop(STOP_BLOCKED, f"{target}: {reason}")
 
         if status != STATUS_COMPLETE:
-            say(f"stopped: {STOP_UNKNOWN_STATUS} - {target} reported status {status!r}")
-            return _summary(
-                epic_key=epic_key,
-                driven=driven,
-                advanced=advanced,
-                skipped=skipped,
-                stopped_because=STOP_UNKNOWN_STATUS,
-                detail=f"{target}: unrecognised status {status!r}",
-            )
+            return stop(STOP_UNKNOWN_STATUS, f"{target}: unrecognised status {status!r}")
 
         rollup = preflight_check.build_rollup(project_root, impl_artifacts)
         stories = epic_stories(rollup, epic_key) or []
         now = status_of(stories, target)
         if now != DONE:
-            say(f"stopped: {STOP_NO_PROGRESS} - {target} reported complete but is {now!r}")
-            return _summary(
-                epic_key=epic_key,
-                driven=driven,
-                advanced=advanced,
-                skipped=skipped,
-                stopped_because=STOP_NO_PROGRESS,
-                detail=f"{target}: complete envelope, sprint status still {now!r}",
+            # Triaged like every other post-spawn stop, and this is the one where
+            # the tree matters most: a session that claimed `complete` while the
+            # sprint row stayed put is exactly the shape where the work may have
+            # committed and only the `done` sync is missing.
+            return stop(
+                STOP_NO_PROGRESS, f"{target}: complete envelope, sprint status still {now!r}"
             )
 
         advanced.append(target)
@@ -812,6 +1112,17 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             f"Seconds one session may run before it is killed and the drive stops "
             f"(default {DEFAULT_SESSION_TIMEOUT}). 0 disables the ceiling."
+        ),
+    )
+    parser.add_argument(
+        "--max-abort-retries",
+        type=int,
+        default=DEFAULT_MAX_ABORT_RETRIES,
+        help=(
+            f"How many times to re-spawn one story after a spawn died leaving no "
+            f"terminal (default {DEFAULT_MAX_ABORT_RETRIES}). A retry is taken ONLY "
+            f"when the post-stop triage finds the tree clean and HEAD unmoved, so it "
+            f"can never re-spawn over work in progress. 0 disables it."
         ),
     )
     parser.add_argument(
@@ -887,6 +1198,7 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit,
         claude_bin=args.claude_bin,
         dry_run=args.dry_run,
+        max_abort_retries=max(0, args.max_abort_retries),
     )
     print(render_summary(summary))
     return 0 if summary["stopped_because"] in CLEAN_STOPS else 1
