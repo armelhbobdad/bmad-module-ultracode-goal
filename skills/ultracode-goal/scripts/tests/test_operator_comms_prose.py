@@ -282,12 +282,20 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
     assert "--profile light" in fixture and "--profile production" in fixture
 
     # It is a real slice of the shipped file, not a summary of one: everything in
-    # the fixture is still present, byte-for-byte, in the live section. Only the
-    # print paragraph was added on top.
+    # the fixture is still present, byte-for-byte, in the live section. What was
+    # added on top is ENUMERATED rather than counted, so a new paragraph has to
+    # be named here instead of quietly raising a threshold:
+    #   1. the attended per-story verdict print;
+    #   2. the gate-provenance record, which says whether TEA or the run itself
+    #      authored the artifacts the verdict rests on (the hand-authored path is
+    #      sanctioned, but on it the model writes the file the gate reads, and
+    #      the two were previously indistinguishable in the log and the report).
     live = _gate_run_section()
     added = [p for p in _paragraphs(live) if p not in _paragraphs(fixture)]
-    assert len(added) == 1, [p[:60] for p in added]
-    assert added[0] == _print_paragraph(live)
+    assert len(added) == 2, [p[:60] for p in added]
+    assert _print_paragraph(live) in added, "the verdict-print paragraph must be one of them"
+    provenance = [p for p in added if "gate-provenance" in p]
+    assert len(provenance) == 1, [p[:60] for p in added]
 
 
 # --- the launch briefing ------------------------------------------------------

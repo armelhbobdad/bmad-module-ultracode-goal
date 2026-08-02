@@ -25,6 +25,7 @@ Produce a report (write it as a peer of `.decision-log.md` in the run folder, e.
 
 - Epic and profile (production / `--light`), branch off `{workflow.epic_branch_prefix}`, sequential vs `--parallel`.
 - Per-story outcome: gate_status and verdict (advance / defer / reloop / escalate), and any re-loops spent against budget.
+- **Gate provenance per story** — `tea` or `hand-authored`, copied from the `gate-provenance:` line Stage 5 logged (`references/gate.md`). Say it per story rather than once for the run: a mixed Epic is the common shape, and a reader who is told only "production profile" cannot tell which stories the model itself supplied the gate file for. If every story reads `hand-authored`, say that in one sentence — an Epic gated entirely on artifacts the run wrote for itself is the single most important caveat on its own report.
 - The Epic-level gate result.
 - Turns consumed vs `{workflow.max_turns_per_story}`.
 - Learnings captured and where they went (memory vs CLAUDE.md).
