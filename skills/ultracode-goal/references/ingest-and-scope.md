@@ -57,13 +57,21 @@ A prior run of this Epic may have parked non-blocking work in the ledger at `{wo
 
 Resolve `{workflow.cross_session_recall}`. **Mint the run id first — both paths below pass one.** The convention is `epic-<id>-<UTC yyyymmddThhmmssZ>` (e.g. `epic-7-20260604T172512Z`): minted once here, reused verbatim at every `<run-id>` call-site for the rest of the run — the latch commands below and the Finalize outbox build, which derives `mem-outbox.<run-id>.jsonl` from it. Second-resolution UTC keeps two runs of the same Epic from ever sharing an outbox file.
 
-If recall is `"off"`, **or** the claude-mem MCP tools are not available in this session, run only the latch so `.mem-state.json` exists and the PreToolUse hook gates uniformly, then **skip the rest of this section entirely — do not call ToolSearch, do not retry, do not search**:
+If recall is `"off"`, **or** the claude-mem MCP tools are not available in this session, **or a call to them is refused by the permission layer**, run only the latch so `.mem-state.json` exists and the PreToolUse hook gates uniformly, then **skip the rest of this section entirely — do not call ToolSearch, do not retry, do not search**:
 
 ```
 uv run {skill-root}/scripts/mem_recall.py latch --impl-artifacts {workflow.implementation_artifacts} --run-id <run-id> --recall off --claude-mem-absent
 ```
 
-(`--claude-mem-absent` covers both the off and the tools-unavailable cases and writes a red latch; the on-with-tools case uses the `--recall on --probe` form below.) The latch writes the state once, atomically; Stage 6 Finalize removes it. With it absent the hook never gates the user's own claude-mem usage — which is why it must exist before any unattended action.
+(`--claude-mem-absent` covers the off, the tools-unavailable **and** the permission-denied cases and writes a red latch; the on-with-tools case uses the `--recall on --probe` form below.) The latch writes the state once, atomically; Stage 6 Finalize removes it. With it absent the hook never gates the user's own claude-mem usage — which is why it must exist before any unattended action.
+
+**The denial is a THIRD state, and it is the ordinary unattended one.** "Not available" reads as *absent from the tool list*, and in a headless spawn that is false: the tools are listed, `ToolSearch` resolves their schemas, the call is well-formed, and the refusal arrives only when the call is *made*. So this state cannot be decided before spending one call, which is why it is named here rather than left to be inferred at step 1.
+
+**Treat the first denial as final.** There is nobody to grant it, so a second attempt costs a turn and cannot succeed: latch `--claude-mem-absent`, log the `WARN` to `.decision-log.md`, and skip the rest of the section — the same destination as absence.
+
+**Never synthesize a probe to stand in for a denied call.** An empty `[]` written to the probe file satisfies the capability contract and latches GREEN (`claude_mem: present`, `schema_ok: true`), which claims this run validated a surface it never reached, and then authorizes a Finalize write against it. A denial is a red latch, always.
+
+**Still make the call even when a prior session recorded the same denial.** Skipping the probe on the strength of a previous run's note asserts an unavailability *this* run never measured, which is the anti-fabrication rule applied to the run's own history. It costs one turn. What a prior note earns is not a skipped probe but a louder report: after several consecutive denials, say in the run report that `on` plus headless plus a permission-gated MCP server means recall is **off in practice**, and the operator should either grant the permission once or set `cross_session_recall = "off"` rather than pay the probe every run.
 
 When `{workflow.cross_session_recall}` is `"on"` **and** the claude-mem MCP tools are present, consult prior runs — exactly one search, one read:
 

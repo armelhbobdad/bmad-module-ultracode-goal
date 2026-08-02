@@ -17,6 +17,14 @@ You need [claude-mem](https://github.com/thedotmack/claude-mem) installed and th
 
 > claude-mem is a third-party plugin maintained independently of this module. We don't bundle, endorse, or install it; Cross-Session Recall simply uses it when you already have it.
 
+**Two headless caveats, both observed rather than theoretical.**
+
+*Your harness may gate the MCP call behind a permission prompt.* An unattended run has nobody to answer it, so the tools are listed, their schemas resolve, and the one sanctioned `search` is refused at call time. UCG handles that correctly (it latches red, logs a `WARN`, and proceeds gateless, since recall is advisory and never part of the gate) but it pays one call every run to rediscover it. One project recorded that outcome on 25 consecutive runs. If that is your situation, `on` means **off in practice**: either grant the permission once, or set `cross_session_recall = "off"` and stop paying for the probe.
+
+*The latch only enforces anything if your PreToolUse hook is armed for MCP tools.* The guard denies a claude-mem call under a red latch, but Claude Code only invokes a hook group for the tools its `matcher` selects, and a group armed for `Bash` alone is never invoked for an MCP call. Preflight arms it with an all-tools matcher for exactly this reason; if you merge the hook by hand, match every tool or this gate is inert.
+
+*And claude-mem may expose reads without a write.* The latch is validated by a read-shaped probe, so `present` certifies that UCG can look, not that there is anywhere to write. On a surface with no write tool, Finalize parks its summary and says so rather than reporting a failed write.
+
 ## The touchpoints
 
 Recall touches the run in exactly three places, and a machine latch (`.mem-state.json`) gates every one of them. The latch is written **once** at Ingest and removed at Finalize close-out; while it is present a `PreToolUse` hook allows claude-mem calls only when recall is green, and denies them otherwise: fail closed. The Execute and Gate stages are never touched.
