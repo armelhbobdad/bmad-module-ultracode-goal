@@ -192,6 +192,7 @@ class FakeSession:
         dirty: bool = False,
         commit: bool = False,
         intent_to_add: bool = False,
+        writes_sidecar: tuple[str, str] | None = None,
     ):
         self.project = project
         self.script = list(script)
@@ -201,6 +202,10 @@ class FakeSession:
         self.dirty = dirty
         self.commit = commit
         self.intent_to_add = intent_to_add
+        # (story, kind) the session writes DURING its spawn. It has to be during:
+        # the driver only honours a sidecar this spawn produced, so one planted
+        # before the drive is - correctly - residue.
+        self.writes_sidecar = writes_sidecar
         # A driver that lost its anti-spin rule would call this forever. The cap
         # converts that regression into a NAMED failure instead of a CI job that
         # hangs until somebody kills it - verified: with the rule removed the
@@ -229,6 +234,9 @@ class FakeSession:
 
         step = self.script[0] if len(self.script) == 1 else self.script.pop(0)
         payload, advance = step
+
+        if self.writes_sidecar:
+            _sidecar(self.project, *self.writes_sidecar)
 
         root = self.project["root"]
         if self.dirty:
@@ -1622,8 +1630,11 @@ def test_a_blocked_stop_carrying_a_handoff_kind_is_named_as_one(project, monkeyp
     third status value - and the driver's bare stop line gives an operator no way
     to tell "this split a story, pick the children up" from "this died".
     """
-    _sidecar(project, STORY_A, kind)
-    fake = FakeSession(project, [(blocked_envelope("story too large to drive"), None)])
+    fake = FakeSession(
+        project,
+        [(blocked_envelope("story too large to drive"), None)],
+        writes_sidecar=(STORY_A, kind),
+    )
     monkeypatch.setattr(drive_epic, "spawn", fake)
     summary = drive_epic.drive(
         epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
@@ -1638,8 +1649,11 @@ def test_a_blocked_stop_carrying_a_handoff_kind_is_named_as_one(project, monkeyp
 
 def test_an_ordinary_escalation_is_not_reported_as_a_handoff(project, monkeypatch, capsys):
     """`kind` is open vocabulary, so an unrecognised one is simply not a handoff."""
-    _sidecar(project, STORY_A, "budget-overrun")
-    fake = FakeSession(project, [(blocked_envelope("turn budget exhausted"), None)])
+    fake = FakeSession(
+        project,
+        [(blocked_envelope("turn budget exhausted"), None)],
+        writes_sidecar=(STORY_A, "budget-overrun"),
+    )
     monkeypatch.setattr(drive_epic, "spawn", fake)
     summary = drive_epic.drive(
         epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
@@ -1660,7 +1674,24 @@ def test_a_blocked_stop_with_no_sidecar_is_unchanged(project, monkeypatch, capsy
 
 
 @pytest.mark.parametrize(
-    "payload", ["not json at all", "[]", '"a string"', '{"kind": 7}', '{"no_kind": true}']
+    "payload",
+    [
+        "not json at all",
+        "[]",
+        '"a string"',
+        '{"kind": 7}',
+        '{"no_kind": true}',
+        # RecursionError is neither ValueError nor TypeError, so a narrow
+        # `except (ValueError, TypeError)` let it escape into the one code path
+        # whose whole job is to reach a clean stop - killing the driver before it
+        # printed its stop line OR its tree triage, on an unattended overnight run.
+        #
+        # DEPTH, AND DELIBERATELY UNDER THE SIZE CAP. A 400 KB payload is
+        # rejected by the byte cap before the parser is ever reached, so it
+        # exercises the cap and says nothing about the parse guard - which is
+        # what the first version of this case did.
+        pytest.param("[" * 20_000 + "]" * 20_000, id="deeply-nested-under-the-cap"),
+    ],
 )
 def test_an_unreadable_sidecar_is_never_a_handoff_and_never_raises(
     project, monkeypatch, payload
@@ -1674,3 +1705,69 @@ def test_an_unreadable_sidecar_is_never_a_handoff_and_never_raises(
         epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
     )
     assert summary["stopped_because"] == drive_epic.STOP_BLOCKED
+
+
+def test_a_sidecar_from_an_earlier_invocation_is_not_this_spawns_handoff(project, monkeypatch, capsys):
+    """Run-scoping, which this module already requires of every other such read.
+
+    `references/preflight.md` deliberately does NOT purge `escalation-*.json` at
+    arming - it is an operator-facing artifact that may be legitimately pending -
+    and says staleness is handled at READ time instead. `references/execute.md`'s
+    marker scan does exactly that: in scope only when it names a story in this
+    run AND was written after this run's start, "both conjuncts, never either one
+    alone".
+
+    Without the second conjunct: run 1 authors a definition it cannot drive and
+    writes the sidecar; run 2 blocks on a hard preflight RED, which writes no
+    sidecar at all; run 2 reads run 1's and announces a failure needing an
+    operator NOW as routine pick-it-up-later work. Reproduced end to end.
+    """
+    # Residue: written before the drive, i.e. by a previous invocation.
+    _sidecar(project, STORY_A, "defined-not-driven")
+    os.utime(
+        project["impl"] / f"escalation-{STORY_A}.json",
+        (time.time() - 3600, time.time() - 3600),
+    )
+
+    fake = FakeSession(project, [(blocked_envelope("preflight gate failed: 3 REDs"), None)])
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_BLOCKED
+    out = capsys.readouterr().out
+    assert "handoff:" not in out, (
+        "a hard failure was announced as a routine handoff, on the strength of a "
+        "sidecar an earlier invocation left behind"
+    )
+
+
+def test_the_clock_slack_is_wide_enough_for_a_real_write(tmp_path):
+    """The run-scoping must not reject the sidecars it exists to accept.
+
+    The filesystem's mtime clock is not `time.time()`: a file written immediately
+    AFTER a `time.time()` sample reports an mtime BEFORE it (4-8ms, measured). A
+    strict comparison makes the check inert in exactly the way the defect it
+    fixes was inert - enforcing nothing while appearing armed.
+    """
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    for _ in range(20):
+        started = time.time()
+        (impl / f"escalation-{STORY_A}.json").write_text(
+            json.dumps({"kind": "story-decomposed"}), encoding="utf-8"
+        )
+        assert drive_epic.handoff_kind(impl, STORY_A, started) == "story-decomposed", (
+            "a sidecar written after the spawn began was rejected as residue"
+        )
+
+
+def test_an_implausibly_large_sidecar_is_not_read(tmp_path):
+    """A legitimate sidecar is four short strings."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / f"escalation-{STORY_A}.json").write_text(
+        json.dumps({"kind": "story-decomposed", "pad": "x" * (128 * 1024)}), encoding="utf-8"
+    )
+    assert drive_epic.handoff_kind(impl, STORY_A) is None

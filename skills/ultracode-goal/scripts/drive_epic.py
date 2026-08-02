@@ -175,6 +175,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -775,20 +776,57 @@ def render_triage(triage: dict) -> list[str]:
 HANDOFF_KINDS = frozenset({"story-decomposed", "defined-not-driven"})
 
 
-def handoff_kind(impl_artifacts: Path, story: str) -> str | None:
-    """The escalation sidecar's `kind` when it names a handoff, else None.
+# A sidecar is only THIS spawn's if it was written after the spawn started. A
+# legitimate one is four short strings, so anything larger is not one.
+_SIDECAR_MAX_BYTES = 64 * 1024
 
-    Read-only and fail-soft, like every other read this driver makes: an absent,
-    unreadable or unparseable sidecar simply is not a handoff, and the blocked
-    stop reports itself the way it always did.
+# Slack on that comparison, and it is required rather than defensive. The
+# filesystem's mtime clock is not `time.time()`: measured on this machine, a file
+# written immediately AFTER a `time.time()` sample reports an mtime 4-8ms BEFORE
+# it. A strict `mtime >= started` therefore rejects every genuine sidecar and the
+# run-scoping silently enforces nothing - inert in exactly the way the defect it
+# fixes was inert. The quantities are not close: clock skew is milliseconds,
+# while the residue this rejects is a PRIOR INVOCATION, minutes to hours old.
+_SIDECAR_CLOCK_SLACK_SECONDS = 5.0
+
+
+def handoff_kind(impl_artifacts: Path, story: str, spawn_started: float | None = None) -> str | None:
+    """The escalation sidecar's `kind` when THIS spawn wrote one naming a handoff.
+
+    RUN-SCOPED, and that is not caution - it is the module's existing discipline,
+    which this read was missing. `references/preflight.md` deliberately does NOT
+    purge `escalation-*.json` at arming, calling it an operator-facing artifact
+    that may be legitimately pending, and it says staleness is handled at READ
+    time instead. `references/execute.md`'s own marker scan applies exactly that:
+    a marker counts only when it both names a story in this run and was written
+    after this run's start, "both conjuncts, never either one alone".
+
+    Without the second conjunct, a sidecar left by an earlier invocation makes a
+    LATER, unrelated `blocked` stop announce itself as a routine handoff. The
+    reproduced case: run 1 authors a definition and writes the sidecar; run 2
+    blocks on a hard preflight RED, which writes no sidecar at all; run 2 reports
+    "handoff ... defined-not-driven" for a failure that needs an operator now.
+    That is the dangerous direction - a real failure dressed as routine.
+
+    Fail-soft in every other respect, like every read this driver makes. The
+    parse guard is deliberately broad: `json.loads` on deeply nested input raises
+    RecursionError, which is neither ValueError nor TypeError, and it escaped
+    into the one code path whose whole job is to reach a clean stop - killing the
+    driver before it printed its stop line or its tree triage.
     """
+    path = Path(impl_artifacts) / f"escalation-{story}.json"
     try:
-        raw = (Path(impl_artifacts) / f"escalation-{story}.json").read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        stat = path.stat()
+    except OSError:
+        return None
+    if spawn_started is not None and stat.st_mtime < spawn_started - _SIDECAR_CLOCK_SLACK_SECONDS:
+        return None  # residue from an earlier invocation, not this spawn's
+    if stat.st_size > _SIDECAR_MAX_BYTES:
         return None
     try:
+        raw = path.read_text(encoding="utf-8")
         sidecar = json.loads(raw)
-    except (ValueError, TypeError):
+    except Exception:  # noqa: BLE001 - a report must never kill the stop it precedes
         return None
     if not isinstance(sidecar, dict):
         return None
@@ -988,6 +1026,7 @@ def drive(
             )
 
         head_before = head_sha(project_root)
+        spawn_started = time.time()
         spawns_run += 1
         say(f"[{spawns_run}] {target} - spawning: {shlex.join(command)}")
         code = spawn(command, project_root, session_timeout)
@@ -1082,7 +1121,7 @@ def drive(
             # crash; the next invocation picks the work up. Say so, keep the
             # non-zero exit, and do not continue: a human should see a split
             # before the drive runs on.
-            kind = handoff_kind(impl_artifacts, target)
+            kind = handoff_kind(impl_artifacts, target, spawn_started)
             if kind:
                 say(f"handoff: {target} did durable work and advanced no row ({kind})")
             return stop(STOP_BLOCKED, f"{target}: {reason}")
