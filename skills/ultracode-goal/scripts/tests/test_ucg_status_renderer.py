@@ -64,7 +64,7 @@ SCRIPT = HERE.parent / "status_render.py"
 FIXTURES = HERE / "fixtures" / "ucg_status"
 
 REPO_ROOT = HERE.parents[3]  # skills/ultracode-goal/scripts/tests -> repo root
-SKILL_DIR = REPO_ROOT / "skills" / "ultracode-goal" / "skills" / "ucg-status"
+SKILL_DIR = REPO_ROOT / "skills" / "ucg-status"
 SKILL_MD = SKILL_DIR / "SKILL.md"
 HELP_CSV = REPO_ROOT / "skills" / "ultracode-goal" / "assets" / "module-help.csv"
 VALIDATE_SKILLS = REPO_ROOT / "tools" / "validate-skills.js"
@@ -617,7 +617,7 @@ def test_skill_registered_in_help_csv_and_passes_validate_skills():
 
     # The renderer is invoked through the PARENT skill root - the one thing a
     # nested skill gets wrong by default.
-    assert "{skill-root}/scripts/status_render.py" in text
+    assert "{ucg-root}/scripts/status_render.py" in text
 
 
 @pytest.mark.skipif(_node_missing(), reason="node not available")

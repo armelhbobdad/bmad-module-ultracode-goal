@@ -1195,8 +1195,11 @@ async function testStep6bUcgAwareness() {
         await fs.pathExists(path.join(ucgSkill, 'scripts', 'formalize_check.py')),
         'Twin: formalize_check.py present (verify-only still works)',
       );
+      // Sibling of the module, not a child of it. It shipped nested until the
+      // IDE skill loader was found to enumerate one level only, which left
+      // /ucg-formalize unregistered and therefore not invocable at all.
       assert(
-        await fs.pathExists(path.join(ucgSkill, 'skills', 'ucg-formalize', 'SKILL.md')),
+        await fs.pathExists(path.join(projectDir, '_bmad/ucg/ucg-formalize', 'SKILL.md')),
         'Twin: /ucg-formalize skill present in installed tree',
       );
     } catch (error) {

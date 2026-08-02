@@ -31,8 +31,8 @@ _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _PREFLIGHT = _SKILL_ROOT / "references" / "preflight.md"
 _INGEST = _SKILL_ROOT / "references" / "ingest-and-scope.md"
 _PARENT_SKILL = _SKILL_ROOT / "SKILL.md"
-_RESOLVE = _SKILL_ROOT / "skills" / "ucg-resolve" / "SKILL.md"
-_STATUS = _SKILL_ROOT / "skills" / "ucg-status" / "SKILL.md"
+_RESOLVE = _SKILL_ROOT.parent / "ucg-resolve" / "SKILL.md"
+_STATUS = _SKILL_ROOT.parent / "ucg-status" / "SKILL.md"
 
 
 def _preflight() -> str:
@@ -197,7 +197,7 @@ def test_the_clear_is_bound_to_scalar_resolution_not_to_stage_one():
 # --- status: a declared scalar must actually be threaded ----------------------
 def test_status_invocation_passes_the_declared_ledger_scalar():
     text = _STATUS.read_text(encoding="utf-8")
-    m = re.search(r"uv run \{skill-root\}/scripts/status_render\.py[^\n]*", text)
+    m = re.search(r"uv run \{ucg-root\}/scripts/status_render\.py[^\n]*", text)
     assert m, "the renderer invocation must be present"
     assert "--deferred-work" in m.group(0), (
         "Conventions tells the agent to resolve `deferred_work_path` and to stop if it "

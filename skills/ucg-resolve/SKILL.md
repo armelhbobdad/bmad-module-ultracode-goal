@@ -15,16 +15,20 @@ back to the resume the module already has.
 The loop only counts as closed if an answer given here is not asked for again. So a
 decision resolved at this surface is consumed by the next preflight's semantic
 intervention scan and does not re-fire — that consumption lives in
-`{skill-root}/references/preflight.md`, step 3, and it is the half that makes this skill
+`{ucg-root}/references/preflight.md`, step 3, and it is the half that makes this skill
 more than a note-taker.
 
 ## Conventions
 
-- This nested sub-skill ships no `scripts/` or `customize.toml` of its own: the scripts,
-  `customize.toml`, and `references/` all live in the **parent** `ultracode-goal/` skill
-  dir, one level up. `{skill-root}` in this file therefore resolves to that **parent**
-  dir, so `{skill-root}/scripts/…` and `{skill-root}/customize.toml` resolve there;
-  qualify every script path with it so it resolves from any cwd.
+- This skill ships no `scripts/` or `customize.toml` of its own: the scripts,
+  `customize.toml`, and `references/` all live in the **parent `ultracode-goal`
+  module**. `{ucg-root}` names that module directory —
+  `{project-root}/_bmad/ucg/ultracode-goal` in an installed project, or
+  `{project-root}/skills/ultracode-goal` in a source checkout of the module itself.
+  Resolve it once (first of those two that exists) and qualify every script path with
+  it, so `{ucg-root}/scripts/…` and `{ucg-root}/customize.toml` resolve from any cwd.
+  It is deliberately **not** `{skill-root}`: this is a top-level skill, so `{skill-root}`
+  would resolve to this skill's own directory, which holds none of those files.
 - `{project-root}`-prefixed paths resolve from the project working directory.
 - `{workflow.implementation_artifacts}` and `{workflow.deferred_work_path}` resolve from
   the parent module's `customize.toml` workflow block (the same scalars the autonomous
@@ -37,8 +41,8 @@ more than a note-taker.
 `/ucg-resolve` normally runs **cold** — the operator arrives at a run that stopped, in a
 session that never saw it start. That is the whole point of this surface, so resolve the
 scalars before reading any artifact. Run `python3
-{project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow`
-(on failure, merge `{skill-root}/customize.toml` →
+{project-root}/_bmad/scripts/resolve_customization.py --skill {ucg-root} --key workflow`
+(on failure, merge `{ucg-root}/customize.toml` →
 `{project-root}/_bmad/custom/ultracode-goal.toml` →
 `{project-root}/_bmad/custom/ultracode-goal.user.toml`, scalars override / arrays append).
 
@@ -72,7 +76,7 @@ and anything not written down is not a pending decision this surface can honor.
 
 **For a preflight RED, read the `id` off the sidecar entry — never re-derive it.** Each
 entry in `.preflight-reds.json` carries its own minted `id`, written there by the preflight
-that found it (`{skill-root}/references/preflight.md`, step 3). That stored value is the
+that found it (`{ucg-root}/references/preflight.md`, step 3). That stored value is the
 one the next preflight matches an answer against, so it is the only id that can close the
 loop — and because it is stored rather than recomputed, a RED a later scan re-detects
 **inherits its existing id** instead of arriving as something nobody has answered. That
@@ -89,7 +93,7 @@ at four fields and cannot carry one, so it is the one case where an id is derive
 than read:
 
 ```
-uv run {skill-root}/scripts/red_ids.py --mint-one <kind> <artifact path> <decision_needed>
+uv run {ucg-root}/scripts/red_ids.py --mint-one <kind> <artifact path> <decision_needed>
 ```
 
 It prints the id and touches nothing. **Never derive an id by hand at either surface.** The
@@ -121,7 +125,7 @@ exists to remove.
 An entry recorded with `action` `defer` is the opposite case: it is a parked question, not
 an answered one. Present it again, and replace its entry in place when the operator decides
 it. Suppressing a deferred item would deadlock the run outright — `defer` clears nothing,
-so the next preflight still blocks on that RED (`{skill-root}/references/preflight.md`,
+so the next preflight still blocks on that RED (`{ucg-root}/references/preflight.md`,
 step 3, drops only the ids whose `action` is `close`), while this surface, the only one that
 can answer it, would never ask again. The scan blocks forever on a question the operator is
 no longer offered.
@@ -168,7 +172,7 @@ The two dispositions are genuinely different things, not two names for one:
 
 - **`close`** — the decision is made. Apply it immediately, record the entry, and clear
   the artifact that carried it. For a preflight RED, record the entry and then re-apply the
-  override through the id layer with `uv run {skill-root}/scripts/red_ids.py --from-sidecar
+  override through the id layer with `uv run {ucg-root}/scripts/red_ids.py --from-sidecar
   --impl-artifacts {workflow.implementation_artifacts}`, which removes it and records the
   closed id in the sidecar's `resolved` audit list. For the other two sources, delete the answered typed
   escalation sidecar, or mark the ledger row resolved. Clearing the RED sidecar is
@@ -180,9 +184,9 @@ The two dispositions are genuinely different things, not two names for one:
   **Closing a `budget-overrun` escalation also resets that story's turn counter** — delete
   `{workflow.implementation_artifacts}/.budget-<story_id>.json`, or set its `turns` to `0`.
   The Stop hook's counter is persistent and monotonic
-  (`{skill-root}/scripts/hooks/budget_stop.py` increments it every Stop event and escalates
+  (`{ucg-root}/scripts/hooks/budget_stop.py` increments it every Stop event and escalates
   once it reaches the ceiling), and no ordinary resume clears it — the Stage 2 arming purge
-  (`{skill-root}/references/preflight.md`, step 5) deliberately skips it on re-entry so a story cannot evade its ceiling by stopping and
+  (`{ucg-root}/references/preflight.md`, step 5) deliberately skips it on re-entry so a story cannot evade its ceiling by stopping and
   resuming. Leave it standing here and the resumed story escalates again on its **first**
   Stop event, before it has done a single turn of the work the operator just authorized, and
   the close would apply in name only. Answering a budget overrun by re-scoping, splitting,

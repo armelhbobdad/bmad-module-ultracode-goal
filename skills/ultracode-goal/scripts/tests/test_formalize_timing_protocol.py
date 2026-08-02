@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
-_FORMALIZE_SKILL = _SKILL_ROOT / "skills" / "ucg-formalize" / "SKILL.md"
+_FORMALIZE_SKILL = _SKILL_ROOT.parent / "ucg-formalize" / "SKILL.md"
 _PREFLIGHT = _SKILL_ROOT / "references" / "preflight.md"
 _KERNEL = _SKILL_ROOT / "scripts" / "formalize_check.py"
 

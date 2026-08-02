@@ -122,17 +122,29 @@ def _envelope_keys_ok(env: dict) -> bool:
 def _rel_paths_containing(needle: str) -> set[str]:
     """Every shipped-tree file carrying `needle`, as skill-root-relative posix paths."""
     hits: set[str] = set()
-    for path in _SKILL_ROOT.rglob("*"):
-        if not path.is_file() or "__pycache__" in path.parts or ".analysis" in path.parts:
-            continue
-        if path.resolve() == Path(__file__).resolve():
-            continue  # this module names the literal in order to police it
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-        if needle in text:
-            hits.add(path.relative_to(_SKILL_ROOT).as_posix())
+    # Two roots. The ucg-* entry points are SIBLINGS of this module rather than
+    # children of it (they were nested until the IDE loader, which enumerates one
+    # level, was found never to register them). Walking only `_SKILL_ROOT` would
+    # silently stop reaching them, and this assertion would then pass by not
+    # looking — the exact vacuity its own positive control exists to catch.
+    # They are still reported in the historical `skills/<name>/…` form so the
+    # declared home set reads the same way it always did.
+    roots: list[tuple[Path, str]] = [(_SKILL_ROOT, "")]
+    for sibling in sorted(_SKILL_ROOT.parent.glob("ucg-*")):
+        if sibling.is_dir():
+            roots.append((sibling, "skills/%s/" % sibling.name))
+    for root, prefix in roots:
+        for path in root.rglob("*"):
+            if not path.is_file() or "__pycache__" in path.parts or ".analysis" in path.parts:
+                continue
+            if path.resolve() == Path(__file__).resolve():
+                continue  # this module names the literal in order to police it
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            if needle in text:
+                hits.add(prefix + path.relative_to(root).as_posix())
     return hits
 
 

@@ -18,12 +18,15 @@ one move: run the renderer and show what came back.
 
 ## Conventions
 
-- This nested sub-skill ships no `scripts/` or `customize.toml` of its own: the renderer
-  (`status_render.py`), `customize.toml`, and `references/` all live in the **parent**
-  `ultracode-goal/` skill dir, one level up. `{skill-root}` in this file therefore
-  resolves to that **parent** dir, so `{skill-root}/scripts/…` and
-  `{skill-root}/customize.toml` resolve there; qualify every script path with it so it
-  resolves from any cwd.
+- This skill ships no `scripts/` or `customize.toml` of its own: the renderer
+  (`status_render.py`), `customize.toml`, and `references/` all live in the **parent
+  `ultracode-goal` module**. `{ucg-root}` names that module directory —
+  `{project-root}/_bmad/ucg/ultracode-goal` in an installed project, or
+  `{project-root}/skills/ultracode-goal` in a source checkout of the module itself.
+  Resolve it once (first of those two that exists) and qualify every script path with
+  it, so `{ucg-root}/scripts/…` and `{ucg-root}/customize.toml` resolve from any cwd.
+  It is deliberately **not** `{skill-root}`: this is a top-level skill, so `{skill-root}`
+  would resolve to this skill's own directory, which holds none of those files.
 - `{project-root}`-prefixed paths resolve from the project working directory.
 - `{workflow.implementation_artifacts}` and `{workflow.deferred_work_path}` resolve from
   the parent module's `customize.toml` workflow block (the same scalars the autonomous
@@ -38,8 +41,8 @@ one move: run the renderer and show what came back.
 exactly the situation where nobody can see the transcript any more. Resolve the scalars
 the renderer needs before calling it, against the **parent** module, so they are the same
 paths the autonomous run wrote to. Run `python3
-{project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow`
-(on failure, merge `{skill-root}/customize.toml` →
+{project-root}/_bmad/scripts/resolve_customization.py --skill {ucg-root} --key workflow`
+(on failure, merge `{ucg-root}/customize.toml` →
 `{project-root}/_bmad/custom/ultracode-goal.toml` →
 `{project-root}/_bmad/custom/ultracode-goal.user.toml`, scalars override / arrays append).
 
@@ -50,7 +53,7 @@ some other run, or no run, while looking exactly like a real answer.
 ## 1. Run the renderer
 
 ```
-uv run {skill-root}/scripts/status_render.py --impl-artifacts {workflow.implementation_artifacts} --deferred-work {workflow.deferred_work_path} --runs-root {project-root}/_bmad-output/ultracode-goal --repo {project-root}
+uv run {ucg-root}/scripts/status_render.py --impl-artifacts {workflow.implementation_artifacts} --deferred-work {workflow.deferred_work_path} --runs-root {project-root}/_bmad-output/ultracode-goal --repo {project-root}
 ```
 
 `--deferred-work` carries the scalar Conventions told you to resolve. The two paths are

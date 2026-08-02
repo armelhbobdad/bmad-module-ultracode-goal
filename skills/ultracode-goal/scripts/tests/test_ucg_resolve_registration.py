@@ -13,7 +13,10 @@ from pathlib import Path
 
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _HELP_CSV = _SKILL_ROOT / "assets" / "module-help.csv"
-_NESTED_SKILLS_DIR = _SKILL_ROOT / "skills"
+# The three ucg-* entry points are SIBLINGS of the parent module, not children of
+# it. They shipped nested until the IDE loader was found to enumerate one level
+# only, which left every one of them unreachable as a slash command.
+_SIBLING_SKILLS_DIR = _SKILL_ROOT.parent
 
 _MODULE = "UltraCode Goal"
 _PARENT_SKILL = "ultracode-goal"
@@ -62,12 +65,15 @@ def test_every_shipped_nested_skill_has_a_help_row():
 
     shipped = {
         d.name
-        for d in _NESTED_SKILLS_DIR.iterdir()
-        if d.is_dir() and (d / "SKILL.md").is_file()
+        for d in _SIBLING_SKILLS_DIR.iterdir()
+        if d.is_dir()
+        and d.name != _PARENT_SKILL
+        and d.name.startswith("ucg-")
+        and (d / "SKILL.md").is_file()
     }
     registered = {r[skill_col] for r in data} - {_PARENT_SKILL}
 
-    assert shipped, "no nested skills discovered"
+    assert shipped, "no ucg-* companion skills discovered"
     assert shipped == registered, (
         "shipped nested skills and help-catalog rows diverged: "
         "shipped-but-unregistered=%s, registered-but-unshipped=%s"

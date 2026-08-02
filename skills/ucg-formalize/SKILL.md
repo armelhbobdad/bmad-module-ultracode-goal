@@ -16,12 +16,15 @@ verdict and remediation lands in `.decision-log.md`.
 
 ## Conventions
 
-- This nested sub-skill ships no `scripts/` or `customize.toml` of its own: the kernel
+- This skill ships no `scripts/` or `customize.toml` of its own: the kernel
   (`formalize_check.py`, `headless_envelope.py`), `customize.toml`, and `references/`
-  all live in the **parent** `ultracode-goal/` skill dir, one level up. `{skill-root}` in
-  this file therefore resolves to that **parent** dir, so `{skill-root}/scripts/…` and
-  `{skill-root}/customize.toml` resolve there; qualify every script path with it so it
-  resolves from any cwd.
+  all live in the **parent `ultracode-goal` module**. `{ucg-root}` names that module
+  directory — `{project-root}/_bmad/ucg/ultracode-goal` in an installed project, or
+  `{project-root}/skills/ultracode-goal` in a source checkout of the module itself.
+  Resolve it once (first of those two that exists) and qualify every script path with
+  it, so `{ucg-root}/scripts/…` and `{ucg-root}/customize.toml` resolve from any cwd.
+  It is deliberately **not** `{skill-root}`: this is a top-level skill, so `{skill-root}`
+  would resolve to this skill's own directory, which holds none of those files.
 - `{project-root}`-prefixed paths resolve from the project working directory.
 - `{workflow.implementation_artifacts}` and `{workflow.tea_config_path}` resolve from
   the parent module's `customize.toml` workflow block (the same scalars the autonomous
@@ -36,8 +39,8 @@ verdict and remediation lands in `.decision-log.md`.
 `/ucg-formalize` can run cold (outside an active `ultracode goal` run), so resolve the
 scalars the step-1 kernel consumes before calling it — against the **parent** module, so
 they are the same scalars the autonomous run reads. Run `python3
-{project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow`
-(on failure, merge `{skill-root}/customize.toml` →
+{project-root}/_bmad/scripts/resolve_customization.py --skill {ucg-root} --key workflow`
+(on failure, merge `{ucg-root}/customize.toml` →
 `{project-root}/_bmad/custom/ultracode-goal.toml` →
 `{project-root}/_bmad/custom/ultracode-goal.user.toml`, scalars override / arrays append),
 and load `{planning_artifacts}` from `{project-root}/_bmad/config.yaml` (root + `bmm`
@@ -49,10 +52,10 @@ blocker list, so the Headless `reason` renders.
 ## 1. Run the readiness kernel
 
 Resolve the Epic id `<id>` the operator named, then run the readiness kernel — qualified
-by `{skill-root}` so it resolves from any cwd:
+by `{ucg-root}` so it resolves from any cwd:
 
 ```
-uv run {skill-root}/scripts/formalize_check.py --epic <id> --project-root {project-root} --planning-artifacts {planning_artifacts} --impl-artifacts {workflow.implementation_artifacts} --tea-config {workflow.tea_config_path}
+uv run {ucg-root}/scripts/formalize_check.py --epic <id> --project-root {project-root} --planning-artifacts {planning_artifacts} --impl-artifacts {workflow.implementation_artifacts} --tea-config {workflow.tea_config_path}
 ```
 
 Read the kernel's readiness verdict JSON from stdout. Its shape is
@@ -162,7 +165,7 @@ autonomous parent `SKILL.md` shape: `skill` is the constant `ultracode-goal` (ne
 into the envelope.
 
 Serialize the envelope through the one shared adapter
-`{skill-root}/scripts/headless_envelope.py` (`build_headless_envelope`) — the same
+`{ucg-root}/scripts/headless_envelope.py` (`build_headless_envelope`) — the same
 definition `references/preflight.md` uses — passing the ordered blocker list
 from step 4. The adapter emits the canonical keys and the positional `reason`
 (`blockers[0]`), so this entry point and the autonomous run cannot serialize a blocked
