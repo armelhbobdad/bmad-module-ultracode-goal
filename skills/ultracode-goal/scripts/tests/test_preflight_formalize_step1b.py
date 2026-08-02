@@ -12,13 +12,20 @@ import pytest
 
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _PREFLIGHT = _SKILL_ROOT / "references" / "preflight.md"
-_UCG_FORMALIZE_SKILL = _SKILL_ROOT / "skills" / "ucg-formalize" / "SKILL.md"
+_UCG_FORMALIZE_SKILL = _SKILL_ROOT.parent / "ucg-formalize" / "SKILL.md"
 
 _STEP1B_HEADING_RE = re.compile(r"^## 1b\..*$", re.MULTILINE)
 _STEP1_HEADING = "## 1. Run the mechanical check"
 _STEP2_HEADING = "## 2. Auto-remediation pass"
 _QUALIFIED_INVOCATION = "uv run {skill-root}/scripts/formalize_check.py"
-_ONE_KERNEL_TOKEN = "{skill-root}/scripts/formalize_check.py"
+# The two entry points name the SAME kernel, each qualified so it resolves from
+# any cwd — but they no longer spell the root identically, and that is correct.
+# preflight.md lives inside the module, so its root is `{skill-root}`;
+# ucg-formalize is a TOP-LEVEL skill whose own `{skill-root}` would point at its
+# own directory, which holds no scripts, so it qualifies with `{ucg-root}` (the
+# parent module dir). What must not drift is the kernel itself.
+_ONE_KERNEL_SCRIPT = "/scripts/formalize_check.py"
+_VALID_KERNEL_ROOTS = ("{skill-root}", "{ucg-root}")
 _FR5_FLAGS = (
     "--epic",
     "--project-root {project-root}",
@@ -74,7 +81,7 @@ def test_invocation_has_all_fr5_flags_with_canonical_placeholders():
 
 
 def test_one_kernel_token_self_contained():
-    assert _text().count(_ONE_KERNEL_TOKEN) == 1
+    assert _text().count("{skill-root}" + _ONE_KERNEL_SCRIPT) == 1
 
 
 def test_step1b_states_inv3_inv4_unconditional():
@@ -100,4 +107,16 @@ def test_one_kernel_two_entry_points():
         pytest.skip("ucg-formalize SKILL.md not present")
     preflight_token = _formalize_token(_text())
     skill_token = _formalize_token(_UCG_FORMALIZE_SKILL.read_text(encoding="utf-8"))
-    assert preflight_token == skill_token == _ONE_KERNEL_TOKEN
+
+    # ONE kernel: both entry points must end in the same script path, so the two
+    # callers can never drift onto divergent kernels.
+    assert preflight_token.endswith(_ONE_KERNEL_SCRIPT), preflight_token
+    assert skill_token.endswith(_ONE_KERNEL_SCRIPT), skill_token
+
+    # ...and each must still be ROOT-QUALIFIED, which is what makes it resolve
+    # from the project cwd the caller actually runs in. A bare `scripts/…` here
+    # is the regression this pair has always guarded against.
+    for token in (preflight_token, skill_token):
+        assert token[: -len(_ONE_KERNEL_SCRIPT)] in _VALID_KERNEL_ROOTS, (
+            "kernel invocation is not root-qualified: %r" % token
+        )

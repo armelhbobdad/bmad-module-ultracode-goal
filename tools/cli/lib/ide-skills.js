@@ -15,8 +15,17 @@ const yaml = require('js-yaml');
 
 const PLATFORM_CODES_PATH = path.join(__dirname, 'platform-codes.yaml');
 
-// UCG-owned skill directories inside IDE skills/ targets
-const UCG_SKILLS = new Set(['ultracode-goal']);
+// UCG-owned skill directories inside IDE skills/ targets.
+//
+// The three ucg-* entry points are TOP-LEVEL skills, not nested ones. They used
+// to ship inside `ultracode-goal/skills/`, where the IDE's skill loader — which
+// enumerates one level — never saw them: `/ucg-formalize`, `/ucg-resolve` and
+// `/ucg-status` were documented operator commands that did not resolve, and
+// `docs/operating-tips.md` routed a blocked run to `/ucg-resolve` at exactly the
+// moment an operator needs it. They remain thin: their scripts, `customize.toml`
+// and `references/` still live in the parent module, which each SKILL.md now
+// locates by an explicit path rather than by `{skill-root}`.
+const UCG_SKILLS = new Set(['ultracode-goal', 'ucg-formalize', 'ucg-resolve', 'ucg-status']);
 
 // OS/editor artifacts to filter during copy
 const ARTIFACT_FILTER = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '._.DS_Store']);

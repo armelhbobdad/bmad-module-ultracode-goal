@@ -278,12 +278,55 @@ async function testClaudeCodeOnly() {
   const docsSrc = await fs.readFile(path.join(REPO_ROOT, 'docs', 'how-it-works.md'), 'utf8');
   assert(!/##\s*Portability/i.test(docsSrc), 'docs/how-it-works.md has no Portability section');
 
+  // ---- every ucg-* entry point installs where the loader can SEE it --------
+  //
+  // The IDE skill loader enumerates ONE level of the target dir. While the three
+  // ucg-* skills shipped inside `ultracode-goal/skills/`, none of them was ever
+  // registered: `/ucg-formalize`, `/ucg-resolve` and `/ucg-status` were
+  // documented operator commands that did not resolve, and a blocked run's
+  // advice to "run /ucg-resolve" pointed at nothing. A presence check against
+  // the module tree cannot catch that -- the files were present the whole time.
+  // This asserts the property that actually decides registration: a SKILL.md
+  // exactly one level below the IDE target.
+  {
+    const os = require('node:os');
+    const { installSkillsToIdes } = require(path.join(REPO_ROOT, 'tools', 'cli', 'lib', 'ide-skills.js'));
+    const proj = await fs.mkdtemp(path.join(os.tmpdir(), 'ucg-loader-'));
+    try {
+      const ucgDir = path.join(proj, '_bmad', 'ucg');
+      await fs.ensureDir(ucgDir);
+      for (const d of ['ultracode-goal', 'ucg-formalize', 'ucg-resolve', 'ucg-status']) {
+        await fs.copy(path.join(SKILLS_DIR, d), path.join(ucgDir, d));
+      }
+      const result = await installSkillsToIdes(proj, ucgDir, ['claude-code']);
+      const target = path.join(proj, result.directories[0]);
+      for (const name of ['ultracode-goal', 'ucg-formalize', 'ucg-resolve', 'ucg-status']) {
+        assert(
+          await fs.pathExists(path.join(target, name, 'SKILL.md')),
+          `${name} installs one level below the IDE target (loader-visible)`,
+        );
+      }
+      // Anti-vacuous twin: the OLD nested location must be gone, or the check
+      // above could pass while the skills also sat somewhere unreachable.
+      assert(
+        !(await fs.pathExists(path.join(target, 'ultracode-goal', 'skills', 'ucg-formalize'))),
+        'no nested ucg-* copy survives inside the parent skill dir',
+      );
+    } finally {
+      await fs.remove(proj);
+    }
+  }
+
   // ---- the standalone gate + planning fragments still ship for Claude Code -
   const SKILL_SRC = path.join(SKILLS_DIR, 'ultracode-goal');
   const shipped = [
-    path.join(SKILL_SRC, 'skills', 'ucg-formalize', 'SKILL.md'),
-    path.join(SKILL_SRC, 'skills', 'ucg-status', 'SKILL.md'),
-    path.join(SKILL_SRC, 'skills', 'ucg-resolve', 'SKILL.md'),
+    // Siblings of the module, not children of it: the IDE skill loader
+    // enumerates one level, so while these shipped nested none of them was ever
+    // registered and `/ucg-formalize`, `/ucg-resolve` and `/ucg-status` did not
+    // resolve as commands.
+    path.join(SKILLS_DIR, 'ucg-formalize', 'SKILL.md'),
+    path.join(SKILLS_DIR, 'ucg-status', 'SKILL.md'),
+    path.join(SKILLS_DIR, 'ucg-resolve', 'SKILL.md'),
     path.join(SKILL_SRC, 'scripts', 'formalize_check.py'),
     path.join(SKILL_SRC, 'scripts', 'merge_customization.py'),
   ];

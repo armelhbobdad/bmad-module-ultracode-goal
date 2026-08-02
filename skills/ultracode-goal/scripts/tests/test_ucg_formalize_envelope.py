@@ -58,7 +58,7 @@ FLOOR = FIXTURES / "floor"
 UCG_FIXTURES = FIXTURES / "ucg_formalize"
 
 REPO_ROOT = HERE.parents[3]  # skills/ultracode-goal/scripts/tests -> repo root
-SKILL_MD = REPO_ROOT / "skills" / "ultracode-goal" / "skills" / "ucg-formalize" / "SKILL.md"
+SKILL_MD = REPO_ROOT / "skills" / "ucg-formalize" / "SKILL.md"
 PARENT_SKILL_MD = REPO_ROOT / "skills" / "ultracode-goal" / "SKILL.md"
 PREFLIGHT_MD = REPO_ROOT / "skills" / "ultracode-goal" / "references" / "preflight.md"
 VALIDATE_SKILLS = REPO_ROOT / "tools" / "validate-skills.js"
@@ -544,11 +544,11 @@ def test_empty_body_skill_mutant_fails_validate_skills(tmp_path):
 
 
 def test_kernel_invocation_block_present():
-    # Deterministic: the SKILL instructs the {skill-root}-qualified kernel
+    # Deterministic: the SKILL instructs the {ucg-root}-qualified kernel
     # invocation with all five flags, and does NOT recompute the verdict.
     text = _skill_text()
     assert text.count("formalize_check.py") >= 1
-    assert "{skill-root}/scripts/formalize_check.py" in text
+    assert "{ucg-root}/scripts/formalize_check.py" in text
     for flag in ("--epic", "--project-root", "--planning-artifacts", "--impl-artifacts", "--tea-config"):
         assert flag in text, "missing kernel flag %s" % flag
     # No second kernel, and mechanical_budget is READ not recomputed.

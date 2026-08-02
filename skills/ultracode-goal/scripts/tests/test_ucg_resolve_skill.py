@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
-_SKILL = _SKILL_ROOT / "skills" / "ucg-resolve" / "SKILL.md"
+_SKILL = _SKILL_ROOT.parent / "ucg-resolve" / "SKILL.md"
 _PARENT_SKILL = _SKILL_ROOT / "SKILL.md"
 _EXECUTE = _SKILL_ROOT / "references" / "execute.md"
 
