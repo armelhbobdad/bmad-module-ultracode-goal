@@ -497,6 +497,24 @@ def test_epic_level_resolution_still_works_alongside_children(tmp_path):
     assert run_gate(tmp_path, profile="light", story="9")["gate_status"] == "NOT_EVALUATED"
 
 
+def test_own_slim_wins_over_a_neighbours_frontmatter_hint(tmp_path):
+    # A story that wrote its own slim gate file but NO trace report must resolve
+    # that file — never the first frontmatter hint in the shared directory.
+    #
+    # Observed in the field: `--story` matched no `trace-*.md`, so scoping left
+    # every report in play and the hint loop returned an unrelated epic's gate.
+    # The wrong answer was a PASS, which is the verdict nobody re-reads.
+    write_trace_report(tmp_path, "trace-11-0.md", "gate-decision-11-0.json")
+    write_named_slim(tmp_path, "gate-decision-11-0.json", "PASS")
+    write_named_slim(tmp_path, "gate-decision-92-6c.json", "CONCERNS")
+
+    result = run_gate(tmp_path, profile="light", story="92-6c")
+    assert result["gate_status"] == "CONCERNS"
+    assert result["verdict"] == "defer"
+    assert any("gate-decision-92-6c.json" in r for r in result["reasons"])
+    assert not any("gate-decision-11-0.json" in r for r in result["reasons"])
+
+
 # --- Anti-vacuous twin: mutate a COPY of the script, assert the test reds -----
 
 
@@ -511,6 +529,27 @@ def _write_mutant(tmp_path, name, old, new):
 
 
 _FAIL_CLOSED_CLAUSE = (
+    "        elif _is_per_story_named(trace_output):\n"
+    "            return None\n"
+)
+
+# The clause that stops a story's OWN slim gate file from being passed over in
+# favour of a neighbour's frontmatter hint. The mutation below rewrites the two
+# scoping clauses back into the single pre-fix one, which is what let story B be
+# handed story A's verdict.
+_OWN_SLIM_WINS_CLAUSE = (
+    "        elif scoped_slim is not None:\n"
+    "            # This story wrote no trace report but DID write its own slim gate\n"
+    "            # file. Falling through here would leave ``reports`` as every report\n"
+    "            # in the directory and let the hint loop below return a NEIGHBOUR's\n"
+    "            # gate — observed handing an unrelated epic's PASS back as this\n"
+    "            # story's verdict. The story's own file wins, before any hint is read.\n"
+    "            return scoped_slim\n"
+    "        elif _is_per_story_named(trace_output):\n"
+    "            return None\n"
+)
+
+_PRE_FIX_SCOPING_CLAUSE = (
     "        elif scoped_slim is None and _is_per_story_named(trace_output):\n"
     "            return None\n"
 )
@@ -554,8 +593,8 @@ def test_mutant_always_fail_closed_reds_the_generic_fallback(tmp_path):
     mutant = _write_mutant(
         tmp_path / "src",
         "always_fail_closed",
-        "        elif scoped_slim is None and _is_per_story_named(trace_output):\n",
-        "        elif scoped_slim is None:\n",
+        "        elif _is_per_story_named(trace_output):\n",
+        "        else:\n",
     )
     trace = tmp_path / "trace"
     trace.mkdir(parents=True)
@@ -574,6 +613,39 @@ def test_mutant_always_fail_closed_reds_the_generic_fallback(tmp_path):
 
     assert result["gate_status"] == "NOT_EVALUATED"
     assert result["verdict"] == "escalate"
+
+
+def test_mutant_without_own_slim_clause_reports_another_epics_pass(tmp_path):
+    """Twin for test_own_slim_wins_over_a_neighbours_frontmatter_hint.
+
+    Concrete mutation: restore the pre-fix scoping clause verbatim, so a story
+    with a slim gate file but no trace report falls through with `reports` still
+    holding every report in the directory. The hint loop then hands back epic
+    11's gate — a PASS — as story 92-6c's verdict, which is exactly the field
+    failure. If CONCERNS survived this reversion, the new clause would not be
+    what produces it.
+    """
+    mutant = _write_mutant(
+        tmp_path / "src", "no_own_slim", _OWN_SLIM_WINS_CLAUSE, _PRE_FIX_SCOPING_CLAUSE
+    )
+    trace = tmp_path / "trace"
+    trace.mkdir(parents=True)
+    write_trace_report(trace, "trace-11-0.md", "gate-decision-11-0.json")
+    write_named_slim(trace, "gate-decision-11-0.json", "PASS")
+    write_named_slim(trace, "gate-decision-92-6c.json", "CONCERNS")
+
+    proc = subprocess.run(
+        [sys.executable, str(mutant), "--trace-output", str(trace),
+         "--profile", "light", "--story", "92-6c"],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+
+    # The pre-fix fail-open, reproduced against the mutant: a neighbour's PASS.
+    assert result["gate_status"] == "PASS"
+    assert result["verdict"] == "advance"
+    assert any("gate-decision-11-0.json" in r for r in result["reasons"])
 
 
 if __name__ == "__main__":
