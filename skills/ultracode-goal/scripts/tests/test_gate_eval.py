@@ -26,7 +26,9 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[1] / "gate_eval.py"
 
 
-def run_gate(trace_output, profile="light", nfr=None, test_review=None, story=None):
+def run_gate(
+    trace_output, profile="light", nfr=None, test_review=None, story=None, epic_level=False
+):
     cmd = [sys.executable, str(SCRIPT), "--trace-output", str(trace_output), "--profile", profile]
     if nfr is not None:
         cmd += ["--nfr", str(nfr)]
@@ -34,6 +36,8 @@ def run_gate(trace_output, profile="light", nfr=None, test_review=None, story=No
         cmd += ["--test-review", str(test_review)]
     if story is not None:
         cmd += ["--story", str(story)]
+    if epic_level:
+        cmd += ["--epic-level"]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
@@ -263,6 +267,132 @@ def test_production_missing_nfr_file_downgrades(tmp_path):
         tmp_path, profile="production", nfr=tmp_path / "absent.md", test_review=review
     )
     assert result["verdict"] == "reloop"
+
+
+def test_production_omitted_nfr_flag_is_failing_not_silent(tmp_path):
+    """A flag that is never passed must not buy a higher verdict than a failing one.
+
+    An omitted path used to be skipped in silence: the AND did not run, the field
+    rendered `null`, and the verdict was computed WITHOUT the signal. So a run
+    that forgot `--nfr` advanced where a run that supplied a FAILING nfr would
+    have re-looped, and `null` beside `--profile production` read as "missing or
+    malformed" - the opposite of "not asked for".
+    """
+    write_slim(tmp_path, "PASS")
+    review = tmp_path / "test-review.md"
+    write_review(review, 90, "Approve")
+    result = run_gate(tmp_path, profile="production", test_review=review)
+
+    assert result["verdict"] == "reloop"
+    assert any("--nfr not supplied" in r for r in result["reasons"])
+    assert any("--epic-level" in r for r in result["reasons"]), "the reason names the escape"
+
+
+def test_production_omitted_test_review_flag_is_failing_not_silent(tmp_path):
+    write_slim(tmp_path, "PASS")
+    nfr = tmp_path / "nfr-assessment.md"
+    write_nfr(nfr, "PASS")
+    result = run_gate(tmp_path, profile="production", nfr=nfr)
+
+    assert result["verdict"] == "reloop"
+    assert any("--test-review not supplied" in r for r in result["reasons"])
+
+
+def test_epic_level_declares_the_omission_instead_of_implying_it(tmp_path):
+    """The epic roll-up has no aggregate to AND, and now says so explicitly.
+
+    `references/gate.md` is right that omitting the flags is CORRECT at the epic
+    level - TEA writes both artifacts per story - but "correct omission" and
+    "forgotten flag" were the same input. `--epic-level` separates them.
+    """
+    write_slim(tmp_path, "PASS")
+    result = run_gate(tmp_path, profile="production", epic_level=True)
+
+    assert result["verdict"] == "advance"
+    assert result["nfr_status"] is None
+    assert result["review_score"] is None
+    assert any("epic-level roll-up" in r for r in result["reasons"])
+
+
+def test_epic_level_still_cannot_lift_a_failing_trace_gate(tmp_path):
+    """The escape skips the ANDs; it never touches the gate status itself."""
+    write_slim(tmp_path, "FAIL", p0="NOT_MET")
+    result = run_gate(tmp_path, profile="production", epic_level=True)
+    assert result["verdict"] == "reloop"
+
+
+def test_epic_level_is_a_no_op_under_light(tmp_path):
+    """`--profile light` runs no ANDs anyway, so the flag decides nothing.
+
+    It is still REPORTED truthfully in `epic_level` - the caller did declare it -
+    so the comparison excludes that key and asserts every deciding field is
+    untouched.
+    """
+    write_slim(tmp_path, "PASS")
+    plain = run_gate(tmp_path, profile="light")
+    flagged = run_gate(tmp_path, profile="light", epic_level=True)
+
+    assert {k: v for k, v in plain.items() if k != "epic_level"} == {
+        k: v for k, v in flagged.items() if k != "epic_level"
+    }
+    assert plain["epic_level"] is False and flagged["epic_level"] is True
+
+
+def test_production_both_flags_omitted_names_both(tmp_path):
+    """Two omissions are two reasons, not one."""
+    write_slim(tmp_path, "PASS")
+    result = run_gate(tmp_path, profile="production")
+    assert result["verdict"] == "reloop"
+    assert any("--nfr not supplied" in r for r in result["reasons"])
+    assert any("--test-review not supplied" in r for r in result["reasons"])
+
+
+def test_an_omitted_flag_cannot_lower_a_verdict_below_reloop(tmp_path):
+    """The downgrade floor is unchanged: only an otherwise-advance verdict moves."""
+    write_slim(tmp_path, "CONCERNS")
+    result = run_gate(tmp_path, profile="production")
+    assert result["verdict"] == "defer", "a CONCERNS defer is not dragged to reloop"
+
+
+def test_epic_level_refuses_to_combine_with_a_supplied_path(tmp_path):
+    """`--epic-level` asserts there is nothing to AND, so a path contradicts it.
+
+    Without this, the flag wins silently and DISCARDS an explicitly named
+    artifact - including a FAILING one. `references/gate.md` already calls the
+    hybrid the mirror mistake; this puts it in the invocation-error lane a
+    missing `--story` already occupies.
+    """
+    write_slim(tmp_path, "PASS")
+    nfr = tmp_path / "nfr-assessment.md"
+    write_nfr(nfr, "FAIL")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--trace-output", str(tmp_path), "--profile",
+         "production", "--epic-level", "--nfr", str(nfr)],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 2, proc.stdout
+    assert "--epic-level" in proc.stderr
+
+
+def test_epic_level_is_reported_machine_readably(tmp_path):
+    """`reasons` wording is explicitly non-contractual, so the fact needs a key.
+
+    Without it a consumer cannot tell an `advance` that ANDed both production
+    signals from one that skipped them, and `nfr_status: null` alone does not say.
+    """
+    write_slim(tmp_path, "PASS")
+    nfr = tmp_path / "nfr-assessment.md"
+    review = tmp_path / "test-review.md"
+    write_nfr(nfr, "PASS")
+    write_review(review, 92, "Approve")
+
+    anded = run_gate(tmp_path, profile="production", nfr=nfr, test_review=review)
+    skipped = run_gate(tmp_path, profile="production", epic_level=True)
+
+    assert anded["verdict"] == skipped["verdict"] == "advance"
+    assert anded["epic_level"] is False
+    assert skipped["epic_level"] is True, "the two advances are distinguishable"
+    assert run_gate(tmp_path, profile="light")["epic_level"] is False
 
 
 def test_production_signals_do_not_lift_concerns(tmp_path):
@@ -513,6 +643,44 @@ def test_own_slim_wins_over_a_neighbours_frontmatter_hint(tmp_path):
     assert result["verdict"] == "defer"
     assert any("gate-decision-92-6c.json" in r for r in result["reasons"])
     assert not any("gate-decision-11-0.json" in r for r in result["reasons"])
+
+
+def test_both_shipped_epic_level_callers_pass_the_flag():
+    """Drift here reloops a passing epic, silently.
+
+    `--epic-level` is only correct because the two surfaces that perform the epic
+    roll-up actually pass it. If either drops it, the roll-up hits the new
+    omitted-flag rule and downgrades an epic PASS to `reloop` with no other
+    symptom - which is exactly the class of silent doc/code drift the omitted-flag
+    fix exists to remove.
+    """
+    gate_md = (SCRIPT.parent.parent / "references" / "gate.md").read_text(encoding="utf-8")
+    # Fenced invocations only. Prose ALSO names the flags while discussing them,
+    # and a prose match would assert against a sentence rather than a command.
+    fenced = [ln.strip() for ln in gate_md.splitlines() if ln.strip().startswith("uv run ")]
+    epic_cmd = next((ln for ln in fenced if "<epic_id>" in ln), None)
+    assert epic_cmd, "references/gate.md no longer shows an epic-level invocation"
+    assert "--epic-level" in epic_cmd, epic_cmd
+    assert "--nfr" not in epic_cmd and "--test-review" not in epic_cmd, (
+        "the epic roll-up must not combine --epic-level with a signal path"
+    )
+
+    workflow_js = (SCRIPT.parent.parent / "assets" / "execute-epic.workflow.js").read_text(
+        encoding="utf-8"
+    )
+    js_cmd = next(
+        (ln for ln in workflow_js.splitlines() if "gate_eval.py" in ln and "${epic}" in ln), None
+    )
+    assert js_cmd, "the --parallel workflow no longer emits an epic-level invocation"
+    assert "--epic-level" in js_cmd, js_cmd
+
+    # And the per-story invocation must still carry both paths.
+    story_cmd = next(
+        (ln for ln in fenced if "--profile production" in ln and "<story_id>" in ln), None
+    )
+    assert story_cmd, "references/gate.md no longer shows a per-story production invocation"
+    assert "--nfr" in story_cmd and "--test-review" in story_cmd, story_cmd
+    assert "--epic-level" not in story_cmd, story_cmd
 
 
 # --- Anti-vacuous twin: mutate a COPY of the script, assert the test reds -----

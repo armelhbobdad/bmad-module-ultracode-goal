@@ -49,7 +49,7 @@ def _one_line(blocker: dict) -> str:
     """Render a blocker {source, decision_needed} as ONE physical line (no newline)."""
     source = str(blocker.get("source", "")).strip()
     decision = str(blocker.get("decision_needed", "")).strip()
-    text = f"{source} — {decision}" if source and decision else (source or decision)
+    text = f"{source} - {decision}" if source and decision else (source or decision)
     return re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
 
 
@@ -93,7 +93,7 @@ def _append_line_to_log(decision_log: str, line: str) -> None:
 
 def _append_blockers_to_log(decision_log: str, blockers: list[dict]) -> None:
     """Write the full formalize/semantic blockers (source:line + decision_needed) to the log."""
-    lines = ["", "## Headless blocked envelope — full blocker list", ""]
+    lines = ["", "## Headless blocked envelope - full blocker list", ""]
     for b in blockers:
         lines.append(f"- {b.get('source', '')} :: {b.get('decision_needed', '')}")
     _append_to_log(decision_log, lines)
@@ -151,16 +151,49 @@ def write_run_result(text: str, impl_artifacts, decision_log: str | None = None)
     return path
 
 
-def build_headless_envelope(source, decision_log, *, write_log: bool = True, impl_artifacts=None) -> dict:
-    """Adapt a blocker source into the canonical blocked envelope.
+def build_headless_envelope(
+    source,
+    decision_log,
+    *,
+    write_log: bool = True,
+    impl_artifacts=None,
+    report=None,
+    deferred_work=None,
+) -> dict:
+    """Adapt a blocker source into the canonical BLOCKED envelope.
+
+    THIS IS THE BLOCKED ADAPTER. Its complete sibling is
+    :func:`build_complete_envelope`, and the name here is historical - see the
+    :data:`build_blocked_envelope` alias below, which is what new callers should
+    read for.
 
     ``source`` is either an ordered list of blocker dicts (each {source, decision_needed})
     or a formalize verdict dict (adapted via :func:`fr5_blockers`). Returns exactly the five
     canonical keys plus ``reason`` (the one-line rendering of ``blockers[0]``).
 
+    ``report`` / ``deferred_work`` are optional because a blocked exit is not
+    always artifact-less. A run that ESCALATED reached Stage 6 and produced a run
+    report and a gate trail, so hard-coding them to ``None`` under-reported what
+    was on disk for the one run most worth reading. They stay ``None`` when the
+    block happened before those artifacts existed, which is the earlier block
+    points' case.
+
     When ``impl_artifacts`` resolves, the same bytes are also written to
     ``run-result.json`` there.
     """
+    # Refuse a complete-shaped mapping BEFORE any side effect. Handed one, the
+    # fail-closed branch below reads no blockers from it, SYNTHESISES one, and
+    # then (a) appends a fabricated "formalize verdict is unreadable or missing"
+    # line to the decision log and (b) writes a `blocked` run-result.json over a
+    # successful run - corrupting the two artifacts an automator and a resume
+    # read, silently and with no exception. Observed in the field. Raising is
+    # right even though the emit path is otherwise never-raise: this is a caller
+    # error, and the alternative is a wrong answer written to disk.
+    if isinstance(source, dict) and str(source.get("status", "")).strip() == "complete":
+        raise ValueError(
+            "build_headless_envelope is the BLOCKED adapter; a complete-shaped "
+            "mapping belongs in build_complete_envelope"
+        )
     blockers = source if isinstance(source, list) else fr5_blockers(source)
     decision_log = str(decision_log)
     if not blockers:
@@ -181,12 +214,18 @@ def build_headless_envelope(source, decision_log, *, write_log: bool = True, imp
         "status": "blocked",
         "skill": SKILL,
         "decision_log": decision_log,
-        "report": None,
-        "deferred_work": None,
+        "report": str(report) if report else None,
+        "deferred_work": str(deferred_work) if deferred_work else None,
         "reason": reason,
     }
     write_run_result(render_envelope(envelope), impl_artifacts, decision_log)
     return envelope
+
+
+# The name this adapter should have had. `build_headless_envelope` reads as the
+# adapter for headless generally, which is how a complete-shaped mapping came to
+# be handed to the blocked one.
+build_blocked_envelope = build_headless_envelope
 
 
 def build_complete_envelope(decision_log, *, report=None, deferred_work=None, impl_artifacts=None) -> dict:

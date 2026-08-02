@@ -328,6 +328,17 @@ def apply_production_and(
     conservative reloop rather than a silent false-advance. The conservative
     direction is intentional: we would rather re-loop a green story than advance
     a story whose evidence we could not actually read.
+
+    AN OMITTED PATH IS FAILING TOO, and that is the same rule rather than a new
+    one. A ``None`` path used to be skipped in silence: the signal's AND simply
+    did not run, the field rendered ``null``, and the verdict was computed
+    WITHOUT it. So the fail-closed contract covered a signal that was unreadable
+    but not a signal that was never asked for, and forgetting a flag bought a
+    higher verdict than supplying a failing artifact would have. A ``null`` beside
+    ``--profile production`` also reads as "the artifact is missing or malformed",
+    which is the opposite of what it meant. The epic roll-up genuinely has no
+    aggregate to AND - TEA writes both artifacts per story - so it says so with
+    ``--epic-level`` instead of by omission.
     """
     nfr_status: str | None = None
     review_score: int | None = None
@@ -343,6 +354,12 @@ def apply_production_and(
             failed = True
     elif nfr_path is not None:
         reasons.append(f"nfr file {nfr_path} not found; treated as failing")
+        failed = True
+    else:
+        reasons.append(
+            "--nfr not supplied on a per-story production gate; treated as failing "
+            "(pass --nfr, or --epic-level if this is the epic roll-up)"
+        )
         failed = True
 
     if review_path is not None and review_path.is_file():
@@ -360,6 +377,12 @@ def apply_production_and(
             failed = True
     elif review_path is not None:
         reasons.append(f"test-review file {review_path} not found; treated as failing")
+        failed = True
+    else:
+        reasons.append(
+            "--test-review not supplied on a per-story production gate; treated as failing "
+            "(pass --test-review, or --epic-level if this is the epic roll-up)"
+        )
         failed = True
 
     if failed and verdict == "advance":
@@ -384,11 +407,22 @@ def evaluate(args: argparse.Namespace) -> dict:
     nfr_status: str | None = None
     review_score: int | None = None
     if args.profile == "production":
-        nfr_path = Path(args.nfr) if args.nfr else None
-        review_path = Path(args.test_review) if args.test_review else None
-        verdict, nfr_status, review_score = apply_production_and(
-            verdict, nfr_path, review_path, reasons
-        )
+        if getattr(args, "epic_level", False):
+            # The epic roll-up is a pure trace read. TEA produces NFR and
+            # test-review PER STORY, so there is no aggregate to AND, and every
+            # story already ANDed its own signals before reaching `done`.
+            # Declared, never inferred from an absent flag - that is the whole
+            # point of the flag.
+            reasons.append(
+                "epic-level roll-up: production ANDs not applied "
+                "(TEA writes nfr and test-review per story, not per epic)"
+            )
+        else:
+            nfr_path = Path(args.nfr) if args.nfr else None
+            review_path = Path(args.test_review) if args.test_review else None
+            verdict, nfr_status, review_score = apply_production_and(
+                verdict, nfr_path, review_path, reasons
+            )
 
     return {
         "verdict": verdict,
@@ -398,6 +432,11 @@ def evaluate(args: argparse.Namespace) -> dict:
         "overall_status": gate["overall_status"],
         "nfr_status": nfr_status,
         "review_score": review_score,
+        # Machine-readable, because the `reasons` wording explicitly is not
+        # (docs/_internal/STABILITY.md). Without this key a consumer cannot tell
+        # an advance that ANDed both production signals from one that skipped
+        # them, and `nfr_status: null` alone does not say which.
+        "epic_level": bool(getattr(args, "epic_level", False)),
         "reasons": reasons,
     }
 
@@ -413,7 +452,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--nfr", help="Path to nfr-assessment.md (production only).")
     parser.add_argument("--test-review", help="Path to test-review.md (production only).")
+    parser.add_argument(
+        "--epic-level",
+        action="store_true",
+        help="This is the epic roll-up, not a story gate: skip the production "
+        "NFR/test-review ANDs, which TEA writes per story and never per epic. "
+        "Without it, --profile production requires both --nfr and --test-review.",
+    )
     args = parser.parse_args(argv)
+
+    # Mutually exclusive by meaning: --epic-level asserts there is no aggregate to
+    # AND, so supplying one anyway is a contradiction, and the flag would win
+    # silently - discarding a FAILING artifact the caller explicitly named.
+    # `references/gate.md` already calls the hybrid the mirror mistake; this is
+    # the invocation-error lane a missing --story already occupies.
+    if args.epic_level and (args.nfr or args.test_review):
+        parser.error(
+            "--epic-level asserts there is no epic-level aggregate to AND, so it "
+            "cannot be combined with --nfr/--test-review; drop the flag for a "
+            "per-story gate, or drop the paths for the epic roll-up"
+        )
 
     result = evaluate(args)
     print(json.dumps(result, indent=2))

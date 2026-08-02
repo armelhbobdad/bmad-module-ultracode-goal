@@ -58,7 +58,8 @@ The skill name `ultracode-goal` and its documented invocation phrases ("run an e
 
 `scripts/gate_eval.py` is the deterministic completion authority. Covered:
 
-- **CLI flags**: `--trace-output` (required), `--profile` (`light` | `production`, required), `--story`, `--nfr`, `--test-review` (production only).
+- **CLI flags**: `--trace-output` (required), `--profile` (`light` | `production`, required), `--story`, `--nfr`, `--test-review` (production only), `--epic-level`.
+- **The production signals are required, not optional, on a per-story gate.** Under `--profile production` an omitted `--nfr` or `--test-review` is a *failing* signal, exactly as a supplied-but-missing path already was. `--epic-level` is the one sanctioned omission: it declares the epic roll-up, where TEA writes no aggregate to AND, and it cannot be combined with either path (doing so is an invocation error, exit 2). Under `--profile light` the flag is a no-op.
 - **Verdict vocabulary**: the `verdict` values `advance` / `defer` / `reloop` / `escalate`, and the `gate_status` values `PASS` / `CONCERNS` / `FAIL` / `WAIVED` / `NOT_EVALUATED`, plus the mapping between them. See the [gate model](../gate-model.md).
 - **`--story` fail-closed resolution**: when `--story` matches no artifact in a trace dir whose reports or gate-decision files are named per story, the result is `NOT_EVALUATED` (so, `escalate`), never a fallback to another story's gate. A trace dir whose candidates are all generically named (`trace.md`, `gate-decision.json`) still resolves unscoped. Which file the resolver picks, and how it decides that a name carries a story id, are internal.
 
@@ -75,7 +76,7 @@ flowchart LR
     class ADV,DEF,REL,ESC verdict
 ```
 
-The printed JSON object's key set (`verdict`, `gate_status`, `p0_status`, `p1_status`, `overall_status`, `nfr_status`, `review_score`, `reasons`) is the consumable shape; the human-readable `reasons` strings are not contractual wording.
+The printed JSON object's key set (`verdict`, `gate_status`, `p0_status`, `p1_status`, `overall_status`, `nfr_status`, `review_score`, `epic_level`, `reasons`) is the consumable shape; the human-readable `reasons` strings are not contractual wording. `epic_level` is how a consumer tells an `advance` that ANDed both production signals from one that skipped them by declaration: `nfr_status: null` alone cannot say which, and the distinction is not readable from `reasons` precisely because that wording is not contractual.
 
 ## @internal: not covered
 

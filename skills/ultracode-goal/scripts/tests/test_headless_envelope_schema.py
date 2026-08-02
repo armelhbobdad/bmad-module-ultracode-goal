@@ -19,6 +19,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _REPO_ROOT = _SKILL_ROOT.parents[1]
 _PREFLIGHT = _SKILL_ROOT / "references" / "preflight.md"
@@ -136,6 +138,116 @@ def test_blocked_envelope_logs_formalize_red(tmp_path):
     assert log.exists()
     body = log.read_text(encoding="utf-8")
     assert "epic.md:99" in body and "resolve the undecided NFR threshold" in body
+
+
+def test_complete_shaped_mapping_is_rejected_with_no_side_effects(tmp_path):
+    """The blocked adapter must refuse a complete-shaped dict, before writing anything.
+
+    Handed one, it read no blockers from it, SYNTHESISED a "formalize verdict is
+    unreadable or missing" blocker, appended that fabrication to the decision log,
+    and wrote a `blocked` run-result.json over a successful run. Both artifacts
+    are what an automator and a resume read, and it happened in the field.
+    """
+    log = tmp_path / "dl.md"
+    log.write_text("# Decision log\n\n- pre-existing line\n", encoding="utf-8")
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    complete_shaped = {
+        "status": "complete",
+        "skill": "ultracode-goal",
+        "decision_log": str(log),
+        "report": str(impl / "run-report.md"),
+        "deferred_work": None,
+    }
+
+    with pytest.raises(ValueError, match="BLOCKED adapter"):
+        he.build_headless_envelope(complete_shaped, str(log), impl_artifacts=str(impl))
+
+    # Neither side effect fired.
+    assert log.read_text(encoding="utf-8") == "# Decision log\n\n- pre-existing line\n"
+    assert not (impl / "run-result.json").exists()
+
+
+def test_a_genuine_blocker_dict_is_still_accepted(tmp_path):
+    """The guard keys on `status == complete`, not on "is a dict"."""
+    log = tmp_path / "dl.md"
+    verdict = {"verdict": "blocked", "judgment_candidates": [
+        {"source": "prd.md:4", "why_machine_cannot_decide": "pick a store", "kind": "undecided"}
+    ]}
+    env = he.build_headless_envelope(verdict, str(log))
+    assert env["status"] == "blocked"
+    assert "pick a store" in env["reason"]
+
+
+def test_an_escalated_blocked_envelope_can_carry_its_report(tmp_path):
+    """A blocked exit is not always artifact-less.
+
+    An escalated run reaches Stage 6 and DOES produce a run report and a gate
+    trail, but the adapter hard-coded `report: None` with no parameter to supply
+    one - so the envelope under-reported what was on disk for the one run most
+    worth reading.
+    """
+    log = tmp_path / "dl.md"
+    env = he.build_headless_envelope(
+        [{"source": "gate", "decision_needed": "story escalated"}],
+        str(log),
+        report=tmp_path / "run-report.md",
+        deferred_work=tmp_path / "deferred.md",
+    )
+    assert env["status"] == "blocked"
+    assert env["report"] == str(tmp_path / "run-report.md")
+    assert env["deferred_work"] == str(tmp_path / "deferred.md")
+    assert list(env) == [*he.CANONICAL_KEYS, "reason"], "key order and the five-key set are unchanged"
+
+
+def test_an_early_block_still_reports_null_artifacts(tmp_path):
+    """Omitting the new kwargs keeps the pre-existing shape exactly."""
+    env = he.build_headless_envelope(
+        [{"source": "preflight", "decision_needed": "unresolvable secret"}], str(tmp_path / "dl.md")
+    )
+    assert env["report"] is None
+    assert env["deferred_work"] is None
+
+
+def test_the_adapter_injects_no_em_dash_into_its_output(tmp_path):
+    """The reason line and the log heading carry only bytes the caller supplied.
+
+    `_one_line` joined source and decision_needed with U+2014, so both the stdout
+    envelope and the run-result.json written beside it carried a character the
+    caller never wrote. Harmless here, red in any project that lints its tracked
+    run artifacts for it.
+    """
+    log = tmp_path / "dl.md"
+    env = he.build_headless_envelope(
+        [{"source": "formalize", "decision_needed": "pick a store"}], str(log)
+    )
+    assert "—" not in env["reason"]
+    assert "—" not in log.read_text(encoding="utf-8")
+
+
+def test_blocked_alias_names_the_same_adapter():
+    assert he.build_blocked_envelope is he.build_headless_envelope
+
+
+def test_run_result_stays_byte_identical_with_the_new_kwargs(tmp_path):
+    """The single-serialization property must hold on the escalated shape too.
+
+    The existing byte-identity test covers a blocked envelope with null
+    artifacts; `report=`/`deferred_work=` add two populated string fields, which
+    is exactly where a second `json.dumps` with different kwargs would diverge.
+    """
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = he.build_headless_envelope(
+        [{"source": "gate", "decision_needed": "story escalated"}],
+        str(tmp_path / "dl.md"),
+        impl_artifacts=str(impl),
+        report=tmp_path / "run-report.md",
+        deferred_work=tmp_path / "deferred.md",
+    )
+    on_disk = (impl / "run-result.json").read_text(encoding="utf-8")
+    assert on_disk == he.render_envelope(env)
+    assert json.loads(on_disk)["report"] == str(tmp_path / "run-report.md")
 
 
 # Case 5 ---------------------------------------------------------------------

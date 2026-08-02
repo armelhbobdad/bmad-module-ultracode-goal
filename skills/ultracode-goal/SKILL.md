@@ -79,7 +79,7 @@ With `-H`, run non-interactively: infer scope, default to **production** (unless
  "deferred_work": "<path to {workflow.deferred_work_path}, or null>"}
 ```
 
-A run that blocked (the same five keys, plus `reason`; `report`/`deferred_work` `null` because no report was produced):
+A run that blocked (the same five keys, plus `reason`). `report`/`deferred_work` are `null` below because a block at Stage 1 or Stage 2 produces neither; a run that **escalated** reached Stage 6 and does produce them, so it carries their paths here just as a complete emit does:
 
 ```json
 {"status": "blocked",

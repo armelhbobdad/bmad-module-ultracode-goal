@@ -59,25 +59,32 @@ Under `--profile production`, an otherwise-`advance` verdict is additionally AND
 - **NFR** (`nfr-assessment.md`): the audit's Overall Status must not be `FAIL`.
 - **Test review** (`test-review.md`): the Quality Score must be `>= 80` **and** the Recommendation must not be `Block`.
 
-How the AND folds the two signals in, with every unreadable path counting as a failure:
+**Both paths are required, and an omitted flag is a failure too.** A path that is given but missing counts as failing, and so does one you simply leave off: the AND cannot run on a signal nobody named. That matters because the two used to differ. A forgotten flag was skipped in silence, `nfr_status` rendered `null`, and the verdict was computed without it, so forgetting a flag bought a *higher* verdict than supplying a failing artifact would have.
+
+The one legitimate omission is the **epic roll-up**, where TEA writes no aggregate to AND, because it produces both artifacts per story. That case declares itself with `--epic-level` rather than being inferred from an absent flag, and the flag cannot be combined with either path (an invocation error, exit 2). The verdict JSON carries `epic_level` so a reader can tell a skipped-AND `advance` from one that ANDed both signals.
+
+How the AND folds the two signals in, with every unreadable *or unsupplied* path counting as a failure:
 
 ```mermaid
 flowchart TD
     V{"Verdict is advance?"} -->|"no, defer/reloop/escalate"| K["Unchanged"]
-    V -->|"yes"| N{"NFR Overall Status"}
+    V -->|"yes"| E{"--epic-level declared?"}
+    E -->|"yes, no aggregate to AND"| A["Stay advance"]
+    E -->|"no, per-story gate"| N{"NFR Overall Status"}
     N -->|"FAIL"| F["Signal failed"]
     N -->|"file missing or unparsable"| F
+    N -->|"--nfr not supplied"| F
     N -->|"parsed and not FAIL"| R{"Test review"}
     R -->|"score lt 80 or Block"| F
     R -->|"score unparsable, file missing"| F
-    R -->|"score gte 80 and not Block"| P["Both signals passed"]
+    R -->|"--test-review not supplied"| F
+    R -->|"score gte 80 and not Block"| A
     F --> D["Downgrade advance to reloop"]
-    P --> A["Stay advance"]
     classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
     class A,D,K verdict
 ```
 
-Under `--profile light` none of this applies: the trace gate is the whole decision.
+Under `--profile light` none of this applies: the trace gate is the whole decision, and `--epic-level` is a no-op there.
 
 ## The thresholds
 
