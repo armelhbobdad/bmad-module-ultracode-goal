@@ -138,14 +138,46 @@ def _stem_matches_story(stem: str, story: str) -> bool:
     return cut == 0 or not stem_parts[cut - 1].isdigit()
 
 
-def _has_trailing_id(stem: str) -> bool:
-    """True iff a filename stem's last id-component is numeric.
+# The artifact-name prefixes this module writes. A stem that is EXACTLY one of
+# these carries no id; a stem that is one of these followed by something starting
+# with a digit is named for a story or an epic.
+_ARTIFACT_PREFIXES = (
+    ("gate", "decision"),
+    ("e2e", "trace", "summary"),
+    ("nfr", "assessment"),
+    ("test", "review"),
+    ("trace",),
+    ("atdd", "checklist"),
+)
 
-    Such a stem is named for SOME story or epic (``trace-2-1``,
-    ``gate-decision-4``); a generic one is not (``trace``, ``gate-decision``).
+
+def _has_trailing_id(stem: str) -> bool:
+    """True iff a filename stem carries a story or epic id after its prefix.
+
+    NOT "the last component is numeric". That was the original rule and it is
+    wrong for every id this module actually produces once a story is split or
+    slugged: ``trace-92-0a`` ends in ``0a`` and ``trace-5-8-some-slug`` ends in
+    ``slug``, so both read as GENERIC. A directory full of them therefore
+    reported itself as not-per-story-named, which switches OFF the fail-closed
+    branch in :func:`_resolve_gate_file` - and an artifact-less story then
+    resolved a neighbour's gate and advanced on it.
+
+    Measured before the fix, in a directory holding only
+    ``trace-92-0a-alpha.md`` + its PASS gate file: ``--story 92-7f-never-driven``
+    returned ``PASS``. That story wrote nothing at all.
+
+    The rule is now structural: match a known artifact prefix, then require the
+    NEXT component to start with a digit. ``traceability-matrix`` is untouched
+    (its first component is ``traceability``, not ``trace``), which keeps the
+    documented unscoped fallback for a directory that names no story.
     """
     parts = [p for p in re.split(r"[-._]", stem) if p]
-    return bool(parts) and parts[-1].isdigit()
+    if not parts:
+        return False
+    for prefix in _ARTIFACT_PREFIXES:
+        if len(parts) > len(prefix) and tuple(parts[: len(prefix)]) == prefix:
+            return parts[len(prefix)][:1].isdigit()
+    return False
 
 
 def _is_per_story_named(trace_output: Path) -> bool:
