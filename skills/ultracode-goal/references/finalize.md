@@ -54,7 +54,11 @@ Two properties are load-bearing, so do not "improve" them:
 
 Read `{workflow.implementation_artifacts}/.mem-state.json`. Act only on its latched state.
 
-**Present + `schema_ok` + recall `on`** — write this run's summary, draining first so nothing parked in a prior crash is lost:
+**The latch certifies the READ surface, so check for a write tool before acting on it.** Stage 1 validates the capability contract against a `get_observations`-shaped probe, which says nothing about whether `save_observation` exists — and a claude-mem surface that exposes `search` / `get_observations` / the `smart_*` family and **no write tool of any name** is a real shape, observed. So `present + schema_ok` is clearance to *look*, not proof there is anywhere to write.
+
+**If no write tool is present in this session's surface, do not call and do not drain.** Build the payload, `mem_observation.py spill` it once, print the distinct notice *claude-mem is present for reads but exposes no write tool — this run's summary was parked, not deferred*, and log `NOTE mem-write-unavailable`. Not `WARN mem-write-deferred`: that one means a call was attempted and failed, and conflating a structural absence with a transient failure is why three sessions recorded this as permission-denied when the tool was simply not there. **Skipping the drain is the load-bearing half** — a drain with no write path replays every parked payload against nothing and bumps each one closer to the dead-letter file, so the step meant to rescue parked work destroys it instead.
+
+**Present + `schema_ok` + recall `on` + a write tool** — write this run's summary, draining first so nothing parked in a prior crash is lost:
 
 1. **Drain the outbox** — replay each spilled payload with **one** `save_observation` attempt apiece:
 
