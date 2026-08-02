@@ -546,11 +546,27 @@ def test_pre_edit_fixture_is_a_real_snapshot():
         assert anchor in blob, f"the fixture is not a real finalize.md snapshot: {anchor!r}"
         assert anchor in live, f"control: the live file still carries {anchor!r}"
 
-    # The edit was additive: every line of the pre-edit file survives in the live
-    # one, so the section was inserted rather than swapped in over something.
-    assert set(blob.splitlines()) <= set(live.splitlines()), (
-        "the live finalize.md dropped lines the pre-edit snapshot carried; this "
-        "story's edit was supposed to be purely additive"
+    # The fixture is the same DOCUMENT minus the graphify section: identical
+    # heading skeleton apart from that one heading, which only the live file has.
+    #
+    # This used to assert `set(blob.splitlines()) <= set(live.splitlines())`,
+    # which encodes "no edit to finalize.md may ever change an existing line".
+    # Nobody intends that, and three unrelated, legitimate edits to other
+    # sections have since had to re-base this fixture to satisfy it - each
+    # re-base weakening the snapshot it was protecting. The property actually
+    # being guarded is only "the fixture is a real finalize.md, not an emptied
+    # or gutted file", and the heading skeleton pins that without freezing the
+    # prose. What makes the twin non-vacuous is
+    # `test_pre_edit_fixture_lacks_the_whole_section`, which runs the SAME
+    # matcher over the fixture and requires every check to fail.
+    def _headings(text: str) -> list[str]:
+        return [ln.strip() for ln in text.splitlines() if ln.startswith("## ")]
+
+    graphify_heading = "## Knowledge-graph refresh (optional)"
+    assert graphify_heading in _headings(live), "control: the live file has the section"
+    assert graphify_heading not in _headings(blob), "the fixture is not pre-edit"
+    assert _headings(blob) == [h for h in _headings(live) if h != graphify_heading], (
+        "the fixture is no longer the same document minus the graphify section"
     )
     assert len(live) > len(blob)
 

@@ -1594,3 +1594,83 @@ def test_pre_spawn_stops_carry_no_triage(project, monkeypatch):
     )
     assert summary["stopped_because"] == drive_epic.STOP_EPIC_NOT_FOUND
     assert len(fake.calls) == 0
+
+
+# --- The handoff: durable work, no row advanced -------------------------------
+
+
+def _sidecar(project: dict, story: str, kind: str) -> None:
+    project["impl"].mkdir(parents=True, exist_ok=True)
+    (project["impl"] / f"escalation-{story}.json").write_text(
+        json.dumps(
+            {
+                "source": "references/execute.md#sizing",
+                "kind": kind,
+                "decision_needed": "review the split, then re-drive",
+                "evidence": "20 ACs against max_turns_per_story 25",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("kind", ["story-decomposed", "defined-not-driven"])
+def test_a_blocked_stop_carrying_a_handoff_kind_is_named_as_one(project, monkeypatch, capsys, kind):
+    """An invocation that decomposed a row reads exactly like a crash otherwise.
+
+    It advanced nothing, so the envelope is `blocked` - there is deliberately no
+    third status value - and the driver's bare stop line gives an operator no way
+    to tell "this split a story, pick the children up" from "this died".
+    """
+    _sidecar(project, STORY_A, kind)
+    fake = FakeSession(project, [(blocked_envelope("story too large to drive"), None)])
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_BLOCKED, "still a stop"
+    out = capsys.readouterr().out
+    assert "handoff:" in out
+    assert kind in out
+    assert len(fake.calls) == 1, "a handoff must not continue the drive"
+
+
+def test_an_ordinary_escalation_is_not_reported_as_a_handoff(project, monkeypatch, capsys):
+    """`kind` is open vocabulary, so an unrecognised one is simply not a handoff."""
+    _sidecar(project, STORY_A, "budget-overrun")
+    fake = FakeSession(project, [(blocked_envelope("turn budget exhausted"), None)])
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
+    )
+
+    assert summary["stopped_because"] == drive_epic.STOP_BLOCKED
+    assert "handoff:" not in capsys.readouterr().out
+
+
+def test_a_blocked_stop_with_no_sidecar_is_unchanged(project, monkeypatch, capsys):
+    fake = FakeSession(project, [(blocked_envelope("something went wrong"), None)])
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
+    )
+    assert summary["stopped_because"] == drive_epic.STOP_BLOCKED
+    assert "handoff:" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "payload", ["not json at all", "[]", '"a string"', '{"kind": 7}', '{"no_kind": true}']
+)
+def test_an_unreadable_sidecar_is_never_a_handoff_and_never_raises(
+    project, monkeypatch, payload
+):
+    """Fail-soft, like every other read this driver makes."""
+    project["impl"].mkdir(parents=True, exist_ok=True)
+    (project["impl"] / f"escalation-{STORY_A}.json").write_text(payload, encoding="utf-8")
+    fake = FakeSession(project, [(blocked_envelope("x"), None)])
+    monkeypatch.setattr(drive_epic, "spawn", fake)
+    summary = drive_epic.drive(
+        epic=EPIC, project_root=project["root"], impl_artifacts=project["impl"]
+    )
+    assert summary["stopped_because"] == drive_epic.STOP_BLOCKED

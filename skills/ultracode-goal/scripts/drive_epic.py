@@ -61,6 +61,7 @@ FAIL-CLOSED AT EVERY DECISION, and there are six of them:
   | no result file, or it will not parse     | RETRY once or twice,  |
   |                                          | else STOP (`no-terminal`)|
   | `status` is `blocked`                    | STOP, surface `reason`|
+  |   ...whose sidecar names a handoff kind   | STOP, name it a handoff|
   | `status` is neither `complete`/`blocked`  | STOP (`unknown-status`)|
   | `status` is `complete`, story not `done` | STOP (`no-progress`)  |
 
@@ -768,6 +769,33 @@ def render_triage(triage: dict) -> list[str]:
     return lines
 
 
+# Sidecar `kind` values that mean "durable work, no row advanced" rather than
+# "something went wrong". Open vocabulary by design (`references/execute.md`),
+# so an unrecognised kind is simply not a handoff - never an error.
+HANDOFF_KINDS = frozenset({"story-decomposed", "defined-not-driven"})
+
+
+def handoff_kind(impl_artifacts: Path, story: str) -> str | None:
+    """The escalation sidecar's `kind` when it names a handoff, else None.
+
+    Read-only and fail-soft, like every other read this driver makes: an absent,
+    unreadable or unparseable sidecar simply is not a handoff, and the blocked
+    stop reports itself the way it always did.
+    """
+    try:
+        raw = (Path(impl_artifacts) / f"escalation-{story}.json").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        sidecar = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(sidecar, dict):
+        return None
+    kind = sidecar.get("kind")
+    return kind if isinstance(kind, str) and kind in HANDOFF_KINDS else None
+
+
 def _summary(
     *,
     epic_key: str | None,
@@ -1046,6 +1074,17 @@ def drive(
         status = result.get("status")
         if status == STATUS_BLOCKED:
             reason = str(result.get("reason") or "").strip() or "(no reason recorded)"
+            # A HANDOFF is still a stop. An invocation that decomposed an
+            # oversized row, or authored a story definition it had no budget to
+            # drive, did durable work and advanced nothing - which is `blocked`
+            # because no story reached a Stage-5 verdict, and which reads to an
+            # operator exactly like a crash unless it is named. It is not a
+            # crash; the next invocation picks the work up. Say so, keep the
+            # non-zero exit, and do not continue: a human should see a split
+            # before the drive runs on.
+            kind = handoff_kind(impl_artifacts, target)
+            if kind:
+                say(f"handoff: {target} did durable work and advanced no row ({kind})")
             return stop(STOP_BLOCKED, f"{target}: {reason}")
 
         if status != STATUS_COMPLETE:
