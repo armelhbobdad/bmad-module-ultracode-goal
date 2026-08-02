@@ -520,6 +520,46 @@ def test_gate_artifact_resolves_for_an_alphanumeric_story_id(tmp_path):
     assert any(f"gate-decision-{story}.json" in r for r in reasons)
 
 
+def test_a_story_with_its_own_gate_never_renders_a_neighbours_status(tmp_path):
+    """The truncated scope did not only under-report; it could report a PASS.
+
+    With the scope collapsed to the bare epic number, `_resolve_gate_file` matched
+    nothing by id and fell through to the FIRST sorted trace report's hint - a
+    neighbour's. `belongs()` then accepted it anyway, because `own_trace` is true
+    whenever this story has any matching `.md` in the directory, which disarms
+    the very narrowing whose docstring promises to stop "an unevaluated story
+    with someone else's verdict - silently green".
+
+    So a CONCERNS story rendered its neighbour's PASS. That is the direction that
+    matters: a spurious PASS is the verdict nobody re-reads.
+    """
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    for story, status in (
+        ("92-1a-the-neighbour-story", "PASS"),
+        ("92-9a-the-rehearsal-constant", "CONCERNS"),
+    ):
+        (trace / f"trace-{story}.md").write_text(
+            f"---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision-{story}.json\n---\n# t\n",
+            encoding="utf-8",
+        )
+        (trace / f"gate-decision-{story}.json").write_text(
+            json.dumps({"gate_status": status}), encoding="utf-8"
+        )
+
+    status, source = gate_trail.gate_status_for(trace, "92-9a-the-rehearsal-constant")
+    assert (status, source) == (
+        "CONCERNS",
+        "gate-decision-92-9a-the-rehearsal-constant.json",
+    )
+    # The oracle is agreement with the reader that actually decides.
+    reasons: list[str] = []
+    assert (
+        gate_eval.load_gate(trace, reasons, "92-9a-the-rehearsal-constant")["gate_status"]
+        == status
+    )
+
+
 def test_gate_artifact_resolves_when_the_trace_report_carries_a_hint(tmp_path):
     """The hint path that every field workaround relied on still resolves."""
     trace = tmp_path / "traceability"

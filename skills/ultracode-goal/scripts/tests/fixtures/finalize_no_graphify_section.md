@@ -106,8 +106,10 @@ In headless (`-H`), build the final JSON **through the `scripts/headless_envelop
 
 ```
 build_complete_envelope(<path to this run's .decision-log.md>, report=<run-report.md path or None>, deferred_work=<{workflow.deferred_work_path} or None>, impl_artifacts={workflow.implementation_artifacts})
-build_headless_envelope(<blocker list>, <path to this run's .decision-log.md>, impl_artifacts={workflow.implementation_artifacts})
+build_headless_envelope(<blocker list>, <path to this run's .decision-log.md>, report=<run-report.md path or None>, deferred_work=<{workflow.deferred_work_path} or None>, impl_artifacts={workflow.implementation_artifacts})
 ```
+
+**Pick the entry point by SHAPE, not by name.** `build_headless_envelope` is the **blocked** adapter (it is also exported as `build_blocked_envelope`, which is the name to read for); `build_complete_envelope` is the complete one. Handing a complete-shaped mapping to the blocked adapter used to succeed silently: it read no blockers from it, synthesised a `formalize verdict is unreadable or missing` one, appended that fabrication to `.decision-log.md`, and wrote a `blocked` `run-result.json` over a successful run. It now raises instead, before either side effect.
 
 **Both emits are also written to `{workflow.implementation_artifacts}/run-result.json` by `scripts/headless_envelope.py` itself, which is the writer of that file** — so an automator reads a file at a pinned path instead of scraping the transcript for the terminal verdict. The adapter serializes once and hands the same string to both sinks, so the file is byte-identical to what you emit on stdout: print exactly what it produced, do not re-serialize the dict yourself. The write is best-effort and never a gate on the exit — if it fails, the adapter logs `WARN run-result-write-failed` to `.decision-log.md` and the run still emits.
 
@@ -127,7 +129,9 @@ The emitted object is the **same five-canonical-key shape every headless exit po
  "deferred_work": "<path to {workflow.deferred_work_path}, or null>"}
 ```
 
-A blocked exit (a story escalated) emits the same five keys plus `reason`, with `report`/`deferred_work` `null` — the shape `references/preflight.md` and the `scripts/headless_envelope.py` adapter build (one shared envelope definition), and it lands in the same `run-result.json` the complete emit does.
+A blocked exit (a story escalated) emits the same five keys plus `reason` — the shape `references/preflight.md` and the `scripts/headless_envelope.py` adapter build (one shared envelope definition), and it lands in the same `run-result.json` the complete emit does.
+
+**`report`/`deferred_work` are `null` only when the artifact was not produced, which is not the same as "blocked".** A run that blocked at Stage 1 or Stage 2 has no report, so both are `null`. A run that **escalated** reached Stage 6 and therefore *does* have a run report and a gate trail: pass them, exactly as the complete emit does. Hard-coding them null under-reports what is on disk for the one run most worth reading.
 
 ## Workflow health check (terminal)
 
