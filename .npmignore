@@ -65,3 +65,6 @@ node_modules/
 
 # Browser-automation session artifacts (screenshots, snapshots)
 .playwright-mcp/
+
+# Learning material scaffold: gitignored, so npm would otherwise pack a stale copy
+_ucg-learn/

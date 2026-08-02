@@ -215,11 +215,16 @@ def test_story_token_budget_deprecated_in_place() -> None:
     assert "deprecated" in workflow_section.lower()
     assert "no-op" in workflow_section.lower()
 
-    unreleased = _unreleased_block(_CHANGELOG.read_text(encoding="utf-8"))
-    assert "### Deprecated" in unreleased, (
+    # The note must be IN the changelog, not necessarily under [Unreleased].
+    # It shipped in 1.0.0 and now sits under that release, which is where a
+    # reader looks for what 1.0.0 deprecated. Asserting [Unreleased] only held
+    # while that block was never drained between releases - the entry had simply
+    # never been filed to the version it went out in.
+    changelog = _CHANGELOG.read_text(encoding="utf-8")
+    assert "### Deprecated" in changelog, (
         "a [workflow] key gets a deprecation note in the changelog before changing"
     )
-    deprecated = unreleased[unreleased.index("### Deprecated"):]
+    deprecated = changelog[changelog.index("### Deprecated"):]
     nxt = deprecated.find("\n### ", 1)
     deprecated = deprecated if nxt == -1 else deprecated[:nxt]
     assert "story_token_budget" in deprecated
