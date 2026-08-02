@@ -253,8 +253,21 @@ def test_no_surface_still_claims_the_guard_cannot_see_non_bash_tools():
     "the guard never sees Write/Edit" resolves the contradiction the easy way:
     by narrowing the matcher back to Bash, which re-inerts the sixth invariant.
     """
+    # The ASSERTIVE forms, verbatim. Both files now also QUOTE the old phrasing
+    # while warning against it, so a blanket substring ban would red on the
+    # correction itself.
+    forbidden = {
+        "preflight.md": "The PreToolUse guard sees Bash commands only",
+        "execute.md": "The guard never sees Write/Edit at all,",
+    }
+    for path in (_PREFLIGHT, _SKILL_ROOT / "references" / "execute.md"):
+        body = _read(path)
+        claim = forbidden[path.name]
+        assert claim not in body, f"{path.name} still asserts: {claim!r}"
+        assert "evaluates Bash command strings only" in body, (
+            f"{path.name} lost the corrected phrasing"
+        )
     text = _read(_PREFLIGHT)
-    assert "sees Bash commands only" not in text
     assert "evaluates Bash command strings only" in text.lower() or re.search(
         r"\*\*evaluates Bash command strings only\*\*", text
     )
