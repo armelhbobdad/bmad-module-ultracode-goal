@@ -184,7 +184,14 @@ def _resolve_gate_file(trace_output: Path, story: str | None = None) -> Path | N
         scoped = [r for r in reports if _stem_matches_story(r.stem, story)]
         if scoped:
             reports = scoped
-        elif scoped_slim is None and _is_per_story_named(trace_output):
+        elif scoped_slim is not None:
+            # This story wrote no trace report but DID write its own slim gate
+            # file. Falling through here would leave ``reports`` as every report
+            # in the directory and let the hint loop below return a NEIGHBOUR's
+            # gate — observed handing an unrelated epic's PASS back as this
+            # story's verdict. The story's own file wins, before any hint is read.
+            return scoped_slim
+        elif _is_per_story_named(trace_output):
             return None
     for report in reports:
         try:

@@ -174,6 +174,18 @@ def header_cells(section_text: str) -> list[str]:
     return [c.strip() for c in table[0].strip().strip("|").split("|")]
 
 
+def _log_with_verdict(tmp_path: Path, heading_id: str, verdict: str) -> Path:
+    """A decision log carrying one story heading and one fenced verdict block."""
+    log = tmp_path / f"decision-log-{heading_id}.md"
+    log.write_text(
+        f"# Decision log\n\n### Story {heading_id} - some prose title\n\n```json\n"
+        + json.dumps({"story": heading_id, "verdict": verdict})
+        + "\n```\n",
+        encoding="utf-8",
+    )
+    return log
+
+
 def _git(repo: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
@@ -426,6 +438,223 @@ def test_recorded_verdict_in_the_decision_log_wins_over_the_mapped_one(tmp_path)
     assert {row[3] for row in rows(section(text, "7-1"))} == {"reloop"}
     # Unrecorded stories still come from the gate artifact.
     assert {row[3] for row in rows(section(text, "7-3"))} == {"escalate"}
+
+
+def test_alphanumeric_sibling_ids_do_not_share_one_recorded_verdict(tmp_path):
+    """One driven story's verdict must not bleed onto undriven siblings.
+
+    The recorded-verdict map used to be keyed by `numeric_prefix`, which keeps
+    only the LEADING numeric components — so `92-0a`, `92-3b` and `92-7f` all
+    collapsed to the bucket `92` and every sibling in the `--story` list rendered
+    whatever verdict the log last recorded. Measured against a real epic's
+    artifacts: 63 of 76 stories rendered a `defer` that only one of them had
+    actually reached.
+
+    The `92-8` control matters. Its second component IS numeric, so it never
+    collided and always rendered correctly — which is why the defect read as
+    "sometimes" and was twice diagnosed wrongly.
+    """
+    stories = ["92-0a-alpha", "92-3b-beta", "92-7f-gamma", "92-8-numeric"]
+    recorded = gate_trail.recorded_verdicts(_log_with_verdict(tmp_path, "92-3b", "defer"))
+
+    assert recorded == {"92-3b": "defer"}, "the heading id is keyed verbatim"
+    resolved = gate_trail.resolve_recorded_verdicts(recorded, stories)
+    assert resolved == {"92-3b-beta": "defer"}, "exactly the story that was driven"
+
+
+def test_a_heading_matching_every_story_records_none_of_them(tmp_path):
+    """An epic-wide heading names no single story, so no story inherits it.
+
+    This is the uniqueness rule doing its job: rendering `## Story 92`'s verdict
+    on all of 92's children is the fabrication the trail's `n/a` promise forbids.
+    """
+    stories = ["92-1-one", "92-2-two", "92-3-three"]
+    recorded = gate_trail.recorded_verdicts(_log_with_verdict(tmp_path, "92", "advance"))
+
+    assert recorded == {"92": "advance"}
+    assert gate_trail.resolve_recorded_verdicts(recorded, stories) == {}
+
+
+def test_a_short_heading_id_still_matches_its_full_slugged_story(tmp_path):
+    """Headings carry the short id; `--story` carries the full slug.
+
+    A real log writes `### Story 92-0a - the five confirmed defects` while the
+    trail is invoked with `92-0a-the-five-confirmed-defects`. Requiring equality
+    would blank the verdict column on every real run, which is the failure mode
+    the obvious "key it by the full id" fix would have introduced.
+    """
+    recorded = gate_trail.recorded_verdicts(_log_with_verdict(tmp_path, "92-0a", "defer"))
+    resolved = gate_trail.resolve_recorded_verdicts(
+        recorded, ["92-0a-the-five-confirmed-defects"]
+    )
+    assert resolved == {"92-0a-the-five-confirmed-defects": "defer"}
+
+
+def test_gate_artifact_resolves_for_an_alphanumeric_story_id(tmp_path):
+    """The trail resolves the same gate file `gate_eval.py` resolves.
+
+    `gate_status_for` scoped by `numeric_prefix`, so `92-3b-…` truncated to `92`,
+    nothing in a per-story directory is named `92`, and the cell read
+    `Gate artifact: n/a` for a file sitting right there under its correct name.
+    Reported at least six times across one epic. The assertion that matters is
+    the AGREEMENT: both readers, same directory, same id, same file.
+
+    NO TRACE REPORT HERE, DELIBERATELY. Every prior sighting was worked around by
+    authoring `trace-<id>.md` with a `gateDecisionFile:` hint, and that hint
+    rescues resolution even under the truncated scope — so a fixture carrying one
+    reproduces the workaround, not the defect. The story's own slim gate file,
+    standing alone, is the case that failed.
+    """
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    story = "92-3b-the-minting-primitives-secrets-and-escrow"
+    (trace / f"gate-decision-{story}.json").write_text(
+        json.dumps({"gate_status": "CONCERNS"}), encoding="utf-8"
+    )
+
+    status, source = gate_trail.gate_status_for(trace, story)
+    assert (status, source) == ("CONCERNS", f"gate-decision-{story}.json")
+
+    reasons: list[str] = []
+    assert gate_eval.load_gate(trace, reasons, story)["gate_status"] == "CONCERNS"
+    assert any(f"gate-decision-{story}.json" in r for r in reasons)
+
+
+def test_gate_artifact_resolves_when_the_trace_report_carries_a_hint(tmp_path):
+    """The hint path that every field workaround relied on still resolves."""
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    story = "92-3b-the-minting-primitives-secrets-and-escrow"
+    (trace / f"trace-{story}.md").write_text(
+        f"---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision-{story}.json\n---\n# t\n",
+        encoding="utf-8",
+    )
+    (trace / f"gate-decision-{story}.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+    assert gate_trail.gate_status_for(trace, story) == (
+        "PASS",
+        f"gate-decision-{story}.json",
+    )
+
+
+def test_trace_report_is_the_declared_one_not_the_alphabetical_first(tmp_path):
+    """`nfr-assessment-<id>.md` sorts first and is not the trace report.
+
+    `references/gate.md`'s non-web-stack path puts `nfr-assessment-`,
+    `test-review-` and `trace-` files for one story in one directory. Selecting
+    the first sorted id-match returned the NFR file, which carries no
+    `gateDecisionFile` hint, so no gate resolved and the per-AC table vanished.
+    """
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    story = "92-3b-the-minting"
+    (trace / f"nfr-assessment-{story}.md").write_text(
+        "# NFR\n\n**Overall Status:** CONCERNS\n", encoding="utf-8"
+    )
+    (trace / f"test-review-{story}.md").write_text("# Review\n", encoding="utf-8")
+    (trace / f"trace-{story}.md").write_text(
+        f"---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision-{story}.json\n---\n# t\n",
+        encoding="utf-8",
+    )
+    (trace / f"gate-decision-{story}.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+
+    assert gate_trail.trace_report_path(trace, story).name == f"trace-{story}.md"
+    assert gate_trail.gate_status_for(trace, story)[0] == "PASS"
+
+
+def test_generic_named_single_story_dir_resolves_its_gate(tmp_path):
+    """The documented isolate-into-a-fresh-dir workaround must actually work.
+
+    `references/gate.md` sanctions isolating one story's artifacts under the
+    generic names `trace.md` / `gate-decision.json`, and `gate_eval.py` resolves
+    them. The trail rejected the resolved file afterwards, because a generic stem
+    matches no story id - so the workaround recovered nothing and a third
+    sighting reported byte-equal output to the un-worked-around render.
+    """
+    trace = tmp_path / "isolated"
+    trace.mkdir()
+    (trace / "trace.md").write_text(
+        "---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision.json\n---\n# t\n",
+        encoding="utf-8",
+    )
+    (trace / "gate-decision.json").write_text(
+        json.dumps({"gate_status": "CONCERNS"}), encoding="utf-8"
+    )
+    assert gate_trail.gate_status_for(trace, "92-9a-the-rehearsal-constant") == (
+        "CONCERNS",
+        "gate-decision.json",
+    )
+
+
+def test_a_shared_generic_summary_is_not_inherited_by_an_undriven_story(tmp_path):
+    """The generic-name allowance must not fire in a per-story directory.
+
+    `e2e-trace-summary.json` is written unconditionally and carries no story id.
+    Accepting a generic name on the filename alone therefore hands its status to
+    every story in the directory that wrote nothing - which is the exact
+    fail-open the id-keying fixes exist to close, re-entering through the door
+    opened for the isolated-directory workaround.
+
+    The oracle is AGREEMENT: `gate_eval.py` fails closed for this story, so the
+    trail must render `n/a`, not the summary's PASS.
+    """
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    (trace / "trace-92-1.md").write_text(
+        "---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision-92-1.json\n---\n# t\n",
+        encoding="utf-8",
+    )
+    (trace / "gate-decision-92-1.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+    (trace / "e2e-trace-summary.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+
+    assert gate_trail.gate_status_for(trace, "92-2-never-driven") == (None, None)
+    reasons: list[str] = []
+    assert gate_eval.load_gate(trace, reasons, "92-2-never-driven")["gate_status"] == "NOT_EVALUATED"
+    # The story that DID write artifacts still resolves its own.
+    assert gate_trail.gate_status_for(trace, "92-1")[1] == "gate-decision-92-1.json"
+
+
+def test_a_scopes_summary_fallback_never_preempts_another_scopes_gate_file(tmp_path):
+    """Every scope's gate file is tried before any scope's summary.
+
+    Resolving each scope completely in turn let the FULL id's summary fallback
+    answer first: `_resolve_gate_file` found nothing under `4-1-some-slug`, the
+    same iteration fell to the epic-wide `e2e-trace-summary.json`, and the story's
+    own `gate-decision-4-1.json` - reachable under the numeric prefix - was never
+    read. CONCERNS rendered as PASS, which is a downgrade in the unsafe direction.
+    """
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    (trace / "trace-4-1.md").write_text(
+        "---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision-4-1.json\n---\n# t\n",
+        encoding="utf-8",
+    )
+    (trace / "gate-decision-4-1.json").write_text(
+        json.dumps({"gate_status": "CONCERNS"}), encoding="utf-8"
+    )
+    (trace / "e2e-trace-summary.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+
+    assert gate_trail.gate_status_for(trace, "4-1-some-slug") == (
+        "CONCERNS",
+        "gate-decision-4-1.json",
+    )
+
+
+def test_reports_declaring_no_workflow_type_keep_sorted_first(tmp_path):
+    """The workflowType preference must not resolve NOTHING for an old dir."""
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    (trace / "trace-4-1.md").write_text("# plain trace report, no frontmatter\n", encoding="utf-8")
+    assert gate_trail.trace_report_path(trace, "4-1").name == "trace-4-1.md"
 
 
 # ---------------------------------------------------------------------------

@@ -80,6 +80,11 @@ COLUMNS = (
 # Rendered in any cell whose source artifact is absent or unreadable.
 NA = "n/a"
 
+# The un-suffixed artifact names `references/gate.md` documents for a directory
+# holding a single story's artifacts. They carry no story id, so they can only be
+# matched by name.
+GENERIC_ARTIFACT_STEMS = frozenset({"gate-decision", "trace", "e2e-trace-summary"})
+
 # Column headers are matched by NAME, never by position: the house trace table
 # carries an extra split column that a future trace author may drop, and a
 # positional parser would then read the wrong column as the planned test.
@@ -222,8 +227,46 @@ def checklist_path(test_artifacts: Path | None, story: str) -> Path | None:
     return test_artifacts / f"atdd-checklist-{story}.md"
 
 
+def _only_generic_artifacts(trace_output: Path) -> bool:
+    """True iff every trace / gate candidate here is generically named.
+
+    That is the isolated single-story directory `references/gate.md` tells a run
+    to build when its TEA output is not named per story. It is the ONLY place a
+    generically-named artifact may be accepted without an id match, because it is
+    the only place such a file provably belongs to the story being rendered.
+    """
+    candidates = list(trace_output.glob("*.md")) + list(trace_output.glob("*.json"))
+    return bool(candidates) and all(path.stem in GENERIC_ARTIFACT_STEMS for path in candidates)
+
+
+def _is_trace_report(report: Path) -> bool:
+    """True iff a markdown file declares itself a trace report in its frontmatter.
+
+    The same predicate `gate_eval._resolve_gate_file` applies before honoring a
+    file's `gateDecisionFile` hint, so the two readers agree on what a trace
+    report *is* rather than only on how a story id is spelled.
+    """
+    try:
+        fm = gate_eval._frontmatter(report.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return False
+    return fm.get("workflowType") in ("testarch-trace", "trace")
+
+
 def trace_report_path(trace_output: Path | None, story: str) -> Path | None:
-    """The story's trace report, matched by id components the way the gate does."""
+    """The story's trace report, matched by id components the way the gate does.
+
+    Among the files whose id matches, a DECLARED trace report always wins over a
+    merely alphabetical first match. The non-web-stack path in `references/gate.md`
+    tells a run to author `nfr-assessment-<id>.md`, `test-review-<id>.md` and
+    `trace-<id>.md` into one directory; all three carry the story id, and
+    `nfr-assessment-` sorts first. Selecting by sort order therefore returned the
+    NFR file as the trace report, which carries no `gateDecisionFile` hint, so no
+    gate decision resolved and the whole per-AC table dropped out of the trail.
+
+    A directory whose reports declare no `workflowType` at all keeps the previous
+    sorted-first behaviour rather than resolving nothing.
+    """
     if trace_output is None or not trace_output.is_dir():
         return None
     candidates = [
@@ -232,7 +275,10 @@ def trace_report_path(trace_output: Path | None, story: str) -> Path | None:
         if gate_eval._stem_matches_story(report.stem, story)
         or gate_eval._stem_matches_story(report.stem, numeric_prefix(story) or story)
     ]
-    return candidates[0] if candidates else None
+    if not candidates:
+        return None
+    declared = [report for report in candidates if _is_trace_report(report)]
+    return (declared or candidates)[0]
 
 
 def gate_status_for(trace_output: Path | None, story: str) -> tuple[str | None, str | None]:
@@ -254,25 +300,57 @@ def gate_status_for(trace_output: Path | None, story: str) -> tuple[str | None, 
     """
     if trace_output is None or not trace_output.is_dir():
         return None, None
-    scope = numeric_prefix(story) or story
     own_trace = trace_report_path(trace_output, story) is not None
 
-    def belongs(path: Path) -> bool:
-        return own_trace or gate_eval._stem_matches_story(path.stem, scope)
+    # Try the FULL story id before the numeric prefix, which is the order
+    # `gate_eval.py` itself uses. `numeric_prefix` keeps only the LEADING numeric
+    # components, so an id whose second component is alphanumeric (`92-3b-…`,
+    # the shape every split story takes) truncates to the bare epic number. No
+    # per-story artifact is named for that, so the resolver failed closed and the
+    # cell read `n/a` for a gate file sitting in the directory under its own
+    # correct name — while `gate_eval.py`, given the same id and directory, read
+    # it without difficulty. Two readers disagreeing about one file is the defect;
+    # the prefix stays only as a fallback for ids that genuinely resolve that way.
+    scopes = [story]
+    prefix = numeric_prefix(story)
+    if prefix and prefix != story:
+        scopes.append(prefix)
 
-    # The resolver itself returns None when this story is absent from a
-    # per-story-named directory; that is already "absent", so it skips the read.
-    gate_file = gate_eval._resolve_gate_file(trace_output, scope)
-    if gate_file is not None and belongs(gate_file):
-        slim = read_json(gate_file)
-        if slim is not None and slim.get("gate_status"):
-            return str(slim["gate_status"]).strip(), gate_file.name
+    # A generically-named artifact carries no id to match, so it can only be
+    # accepted by name - and ONLY in the isolated single-story directory
+    # `references/gate.md` sanctions, where every candidate is generic. Keying on
+    # the filename alone fails the trail OPEN: a per-story directory usually also
+    # holds the always-written `e2e-trace-summary.json`, and an undriven story
+    # would then inherit ITS status and render `advance` for work nobody did.
+    isolated = _only_generic_artifacts(trace_output)
 
-    summary_file = gate_eval._resolve_summary_file(trace_output, scope)
-    if belongs(summary_file):
-        summary = read_json(summary_file)
-        if summary is not None and summary.get("gate_status"):
-            return str(summary["gate_status"]).strip(), summary_file.name
+    def belongs(path: Path, scope: str) -> bool:
+        return (
+            own_trace
+            or (isolated and path.stem in GENERIC_ARTIFACT_STEMS)
+            or gate_eval._stem_matches_story(path.stem, scope)
+        )
+
+    # TWO PASSES, and the order is load-bearing. A single pass per scope lets the
+    # FULL id's summary fallback fire before the numeric prefix's real gate file
+    # is ever looked for, so a story with `gate-decision-4-1.json` saying CONCERNS
+    # rendered the epic-wide summary's PASS instead. Every scope's authoritative
+    # gate file is tried before any scope's fallback summary.
+    for scope in scopes:
+        # The resolver itself returns None when this story is absent from a
+        # per-story-named directory; that is already "absent", so it skips the read.
+        gate_file = gate_eval._resolve_gate_file(trace_output, scope)
+        if gate_file is not None and belongs(gate_file, scope):
+            slim = read_json(gate_file)
+            if slim is not None and slim.get("gate_status"):
+                return str(slim["gate_status"]).strip(), gate_file.name
+
+    for scope in scopes:
+        summary_file = gate_eval._resolve_summary_file(trace_output, scope)
+        if belongs(summary_file, scope):
+            summary = read_json(summary_file)
+            if summary is not None and summary.get("gate_status"):
+                return str(summary["gate_status"]).strip(), summary_file.name
     return None, None
 
 
@@ -296,6 +374,14 @@ def recorded_verdicts(decision_log: Path | None) -> dict[str, str]:
     A story heading followed by a fenced JSON object carrying a `verdict` key is
     read as the verdict the run acted on. Prose headings without such a block
     contribute nothing, which is the common case.
+
+    Keyed by the heading's id VERBATIM. It used to be keyed by
+    `numeric_prefix(...)`, which collapsed every alphanumeric child id of one
+    epic (`92-0a`, `92-3b`, `92-7f`) into the single bucket `92` — so one story's
+    verdict was rendered as the verdict of every sibling in the `--story` list,
+    including stories the invocation never drove. Matching a heading id to a
+    story id is `resolve_recorded_verdicts`' job, because it needs the story list
+    to tell an unambiguous match from a colliding one.
     """
     text = read_text(decision_log)
     if not text:
@@ -311,8 +397,53 @@ def recorded_verdicts(decision_log: Path | None) -> dict[str, str]:
             except (ValueError, TypeError):
                 continue
             if isinstance(payload, dict) and payload.get("verdict"):
-                out[numeric_prefix(match.group(1)) or match.group(1)] = str(payload["verdict"])
+                out[match.group(1)] = str(payload["verdict"])
                 break
+    return out
+
+
+def _components(story: str) -> list[str]:
+    return [p for p in re.split(r"[-._]", (story or "").strip()) if p]
+
+
+def _heading_matches_story(heading: str, story: str) -> bool:
+    """True iff a decision-log heading id names this story.
+
+    Headings in a real log carry the SHORT id (`### Story 92-0a - the five
+    confirmed defects`) while `--story` carries the full slugged id
+    (`92-0a-the-five-confirmed-defects`), so an equality test would find nothing
+    and blank the column. The heading's components must be a leading run of the
+    story's.
+    """
+    head, tail = _components(heading), _components(story)
+    return bool(head) and len(head) <= len(tail) and tail[: len(head)] == head
+
+
+def resolve_recorded_verdicts(recorded: dict[str, str], stories: list[str]) -> dict[str, str]:
+    """Map each story id to the verdict its OWN decision-log heading recorded.
+
+    THE UNIQUENESS RULE IS THE WHOLE POINT, so do not "simplify" it away: a
+    heading that matches more than one story in the list names none of them, and
+    every story it touches renders `n/a`. A bare `## Story 92` heading in an epic
+    of seventy-six children matches all of them, and rendering its verdict on all
+    of them is exactly the fabrication this function exists to prevent — the
+    trail's header promises that an absent verdict reads `n/a`, and a reader who
+    trusts that promise therefore trusts every cell that is not `n/a`.
+
+    Where several headings match one story, the most specific (longest component
+    run) wins, since a run that logged both `92-3` and `92-3b` meant the latter
+    for `92-3b-the-minting-primitives`.
+    """
+    out: dict[str, str] = {}
+    for story in stories:
+        hits = [
+            heading
+            for heading in recorded
+            if _heading_matches_story(heading, story)
+            and sum(1 for other in stories if _heading_matches_story(heading, other)) == 1
+        ]
+        if hits:
+            out[story] = recorded[max(hits, key=lambda h: len(_components(h)))]
     return out
 
 
@@ -400,7 +531,7 @@ def story_section(
         criteria_source = trace.name if (rows and trace is not None) else criteria_source
 
     gate_status, gate_source = gate_status_for(trace_output, story)
-    verdict = verdict_for(gate_status, recorded.get(numeric_prefix(story) or story))
+    verdict = verdict_for(gate_status, recorded.get(story))
     start = baseline_sha(impl_artifacts, story)
     commits = commit_cell(repo, start, range_end)
 
@@ -409,7 +540,7 @@ def story_section(
     lines.append(f"- Gate artifact: {gate_source or NA} (gate status `{gate_status or NA}`)")
     lines.append(
         "- Verdict source: recorded in the decision log"
-        if recorded.get(numeric_prefix(story) or story)
+        if recorded.get(story)
         else "- Verdict source: the gate artifact's status, mapped by the gate's own table"
     )
     lines.append(f"- Baseline: `{start}`" if start else f"- Baseline: {NA}")
@@ -446,7 +577,9 @@ def render(
     decision_log: Path | None,
     repo: Path,
 ) -> str:
-    recorded = recorded_verdicts(decision_log)
+    # Resolved against the story list, so `recorded` below is keyed by the SAME
+    # full story ids the sections are rendered for and every lookup is exact.
+    recorded = resolve_recorded_verdicts(recorded_verdicts(decision_log), stories)
     baselines = {story: baseline_sha(impl_artifacts, story) for story in stories}
 
     header = [
@@ -468,6 +601,18 @@ def render(
     for index, story in enumerate(stories):
         # The range end is the next story's baseline (its start is this story's
         # end), and HEAD for the last story in sprint order.
+        #
+        # A later story anchored at THIS story's own sha collapses the range to
+        # `X..X`, so a story that did commit renders `(no commits in range)`.
+        # Skipping such a candidate is NOT the fix: two stories share a sha both
+        # when the later marker is residue AND when this story legitimately
+        # committed nothing (step 0 anchors before any implementation and never
+        # overwrites, so an escalated story leaves exactly that), and the two are
+        # indistinguishable from baselines alone. Skipping trades a false
+        # negative the docstring calls "an observation, never a denial" for a
+        # false positive in an evidence artifact - one story credited with the
+        # next story's commit, the same sha rendered under both. Left as is until
+        # the trail carries a signal for which stories this run actually drove.
         range_end = None
         for later in stories[index + 1 :]:
             if baselines.get(later):
