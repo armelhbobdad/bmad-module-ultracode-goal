@@ -241,3 +241,23 @@ def test_the_operator_doc_carries_the_headless_caveats():
     assert re.search(r"25 consecutive runs", text), "the observed scale, not a vague caution"
     assert re.search(r"a group armed for `Bash` alone is never invoked", text)
     assert re.search(r"reads without a write", text, re.I)
+
+
+def test_no_surface_still_claims_the_guard_cannot_see_non_bash_tools():
+    """Widening the matcher makes "the guard sees Bash only" literally false.
+
+    The CONCLUSION survives - a Write reaches no evaluation and cannot trip a
+    gate, verified across Read/Write/Edit/Grep/Glob/Task/WebFetch and an MCP
+    call, every one of which the guard passes through with no decision. The
+    REASONING does not, and a reader who meets "arm it for every tool" beside
+    "the guard never sees Write/Edit" resolves the contradiction the easy way:
+    by narrowing the matcher back to Bash, which re-inerts the sixth invariant.
+    """
+    text = _read(_PREFLIGHT)
+    assert "sees Bash commands only" not in text
+    assert "evaluates Bash command strings only" in text.lower() or re.search(
+        r"\*\*evaluates Bash command strings only\*\*", text
+    )
+    # And it says WHY the two clauses are compatible, rather than leaving a
+    # reader to reconcile them.
+    assert re.search(r"the hook IS invoked for a `Write`", text)
