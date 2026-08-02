@@ -1,15 +1,15 @@
 ---
 title: Stability and Public Contract
-description: "The 0.1.0 stability posture: which CLI, config, JSON, and gate surfaces are the supported public contract versus everything that is @internal and free to change."
+description: "The 1.x stability posture: which CLI, config, JSON, and gate surfaces are the supported public contract, what a major costs, and everything that is @internal and free to change."
 ---
 
-> **Status:** 0.x, pre-1.0. The surfaces below are the intended public contract at `0.1.0`. Per [Semantic Versioning 2.0.0](https://semver.org/), a `0.x` series makes no stability guarantee across minor versions; this document records what we *try* to hold stable and what is explicitly `@internal`, so a consumer knows which surfaces to pin against and which to treat as free to change.
+> **Status:** 1.x. The surfaces below are the public contract. Per [Semantic Versioning 2.0.0](https://semver.org/), a breaking change to any of them requires a MAJOR bump; everything marked `@internal` may change in any release. This document is what a consumer pins against.
 
-This is the stability posture for `bmad-module-ultracode-goal` at `0.1.0`. It enumerates the surfaces a downstream consumer or automator may reasonably depend on, versus everything else, which is `@internal`.
+This is the stability posture for `bmad-module-ultracode-goal` at `1.x`. It enumerates the surfaces a downstream consumer or automator may reasonably depend on, versus everything else, which is `@internal`.
 
-## Public contract at 0.1.0
+## Public contract
 
-The following surfaces are the intended public contract. We aim not to break them within the `0.x` series without a deprecation note; see [SemVer note](#semver-note).
+The following surfaces are the public contract. Breaking one requires a MAJOR bump; see [SemVer note](#semver-note).
 
 ### CLI command surface
 
@@ -20,7 +20,7 @@ The installer CLI is invoked via `npx bmad-module-ultracode-goal <subcommand>`. 
 
 ### The `[workflow]` customize.toml keys
 
-The keys in the shipped `[workflow]` block of `customize.toml` (including `persistent_facts`, `tea_config_path`, `trace_output_dir`, `implementation_artifacts`, `deferred_work_path`, `epic_branch_prefix`, `protected_branches`, `max_turns_per_story`, `story_token_budget` (**deprecated, no-op**), `parallel_max_concurrency`, `allowlist_commands`, `on_epic_complete`, and `on_escalation`) are the supported override surface. Teams and users override them in `_bmad/custom/ultracode-goal.toml` (and `.user.toml`) with base → team → user resolution (scalars override, tables deep-merge, arrays append). Renaming or removing a key, or changing how it resolves, is a contract change. See [architecture](../architecture.md).
+The keys in the shipped `[workflow]` block of `customize.toml` (including `persistent_facts`, `tea_config_path`, `trace_output_dir`, `implementation_artifacts`, `deferred_work_path`, `epic_branch_prefix`, `protected_branches`, `max_turns_per_story`, `story_token_budget` (**deprecated, no-op**), `parallel_max_concurrency`, `allowlist_commands`, `on_epic_complete`, `on_escalation`, `cross_session_recall`, and `graphify_integration`) are the supported override surface. Teams and users override them in `_bmad/custom/ultracode-goal.toml` (and `.user.toml`) with base → team → user resolution (scalars override, tables deep-merge, arrays append). Renaming or removing a key, or changing how it resolves, is a contract change. See [architecture](../architecture.md).
 
 `story_token_budget` is **deprecated** as of the deprecation note in `CHANGELOG.md`: it is still shipped, still accepted, and still resolves, so existing overrides keep working and nothing errors. It is a no-op; no layer reads it any more. The runaway bound is turns only, via `max_turns_per_story`. The key stays enumerated here (and stays in `customize.toml`) precisely because removing it would be the contract break this section forbids.
 
@@ -80,7 +80,7 @@ The printed JSON object's key set (`verdict`, `gate_status`, `p0_status`, `p1_st
 
 ## @internal: not covered
 
-Everything not enumerated above is `@internal` and may change in any `0.x` release without a deprecation note. Do not pin against:
+Everything not enumerated above is `@internal` and may change in any release, major or minor, without a deprecation note. Do not pin against:
 
 - **Installer library internals**: the implementation behind the CLI subcommands; what is covered is the observable subcommand surface, not how the files get placed.
 - **Reference file structure**: the `references/*.md` stage files' internal structure, step ordering, prose, and section headings. The stage *names* are referenced by the health-check fingerprint (see below) but the file contents are an authoring surface.
@@ -90,4 +90,18 @@ Everything not enumerated above is `@internal` and may change in any `0.x` relea
 
 ## SemVer note
 
-This is a `0.x` module: **minor versions may break.** We try to hold the surfaces in [Public contract at 0.1.0](#public-contract-at-010) stable, and the two surfaces an automator is most likely to encode against, the **headless five-key JSON emit shape** and the **`[workflow]` customize.toml keys**, get a deprecation note in `CHANGELOG.md` before changing. `@internal` surfaces change freely. Once the module reaches `1.0.0`, this document is superseded by a full SemVer contract.
+**A breaking change to any surface in [Public contract](#public-contract) requires a MAJOR bump.** That is the whole rule, and it is deliberately stricter than "we try": this module's value is that a machine-checked contract means what it says, so the versioning of the contract has to as well.
+
+What counts as breaking, stated so it is not re-litigated per release:
+
+- Removing or renaming an enumerated CLI flag, subcommand, config key, or JSON key.
+- **Changing the verdict an unchanged, previously-documented invocation returns.** This is the one that bites, and it bit at 2.0.0: `gate_eval.py --profile production` with neither signal flag was the documented epic-level invocation and returned `advance`; it now returns `reloop` unless `--epic-level` is passed. That the old answer was unearned did not make the change non-breaking — a consumer's pipeline still changed behaviour on an upgrade they did not ask for.
+- Adding a key to the printed verdict JSON or the headless envelope, for a consumer validating the shape strictly.
+
+What does not:
+
+- Fixing a resolver so it returns the *right* artifact rather than a neighbour's, where the documented invocation and its vocabulary are unchanged.
+- Anything behind `@internal`, including which file a resolver picks and how it decides a name carries a story id.
+- Prose in `references/*.md`, which is an authoring surface.
+
+**Deprecation.** The two surfaces an automator is most likely to encode against — the **headless five-key JSON emit shape** and the **`[workflow]` customize.toml keys** — get a deprecation note in `CHANGELOG.md` at least one minor before changing, and the key stays shipped and accepted meanwhile. `story_token_budget` is the worked example: deprecated, still resolving, no-op.

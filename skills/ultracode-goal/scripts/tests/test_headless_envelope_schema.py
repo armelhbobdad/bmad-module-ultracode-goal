@@ -605,7 +605,7 @@ def test_documented_ci_snippet_reads_the_file_not_the_transcript():
 def test_stability_enumerates_run_result_json_as_a_contract_path():
     text = _STABILITY.read_text(encoding="utf-8")
 
-    public = _section(text, "Public contract at 0.1.0")
+    public = _section(text, "Public contract")
     assert _RESULT_FILE in public, "run-result.json must be enumerated in the public contract"
     # sharper: it is its own contract subsection, not a passing mention in another one
     result_section = _section(text, "The headless result file", stop_at_sub=True)
