@@ -47,6 +47,24 @@ All notable changes to this project will be documented in this file. The format 
 - **Formalize: a citation declared itself, which left the judgment arm as dead code.** `_collect_declared_ids` harvested FR/NFR/ADR and test-pointer declarations from the **entire** story body, and the `traces:` row is part of that body, so a cited id declared itself and could never be reported dangling. Every index-token shape except the story key is matched by one of those declaration patterns, and the story key always takes the machine-regenerable arm, so the JUDGMENT branch was unreachable. Measured: `- traces: FR-99`, `- traces: tests/test_ghost.py::test_never_written`, `- traces: VER-GHOST-1` and `- traces: STORY-GHOST` each scored a clean `ready` with zero findings, and now reach `blocked` with a real `orphaned_index` judgment candidate. Prose and `Verification:` mentions still declare; the citation row no longer declares what it cites.
 - **The `--parallel` fan-out discarded whether the commit landed, and silently dropped a story that produced no result.** `committed` is a required field of the per-story schema, collected specifically to record whether the commit succeeded, and it was then dropped from the returned object without ever being read. `gate_eval.py` imports no subprocess and never touches git, so `{committed: false, verdict: "advance"}` is a coherent, reachable result whenever the tests and TEA artifacts are green inside the worktree but the PreToolUse guard denied the commit: the fan-out reported a story done whose work is on no branch. Such a story is now downgraded to `escalate` with a logged reason, and `branch` is carried through. Separately, `.filter(Boolean)` deleted a story whose agent returned nothing (a spawn failure, a schema-violating response) from the log, the epic-gate context and the return alike, making a story that never ran indistinguishable from one that was never in scope; those are now named in a new `unevaluated` array.
 
+## [2.0.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v1.0.1...v2.0.0) (2026-08-02)
+
+### Features
+
+* give the spine a route for a row that is too large to drive ([73c0ada](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/73c0ada6dba56fe7f5854a763c282512ad91c795))
+* let the driver survive an in-flight spawn death, and report the tree ([eb2359f](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/eb2359f88737b6ead3227b833d237a7d86c8cb70))
+* say whether TEA or the run itself authored the gate file ([21996a0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/21996a053c7a13d9e040f3e1a5206e16023ae2c2))
+
+### Bug Fixes
+
+* decode git output as UTF-8, not as the platform's legacy code page ([72d3846](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/72d384610909e340df829f48f297fdc025f18a6c))
+* make the gate and the trail agree on which artifact belongs to a story ([dcc6935](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/dcc6935d865c39771a7793744d503db7bbbeba6c))
+* make the three ucg-* commands exist ([c6f161d](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/c6f161d91a65625a2146233f87ee90288a0914d4))
+* name all four non-web artifacts, and stop one of them faking a trace report ([0b22bb2](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/0b22bb2625ff74be0e7268739258807826ec422c))
+* recognise a slugged story id, so the fail-closed branch actually fires ([c2424b1](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/c2424b197c7e5d5e6e20ef59937b70cc8717d16c)), closes [#69](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/69)
+* run-scope the handoff sidecar read, and stop it killing the driver ([fd91d73](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/fd91d738d3a7615f1f56f2c4517fc9aa58ced839)), closes [#74](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/74)
+* six fail-opens that let the module pass work it never checked ([a58a18b](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/a58a18bb14fbf84e68fedeaf9fecf4966b01fa88))
+* stop the gate dropping a signal, and stop the adapter inverting a run ([cce71b1](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/cce71b13649486b4dc8386a0db400dbb121966c4))
 ## [1.0.1](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v1.0.0...v1.0.1) (2026-07-28)
 
 ### Details
