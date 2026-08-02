@@ -132,8 +132,12 @@ def _git(repo: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", "-C", str(repo), "-c", "commit.gpgsign=false", *args],
         capture_output=True,
-        text=True,
         check=True,
+        # UTF-8 explicitly, for the reason `drive_epic._git_out` gives: `text=True`
+        # decodes with the platform's preferred encoding, and on Windows that is a
+        # legacy code page that mangles a non-ASCII path.
+        encoding="utf-8",
+        errors="replace",
         env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
     )
     return proc.stdout.strip()
@@ -1296,7 +1300,17 @@ def test_intent_to_add_is_read_off_the_columns_not_sniffed(tmp_path):
     )
     found = drive_epic.intent_to_add_paths(drive_epic.porcelain_entries(porcelain))
 
-    assert sorted(found) == sorted(hazards)
+    # Compared against the FILESYSTEM, not against the source literals above.
+    # A name round-trips through git and the OS, and Unicode normalisation is not
+    # guaranteed to preserve the exact code points on every platform - so the
+    # property worth pinning is "these are the files git says are intent-to-add,
+    # and each one is really there", which no normalisation can fake.
+    on_disk = {q.name for q in root.iterdir() if q.is_file()}
+    assert len(found) == len(hazards), f"expected {len(hazards)} hazards, got {found}"
+    assert set(found) <= on_disk, f"named a file that is not on disk: {set(found) - on_disk}"
+    assert "staged.rs" not in found and "untracked.rs" not in found, (
+        "a genuinely staged add and an untracked file are not intent-to-add"
+    )
     # Every name it reports is a file that actually exists - the property the
     # arrow-split and the octal escapes each broke.
     for name in found:

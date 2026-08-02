@@ -548,10 +548,23 @@ def _git_out(repo: Path, *args: str) -> str | None:
 
     Fail-soft on purpose: the triage below is a REPORT, and a report that
     crashed the driver would be worse than the silence it replaces.
+
+    DECODED AS UTF-8 EXPLICITLY, not by the locale. `text=True` alone decodes
+    with the platform's preferred encoding, which on Windows is a legacy code
+    page (cp1252 on the CI runners), while git emits path bytes as UTF-8. A file
+    named `café.rs` therefore came back mojibake there - which is the same defect
+    class as the quoting bug this triage already had to fix: a warning naming a
+    file that does not exist. `errors="replace"` keeps the fail-soft posture for
+    a path that is genuinely not UTF-8, so an undecodable name degrades to a
+    visibly mangled entry rather than raising mid-triage.
     """
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            errors="replace",
         )
     except (OSError, ValueError):
         return None
