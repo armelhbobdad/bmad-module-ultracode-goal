@@ -26,6 +26,25 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[1] / "gate_eval.py"
 
 
+def _load_gate_eval():
+    """Import the script as a module, for the pure predicates.
+
+    Everything else here drives it as a SUBPROCESS on purpose - that is the
+    surface a caller uses. A couple of checks below are about one pure function's
+    classification rule, where a subprocess would only let us observe it through
+    three layers of resolution.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gate_eval_under_test", SCRIPT)
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+gate_eval_module = _load_gate_eval()
+
+
 def run_gate(
     trace_output, profile="light", nfr=None, test_review=None, story=None, epic_level=False
 ):
@@ -892,3 +911,50 @@ def test_an_undeclared_trace_report_no_longer_suppresses_fail_closed(tmp_path):
     result = run_gate(tmp_path, profile="light", story="9-2")
     assert result["gate_status"] == "NOT_EVALUATED"
     assert result["verdict"] == "escalate"
+
+
+@pytest.mark.parametrize(
+    "stem,named",
+    [
+        ("trace-2-1", True),
+        ("gate-decision-4", True),
+        # The shapes the ORIGINAL last-component-is-numeric rule called generic.
+        # Every one of them is what this module writes once a story is split or
+        # slugged, which is the normal case in any real epic.
+        ("trace-92-0a", True),
+        ("trace-5-8-some-slug", True),
+        ("gate-decision-92-7f-the-departure-record", True),
+        ("nfr-assessment-1-2", True),
+        # Genuinely generic: the single-story dir whose unscoped fallback is
+        # documented and must keep working.
+        ("trace", False),
+        ("gate-decision", False),
+        ("e2e-trace-summary", False),
+        # Not one of ours at all. Its first component is `traceability`, not
+        # `trace`, so the prefix must not match on a substring.
+        ("traceability-matrix", False),
+    ],
+)
+def test_a_stem_is_named_for_a_story_by_structure_not_by_a_numeric_tail(stem, named):
+    assert gate_eval_module._has_trailing_id(stem) is named
+
+
+def test_an_artifact_less_story_cannot_advance_on_a_slugged_neighbours_gate(tmp_path):
+    """The fail-closed branch must fire in a directory of SLUGGED per-story names.
+
+    `_is_per_story_named` is the discriminator that switches fail-closed on. It
+    asked whether a stem's last component is numeric, which is false for every
+    slugged or alpha-suffixed id - so a directory full of real per-story
+    artifacts reported itself generic, the branch never fired, and an
+    artifact-less story resolved a neighbour's gate.
+
+    Measured before the fix: `--story 92-7f-never-driven` against a directory
+    holding only 92-0a's artifacts returned PASS. That story wrote nothing.
+    """
+    write_trace_report(tmp_path, "trace-92-0a-alpha.md", "gate-decision-92-0a-alpha.json")
+    write_named_slim(tmp_path, "gate-decision-92-0a-alpha.json", "PASS")
+
+    result = run_gate(tmp_path, profile="light", story="92-7f-never-driven")
+    assert result["gate_status"] == "NOT_EVALUATED"
+    assert result["verdict"] == "escalate"
+    assert not any("92-0a" in r for r in result["reasons"]), "resolved a neighbour's gate"
