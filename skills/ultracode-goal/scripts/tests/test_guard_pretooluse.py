@@ -2027,7 +2027,11 @@ def test_chained_real_commit_still_denied(tmp_path: Path) -> None:
 
 
 _SEGMENT_SPLIT = (
-    '    for separators in (r"&&|\\|\\||;|\\|", r"&&|\\|\\||;|\\||\\n|\\r"):\n'
+    "    for separators in (\n"
+    '        r"&&|\\|\\||;|\\|",\n'
+    '        r"&&|\\|\\||;|\\||\\n|\\r",\n'
+    '        r"&&|\\|\\||;|\\||&|\\n|\\r",\n'
+    "    ):\n"
     "        for segment in re.split(separators, command):\n"
     "            verbs |= _segment_write_verbs(segment, depth)"
 )
@@ -2569,3 +2573,142 @@ def test_mutant_step2_marker_without_baseline_reds_only_step2() -> None:
     assert _BASELINE_LINE_RE.search(_md_step5(mutated)), (
         "the step-5 control must stay green under the same mutation"
     )
+
+
+# ---------------------------------------------------------------------------
+# Compound commands and the `&` separator.
+#
+# `_token_write_verbs` reads the segment's LEADING token. A shell keyword or a
+# group opener occupies that position inside every compound form, and a lone
+# `&` was in neither separator set -- so `if true; then <verb>; fi` and
+# `build & <verb>` both classified as "no git write" and skipped the
+# protected-branch, tests-ran, freshness AND empty-index gates at once.
+# ---------------------------------------------------------------------------
+
+_V = "git" + " " + "commit"
+
+_COMPOUND_COMMIT_FORMS = (
+    ("if_then", "if true; then %s -m wip; fi" % _V),
+    ("for_do", "for i in 1; do %s -m wip; done" % _V),
+    ("while_do", "while false; do %s -m wip; done" % _V),
+    ("subshell", "( %s -m wip )" % _V),
+    ("subshell_glued", "(%s -m wip)" % _V),
+    ("brace_group", "{ %s -m wip; }" % _V),
+    ("negated", "! %s -m wip" % _V),
+    ("background_amp", "npm run build & %s -m wip" % _V),
+)
+
+
+@pytest.mark.parametrize(
+    "name,command",
+    _COMPOUND_COMMIT_FORMS,
+    ids=[n for n, _ in _COMPOUND_COMMIT_FORMS],
+)
+def test_compound_forms_still_reach_the_commit_gate(
+    tmp_path: Path, name: str, command: str
+) -> None:
+    """Every compound wrapping of a real commit is still classified as a write."""
+    repo = tmp_path / ("repo_" + name)
+    repo.mkdir()
+    _init_repo(repo, "main")
+
+    code, out = _run_hook(_commit_event(repo, command), repo)
+
+    assert code == 2, "%s: compound form was waved through" % name
+    assert "Protected-branch" in _reason(out)
+
+
+_BENIGN_COMPOUND_FORMS = (
+    ("if_then", "if true; then echo hi; fi"),
+    ("for_do", "for i in 1 2; do echo $i; done"),
+    ("subshell", "( echo hi )"),
+    ("brace_group", "{ echo hi; }"),
+    ("background_amp", "npm run watch & echo started"),
+)
+
+
+@pytest.mark.parametrize(
+    "name,command",
+    _BENIGN_COMPOUND_FORMS,
+    ids=[n for n, _ in _BENIGN_COMPOUND_FORMS],
+)
+def test_compound_forms_without_a_git_write_stay_allowed(
+    tmp_path: Path, name: str, command: str
+) -> None:
+    """Control. Stripping keywords must not turn every compound into a deny --
+    without this pair, the deny test above would also pass on a guard that
+    denied everything."""
+    repo = tmp_path / ("ctl_" + name)
+    repo.mkdir()
+    _init_repo(repo, "main")
+
+    code, out = _run_hook(_commit_event(repo, command), repo)
+
+    assert code == 0, "%s: benign compound was denied" % name
+    assert out is None
+
+
+def test_quoted_ampersand_in_a_git_value_option_still_denies(tmp_path: Path) -> None:
+    """The regression an `&` bolted onto the EXISTING separator sets would cause.
+
+    Splitting on `&` is quote-blind, so `git -c alias.x='a&b' <verb>` tears into
+    two fragments that BOTH fail to tokenize and BOTH miss the fallback regex
+    (the first carries no verb, the second carries no `git`). Adding `&` as a
+    THIRD unioned set keeps the un-split classification that already caught it.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo, "main")
+
+    command = "git -c alias.x='a&b' " + _V.split()[1] + " -m wip"
+    code, out = _run_hook(_commit_event(repo, command), repo)
+
+    assert code == 2
+    assert "Protected-branch" in _reason(out)
+
+
+_LEADING_NOISE_CALL = "    tokens = _strip_leading_noise(tokens)"
+_AMP_SEPARATOR_LINE = '        r"&&|\\|\\||;|\\||&|\\n|\\r",\n'
+
+
+def test_mutant_without_keyword_stripping_allows_a_compound_write(
+    tmp_path: Path,
+) -> None:
+    """Twin: revert the leading-noise strip and the compound form is ALLOWED.
+
+    The ALLOW is the point. If the deny survived this mutation, the strip would
+    not be what produces it and the tests above would pin nothing.
+    """
+    mutant = _write_mutant(
+        tmp_path,
+        "no_keyword_strip",
+        _LEADING_NOISE_CALL,
+        "    tokens = _strip_assignments(tokens)",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo, "main")
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo, "if true; then %s -m wip; fi" % _V), repo
+    )
+
+    assert code == 0
+    assert out is None
+
+
+def test_mutant_without_the_amp_separator_allows_a_background_write(
+    tmp_path: Path,
+) -> None:
+    """Twin for the `&` set: drop it and `build & <verb>` is ALLOWED again."""
+    mutant = _write_mutant(tmp_path, "no_amp_separator", _AMP_SEPARATOR_LINE, "")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo, "main")
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo, "npm run build & %s -m wip" % _V), repo
+    )
+
+    assert code == 0
+    assert out is None

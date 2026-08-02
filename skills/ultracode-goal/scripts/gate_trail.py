@@ -253,6 +253,52 @@ def _is_trace_report(report: Path) -> bool:
     return fm.get("workflowType") in ("testarch-trace", "trace")
 
 
+def _prefix_scope(story: str) -> str | None:
+    """The numeric-prefix fallback scope, or None when it collapses to the epic.
+
+    `numeric_prefix` keeps only LEADING numeric components, so it treats two very
+    different ids identically. For `4-1-some-slug` it yields `4-1` — the same
+    story minus a slug, which is the fallback this scope exists for. For
+    `92-7f-never-driven`, whose SECOND component is alphanumeric (the shape every
+    split story takes), it yields `92`: the bare EPIC id. That is not a shorter
+    spelling of the story, it is a DIFFERENT artifact set — the epic roll-up —
+    so a never-driven child story resolved the epic's PASS as its own verdict.
+
+    The fallback is therefore offered only while it still carries an epic AND a
+    story component.
+    """
+    prefix = numeric_prefix(story)
+    if not prefix or prefix == story:
+        return None
+    if len(prefix.split("-")) < 2:
+        return None
+    return prefix
+
+
+def _has_own_trace_report(trace_output: Path, story: str) -> bool:
+    """True iff the story has its OWN declared trace report in this directory.
+
+    Deliberately stricter than `trace_report_path`, which exists to RENDER a
+    story's report and may fall back to any id-matching markdown. Here the answer
+    authorizes accepting an artifact that is NOT named for this story, so every
+    leniency fails the trail OPEN:
+
+    - matching through `numeric_prefix` let a child story (`92-7f-…`) match the
+      EPIC's `trace-92.md`; and
+    - falling back to any id-matching `*.md` let a story that wrote only its
+      `nfr-assessment-<id>.md` — which `references/gate.md` ORDERS the non-web
+      author to write into this same directory — claim a trace report it never
+      produced.
+
+    Either one made `belongs()` return True unconditionally, so an undriven story
+    rendered a neighbour's, or the epic roll-up's, PASS as its own.
+    """
+    return any(
+        gate_eval._stem_matches_story(report.stem, story) and _is_trace_report(report)
+        for report in sorted(trace_output.glob("*.md"))
+    )
+
+
 def trace_report_path(trace_output: Path | None, story: str) -> Path | None:
     """The story's trace report, matched by id components the way the gate does.
 
@@ -300,20 +346,18 @@ def gate_status_for(trace_output: Path | None, story: str) -> tuple[str | None, 
     """
     if trace_output is None or not trace_output.is_dir():
         return None, None
-    own_trace = trace_report_path(trace_output, story) is not None
+    own_trace = _has_own_trace_report(trace_output, story)
 
     # Try the FULL story id before the numeric prefix, which is the order
-    # `gate_eval.py` itself uses. `numeric_prefix` keeps only the LEADING numeric
-    # components, so an id whose second component is alphanumeric (`92-3b-…`,
-    # the shape every split story takes) truncates to the bare epic number. No
-    # per-story artifact is named for that, so the resolver failed closed and the
-    # cell read `n/a` for a gate file sitting in the directory under its own
-    # correct name — while `gate_eval.py`, given the same id and directory, read
-    # it without difficulty. Two readers disagreeing about one file is the defect;
-    # the prefix stays only as a fallback for ids that genuinely resolve that way.
+    # `gate_eval.py` itself uses. The prefix stays only as a fallback for ids
+    # that genuinely resolve that way — a slug suffix on an otherwise complete
+    # `<epic>-<story>` id — because `gate_eval.py`, given the same id and
+    # directory, reads such a file without difficulty and two readers
+    # disagreeing about one file is a defect. `_prefix_scope` is what stops that
+    # fallback from collapsing an alphanumeric child id to the bare epic number.
     scopes = [story]
-    prefix = numeric_prefix(story)
-    if prefix and prefix != story:
+    prefix = _prefix_scope(story)
+    if prefix:
         scopes.append(prefix)
 
     # A generically-named artifact carries no id to match, so it can only be

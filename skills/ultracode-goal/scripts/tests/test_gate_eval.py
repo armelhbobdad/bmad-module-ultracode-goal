@@ -958,3 +958,122 @@ def test_an_artifact_less_story_cannot_advance_on_a_slugged_neighbours_gate(tmp_
     assert result["gate_status"] == "NOT_EVALUATED"
     assert result["verdict"] == "escalate"
     assert not any("92-0a" in r for r in result["reasons"]), "resolved a neighbour's gate"
+
+
+def test_production_nfr_not_assessed_downgrades_advance_to_reloop(tmp_path):
+    """`NOT_ASSESSED` means the NFRs were never evaluated, so it must fail the AND.
+
+    It is in `_scan_nfr_overall_status`'s alternation, so it parses cleanly and
+    never reaches the "status not found" branch. It therefore used to read as
+    "present and not FAIL" and PASS the production AND, advancing a story on an
+    NFR audit that had assessed nothing -- while an *unreadable* NFR file failed
+    closed. The two are now consistent.
+    """
+    write_slim(tmp_path, "PASS")
+    nfr = tmp_path / "nfr-assessment.md"
+    review = tmp_path / "test-review.md"
+    write_nfr(nfr, "NOT_ASSESSED")
+    write_review(review, 92, "Approve")
+
+    result = run_gate(tmp_path, profile="production", nfr=nfr, test_review=review)
+
+    assert result["verdict"] == "reloop"
+    assert result["nfr_status"] == "NOT_ASSESSED"
+    assert any("NOT_ASSESSED" in r for r in result["reasons"]), result["reasons"]
+
+
+def test_production_nfr_not_assessed_is_inert_under_light(tmp_path):
+    """Control on the profile axis: `--light` runs no ANDs, so the same artifact
+    still advances there. Without this, the test above would also pass on a
+    build that had simply broken the light profile."""
+    write_slim(tmp_path, "PASS")
+    nfr = tmp_path / "nfr-assessment.md"
+    write_nfr(nfr, "NOT_ASSESSED")
+
+    result = run_gate(tmp_path, profile="light")
+
+    assert result["verdict"] == "advance"
+
+
+# ---------------------------------------------------------------------------
+# The last-resort fall-through.
+#
+# The fail-closed `return None` in `_resolve_gate_file` is guarded by `elif`, so
+# it is reachable only when `scoped` is EMPTY. A story that authored a DECLARED
+# trace report but no resolvable gate file skipped it entirely and was handed the
+# directory's UNSCOPED gate-decision.json -- a neighbour's verdict -- or, one file
+# along, the shared e2e-trace-summary.json.
+# ---------------------------------------------------------------------------
+
+
+def _declared_trace(d, story, hint=None):
+    fm = "---\nworkflowType: testarch-trace\n"
+    if hint:
+        fm += "gateDecisionFile: %s\n" % hint
+    fm += "---\n# trace\n"
+    (d / ("trace-%s.md" % story)).write_text(fm, encoding="utf-8")
+
+
+def _per_story_slim(d, story, status):
+    (d / ("gate-decision-%s.json" % story)).write_text(
+        json.dumps({"gate_status": status, "p0_status": "MET",
+                    "p1_status": "MET", "overall_status": "MET"}),
+        encoding="utf-8",
+    )
+
+
+def test_story_with_a_trace_report_but_no_gate_file_fails_closed(tmp_path):
+    """A declared trace report must not buy a pass out of the fail-closed lane."""
+    _declared_trace(tmp_path, "4-1")            # neighbour, fully evaluated
+    _per_story_slim(tmp_path, "4-1", "PASS")
+    _declared_trace(tmp_path, "4-2")            # this story: report, no gate file
+    write_slim(tmp_path, "PASS")                # the UNSCOPED file it used to grab
+
+    result = run_gate(tmp_path, profile="light", story="4-2")
+
+    assert result["gate_status"] == "NOT_EVALUATED"
+    assert result["verdict"] == "escalate"
+    assert any("4-2" in r for r in result["reasons"]), result["reasons"]
+
+
+def test_story_with_a_trace_report_does_not_inherit_the_shared_summary(tmp_path):
+    """One file along, the generic summary is the same unscoped read."""
+    _declared_trace(tmp_path, "4-1")
+    _per_story_slim(tmp_path, "4-1", "PASS")
+    _declared_trace(tmp_path, "4-2")
+    write_summary(tmp_path, "PASS")             # shared, belongs to no story
+
+    result = run_gate(tmp_path, profile="light", story="4-2")
+
+    assert result["gate_status"] == "NOT_EVALUATED"
+    assert result["verdict"] == "escalate"
+
+
+def test_story_with_its_own_gate_file_still_resolves(tmp_path):
+    """Control: the narrowing must not break the ordinary per-story read."""
+    _declared_trace(tmp_path, "4-1")
+    _per_story_slim(tmp_path, "4-1", "PASS")
+    _declared_trace(tmp_path, "4-2")
+    _per_story_slim(tmp_path, "4-2", "CONCERNS")
+
+    result = run_gate(tmp_path, profile="light", story="4-2")
+
+    assert result["gate_status"] == "CONCERNS"
+    assert result["verdict"] == "defer"
+
+
+def test_single_story_generic_dir_still_uses_the_unscoped_fallback(tmp_path):
+    """Control: the documented single-story shape is unchanged.
+
+    `references/gate.md` sanctions an isolated directory whose artifacts carry no
+    id; passing `--story` there must resolve exactly as before.
+    """
+    (tmp_path / "trace.md").write_text(
+        "---\nworkflowType: testarch-trace\n---\n# trace\n", encoding="utf-8"
+    )
+    write_slim(tmp_path, "PASS")
+
+    result = run_gate(tmp_path, profile="light", story="4-2")
+
+    assert result["gate_status"] == "PASS"
+    assert result["verdict"] == "advance"

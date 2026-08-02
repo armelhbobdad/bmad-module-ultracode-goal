@@ -607,3 +607,54 @@ def test_rollup_finds_sprint_status_via_glob_fallback(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --- tea-config inline comments ---------------------------------------------
+#
+# A hand-written tea config routinely annotates its keys. The scalar reader did
+# not strip the comment, so `test_artifacts` resolved to a directory whose name
+# carried the comment text: `ULTRACODE_TEST_ARTIFACTS` pointed nowhere, the
+# guard's un-skip proof found no checklist to read and enforced nothing, and
+# preflight still reported green. An inert control, not a cosmetic parse bug.
+
+
+def test_tea_scalar_drops_an_inline_comment(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "test_artifacts: _bmad-output/test-artifacts  # where TEA writes\n"
+        "tea_execution_mode: create  # forced for unattended runs\n",
+        encoding="utf-8",
+    )
+
+    flags = pf._read_toml_or_yaml_flags(cfg)
+
+    assert flags["test_artifacts"] == "_bmad-output/test-artifacts"
+    assert flags["tea_execution_mode"] == "create"
+    assert pf._tea_artifacts_root(tmp_path, flags) == (
+        tmp_path / "_bmad-output" / "test-artifacts"
+    )
+
+
+def test_tea_scalar_without_a_comment_is_unchanged(tmp_path):
+    """Control: the strip must not alter an un-annotated value."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("test_artifacts: _bmad-output/test-artifacts\n", encoding="utf-8")
+
+    flags = pf._read_toml_or_yaml_flags(cfg)
+
+    assert flags["test_artifacts"] == "_bmad-output/test-artifacts"
+
+
+def test_tea_scalar_keeps_a_hash_inside_a_quoted_value(tmp_path):
+    """A `#` that is part of the value survives.
+
+    YAML starts a comment only at a WHITESPACE-preceded `#`, so the strip is
+    anchored on that rather than on a bare `split('#')` -- which would have
+    truncated a legitimate path.
+    """
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text('test_artifacts: "out/sharp#1"  # annotated\n', encoding="utf-8")
+
+    flags = pf._read_toml_or_yaml_flags(cfg)
+
+    assert flags["test_artifacts"] == "out/sharp#1"

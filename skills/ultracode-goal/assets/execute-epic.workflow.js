@@ -172,6 +172,35 @@ const batchResults = await pipeline(
 )
 
 const perStory = batchResults.flat().filter(Boolean)
+
+// `.filter(Boolean)` used to DELETE a story from the run. A story agent that
+// returns null (spawn failure, a schema-violating response, a worktree error)
+// simply vanished: the log, the epic-gate context and the return all showed one
+// fewer story, with no anomaly anywhere, so a story that never ran was
+// indistinguishable from one that was never in scope. Name them instead.
+const storyIds = stories.map((s) => (typeof s === 'string' ? s : s && (s.id || s.story))).filter(Boolean)
+const unevaluated = storyIds.filter((id) => !perStory.some((r) => r.story === id))
+if (unevaluated.length) {
+  log(`WARNING: ${unevaluated.length} story(ies) produced NO result and were never evaluated: ${unevaluated.join(', ')}`)
+}
+
+// `committed` is a REQUIRED schema field, collected specifically to record
+// whether the commit landed — and it was then discarded unread, so the
+// workflow's output was provably insensitive to it. `gate_eval.py` imports no
+// subprocess and never touches git, so `{committed: false, verdict: 'advance',
+// gate_status: 'PASS'}` is a coherent, reachable result whenever the tests and
+// TEA artifacts are green inside the worktree but the PreToolUse guard denied
+// the commit. Advancing on that reports a story DONE whose work is not on any
+// branch. The gate's verdict is still never recomputed here; an un-landed commit
+// is a separate, non-gate fact that disqualifies the advance.
+for (const r of perStory) {
+  if (r.verdict === 'advance' && r.committed !== true) {
+    log(`WARNING: story ${r.story} gated ${r.gate_status}/advance but reported committed=${r.committed} — downgrading to escalate (no commit on its branch)`)
+    r.verdict = 'escalate'
+    r.reasons = [...(r.reasons || []), 'no commit landed on the story branch; advance downgraded to escalate']
+  }
+}
+
 log(`Stories complete: ${perStory.map((r) => `${r.story}=${r.verdict}/${r.gate_status}`).join(', ')}`)
 
 // Collect non-gate-blocking deferrals for the ledger (the skill, not this script, writes
@@ -202,7 +231,19 @@ const epicGate = await agent(
 log(`Epic gate: ${epicGate ? `${epicGate.verdict}/${epicGate.gate_status}` : 'unavailable'}; deferred items: ${deferred.length}`)
 
 return {
-  perStory: perStory.map((r) => ({ story: r.story, verdict: r.verdict, gate_status: r.gate_status })),
+  perStory: perStory.map((r) => ({
+    story: r.story,
+    verdict: r.verdict,
+    gate_status: r.gate_status,
+    // Carried, not dropped: Stage 5/6 cannot tell a delivered story from one
+    // whose commit was denied if the only fact that distinguishes them is
+    // discarded here.
+    committed: r.committed,
+    branch: r.branch,
+  })),
   epicGate,
   deferred,
+  // Empty on a healthy run. Non-empty means those stories were never evaluated
+  // at all, which is not the same as their having no findings.
+  unevaluated,
 }

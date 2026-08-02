@@ -25,6 +25,7 @@ import ast
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -908,3 +909,168 @@ def test_mutant_without_coverage_gap_reads_ready(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --- present-but-unparsed sprint-status.yaml ---------------------------------
+#
+# `_safe_read_text` returns None only on OSError/decode failure, so an EMPTY or
+# structurally unparseable rollup returns "" and takes the else-branch. The
+# in-scope key set is then empty, which silences BOTH guards at once: story files
+# still resolve through the epic-prefix glob so `no_in_scope_stories` never
+# fires, and `story_keys_uncovered` is scoped `if story_paths and uncovered`
+# against that empty set. The kernel returned `ready`, budget 0, on an Epic
+# missing a story file.
+
+
+def _seeded_epic(tmp_path: Path, sprint_body: str, drop_story: bool) -> Path:
+    root = tmp_path / "proj"
+    shutil.copytree(FIXTURES / "ready_epic", root)
+    (root / "impl-artifacts" / "sprint-status.yaml").write_text(
+        sprint_body, encoding="utf-8"
+    )
+    if drop_story:
+        (root / "impl-artifacts" / "1-2-floor.md").unlink()
+    return root
+
+
+def _run_root(root: Path, epic: str = "1") -> dict:
+    proc = subprocess.run(
+        [
+            sys.executable, str(SCRIPT),
+            "--epic", epic,
+            "--project-root", str(root),
+            "--planning-artifacts", str(root / "planning-artifacts"),
+            "--impl-artifacts", str(root / "impl-artifacts"),
+            "--tea-config", str(root / "tea" / "config.yaml"),
+        ],
+        capture_output=True, text=True,
+    )
+    return json.loads(proc.stdout)
+
+
+_GOOD_ROLLUP = (
+    "generated: fixture\ndevelopment_status:\n  epic-1: in-progress\n"
+    "  1-1-kernel: ready-for-dev\n  1-2-floor: backlog\n"
+)
+
+
+def test_empty_sprint_status_does_not_score_a_vacuous_ready(tmp_path):
+    """An Epic missing a story file must not reach `ready` on an empty rollup."""
+    root = _seeded_epic(tmp_path, "", drop_story=True)
+
+    result = _run_root(root)
+
+    assert result["verdict"] != "ready", result.get("mechanical_gaps")
+    ids = {g["id"] for g in result["mechanical_gaps"]}
+    assert "sprint_status_unparsed" in ids, ids
+
+
+def test_unparseable_sprint_status_is_flagged(tmp_path):
+    """Structurally unparseable is the same fail-open as empty."""
+    root = _seeded_epic(tmp_path, "!!! not a rollup !!!\n", drop_story=True)
+
+    result = _run_root(root)
+
+    assert result["verdict"] != "ready"
+    assert "sprint_status_unparsed" in {g["id"] for g in result["mechanical_gaps"]}
+
+
+def test_a_well_formed_rollup_still_reaches_ready(tmp_path):
+    """Control: the guard must fire on the empty rollup and NOTHING else.
+
+    Same tree, same story files, a parseable rollup -- still `ready`. Without
+    this the assertions above would also pass on a build that had simply broken
+    the kernel.
+    """
+    root = _seeded_epic(tmp_path, _GOOD_ROLLUP, drop_story=False)
+
+    result = _run_root(root)
+
+    assert "sprint_status_unparsed" not in {g["id"] for g in result["mechanical_gaps"]}
+    assert result["verdict"] == "ready", result.get("mechanical_gaps")
+
+
+def test_a_well_formed_rollup_still_catches_the_partial_seed(tmp_path):
+    """Control on the other axis: with a parseable rollup the ORIGINAL guard
+    still fires for the missing story, so the new gap is not masking it."""
+    root = _seeded_epic(tmp_path, _GOOD_ROLLUP, drop_story=True)
+
+    result = _run_root(root)
+
+    ids = {g["id"] for g in result["mechanical_gaps"]}
+    assert "story_keys_uncovered" in ids, ids
+    assert result["verdict"] != "ready"
+
+
+# --- a citation is not a declaration ----------------------------------------
+#
+# _collect_declared_ids harvested _FR_DECL_RE/_VER_DECL_RE over the ENTIRE story
+# body, and the `traces:` row is part of that body -- so a cited id declared
+# itself and could never be reported dangling. Every _INDEX_TOKEN_RE shape except
+# the story key (`\d+-\d+...`) is also matched by one of those two declaration
+# regexes, and the story key always takes the `regenerable` mechanical arm, which
+# left the JUDGMENT arm unreachable.
+
+
+def _epic_citing(tmp_path: Path, citation: str | None) -> Path:
+    root = tmp_path / "proj"
+    shutil.copytree(FIXTURES / "ready_epic", root)
+    if citation is not None:
+        story = root / "impl-artifacts" / "1-1-kernel.md"
+        story.write_text(
+            story.read_text(encoding="utf-8") + "\n" + citation + "\n", encoding="utf-8"
+        )
+    return root
+
+
+@pytest.mark.parametrize(
+    "citation",
+    [
+        "- traces: FR-99",
+        "- traces: tests/test_ghost.py::test_never_written",
+        "- traces: VER-GHOST-1",
+        "- traces: STORY-GHOST",
+    ],
+)
+def test_a_dangling_non_story_citation_reaches_the_judgment_arm(tmp_path, citation):
+    """These four shapes used to self-declare and score a clean `ready`."""
+    result = _run_root(_epic_citing(tmp_path, citation))
+
+    assert result["verdict"] == "blocked", result
+    assert result["judgment_required"] is True
+    kinds = [c["kind"] for c in result["judgment_candidates"]]
+    assert "orphaned_index" in kinds, result["judgment_candidates"]
+
+
+def test_an_uncited_epic_is_still_ready(tmp_path):
+    """Control: the harvest narrowing must not manufacture a finding."""
+    result = _run_root(_epic_citing(tmp_path, None))
+
+    assert result["verdict"] == "ready", result.get("mechanical_gaps")
+    assert result["checks"]["orphaned_indices"] == 0
+
+
+def test_a_citation_that_resolves_to_a_real_story_is_still_ready(tmp_path):
+    """Control: a citation naming a story file that DOES exist still resolves.
+
+    `1-2-floor` is a sibling story in this fixture, declared by its filename
+    stem rather than by the citation row, so narrowing the harvest leaves it
+    resolvable.
+    """
+    result = _run_root(_epic_citing(tmp_path, "- traces: 1-2-floor"))
+
+    assert result["verdict"] == "ready", result.get("mechanical_gaps")
+    assert result["checks"]["orphaned_indices"] == 0
+
+
+def test_a_dangling_story_key_still_takes_the_mechanical_arm(tmp_path):
+    """Control on the other arm: the regenerable shape is unchanged.
+
+    A dangling story key is machine-regenerable, so it stays a `remediable`
+    mechanical gap rather than becoming a judgment candidate -- proving the fix
+    opened the judgment arm without collapsing the two arms together.
+    """
+    result = _run_root(_epic_citing(tmp_path, "- traces: 23-9-ghost-story"))
+
+    assert result["verdict"] == "remediable", result
+    assert any(g["id"].startswith("orphaned_index") for g in result["mechanical_gaps"])
