@@ -705,20 +705,45 @@ def test_both_shipped_epic_level_callers_pass_the_flag():
 # --- Anti-vacuous twin: mutate a COPY of the script, assert the test reds -----
 
 
-def _write_mutant(tmp_path, name, old, new):
-    """Copy the shipped script, apply one textual mutation, return the copy."""
+def _write_mutant(tmp_path, name, *pairs):
+    """Copy the shipped script, apply each textual mutation in turn, return the copy.
+
+    Takes MANY (old, new) pairs, not one, because the resolver no longer has a
+    single guard between an absent story and a neighbour's PASS. Three
+    independent clauses now refuse it, so deleting any one of them on its own
+    leaves the refusal intact and a one-shot mutation can no longer reproduce the
+    historical field failure. A twin that mutated one clause and saw the fail-open
+    NOT come back would look like a passing test while proving nothing; these
+    twins therefore remove every clause on the path and assert the failure returns.
+    """
     src = SCRIPT.read_text(encoding="utf-8")
-    assert old in src, f"mutation anchor drifted out of gate_eval.py: {name}"
     tmp_path.mkdir(parents=True, exist_ok=True)
+    for index, (old, new) in enumerate(pairs):
+        assert old in src, f"mutation anchor {index} drifted out of gate_eval.py: {name}"
+        src = src.replace(old, new, 1)
     path = tmp_path / f"mutant_{name}.py"
-    path.write_text(src.replace(old, new, 1), encoding="utf-8")
+    path.write_text(src, encoding="utf-8")
     return path
 
 
 _FAIL_CLOSED_CLAUSE = (
-    "        elif _is_per_story_named(trace_output):\n"
+    "        elif _is_per_story_named(trace_output) and not _owns_a_per_story_summary(\n"
+    "            trace_output, story\n"
+    "        ):\n"
     "            return None\n"
 )
+
+# The ownership + containment test applied to a `gateDecisionFile` hint. Neutralizing
+# it restores the pre-fix behaviour of following any hint verbatim, which is the
+# second guard each twin below has to remove before its fail-open reappears.
+_HINT_GUARD = (
+    "    if story and story.strip():\n"
+    "        if _has_trailing_id(resolved.stem):\n"
+    "            return candidate if _stem_matches_story(resolved.stem, story) else None\n"
+    "        return None if _holds_another_storys_artifact(trace_output, story) else candidate\n"
+    "    return candidate\n"
+)
+_HINT_GUARD_REMOVED = "    return candidate\n"
 
 # The clause that stops a story's OWN slim gate file from being passed over in
 # favour of a neighbour's frontmatter hint. The mutation below rewrites the two
@@ -732,9 +757,7 @@ _OWN_SLIM_WINS_CLAUSE = (
     "            # gate — observed handing an unrelated epic's PASS back as this\n"
     "            # story's verdict. The story's own file wins, before any hint is read.\n"
     "            return scoped_slim\n"
-    "        elif _is_per_story_named(trace_output):\n"
-    "            return None\n"
-)
+) + _FAIL_CLOSED_CLAUSE
 
 _PRE_FIX_SCOPING_CLAUSE = (
     "        elif scoped_slim is None and _is_per_story_named(trace_output):\n"
@@ -745,14 +768,25 @@ _PRE_FIX_SCOPING_CLAUSE = (
 def test_mutant_without_fail_closed_clause_reports_neighbours_pass(tmp_path):
     """Twin for test_absent_story_in_per_story_named_dir_is_not_evaluated.
 
-    Concrete mutation: delete the fail-closed clause from _resolve_gate_file, so
-    resolution falls through to the unscoped read exactly as it did before the
-    fix. The absent story 4-9 then reports the NEIGHBOUR story 2-1's PASS —
-    which is the assertion the named test above makes, so that test reds. If the
-    NOT_EVALUATED survived this deletion, the clause would not be what produces
-    it and the named test would prove nothing.
+    Concrete mutation, in TWO parts because there are now two guards on this
+    path: delete the fail-closed clause from _resolve_gate_file, AND stop the
+    `gateDecisionFile` hint from being ownership-checked. Resolution then falls
+    through to the unscoped read exactly as it did before either fix, and the
+    absent story 4-9 reports the NEIGHBOUR story 2-1's PASS — which is the
+    assertion the named test above makes, so that test reds.
+
+    Deleting only the fail-closed clause is NOT enough any more, and that is the
+    point of the second pair rather than an inconvenience: the hint check catches
+    the same fail-open one step later, so the two clauses are independent guards
+    over one hole. If NOT_EVALUATED survived BOTH deletions, neither clause would
+    be what produces it and the named test would prove nothing.
     """
-    mutant = _write_mutant(tmp_path / "src", "no_fail_closed", _FAIL_CLOSED_CLAUSE, "")
+    mutant = _write_mutant(
+        tmp_path / "src",
+        "no_fail_closed",
+        (_FAIL_CLOSED_CLAUSE, ""),
+        (_HINT_GUARD, _HINT_GUARD_REMOVED),
+    )
     trace = _per_story_dir(tmp_path / "trace")
 
     proc = subprocess.run(
@@ -780,8 +814,12 @@ def test_mutant_always_fail_closed_reds_the_generic_fallback(tmp_path):
     mutant = _write_mutant(
         tmp_path / "src",
         "always_fail_closed",
-        "        elif _is_per_story_named(trace_output):\n",
-        "        else:\n",
+        (
+            "        elif _is_per_story_named(trace_output) and not _owns_a_per_story_summary(\n"
+            "            trace_output, story\n"
+            "        ):\n",
+            "        else:\n",
+        ),
     )
     trace = tmp_path / "trace"
     trace.mkdir(parents=True)
@@ -805,15 +843,23 @@ def test_mutant_always_fail_closed_reds_the_generic_fallback(tmp_path):
 def test_mutant_without_own_slim_clause_reports_another_epics_pass(tmp_path):
     """Twin for test_own_slim_wins_over_a_neighbours_frontmatter_hint.
 
-    Concrete mutation: restore the pre-fix scoping clause verbatim, so a story
-    with a slim gate file but no trace report falls through with `reports` still
-    holding every report in the directory. The hint loop then hands back epic
-    11's gate — a PASS — as story 92-6c's verdict, which is exactly the field
-    failure. If CONCERNS survived this reversion, the new clause would not be
-    what produces it.
+    Concrete mutation, in TWO parts: restore the pre-fix scoping clause verbatim,
+    so a story with a slim gate file but no trace report falls through with
+    `reports` still holding every report in the directory, AND stop the
+    `gateDecisionFile` hint from being ownership-checked. The hint loop then
+    hands back epic 11's gate — a PASS — as story 92-6c's verdict, which is
+    exactly the field failure.
+
+    As with the twin above, the reversion alone no longer reproduces it: the hint
+    check refuses epic 11's file for story 92-6c on its own, so both guards have
+    to go before the historical verdict comes back. If CONCERNS survived both,
+    neither clause would be what produces it.
     """
     mutant = _write_mutant(
-        tmp_path / "src", "no_own_slim", _OWN_SLIM_WINS_CLAUSE, _PRE_FIX_SCOPING_CLAUSE
+        tmp_path / "src",
+        "no_own_slim",
+        (_OWN_SLIM_WINS_CLAUSE, _PRE_FIX_SCOPING_CLAUSE),
+        (_HINT_GUARD, _HINT_GUARD_REMOVED),
     )
     trace = tmp_path / "trace"
     trace.mkdir(parents=True)
