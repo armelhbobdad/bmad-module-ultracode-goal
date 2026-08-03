@@ -83,7 +83,16 @@ NA = "n/a"
 # The un-suffixed artifact names `references/gate.md` documents for a directory
 # holding a single story's artifacts. They carry no story id, so they can only be
 # matched by name.
-GENERIC_ARTIFACT_STEMS = frozenset({"gate-decision", "trace", "e2e-trace-summary"})
+# The stems that carry NO story id, derived from the gate's own artifact-prefix
+# table rather than restated. A hand-maintained copy drifted the moment that
+# table learned a new prefix: `traceability-matrix` (TEA's own default trace
+# report filename) was added there and not here, so TEA's real isolated
+# single-story directory stopped counting as isolated on THIS side only -
+# `gate_eval` read its `gate-decision.json` as PASS while the trail rendered
+# `n/a` for the same file. Deriving it means the two readers cannot disagree
+# about what "generically named" means, which is the property the trail's own
+# `gate_status_for` docstring asks for.
+GENERIC_ARTIFACT_STEMS = frozenset("-".join(prefix) for prefix in gate_eval._ARTIFACT_PREFIXES)
 
 # Column headers are matched by NAME, never by position: the house trace table
 # carries an extra split column that a future trace author may drop, and a
@@ -312,14 +321,29 @@ def trace_report_path(trace_output: Path | None, story: str) -> Path | None:
 
     A directory whose reports declare no `workflowType` at all keeps the previous
     sorted-first behaviour rather than resolving nothing.
+
+    THE PREFIX FALLBACK IS `_prefix_scope`, NOT `numeric_prefix`, and the
+    difference is the whole epic-versus-child distinction. `_has_own_trace_report`
+    was fixed to make exactly this swap - raw `numeric_prefix('92-7f-...')` is
+    `'92'`, the BARE EPIC id, so a never-driven child story matched the epic's
+    roll-up report - but this function kept the raw call and stayed wrong in the
+    same way. Measured: every child of epic 92 (`92-0a`, `92-4b-<slug>`,
+    `92-7f-never-driven`) resolved `trace-92.md`, and `criterion_rows` then
+    rendered the EPIC's per-AC row under the child story's own heading in the
+    evidence trail. `_prefix_scope` offers the fallback only while it still
+    carries an epic AND a story component, which is the slug-suffix case it
+    exists for and not a collapse to the roll-up.
     """
     if trace_output is None or not trace_output.is_dir():
         return None
+    scopes = [story]
+    prefix = _prefix_scope(story)
+    if prefix:
+        scopes.append(prefix)
     candidates = [
         report
         for report in sorted(trace_output.glob("*.md"))
-        if gate_eval._stem_matches_story(report.stem, story)
-        or gate_eval._stem_matches_story(report.stem, numeric_prefix(story) or story)
+        if any(gate_eval._stem_matches_story(report.stem, scope) for scope in scopes)
     ]
     if not candidates:
         return None
@@ -389,9 +413,29 @@ def gate_status_for(trace_output: Path | None, story: str) -> tuple[str | None, 
             if slim is not None and slim.get("gate_status"):
                 return str(slim["gate_status"]).strip(), gate_file.name
 
+    # THE SUMMARY LANE DOES NOT GET `own_trace`, and that is the difference
+    # between this reader and the gate's. `_resolve_summary_file` NEVER returns
+    # None - with no per-story summary it hands back the generic
+    # `e2e-trace-summary.json` unconditionally - and `belongs` was True for any
+    # path at all whenever `own_trace` was set. So a story that wrote its own
+    # trace report but no gate artifact read the SHARED, run-wide summary as its
+    # own verdict. `gate_eval.load_gate` refuses precisely this read; going
+    # through `_resolve_summary_file` directly walked around the refusal, and the
+    # two readers then disagreed about one file, which this module's own
+    # docstring calls a defect. Measured: `gate_eval` said `escalate` for a story
+    # while the rendered trail said `advance` for the same story.
+    #
+    # A generic summary is therefore accepted only where a generic artifact
+    # provably belongs to the story being rendered: the isolated single-story
+    # directory. Anywhere else it must be named for the scope.
+    def summary_belongs(path: Path, scope: str) -> bool:
+        return (isolated and path.stem in GENERIC_ARTIFACT_STEMS) or gate_eval._stem_matches_story(
+            path.stem, scope
+        )
+
     for scope in scopes:
         summary_file = gate_eval._resolve_summary_file(trace_output, scope)
-        if belongs(summary_file, scope):
+        if summary_belongs(summary_file, scope):
             summary = read_json(summary_file)
             if summary is not None and summary.get("gate_status"):
                 return str(summary["gate_status"]).strip(), summary_file.name
@@ -491,11 +535,11 @@ def resolve_recorded_verdicts(recorded: dict[str, str], stories: list[str]) -> d
     return out
 
 
-def baseline_sha(impl_artifacts: Path | None, story: str) -> str | None:
-    """The story's recorded baseline commit, or None when it was never written."""
+def _marker_sha(impl_artifacts: Path | None, name: str) -> str | None:
+    """The first SHA-looking token in a marker file, or None when there is none."""
     if impl_artifacts is None:
         return None
-    text = read_text(impl_artifacts / f".baseline-{story}")
+    text = read_text(impl_artifacts / name)
     if not text:
         return None
     for line in text.splitlines():
@@ -503,6 +547,32 @@ def baseline_sha(impl_artifacts: Path | None, story: str) -> str | None:
         if match:
             return match.group(1)
     return None
+
+
+def baseline_sha(impl_artifacts: Path | None, story: str) -> str | None:
+    """The story's recorded baseline commit, or None when it was never written."""
+    return _marker_sha(impl_artifacts, f".baseline-{story}")
+
+
+def commit_sha(impl_artifacts: Path | None, story: str) -> str | None:
+    """The story's recorded END commit, or None when the run wrote no such marker.
+
+    `references/execute.md` step 4 writes `.commit-<story>` once the commit lands
+    and step 5 refreshes it after any amend or remediation re-commit, so it names
+    the story's LAST commit. Reading it is what lets the trail stop inferring a
+    range end from the next story's baseline.
+
+    The inference it replaces could not be made correct from baselines alone. Two
+    stories share a SHA both when the later story's marker is residue AND when
+    this story legitimately committed nothing (step 0 anchors before any
+    implementation and never overwrites, so an escalated story leaves exactly
+    that), and nothing in the baselines distinguishes them - so the range
+    collapsed to `X..X` and a story that DID commit rendered
+    `(no commits in range)`. This marker is the missing signal rather than a
+    heuristic on top of the old one: it is written by the step that made the
+    commit, so it is a statement about what this run drove, not a guess.
+    """
+    return _marker_sha(impl_artifacts, f".commit-{story}")
 
 
 def _git_log(repo: Path, start: str, end: str) -> list[str] | None:
@@ -631,7 +701,7 @@ def render(
         "",
         "Synthesized at finalize from the artifacts this run already wrote: the per-story "
         "acceptance checklist (production runs), the trace report, the gate decision file, "
-        "the decision log and the recorded baseline commits.",
+        "the decision log and the recorded baseline and end commits.",
         "",
         "It renders the gate's verdicts; it never forms one. A cell whose source artifact "
         f"was absent or unreadable reads `{NA}`.",
@@ -643,25 +713,35 @@ def render(
 
     sections = []
     for index, story in enumerate(stories):
-        # The range end is the next story's baseline (its start is this story's
-        # end), and HEAD for the last story in sprint order.
+        # The range end is the story's OWN recorded end sha when the run wrote
+        # one, and only otherwise the next story's baseline (whose start is this
+        # story's end), and HEAD for the last story in sprint order.
         #
-        # A later story anchored at THIS story's own sha collapses the range to
-        # `X..X`, so a story that did commit renders `(no commits in range)`.
-        # Skipping such a candidate is NOT the fix: two stories share a sha both
-        # when the later marker is residue AND when this story legitimately
-        # committed nothing (step 0 anchors before any implementation and never
-        # overwrites, so an escalated story leaves exactly that), and the two are
-        # indistinguishable from baselines alone. Skipping trades a false
-        # negative the docstring calls "an observation, never a denial" for a
-        # false positive in an evidence artifact - one story credited with the
-        # next story's commit, the same sha rendered under both. Left as is until
-        # the trail carries a signal for which stories this run actually drove.
-        range_end = None
-        for later in stories[index + 1 :]:
-            if baselines.get(later):
-                range_end = baselines[later]
-                break
+        # The `.commit-<story>` marker is the signal this comment used to say the
+        # trail was waiting for. Inferring the end from a NEIGHBOUR's marker
+        # could not be made correct: a later story anchored at THIS story's own
+        # sha collapses the range to `X..X`, so a story that did commit rendered
+        # `(no commits in range)` - and skipping such a candidate was not the fix
+        # either, because two stories share a sha both when the later marker is
+        # residue AND when this story legitimately committed nothing (step 0
+        # anchors before any implementation and never overwrites, so an escalated
+        # story leaves exactly that). Those two are indistinguishable from
+        # baselines alone, and skipping would have traded a false negative the
+        # docstring calls "an observation, never a denial" for a false positive
+        # in an evidence artifact - one story credited with the next story's
+        # commit, the same sha rendered under both.
+        #
+        # The own-marker read has neither problem, because it is not an inference:
+        # step 4 writes it after the commit it made and step 5 refreshes it, so a
+        # story that committed nothing has no marker and still renders from the
+        # old path. The fallback is kept for exactly that case, and for stories
+        # driven by a run that predates the marker.
+        range_end = commit_sha(impl_artifacts, story)
+        if range_end is None:
+            for later in stories[index + 1 :]:
+                if baselines.get(later):
+                    range_end = baselines[later]
+                    break
         sections.append(
             story_section(
                 story,
