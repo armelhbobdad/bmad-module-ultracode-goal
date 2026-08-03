@@ -863,6 +863,101 @@ def test_commit_cell_lists_shas_from_the_recorded_baseline_range(tmp_path):
     assert "no commits in range" in last
 
 
+def _commit_range_repo(tmp_path):
+    """A three-commit repo plus an impl-artifacts dir, for the range tests below."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    shas = []
+    for index in range(3):
+        (repo / f"f{index}.txt").write_text(f"{index}\n", encoding="utf-8")
+        _git(repo, "add", ".")
+        _git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", f"change {index}")
+        shas.append(_git(repo, "rev-parse", "HEAD"))
+    impl = tmp_path / "impl-artifacts"
+    impl.mkdir()
+    return repo, impl, shas
+
+
+def test_a_story_that_committed_is_not_rendered_as_having_committed_nothing(tmp_path):
+    """The `.commit-<story>` marker closes a story's range without a neighbour.
+
+    THE DEFECT THIS PINS, observed in the field: story 9-1 committed, and the
+    NEXT story's baseline marker was residue anchored at 9-1's own head sha. The
+    range end was inferred from that neighbour, so it collapsed to `X..X` and the
+    trail rendered `(no commits in range)` for a story with a commit sitting in
+    the log. Inference from baselines alone could not tell that apart from a story
+    that legitimately committed nothing, which is why the end sha is now recorded
+    by the step that makes the commit instead of guessed afterwards.
+    """
+    repo, impl, shas = _commit_range_repo(tmp_path)
+    (impl / ".baseline-9-1").write_text(shas[0] + "\n", encoding="utf-8")
+    # residue: the later story is anchored at 9-1's OWN head, collapsing 9-1's
+    # inferred range to shas[2]..shas[2]
+    (impl / ".baseline-9-2").write_text(shas[2] + "\n", encoding="utf-8")
+    (impl / ".commit-9-1").write_text(shas[2] + "\n", encoding="utf-8")
+
+    run_dir = tmp_path / "run"
+    run_trail(
+        run_dir=run_dir,
+        profile="light",
+        stories=["9-1", "9-2"],
+        impl_artifacts=impl,
+        repo=repo,
+        epic="9",
+    )
+    cell = rows(section((run_dir / "gate-trail.md").read_text(encoding="utf-8"), "9-1"))[0][4]
+
+    assert "no commits in range" not in cell, cell
+    assert shas[1][:7] in cell and shas[2][:7] in cell, cell
+    assert shas[0][:7] not in cell, "the baseline is the range start, not a story commit"
+
+
+def test_a_story_that_really_committed_nothing_still_says_so(tmp_path):
+    """The marker must not manufacture commits for a story that made none.
+
+    An escalated story leaves a baseline (step 0 writes it before any
+    implementation) and no `.commit-` marker, because step 4 never ran. It falls
+    back to the old inference and still reports an empty range - the observation
+    the commit cell is documented to make, and the false-positive direction the
+    previous comment refused to trade for.
+    """
+    repo, impl, shas = _commit_range_repo(tmp_path)
+    (impl / ".baseline-9-1").write_text(shas[2] + "\n", encoding="utf-8")
+
+    run_dir = tmp_path / "run"
+    run_trail(
+        run_dir=run_dir,
+        profile="light",
+        stories=["9-1"],
+        impl_artifacts=impl,
+        repo=repo,
+        epic="9",
+    )
+    cell = rows(section((run_dir / "gate-trail.md").read_text(encoding="utf-8"), "9-1"))[0][4]
+
+    assert "no commits in range" in cell, cell
+
+
+def test_execute_orders_the_end_sha_marker_to_be_written_and_refreshed():
+    """The reader is only correct if the step that commits actually writes it.
+
+    `.commit-<story>` is the one step-0-family marker whose rule is refresh
+    rather than keep, so both halves have to be ordered: written at step 4, and
+    rewritten at step 5 after an amend or a remediation re-commit. A reader
+    pointed at a marker nobody writes silently falls back forever.
+    """
+    execute = (SCRIPTS.parent / "references" / "execute.md").read_text(encoding="utf-8")
+
+    assert ".commit-<story_id>" in execute
+    assert execute.count(".commit-<story_id>") >= 2, "step 4 writes it; step 5 must refresh it"
+    assert re.search(r"refreshed, not preserved", execute), (
+        "the refresh rule must be stated, or a reader keeps a stale end sha after an amend"
+    )
+
+
 # ---------------------------------------------------------------------------
 # The story list is an argument, not a source: fail-soft does not cover it.
 # ---------------------------------------------------------------------------
@@ -935,7 +1030,19 @@ def test_finalize_states_the_story_ids_are_required():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", [SCRIPT, FINALIZE, Path(__file__)])
+@pytest.mark.parametrize(
+    "path",
+    [
+        SCRIPT,
+        FINALIZE,
+        Path(__file__),
+        # The resolution property file builds artifact fixtures with a criterion
+        # table, which is exactly where an `AC-<n>` reaches a shipped surface by
+        # habit. It was in the list of files that could drift before it was in
+        # the list of files this checks.
+        Path(__file__).resolve().parent / "test_artifact_resolution_property.py",
+    ],
+)
 def test_shipped_surfaces_cite_no_plan_identifiers(path: Path):
     text = path.read_text(encoding="utf-8")
     if path == Path(__file__):
@@ -1052,10 +1159,27 @@ def test_a_story_with_only_an_nfr_file_does_not_claim_a_trace_report(tmp_path):
     )
 
 
-def test_a_story_with_a_real_trace_report_still_resolves_the_shared_summary(tmp_path):
-    """Control for the test above: with a DECLARED trace report of its own, the
-    story legitimately reaches the shared summary. The narrowing must remove only
-    the NFR-only case, not the mechanism."""
+def test_a_trace_report_does_not_buy_a_story_the_shared_summarys_verdict(tmp_path):
+    """A DECLARED trace report is not a gate artifact, and does not reach the shared summary.
+
+    THIS TEST PREVIOUSLY ASSERTED THE OPPOSITE, as a control proving a narrowing
+    had removed only the NFR-only case "and not the mechanism". The mechanism was
+    the defect. `gate_status_for` reaches `e2e-trace-summary.json` through
+    `gate_eval._resolve_summary_file`, which bypasses `gate_eval.load_gate` - and
+    `load_gate` REFUSES this exact read, in a per-story-named directory, with a
+    comment naming it "the neighbour's-verdict fail-open wearing a different
+    filename". So the two readers disagreed about one file, which this module's
+    own `gate_status_for` docstring calls a defect, and the disagreement ran in
+    the dangerous direction: measured on this very fixture, `gate_eval` returned
+    `escalate` for 92-7f while the rendered trail printed `advance`.
+
+    The directory here is the reason. It holds 92-1a's per-story artifacts too,
+    so `e2e-trace-summary.json` is the run-wide file and provably not 92-7f's
+    alone - and 92-7f, which wrote no gate artifact, would otherwise outrank
+    92-1a, which wrote its own CONCERNS. The isolated all-generic directory,
+    where a generic summary DOES belong to the one story being driven, is
+    unaffected and keeps its own test.
+    """
     trace = tmp_path / "traceability"
     trace.mkdir()
     (trace / "e2e-trace-summary.json").write_text(
@@ -1068,6 +1192,12 @@ def test_a_story_with_a_real_trace_report_still_resolves_the_shared_summary(tmp_
         "---\nworkflowType: testarch-trace\n---\n# t\n", encoding="utf-8"
     )
 
-    status, _source = gate_trail.gate_status_for(trace, "92-7f")
+    status, source = gate_trail.gate_status_for(trace, "92-7f")
 
-    assert status == "PASS"
+    assert (status, source) == (None, None), (
+        "a story with a trace report but no gate artifact resolved %r from %r" % (status, source)
+    )
+
+    # The two readers now agree about this file, which is the whole point.
+    reasons: list[str] = []
+    assert gate_eval.load_gate(trace, reasons, "92-7f")["gate_status"] == "NOT_EVALUATED", reasons
