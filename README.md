@@ -107,7 +107,7 @@ You don't have to take the gate's word for it. The deterministic pieces ship wit
 Run the Python suite (600+ tests across the preflight, gate, hook, readiness, memory, and customization scripts):
 
 ```bash
-uv run --with pytest pytest skills/ultracode-goal/scripts/tests/ -v
+uv run --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest skills/ultracode-goal/scripts/tests/ -n auto
 ```
 
 Then inspect any `gate-decision.json` TEA wrote and evaluate it directly:

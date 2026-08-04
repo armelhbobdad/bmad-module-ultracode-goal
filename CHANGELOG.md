@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- Local quality gate parallelized: the 12 `quality` stages now run concurrently via `npm-run-all2` (pinned `^8`: 9.x declares `engines.node ^22.22.2 || ^24.15.0 || >=26`, which does not cover this repo's full declared `>=22.0.0` range), and the Python suite runs under `pytest-xdist` (`-n auto`, both `pytest` and `pytest-xdist` exact-pinned in the `uv run` invocation). Measured locally: full gate ~60-100s down to ~13-16s, suite results identical (1554 passed). Every line is stage-labeled (`--print-label`); stdout is grouped per stage, stderr streams live. A failing stage still exits non-zero and kills the remaining stages (measured: red in ~5s).
+- `test:python` no longer passes `-v`: a passing run's log drops ~27x in size while failure output (tracebacks, FAILED summary lines, exit code) is byte-equivalent. For localizing a failure, re-run the single test file serially with `-v` as CONTRIBUTING.md describes.
+- `npm test` is now an alias for `npm run quality`. The two scripts were set-identical 12-stage chains that only differed in order, with nothing asserting parity, so a stage added to one could silently never run at the other's door (pre-push and release both call `npm test`).
+
 ## [2.0.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v1.0.1...v2.0.0) (2026-08-02)
 ### ⚠ BREAKING CHANGES
 
