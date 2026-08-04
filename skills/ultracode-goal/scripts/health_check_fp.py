@@ -258,8 +258,17 @@ def cmd_record(args: argparse.Namespace) -> int:
     # so a REGRESSION title can be defect-accurate under a colliding fp. It
     # never keys suppression - that judgement stays with the handled branch's
     # mandated prior-text comparison (references/health-check.md).
-    if getattr(args, "defect_slug", None):
-        record["defect_slug"] = args.defect_slug
+    #
+    # PRESERVED across later records for the same fp unless a new slug is
+    # supplied: the documented resolve recipe re-records the fp without the
+    # flag, and a plain replace would erase the slug at the exact moment the
+    # regression-naming feature needs it (the resolve that precedes the
+    # regression).
+    prior_record = data.get(args.fp)
+    prior_slug = prior_record.get("defect_slug") if isinstance(prior_record, dict) else None
+    slug = getattr(args, "defect_slug", None) or prior_slug
+    if slug:
+        record["defect_slug"] = slug
     data[args.fp] = record
 
     # Atomic write: temp file in the same dir, then os.replace.
@@ -385,7 +394,8 @@ def main(argv: list[str] | None = None) -> int:
         dest="defect_slug",
         help="Optional kebab-case name for WHICH defect this record is about "
         "(informational; never keys suppression). Makes a later REGRESSION "
-        "title defect-accurate under a colliding fp.",
+        "title defect-accurate under a colliding fp. A later record for the "
+        "same fp PRESERVES an existing slug unless a new one is supplied.",
     )
     rec_parser.set_defaults(func=cmd_record)
 

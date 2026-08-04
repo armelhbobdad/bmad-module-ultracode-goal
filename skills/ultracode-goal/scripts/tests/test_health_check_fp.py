@@ -700,3 +700,35 @@ def test_record_rejects_a_malformed_slug(tmp_path):
     )
     assert proc.returncode == 1
     assert "defect-slug" in proc.stdout or "defect-slug" in proc.stderr
+
+
+def test_resolve_without_slug_preserves_the_recorded_slug(tmp_path):
+    """The documented resolve recipe re-records the fp without --defect-slug;
+    a plain replace erased the slug at the exact moment the regression-naming
+    feature needed it (the resolve that precedes the regression)."""
+    fp = "fp-1234abc"
+    cache = tmp_path / "cache.json"
+    _run(
+        "record", "--fp", fp, "--cache", str(cache), "--issue-url", "",
+        "--action", "queued", "--date", "2026-08-01", "--defect-slug", "wrong-event-guard",
+    )
+    _run("record", "--fp", fp, "--cache", str(cache), "--issue-url", "", "--action", "resolved", "--date", "2026-08-04")
+    proc = _run("seen", "--fp", fp, "--cache", str(cache))
+    out = json.loads(proc.stdout)
+    assert out["status"] == "regression"
+    assert out["record"]["defect_slug"] == "wrong-event-guard"
+
+
+def test_a_new_slug_replaces_the_recorded_one(tmp_path):
+    fp = "fp-1234abc"
+    cache = tmp_path / "cache.json"
+    _run(
+        "record", "--fp", fp, "--cache", str(cache), "--issue-url", "",
+        "--action", "queued", "--date", "2026-08-01", "--defect-slug", "first-defect",
+    )
+    _run(
+        "record", "--fp", fp, "--cache", str(cache), "--issue-url", "",
+        "--action", "queued", "--date", "2026-08-02", "--defect-slug", "second-defect",
+    )
+    proc = _run("seen", "--fp", fp, "--cache", str(cache))
+    assert json.loads(proc.stdout)["record"]["defect_slug"] == "second-defect"
