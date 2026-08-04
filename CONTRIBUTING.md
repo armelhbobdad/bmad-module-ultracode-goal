@@ -30,11 +30,13 @@ npm install           # also wires husky pre-commit hooks via "prepare"
 npm run quality       # run the full local pre-flight
 ```
 
-The `npm run quality` script is your contract with CI. If it passes locally, CI should too. The same steps run in [`.github/workflows/quality.yaml`](.github/workflows/quality.yaml) on every pull request. The Python gate runs the suite under `uv`:
+The `npm run quality` script is your contract with CI. If it passes locally, CI should too. The same steps run in [`.github/workflows/quality.yaml`](.github/workflows/quality.yaml) on every pull request (as parallel jobs there; locally the stages run concurrently via `run-p`, and a failure kills the other stages). Every output line carries its stage label. A stage's stdout is additionally buffered and printed as one block when the stage finishes; stderr is not buffered, so a failing tool that reports on stderr (prettier does) prints its labeled lines live, possibly interleaved with other stages. `npm test` is an alias for the same gate. The Python gate runs the suite under `uv`, parallelized with `pytest-xdist`:
 
 ```bash
-uv run --with pytest pytest skills/ultracode-goal/scripts/tests/ -v
+uv run --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest skills/ultracode-goal/scripts/tests/ -n auto
 ```
+
+When a failure needs localizing, re-run just that file serially and verbosely: `uv run --with pytest==9.1.1 pytest skills/ultracode-goal/scripts/tests/test_<name>.py -v`.
 
 ## Workflow for Changes
 
