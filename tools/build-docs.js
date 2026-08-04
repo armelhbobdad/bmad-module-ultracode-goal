@@ -48,7 +48,40 @@ async function main() {
   const artifactsDir = generateArtifacts(docsDir);
   const siteDir = buildSite(artifactsDir);
 
+  writeBuildInputsManifest(docsDir);
+
   printBuildSummary(docsDir, artifactsDir, siteDir);
+}
+
+/**
+ * Record what this render was built FROM, so the validator can detect a stale
+ * build instead of hedging. One sha1 per input: the flat docs/*.md set plus
+ * the three files that shape routes (the rehype rewriter, the Astro config,
+ * this builder). Written to build/, NOT build/site/ - the site dir is uploaded
+ * to Pages and this manifest is local bookkeeping, not a public artifact.
+ *
+ * Deliberately NOT a freshness certificate: Astro's content cache can replay a
+ * stale render against unchanged inputs, so a matching manifest never proves
+ * the render is current - only a MISmatching one proves it is stale.
+ */
+function writeBuildInputsManifest(docsDir) {
+  const crypto = require('node:crypto');
+  const inputs = {};
+  const sha1 = (file) => crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
+  for (const name of fs.readdirSync(docsDir).sort()) {
+    if (name.endsWith('.md')) {
+      inputs[`docs/${name}`] = sha1(path.join(docsDir, name));
+    }
+  }
+  for (const rel of ['website/src/rehype-markdown-links.js', 'website/astro.config.mjs', 'tools/build-docs.js']) {
+    const file = path.join(PROJECT_ROOT, rel);
+    if (fs.existsSync(file)) {
+      inputs[rel] = sha1(file);
+    }
+  }
+  const manifestPath = path.join(BUILD_DIR, '.build-inputs.json');
+  fs.writeFileSync(manifestPath, `${JSON.stringify({ inputs }, null, 2)}\n`, 'utf-8');
+  console.log(`  \u2192 Wrote build-inputs manifest (${Object.keys(inputs).length} inputs)`);
 }
 
 main().catch((error) => {
