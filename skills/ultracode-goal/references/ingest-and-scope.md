@@ -43,7 +43,7 @@ Profile defaults to **production** — the full TEA chain (test-design + atdd + 
 
 Surface the default with its cost up front, so the choice is made at this cheap stage rather than discovered at the expensive one: "Production (full TEA chain per story — the thorough, slower default) unless you want `--light` (trace gate only — faster and cheaper, with proportionally lighter evidence)." One soft-gate touch — "Anything else on scope before I preflight?" — then move on. **Under `--yes` (and headless), skip that soft-gate and the Operator-notes solicitation entirely**: resolve the profile from the flags and proceed straight to preflight, so the "no conversational stops" contract the expert one-liner advertises actually holds. Don't re-derive the profile later; Stages 3 and 5 read what you lock here.
 
-Also note execution mode for the log: **sequential** `/goal` spine (default) or `--parallel` (experimental worktree fan-out). It does not change scope, but the log should carry it so the run is reconstructable after compaction.
+Also note in the log when the retired `--parallel` flag was passed: it is accepted and ignored (`references/execute.md`, "Retired — `--parallel`"), and the accepted-and-ignored note is what keeps the run reconstructable after compaction.
 
 ## Operator notes
 

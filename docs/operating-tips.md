@@ -5,7 +5,7 @@ description: "Field notes from driving a real 22-story epic: giving Bash room fo
 
 Everything here was learned by driving one real epic (22 stories, 12 landed across a single day, four of them split on contact, three of those consecutively) rather than from reading the scripts. Where a tip contradicts an intuition, the measurement is given. The numbers are one run on one codebase: treat them as something to measure your own against, not as properties of the tool.
 
-For the designed behavior of the run's own failure modes (preflight, the gate, hooks, budget, resume, `--parallel`) see [troubleshooting](./troubleshooting.md). The driver's stop reasons are documented here and nowhere else in these docs; the full set is `drive_epic.py`'s `STOP_*` constants.
+For the designed behavior of the run's own failure modes (preflight, the gate, hooks, budget, resume) see [troubleshooting](./troubleshooting.md). The driver's stop reasons are documented here and nowhere else in these docs; the full set is `drive_epic.py`'s `STOP_*` constants.
 
 ## Running the loop
 

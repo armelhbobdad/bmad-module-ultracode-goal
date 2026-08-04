@@ -55,7 +55,6 @@ The docs split into three buckets: **Why** (start here), **Try** (do stuff), and
 
 - [Getting Started](./getting-started.md): prerequisites, install, the flags, and your first autonomous run.
 - [How It Works](./how-it-works.md): the six stages, their routing conditions, and the headless emit shape.
-- [Parallel Mode](./parallel-mode.md): the experimental worktree fan-out and its known limits.
 
 **Reference**
 

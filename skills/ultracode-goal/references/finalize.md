@@ -23,7 +23,7 @@ Walk every entry **this invocation wrote** (scope, preflight verdict, each gate 
 
 Produce a report (write it as a peer of `.decision-log.md` in the run folder, e.g. `run-report.md`) covering the list below. **A prior invocation's report already sitting at that path is the NORMAL state, not a surprise**: under `--max-stories N` the run folder persists across invocations, the Write tool refuses a file that has not been Read this session, and on a mature Epic the prior report cannot be Read cheaply either. Do not Read it and do not improvise a name — archive it first with one Bash move to the next free `run-report-<n>.md` (`<n>` increments per archive; list the folder to find the free slot), then write this invocation's report at `run-report.md`. The latest account is always `run-report.md`; the archives are prior invocations' accounts, ordered by `<n>` — one scheme, stated here, instead of one invented per session.
 
-- Epic and profile (production / `--light`), branch off `{workflow.epic_branch_prefix}`, sequential vs `--parallel`.
+- Epic and profile (production / `--light`), branch off `{workflow.epic_branch_prefix}`.
 - Per-story outcome: gate_status and verdict (advance / defer / reloop / escalate), and any re-loops spent against budget.
 - **Gate provenance per story** — `tea` or `hand-authored`, copied from the `gate-provenance:` line Stage 5 logged (`references/gate.md`). Say it per story rather than once for the run: a mixed Epic is the common shape, and a reader who is told only "production profile" cannot tell which stories the model itself supplied the gate file for. If every story reads `hand-authored`, say that in one sentence — an Epic gated entirely on artifacts the run wrote for itself is the single most important caveat on its own report.
 - The Epic-level gate result.
@@ -130,7 +130,7 @@ Execute may already have pinged when it first observed the escalation marker, so
 
 When the resolved `{workflow.on_escalation}` is non-empty, follow it as an instruction (a prompt to run or a shell command), stating alongside it **the escalating story id** and the path to that story's typed `escalation-<story_id>.json` sidecar as the context it carries, and only then write the fired-marker. A resolved-empty value is a silent no-op — nothing fires and no fired-marker is written — so an empty hook can never suppress a later real one.
 
-This is a side effect on the way out, never a gate on the exit: a hook that errors, hangs or is missing must not change the emitted JSON, the status, or the run-status already recorded. Under `--parallel` this is the only reachable fire site, since the fan-out's worktree agents each see their own `{workflow.implementation_artifacts}`; that is sufficient, because Finalize always runs in the conductor.
+This is a side effect on the way out, never a gate on the exit: a hook that errors, hangs or is missing must not change the emitted JSON, the status, or the run-status already recorded.
 
 ## Headless output
 
@@ -149,7 +149,6 @@ Three constraints on that file:
 
 - **Headless only.** An attended run writes no `run-result.json`. An operator who found a stale one from an attended run would read it as a headless terminal, so do not "helpfully" write it in both modes.
 - **Path-pinned and overwrite-in-place**, exactly like `run-status.json`: a second run against the same `{workflow.implementation_artifacts}` overwrites the first run's result.
-- **No `--parallel` trust claim.** The fan-out's worktree agents each see their own `{workflow.implementation_artifacts}`, so there is no single `run-result.json` an automator can read for a fan-out run — the same scope note that binds `.baseline-<story>`, `run-status.json` and the escalation sidecars.
 
 The emitted object is the **same five-canonical-key shape every headless exit point honors** (Stage 1 first-touch / already-done blocks, Stage 2 preflight block, and this Stage 6 final emit): the five keys `status`/`skill`/`decision_log`/`report`/`deferred_work` are **always present** (`report` and `deferred_work` `null` when not produced), so a caller parsing them never raises a KeyError. A **complete** emit is those five; a **blocked** exit appends a sixth, `reason` (the one-line cause):
 

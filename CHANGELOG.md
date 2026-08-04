@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Removed
+
+- The experimental `--parallel` worktree fan-out is retired: the `assets/execute-epic.workflow.js` dynamic workflow, its two test files, and the docs page are deleted, and every scope note it forced onto other sections (escalation ping, sidecar promotion, work bound, run-result trust claim, launch briefing) is gone with it. The mode never closed its own limit list; in particular it had no post-commit re-verify, so a tracked-files-scoped conformance gate could slip a per-worktree green through to the merge - deleting it removes that documented fail-open. All removed surfaces were explicitly `@internal`/experimental in `docs/_internal/STABILITY.md`, so this is not a contract break.
+
+### Deprecated
+
+- The `--parallel` flag: still accepted so old invocations do not error; the run logs one `.decision-log.md` note that it was accepted and ignored, then executes the sequential `/goal` spine (formerly the mode's own degradation branch, now the only branch).
+- `parallel_max_concurrency` in `customize.toml`: still shipped, still accepted, still resolves, read by nothing - the `story_token_budget` treatment per `docs/_internal/STABILITY.md`.
+
 ### Changed
 
 - Local quality gate parallelized: the 12 `quality` stages now run concurrently via `npm-run-all2` (pinned `^8`: 9.x declares `engines.node ^22.22.2 || ^24.15.0 || >=26`, which does not cover this repo's full declared `>=22.0.0` range), and the Python suite runs under `pytest-xdist` (`-n auto`, both `pytest` and `pytest-xdist` exact-pinned in the `uv run` invocation). Measured locally: full gate ~60-100s down to ~13-16s, suite results identical (1554 passed). Every line is stage-labeled (`--print-label`); stdout is grouped per stage, stderr streams live. A failing stage still exits non-zero and kills the remaining stages (measured: red in ~5s).
