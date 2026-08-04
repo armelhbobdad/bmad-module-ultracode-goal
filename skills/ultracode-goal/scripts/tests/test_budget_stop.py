@@ -224,8 +224,15 @@ def test_story_token_budget_deprecated_in_place() -> None:
     assert "### Deprecated" in changelog, (
         "a [workflow] key gets a deprecation note in the changelog before changing"
     )
-    deprecated = changelog[changelog.index("### Deprecated"):]
-    nxt = deprecated.find("\n### ", 1)
-    deprecated = deprecated if nxt == -1 else deprecated[:nxt]
-    assert "story_token_budget" in deprecated
-    assert "max_turns_per_story" in deprecated
+    # More than one release can carry a "### Deprecated" section (the --parallel
+    # retirement added one), so scan them all for THE story_token_budget note,
+    # which names its replacement.
+    sections = []
+    idx = 0
+    while (idx := changelog.find("### Deprecated", idx)) != -1:
+        nxt = changelog.find("\n### ", idx + 1)
+        sections.append(changelog[idx:] if nxt == -1 else changelog[idx:nxt])
+        idx += 1
+    assert any(
+        "story_token_budget" in s and "max_turns_per_story" in s for s in sections
+    ), "no Deprecated section names story_token_budget with its replacement"

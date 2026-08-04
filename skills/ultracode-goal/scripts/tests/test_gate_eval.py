@@ -664,12 +664,13 @@ def test_own_slim_wins_over_a_neighbours_frontmatter_hint(tmp_path):
     assert not any("gate-decision-11-0.json" in r for r in result["reasons"])
 
 
-def test_both_shipped_epic_level_callers_pass_the_flag():
+def test_the_shipped_epic_level_invocation_passes_the_flag():
     """Drift here reloops a passing epic, silently.
 
-    `--epic-level` is only correct because the two surfaces that perform the epic
-    roll-up actually pass it. If either drops it, the roll-up hits the new
-    omitted-flag rule and downgrades an epic PASS to `reloop` with no other
+    `--epic-level` is only correct because the surface that performs the epic
+    roll-up — gate.md's fenced invocation — actually passes it. If it drops it,
+    the roll-up hits the omitted-flag rule and downgrades an epic PASS to
+    `reloop` with no other
     symptom - which is exactly the class of silent doc/code drift the omitted-flag
     fix exists to remove.
     """
@@ -683,15 +684,6 @@ def test_both_shipped_epic_level_callers_pass_the_flag():
     assert "--nfr" not in epic_cmd and "--test-review" not in epic_cmd, (
         "the epic roll-up must not combine --epic-level with a signal path"
     )
-
-    workflow_js = (SCRIPT.parent.parent / "assets" / "execute-epic.workflow.js").read_text(
-        encoding="utf-8"
-    )
-    js_cmd = next(
-        (ln for ln in workflow_js.splitlines() if "gate_eval.py" in ln and "${epic}" in ln), None
-    )
-    assert js_cmd, "the --parallel workflow no longer emits an epic-level invocation"
-    assert "--epic-level" in js_cmd, js_cmd
 
     # And the per-story invocation must still carry both paths.
     story_cmd = next(

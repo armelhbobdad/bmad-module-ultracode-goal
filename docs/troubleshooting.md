@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Maps the real failure modes of an autonomous Epic run (preflight refusals, gate escalations, silent hooks, budget overruns, resume, and parallel fallback) to what the run does and what you do.
+description: Maps the real failure modes of an autonomous Epic run (preflight refusals, gate escalations, silent hooks, budget overruns, and resume) to what the run does and what you do.
 ---
 
 Real failure modes, sourced from the skill's stage files and scripts, with what the run does about each and what you do. For the design behind these behaviors see [how it works](./how-it-works.md), [the gate model](./gate-model.md), and [architecture](./architecture.md).
@@ -23,9 +23,9 @@ flowchart TD
     R -->|"yes"| RES["See: Resume after an interruption"]
     R -->|"no"| D{"A drive stopped and you cannot tell why"}
     D -->|"yes"| OPS["See: operating tips, the driver's stop reasons"]
-    D -->|"no"| PAR["See: --parallel issues"]
+    D -->|"no"| LOG["Read the tail of .decision-log.md"]
     classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
-    class PRE,GATE,HOOK,BUD,RES,OPS,PAR accent
+    class PRE,GATE,HOOK,BUD,RES,OPS,LOG accent
 ```
 
 ## Preflight can't reach budget-zero
@@ -77,6 +77,6 @@ Note this is fail-closed on purpose: a missing or unreadable gate artifact escal
 
 **What happens.** The run's `.decision-log.md` is canonical memory and recovers full state regardless of compaction. On resume the skill surfaces the existing log with its last session date and offers to resume. Execute re-enters at the **first story whose last logged gate verdict is not `advance`**; already-advanced stories are not re-run. The Epic branch, hooks, and allowlist are **re-asserted, not rebuilt**, before continuing. You do not need to reconstruct state by hand. Point the skill at the same Epic and accept the resume offer.
 
-## `--parallel` issues
+## The retired `--parallel` flag
 
-`--parallel` is experimental and opt-in; the sequential spine is the default. If dynamic workflows are unavailable (wrong Claude Code version, the feature off, or the saved command doesn't resolve), the skill **automatically falls back to the spine** and logs why in `.decision-log.md`; the Epic still ships. For the known limits (shared Auto Memory across worktrees, the under-documented workflow↔skill interplay, no `run-status.json` heartbeat), see [parallel mode](./parallel-mode.md).
+`--parallel` (the experimental worktree fan-out) is retired. The flag is still accepted so an old invocation does not error: the run logs one `.decision-log.md` note that it was accepted and ignored, then executes the sequential spine. The Epic still ships; it ships sequentially. `parallel_max_concurrency` in `customize.toml` is likewise deprecated and no-op.

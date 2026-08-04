@@ -111,7 +111,6 @@ export default defineConfig({
           items: [
             { label: 'Getting Started', slug: 'getting-started' },
             { label: 'How It Works', slug: 'how-it-works' },
-            { label: 'Parallel Mode', slug: 'parallel-mode' },
           ],
         },
         {

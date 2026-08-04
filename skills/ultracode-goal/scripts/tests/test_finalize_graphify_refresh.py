@@ -90,16 +90,15 @@ _TERMINAL_HEADING = "## Workflow health check"
 _MODES = {"off", "refresh"}
 
 # The surfaces graphify must never reach: the preflight scan, the per-story
-# spine (its prose, its fan-out driver), the gate that judges a story, the two
-# hooks that can deny or stop a run, and the adapter that builds the terminal
-# envelope. `references/gate.md` is swept alongside `gate_eval.py` because the
-# gate's PROSE surface is just as natural a place to write a gate-side call as
-# its script is.
+# spine's prose, the gate that judges a story, the two hooks that can deny or
+# stop a run, and the adapter that builds the terminal envelope.
+# `references/gate.md` is swept alongside `gate_eval.py` because the gate's
+# PROSE surface is just as natural a place to write a gate-side call as its
+# script is.
 _SWEPT = (
     "references/preflight.md",
     "references/execute.md",
     "references/gate.md",
-    "assets/execute-epic.workflow.js",
     "scripts/gate_eval.py",
     "scripts/headless_envelope.py",
     "scripts/hooks/guard_pretooluse.py",
@@ -454,7 +453,7 @@ def test_graphify_sweep_catches_a_planted_call(tmp_path: Path):
             f"swept path {path.relative_to(_SKILL_ROOT)} does not exist; the sweep "
             "would pass over it forever"
         )
-    assert len(_swept_paths()) == len(_SWEPT) == 8
+    assert len(_swept_paths()) == len(_SWEPT) == 7
 
 
 # --- AC-5: the delegation is hard time-boxed --------------------------------

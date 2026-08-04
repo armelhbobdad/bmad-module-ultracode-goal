@@ -18,7 +18,6 @@ A clear and concise description of what you expected to happen.
 **Run details (please be specific if relevant)**
 - Epic shape (number of stories):
 - Profile (production / `--light`):
-- Execution (sequential / `--parallel`):
 - Run mode (attended / headless `-H`):
 - Claude Code version (`claude --version`):
 - OS:

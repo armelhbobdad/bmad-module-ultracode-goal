@@ -113,7 +113,6 @@ function generateLlmsTxt(outputDir) {
     '',
     `- **[Getting Started](${SITE_URL}/getting-started/)** - Prerequisites, install, the first-run walkthrough, and the flags table`,
     `- **[How It Works](${SITE_URL}/how-it-works/)** - The six stages narrated, the routing conditions, and the headless emit shape`,
-    `- **[Parallel Mode](${SITE_URL}/parallel-mode/)** - The experimental worktree fan-out and its known limits`,
     '',
     '## Reference',
     '',

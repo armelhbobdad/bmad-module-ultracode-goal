@@ -45,7 +45,7 @@ From there the run is autonomous: it defines done with TEA, executes each story 
 | Flag | Effect |
 |------|--------|
 | `--light` | Trace-only gate. Downscopes from the full TEA chain to `bmad-testarch-trace` plus `gate_eval.py --profile light`: no NFR/test-review AND. |
-| `--parallel` | Experimental worktree fan-out. Each story runs isolated in its own worktree; no mid-run input. The sequential `/goal` spine is the default and recommended path; see [parallel mode](./parallel-mode.md). |
+| `--parallel` | Retired. The flag is still accepted so an old invocation does not error: the run logs one note that it was accepted and ignored, then executes the sequential `/goal` spine. |
 | `--yes` | Skips Stage 1's open-floor invite and the launch confirm. The launch briefing still prints. **Never** skips the hard preflight gate. |
 | `-H` | Headless. Runs non-interactively, never prompts (an unresolvable secret becomes a red blocker, not a question), and emits one JSON object at every exit point. |
 | `--retro` | Runs the close-out retrospective (`bmad-retrospective`). Interactive runs offer it at Epic close anyway; headless runs it only when `--retro` is passed. |

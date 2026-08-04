@@ -76,7 +76,7 @@ You'll be prompted for a project name and whether to install the learning materi
 Invoke the skill in natural language: "run this epic autonomously," "execute this epic," or `ultracode goal`. The conductor ingests the epic, preflights, defines done with TEA, executes, gates, and finalizes. Flags shape the run:
 
 - `--light`: run the **trace gate only** (the production default runs the full TEA gate set).
-- `--parallel`: opt into the **experimental** worktree fan-out instead of the sequential `/goal` spine.
+- `--parallel`: retired. Still accepted so an old invocation does not error: the run logs one note that the flag was accepted and ignored, then executes the sequential `/goal` spine.
 - `--yes`: skip Stage 1's open-floor invite and the launch confirm. It **never** skips the hard preflight gate.
 - `-H`: headless: run non-interactively and emit the five-key status JSON at every exit point.
 - `--retro`: run the close-out retrospective (interactive runs offer it anyway; headless runs it only when this flag is passed).
@@ -130,7 +130,6 @@ The docs are organized into three buckets: **Why** (start here), **Try** (do stu
 
 - **[Getting Started](./docs/getting-started.md)**: install, prerequisites, the flags, and your first autonomous run.
 - **[How It Works](./docs/how-it-works.md)**: the six stages, their routing conditions, and the headless five-key emit.
-- **[Parallel Mode](./docs/parallel-mode.md)**: the experimental worktree fan-out and its known limits.
 
 **Reference**
 
