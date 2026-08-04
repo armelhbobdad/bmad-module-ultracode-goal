@@ -373,18 +373,24 @@ def _parse_development_status(text: str) -> dict[str, str]:
     """
     entries: dict[str, str] = {}
     in_block = False
+    block_indent = 0
     for raw in text.splitlines():
         # The map is one top-level key; detect entering/leaving its body by
         # indentation rather than tracking nesting (the file is flat).
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
             continue
+        indent = len(raw) - len(raw.lstrip(" \t"))
         if not in_block:
             if stripped.rstrip().rstrip(":") == "development_status" and stripped.endswith(":"):
                 in_block = True
+                block_indent = indent
             continue
-        # Inside the block: a non-indented line ends it.
-        if raw[:1] not in (" ", "\t"):
+        # Inside the block: any line indented at or below the key's own
+        # indentation ends it. Ending only at column 0 let a sibling map that
+        # followed a nested development_status: get swallowed into the story
+        # set, and a duplicate key there overwrote a real row last-wins.
+        if indent <= block_indent:
             break
         if ":" not in stripped:
             continue

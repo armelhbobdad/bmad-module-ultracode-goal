@@ -13,9 +13,11 @@ replaces that with a fail-closed aggregate over the per-story record:
   a story omitted from a typed list would simply not be aggregated, which is
   the fabrication channel the flag exists to close;
 - the aggregate is the WORST per-story gate_status;
-- three refusals, all NOT_EVALUATED -> escalate: unreadable sprint-status, any
-  story not `done`, and any `done` story whose own gate artifact does not
-  resolve (a `done` row nothing gated is surfaced, not papered over).
+- five refusals, all NOT_EVALUATED -> escalate: unreadable sprint-status, an
+  epic with no stories, any story not `done`, a multi-story epic in a
+  generically-named trace dir (one shared artifact cannot decide N stories),
+  and any `done` story whose own gate artifact does not resolve (a `done` row
+  nothing gated is surfaced, not papered over).
 
 The flag is additive: unchanged invocations return unchanged verdicts, and the
 printed JSON's key set is exactly the shape STABILITY.md enumerates — the
@@ -127,6 +129,93 @@ def test_the_aggregate_is_the_worst_story_status(tmp_path: Path) -> None:
     assert out["verdict"] == "defer"
 
 
+def test_a_fail_story_rolls_up_to_fail_and_reloop(tmp_path: Path) -> None:
+    """FAIL outranks CONCERNS; the aggregate maps through the gate's own table."""
+    trace = tmp_path / "trace"
+    _gate(trace, "7-1", "CONCERNS")
+    _gate(trace, "7-2", "FAIL")
+    _gate(trace, "7-3", "PASS")
+    sprint = _sprint(tmp_path, {"7-1": "done", "7-2": "done", "7-3": "done"})
+    out = _run(trace, sprint)
+    assert out["gate_status"] == "FAIL"
+    assert out["verdict"] == "reloop"
+
+
+def test_a_generic_named_dir_refuses_a_multi_story_rollup(tmp_path: Path) -> None:
+    """One shared artifact cannot decide N stories: without per-story naming
+    the unscoped fallback would hand the same gate-decision.json to every
+    story, and a one-artifact epic would advance with per-story reason lines
+    the directory cannot support."""
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    (trace / "trace.md").write_text(
+        "---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision.json\n---\n",
+        encoding="utf-8",
+    )
+    (trace / "gate-decision.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+    sprint = _sprint(tmp_path, {"7-1": "done", "7-2": "done"})
+    out = _run(trace, sprint)
+    assert out["gate_status"] == "NOT_EVALUATED"
+    assert out["verdict"] == "escalate"
+    assert any("not per-story-named" in r for r in out["reasons"])
+
+
+def test_a_single_story_epic_may_live_in_a_generic_dir(tmp_path: Path) -> None:
+    """gate_eval's documented isolated-dir rule survives: one story, one
+    generically-named artifact set, resolved as that story's own."""
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    (trace / "trace.md").write_text(
+        "---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision.json\n---\n",
+        encoding="utf-8",
+    )
+    (trace / "gate-decision.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+    sprint = _sprint(tmp_path, {"7-1": "done"})
+    out = _run(trace, sprint)
+    assert out["gate_status"] == "PASS"
+    assert out["verdict"] == "advance"
+
+
+def test_a_failing_storys_resolution_record_is_surfaced(tmp_path: Path) -> None:
+    """The aggregation must not drop the resolver's own record of which file
+    decided a non-PASS story - the trail has to agree with the gate."""
+    trace = tmp_path / "trace"
+    _gate(trace, "7-1", "PASS")
+    _gate(trace, "7-2", "FAIL")
+    sprint = _sprint(tmp_path, {"7-1": "done", "7-2": "done"})
+    out = _run(trace, sprint)
+    assert any(
+        r.startswith("story 7-2: ") and "gate-decision-7-2.json" in r
+        for r in out["reasons"]
+    ), out["reasons"]
+
+
+def test_a_sibling_map_after_development_status_is_not_swallowed(tmp_path: Path) -> None:
+    """The block ends at the key's own indentation: a sibling map (an archive,
+    say) must not inject phantom rows - a duplicate key there overwrote a real
+    not-done row last-wins, which is a wrong-verdict channel, not a refusal."""
+    trace = tmp_path / "trace"
+    _gate(trace, "7-1", "PASS")
+    path = tmp_path / "sprint-status.yaml"
+    path.write_text(
+        "sprint:\n"
+        "  development_status:\n"
+        "    7-1: in-progress\n"
+        "  archive:\n"
+        "    7-1: done\n",
+        encoding="utf-8",
+    )
+    out = _run(trace, path)
+    assert out["gate_status"] == "NOT_EVALUATED"
+    assert any("not done" in r for r in out["reasons"]), (
+        "the archive's done row must not overwrite the real in-progress row"
+    )
+
+
 def test_a_not_done_story_refuses_the_rollup(tmp_path: Path) -> None:
     """The roll-up's own trigger is every-story-done; early is refused, not
     answered — which is also how the partial-by-design exception is enforced
@@ -203,6 +292,31 @@ def test_rollup_requires_its_three_companions(tmp_path: Path) -> None:
     )
     assert proc.returncode == 2
     assert "--rollup" in proc.stderr
+
+
+def test_a_partially_supplied_companion_set_is_refused(tmp_path: Path) -> None:
+    """Each missing companion alone must refuse: an and-to-or mutant passes
+    the all-absent case and dies here."""
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--trace-output",
+            str(trace),
+            "--profile",
+            "production",
+            "--story",
+            "7",
+            "--epic-level",
+            "--rollup",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 2
+    assert "--sprint-status" in proc.stderr or "--rollup" in proc.stderr
 
 
 def test_sprint_status_without_rollup_is_refused(tmp_path: Path) -> None:

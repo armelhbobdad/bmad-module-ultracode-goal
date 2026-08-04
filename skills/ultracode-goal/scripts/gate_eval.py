@@ -765,6 +765,24 @@ def rollup_gate(
             "overall_status": None,
         }
 
+    # A generically-named directory (TEA's untouched single-story output) has
+    # exactly one gate artifact, and the unscoped fallback would hand that one
+    # file to EVERY story here - a multi-story epic advancing on a single
+    # artifact, each reason line asserting a per-story status the directory
+    # cannot support. One story may legitimately live in such a directory
+    # (gate_eval's documented isolated-dir rule); two or more cannot.
+    if len(stories) > 1 and not _is_per_story_named(trace_output):
+        reasons.append(
+            "roll-up refused: %s is not per-story-named, so one shared artifact "
+            "would decide all %d stories" % (trace_output, len(stories))
+        )
+        return {
+            "gate_status": "NOT_EVALUATED",
+            "p0_status": None,
+            "p1_status": None,
+            "overall_status": None,
+        }
+
     worst = "PASS"
     for key in stories:
         sub: list[str] = []
@@ -782,6 +800,13 @@ def rollup_gate(
             )
         else:
             reasons.append(f"story {key}: gate_status {status}")
+        # The resolver's own record (which file decided, any refused hint) must
+        # not be dropped by the aggregation - the trail has to agree with the
+        # gate about which file decided. Surface it for every non-PASS story,
+        # and always for a refused or honoured hint.
+        for line in sub:
+            if status != "PASS" or "hint" in line.lower():
+                reasons.append(f"story {key}: {line}")
         if _ROLLUP_SEVERITY.index(status) > _ROLLUP_SEVERITY.index(worst):
             worst = status
     reasons.append(
