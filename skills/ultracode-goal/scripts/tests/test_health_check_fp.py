@@ -316,7 +316,7 @@ def test_seen_unrecognized_action_does_not_suppress(tmp_path):
 def test_seen_unseen_carries_status(tmp_path):
     proc = _run("seen", "--fp", "fp-abc1234", "--cache", str(tmp_path / "nope.json"))
     payload = json.loads(proc.stdout)
-    assert payload == {"seen": False, "status": "unseen", "record": None}
+    assert payload == {"seen": False, "status": "unseen", "record": None, "prior": None}
 
 
 def test_suppressing_actions_is_not_derived_from_actions():
@@ -582,3 +582,121 @@ def test_version_malformed_package_json_with_nothing_else_is_null(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --- seen --queue-path: the prior filing, inline -----------------------------
+# The handled branch's mandated same-defect comparison used to start with a
+# manual retrieval (grep the queue for the fp). `--queue-path` returns the
+# recorded filing inline; informational only - it never changes the status.
+
+
+def _filing(directory, name, fp, *, slug=None, title="The prior finding"):
+    directory.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "---",
+        "type: workflow-health-finding",
+        f"fingerprint: {fp}",
+    ]
+    if slug:
+        lines.append(f"defect_slug: {slug}")
+    lines += ["date: 2026-08-01", "---", "", f"# {title}", "", "Body."]
+    (directory / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_seen_queue_path_returns_the_prior_filing(tmp_path):
+    fp = "fp-1234abc"
+    cache = tmp_path / "cache.json"
+    _run("record", "--fp", fp, "--cache", str(cache), "--issue-url", "", "--action", "queued", "--date", "2026-08-01")
+    queue = tmp_path / "queue"
+    _filing(queue, "hc-x-20260801-000000.md", fp, slug="the-real-defect")
+    proc = _run("seen", "--fp", fp, "--cache", str(cache), "--queue-path", str(queue))
+    out = json.loads(proc.stdout)
+    assert out["status"] == "handled"
+    assert out["prior"]["title"] == "The prior finding"
+    assert out["prior"]["defect_slug"] == "the-real-defect"
+    assert out["prior"]["path"].endswith("hc-x-20260801-000000.md")
+
+
+def test_seen_queue_path_searches_the_resolved_subfolder(tmp_path):
+    fp = "fp-1234abc"
+    cache = tmp_path / "cache.json"
+    _run("record", "--fp", fp, "--cache", str(cache), "--issue-url", "", "--action", "resolved", "--date", "2026-08-01")
+    queue = tmp_path / "queue"
+    _filing(queue / "resolved", "old-filing.md", fp, title="Resolved prior")
+    proc = _run("seen", "--fp", fp, "--cache", str(cache), "--queue-path", str(queue))
+    out = json.loads(proc.stdout)
+    assert out["status"] == "regression", "prior lookup must not change the status"
+    assert out["prior"]["title"] == "Resolved prior"
+
+
+def test_seen_prior_is_null_when_nothing_matches_and_status_is_unchanged(tmp_path):
+    fp = "fp-1234abc"
+    cache = tmp_path / "cache.json"
+    _run("record", "--fp", fp, "--cache", str(cache), "--issue-url", "", "--action", "queued", "--date", "2026-08-01")
+    queue = tmp_path / "queue"
+    _filing(queue, "other.md", "fp-9999999")
+    proc = _run("seen", "--fp", fp, "--cache", str(cache), "--queue-path", str(queue))
+    out = json.loads(proc.stdout)
+    assert out["status"] == "handled"
+    assert out["prior"] is None
+
+
+def test_seen_prior_never_matches_a_body_mention(tmp_path):
+    """A filing that merely DISCUSSES the fp in its body is not the prior."""
+    fp = "fp-1234abc"
+    cache = tmp_path / "cache.json"
+    _run("record", "--fp", fp, "--cache", str(cache), "--issue-url", "", "--action", "queued", "--date", "2026-08-01")
+    queue = tmp_path / "queue"
+    queue.mkdir()
+    (queue / "discussion.md").write_text(
+        "---\nfingerprint: fp-7777777\n---\n\n# Other\n\nSee also fp-1234abc elsewhere.\n",
+        encoding="utf-8",
+    )
+    proc = _run("seen", "--fp", fp, "--cache", str(cache), "--queue-path", str(queue))
+    out = json.loads(proc.stdout)
+    assert out["prior"] is None
+
+
+def test_seen_without_queue_path_keeps_the_old_shape_plus_null_prior(tmp_path):
+    fp = "fp-1234abc"
+    cache = tmp_path / "cache.json"
+    _run("record", "--fp", fp, "--cache", str(cache), "--issue-url", "", "--action", "queued", "--date", "2026-08-01")
+    proc = _run("seen", "--fp", fp, "--cache", str(cache))
+    out = json.loads(proc.stdout)
+    assert out["prior"] is None
+    assert set(out.keys()) == {"seen", "status", "record", "prior"}
+
+
+# --- record --defect-slug ----------------------------------------------------
+
+
+def test_record_defect_slug_round_trips(tmp_path):
+    fp = "fp-1234abc"
+    cache = tmp_path / "cache.json"
+    _run(
+        "record", "--fp", fp, "--cache", str(cache), "--issue-url", "",
+        "--action", "queued", "--date", "2026-08-01", "--defect-slug", "wrong-event-guard",
+    )
+    proc = _run("seen", "--fp", fp, "--cache", str(cache))
+    out = json.loads(proc.stdout)
+    assert out["record"]["defect_slug"] == "wrong-event-guard"
+    assert out["status"] == "handled", "the slug is informational, never a key"
+
+
+def test_record_without_slug_keeps_the_legacy_record_shape(tmp_path):
+    fp = "fp-1234abc"
+    cache = tmp_path / "cache.json"
+    _run("record", "--fp", fp, "--cache", str(cache), "--issue-url", "", "--action", "queued", "--date", "2026-08-01")
+    proc = _run("seen", "--fp", fp, "--cache", str(cache))
+    out = json.loads(proc.stdout)
+    assert set(out["record"].keys()) == {"issue_url", "action", "date"}
+
+
+def test_record_rejects_a_malformed_slug(tmp_path):
+    proc = _run(
+        "record", "--fp", "fp-1234abc", "--cache", str(tmp_path / "c.json"),
+        "--issue-url", "", "--action", "queued", "--date", "2026-08-01",
+        "--defect-slug", "Not_A_Slug",
+    )
+    assert proc.returncode == 1
+    assert "defect-slug" in proc.stdout or "defect-slug" in proc.stderr

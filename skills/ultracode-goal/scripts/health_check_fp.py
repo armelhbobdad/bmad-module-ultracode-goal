@@ -141,6 +141,49 @@ def _load_cache(cache: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _prior_filing(queue_path: Path, fp: str) -> dict | None:
+    """The queued filing that carries this fingerprint, or None.
+
+    Searched so the handled branch can compare DEFECTS without a manual
+    retrieval step: the queue dir first, then its resolved/ subfolder (a
+    resolved filing is still the recorded prior for a collision judgement).
+    Identity is the frontmatter/underscored fingerprint line or the fp in the
+    filename - never a body-wide substring, which would match filings that
+    merely DISCUSS the fp. Fail-soft: an unreadable dir or file contributes
+    nothing; this helper informs a judgement and never blocks one.
+    """
+    fp_line = re.compile(
+        r"^(?:fingerprint|fp):\s*`?%s`?\s*$" % re.escape(fp), re.MULTILINE
+    )
+    for base in (queue_path, queue_path / "resolved"):
+        try:
+            entries = sorted(base.iterdir())
+        except OSError:
+            continue
+        for path in entries:
+            if not path.is_file() or path.suffix != ".md":
+                continue
+            named = fp in path.name
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            head = "\n".join(text.splitlines()[:40])
+            if not named and not fp_line.search(head):
+                continue
+            title = next(
+                (ln.lstrip("# ").strip() for ln in text.splitlines() if ln.startswith("# ")),
+                None,
+            )
+            slug_match = re.search(r"^defect_slug:\s*([a-z0-9-]+)\s*$", head, re.MULTILINE)
+            return {
+                "path": str(path),
+                "title": title,
+                "defect_slug": slug_match.group(1) if slug_match else None,
+            }
+    return None
+
+
 def cmd_seen(args: argparse.Namespace) -> int:
     if not FP_RE.match(args.fp):
         return _fail("invalid fp %r; expected ^fp-[0-9a-f]{7}$" % args.fp)
@@ -149,8 +192,15 @@ def cmd_seen(args: argparse.Namespace) -> int:
     data = _load_cache(cache)
     record = data.get(args.fp)
 
+    queue_path = getattr(args, "queue_path", None)
+    prior = _prior_filing(Path(queue_path).expanduser(), args.fp) if queue_path else None
+
     if not isinstance(record, dict):
-        print(json.dumps({"seen": False, "status": "unseen", "record": None}))
+        print(
+            json.dumps(
+                {"seen": False, "status": "unseen", "record": None, "prior": prior}
+            )
+        )
         return 0
 
     action = record.get("action")
@@ -166,7 +216,15 @@ def cmd_seen(args: argparse.Namespace) -> int:
 
     print(
         json.dumps(
-            {"seen": status == "handled", "status": status, "record": record}
+            {
+                "seen": status == "handled",
+                "status": status,
+                "record": record,
+                # The recorded prior filing, so the handled branch's mandated
+                # same-defect comparison starts from the text instead of from a
+                # retrieval step. Informational: it never changes the status.
+                "prior": prior,
+            }
         )
     )
     return 0
@@ -175,6 +233,11 @@ def cmd_seen(args: argparse.Namespace) -> int:
 def cmd_record(args: argparse.Namespace) -> int:
     if not FP_RE.match(args.fp):
         return _fail("invalid fp %r; expected ^fp-[0-9a-f]{7}$" % args.fp)
+    if getattr(args, "defect_slug", None) and not SLUG_RE.match(args.defect_slug):
+        return _fail(
+            "invalid defect-slug %r; expected kebab-case ^[a-z0-9]+(-[a-z0-9]+)*$"
+            % args.defect_slug
+        )
     if args.action not in ACTIONS:
         return _fail(
             "invalid action %r; expected one of %s"
@@ -186,11 +249,18 @@ def cmd_record(args: argparse.Namespace) -> int:
 
     # Merge: preserve every other fp; a corrupt/empty cache is treated as empty.
     data = _load_cache(cache)
-    data[args.fp] = {
+    record = {
         "issue_url": args.issue_url,
         "action": args.action,
         "date": args.date,
     }
+    # Additive, informational only: names WHICH defect this record is about,
+    # so a REGRESSION title can be defect-accurate under a colliding fp. It
+    # never keys suppression - that judgement stays with the handled branch's
+    # mandated prior-text comparison (references/health-check.md).
+    if getattr(args, "defect_slug", None):
+        record["defect_slug"] = args.defect_slug
+    data[args.fp] = record
 
     # Atomic write: temp file in the same dir, then os.replace.
     fd, tmp_name = tempfile.mkstemp(dir=str(cache.parent), prefix=".hc-seen-", suffix=".tmp")
@@ -294,6 +364,14 @@ def main(argv: list[str] | None = None) -> int:
     seen_parser = sub.add_parser("seen", help="Check the seen-cache for a fingerprint.")
     seen_parser.add_argument("--fp", required=True)
     seen_parser.add_argument("--cache", required=True)
+    seen_parser.add_argument(
+        "--queue-path",
+        dest="queue_path",
+        help="Local queue dir; when given, the output's `prior` carries the "
+        "recorded filing (path, title, defect_slug) for this fp from the dir "
+        "or its resolved/ subfolder, so the handled branch's same-defect "
+        "comparison starts from text instead of a retrieval step.",
+    )
     seen_parser.set_defaults(func=cmd_seen)
 
     rec_parser = sub.add_parser("record", help="Record a fingerprint outcome to the cache.")
@@ -302,6 +380,13 @@ def main(argv: list[str] | None = None) -> int:
     rec_parser.add_argument("--issue-url", required=True, dest="issue_url")
     rec_parser.add_argument("--action", required=True)
     rec_parser.add_argument("--date", required=True)
+    rec_parser.add_argument(
+        "--defect-slug",
+        dest="defect_slug",
+        help="Optional kebab-case name for WHICH defect this record is about "
+        "(informational; never keys suppression). Makes a later REGRESSION "
+        "title defect-accurate under a colliding fp.",
+    )
     rec_parser.set_defaults(func=cmd_record)
 
     ver_parser = sub.add_parser("version", help="Resolve the module version off the probe ladder.")

@@ -126,14 +126,14 @@ uv run {skill-root}/scripts/health_check_fp.py fingerprint \
 **2. Check the seen-cache via the script:**
 
 ```
-uv run {skill-root}/scripts/health_check_fp.py seen --fp {fp} --cache {seenCachePath}
+uv run {skill-root}/scripts/health_check_fp.py seen --fp {fp} --cache {seenCachePath} --queue-path {workflow.health_check_queue_path}
 ```
 
 → **`seen` is the suppression verdict, not mere cache presence.** Read `status`:
 
 - **`unseen`** (`seen: false`, `record: null`) — proceed.
-- **`handled`** (`seen: true`) — this user already handled this fingerprint on this machine. Before suppressing, if `record.issue_url` is non-empty you **must** run the issue-state check below; it can override this verdict to `regression`. **`handled` suppresses a defect, not a section**: the fingerprint hashes only severity + stage + section slug, so a second, *distinct* defect in an already-reported section computes to the same `fp` — and suppressing it on the fingerprint alone silences a live defect forever. So before suppressing, retrieve the prior finding's text — the issue at `record.issue_url`, or, when that is empty, the queued file whose frontmatter carries this `fp` under `{workflow.health_check_queue_path}` (including its `resolved/` subfolder) — and compare **defects, not wording**. Same defect → suppress and log `"fp-xxxxxxx: already handled on {record.date}, {record.issue_url} — skipping"`. A different defect → proceed as an ordinary submission, opening the body with a one-line collision note naming the `fp` and the prior finding it is not, so a maintainer does not merge the two. Prior text unretrievable → proceed rather than suppress: reporting a duplicate is self-healing (the dedup Action closes it); silencing a live defect is not.
-- **`regression`** (`seen: false`, `record` present, `record.action` is `resolved`) — this fingerprint was fixed and closed out, so a fresh sighting is a **regression, not a duplicate**. Do NOT suppress. Proceed, and mark it so it can never be filed as a first sighting: title it `[health-check][{severity}][{fp}] {workflow}: REGRESSION — {short description}` and open the body with `Regression of {record.issue_url} (resolved {record.date}).` When `record.issue_url` is empty (the prior sighting only ever queued, so no issue exists), write `Regression of a previously resolved local finding (resolved {record.date}).` instead — the `{fp}` label still ties the two together server-side.
+- **`handled`** (`seen: true`) — this user already handled this fingerprint on this machine. Before suppressing, if `record.issue_url` is non-empty you **must** run the issue-state check below; it can override this verdict to `regression`. **`handled` suppresses a defect, not a section**: the fingerprint hashes only severity + stage + section slug, so a second, *distinct* defect in an already-reported section computes to the same `fp` — and suppressing it on the fingerprint alone silences a live defect forever. So before suppressing, compare **defects, not wording**, starting from the `prior` object the `seen` call above already returned (the recorded filing's path, title and `defect_slug`, located from the queue dir and its `resolved/` subfolder — read that file for the Finding text). When `prior` is null, retrieve the prior finding another way: the issue at `record.issue_url`, or a manual search of `{workflow.health_check_queue_path}`. Same defect → suppress and log `"fp-xxxxxxx: already handled on {record.date}, {record.issue_url} — skipping"`. A different defect → proceed as an ordinary submission, opening the body with a one-line collision note naming the `fp` and the prior finding it is not, so a maintainer does not merge the two. Prior text unretrievable → proceed rather than suppress: reporting a duplicate is self-healing (the dedup Action closes it); silencing a live defect is not.
+- **`regression`** (`seen: false`, `record` present, `record.action` is `resolved`) — this fingerprint was fixed and closed out, so a fresh sighting is a **regression, not a duplicate**. Do NOT suppress. Proceed, and mark it so it can never be filed as a first sighting: title it `[health-check][{severity}][{fp}] {workflow}: REGRESSION — {short description}` (when `record.defect_slug` is present, name it: `REGRESSION of {defect_slug} — {short description}`, so a colliding fp's regression names WHICH defect regressed) and open the body with `Regression of {record.issue_url} (resolved {record.date}).` When `record.issue_url` is empty (the prior sighting only ever queued, so no issue exists), write `Regression of a previously resolved local finding (resolved {record.date}).` instead — the `{fp}` label still ties the two together server-side.
 - **`unrecognized`** (`seen: false`, `record` present) — the record carries an action this version does not know, so it cannot be confirmed handled. Proceed as an ordinary submission. Reporting a duplicate is self-healing (the dedup Action closes it); silencing a live defect is not.
 
 **The issue-state check (required whenever `handled` carries an `issue_url`).** The cache is machine-local: it records what *this* user did on *this* machine, so a `resolved` written by whoever fixed the defect is invisible to everyone else. An issue's state is shared, so it is the better authority. Bound the call, because this is finalize's terminal step and a hung network must not stall it:
@@ -244,7 +244,7 @@ Even when queuing, **still compute the fingerprint via the script** (so the queu
 
 ```
 uv run {skill-root}/scripts/health_check_fp.py record --fp {fp} --cache {seenCachePath} \
-  --issue-url "" --action queued --date {YYYY-MM-DD}
+  --issue-url "" --action queued --date {YYYY-MM-DD} [--defect-slug {the frontmatter's defect_slug}]
 ```
 
 **Never overwrite a `resolved` record with `queued`.** `record` is a flat overwrite, and this path runs on the documented default (`autosubmit` off, and friction/gap always queue), so a single unattended run between a fix and the next attended report would otherwise downgrade `resolved` back to `queued` and silently re-arm the suppression the fix just removed. Read the cache first (`seen --fp {fp}`) and **skip this record entirely when `status` is `regression`** — the queue file is still written, and the `resolved` record stays intact so the next §5a run still sees the regression. Log the skip: `"fp-xxxxxxx: resolved on {record.date}, leaving the record intact — queued file written"`.
@@ -260,9 +260,12 @@ workflow: ultracode-goal/{stage}
 step_file: skills/ultracode-goal/references/{stage}.md
 severity: {bug | friction | gap}
 fingerprint: {fp-xxxxxxx}
+defect_slug: {optional-short-kebab-name-for-this-defect}
 date: {ISO date}
 ---
 ```
+
+`defect_slug` is optional and informational: a short kebab-case name for THIS defect (not the section), so a colliding fingerprint's later sightings and regressions can name which defect they mean. It never keys suppression — the handled branch's prior-text comparison stays mandatory.
 
 When `gh auth status` failed, after writing the files display:
 
