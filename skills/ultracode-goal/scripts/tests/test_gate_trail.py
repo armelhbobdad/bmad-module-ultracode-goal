@@ -440,6 +440,46 @@ def test_recorded_verdict_in_the_decision_log_wins_over_the_mapped_one(tmp_path)
     assert {row[3] for row in rows(section(text, "7-3"))} == {"escalate"}
 
 
+def test_a_recorded_verdict_without_a_gate_artifact_is_not_rendered(tmp_path):
+    """A decision-log verdict is honoured only when the story's gate artifact resolved.
+
+    Measured on a real epic: a story with a `.baseline-<id>` from an earlier
+    invocation but no resolvable per-story gate artifact fell through to the
+    decision-log verdict and rendered `advance` beside `Gate artifact: n/a` —
+    while `gate_eval.py` on the same story returns NOT_EVALUATED -> escalate.
+    The trail must not out-vote the gate in the gate's own column: no artifact,
+    no rendered verdict, and the source line says why.
+    """
+    root = copy_fixture("production", tmp_path)
+    log = root / "decision-log.md"
+    log.write_text(
+        log.read_text(encoding="utf-8")
+        + "\n### Story 7-5 - recorded but artifact-less\n\n```json\n"
+        + json.dumps({"story": "7-5", "gate_status": "PASS", "verdict": "advance"})
+        + "\n```\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "run"
+    run_trail(
+        run_dir=run_dir,
+        profile="production",
+        # 7-5 has no trace report and no gate file in the fixture.
+        stories=[*PRODUCTION_STORIES, "7-5"],
+        impl_artifacts=root / "impl-artifacts",
+        trace_output=root / "test-artifacts" / "traceability",
+        decision_log=log,
+        repo=tmp_path,
+    )
+    text = (run_dir / "gate-trail.md").read_text(encoding="utf-8")
+    body = section(text, "7-5")
+
+    assert {row[3] for row in rows(body)} == {"n/a"}
+    assert "advance" not in body
+    assert "no gate artifact resolved" in body
+    # A story whose artifact DID resolve still renders its verdict normally.
+    assert {row[3] for row in rows(section(text, "7-1"))} == {"advance"}
+
+
 def test_alphanumeric_sibling_ids_do_not_share_one_recorded_verdict(tmp_path):
     """One driven story's verdict must not bleed onto undriven siblings.
 

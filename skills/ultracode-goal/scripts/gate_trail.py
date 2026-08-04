@@ -31,6 +31,15 @@ key under that story's heading in `.decision-log.md`), that recorded verdict
 wins over the mapped one, because it is what the run actually acted on -
 including any downgrade the gate applied at decision time.
 
+The recorded verdict is honoured ONLY for a story whose own gate artifact
+resolved. A verdict with no artifact behind it - recorded by an earlier
+invocation whose artifacts are gone, or one this invocation cannot resolve -
+would render `advance` beside `Gate artifact: n/a` while `gate_eval.py` itself
+would refuse the same story with NOT_EVALUATED -> escalate. The trail must not
+disagree with the gate in the gate's own column, so such a story renders `n/a`
+and its verdict-source line says why. The decision log still holds the verdict;
+what this report declines to do is present it as gated evidence.
+
 FAIL-SOFT. Every source is optional. A missing, short or unparseable file
 renders `n/a` in its cell and the synthesis continues. This is the opposite of
 `gate_eval.py`, which fails closed, and the asymmetry is deliberate: the gate has
@@ -645,18 +654,28 @@ def story_section(
         criteria_source = trace.name if (rows and trace is not None) else criteria_source
 
     gate_status, gate_source = gate_status_for(trace_output, story)
-    verdict = verdict_for(gate_status, recorded.get(story))
+    # A recorded verdict is honoured only when this story's own gate artifact
+    # resolved (module docstring): with no artifact the gate itself would refuse
+    # the story, and the trail must not out-vote the gate in the gate's column.
+    recorded_verdict = recorded.get(story) if gate_source else None
+    verdict = verdict_for(gate_status, recorded_verdict)
     start = baseline_sha(impl_artifacts, story)
     commits = commit_cell(repo, start, range_end)
 
     lines = [f"## Story {story}", ""]
     lines.append(f"- Criteria and planned tests: {criteria_source or NA}")
     lines.append(f"- Gate artifact: {gate_source or NA} (gate status `{gate_status or NA}`)")
-    lines.append(
-        "- Verdict source: recorded in the decision log"
-        if recorded.get(story)
-        else "- Verdict source: the gate artifact's status, mapped by the gate's own table"
-    )
+    if recorded_verdict:
+        lines.append("- Verdict source: recorded in the decision log")
+    elif recorded.get(story):
+        lines.append(
+            "- Verdict source: n/a (the decision log records a verdict, but no gate "
+            "artifact resolved for this story, so it is not rendered as gated evidence)"
+        )
+    else:
+        lines.append(
+            "- Verdict source: the gate artifact's status, mapped by the gate's own table"
+        )
     lines.append(f"- Baseline: `{start}`" if start else f"- Baseline: {NA}")
     lines.append("")
     lines.append(_row(list(COLUMNS)))
