@@ -612,19 +612,22 @@ _GUARD_SCRIPT = "guard_pretooluse.py"
 _BUDGET_SCRIPT = "budget_stop.py"
 
 
-def _hook_commands(settings: dict) -> list[tuple[str | None, str]]:
-    """Every (matcher, command) pair nested under hooks.<Event>[].hooks[].
+def _hook_commands(settings: dict) -> list[tuple[str, str | None, str]]:
+    """Every (event, matcher, command) triple nested under hooks.<Event>[].hooks[].
 
     The entries are nested, not top-level (preflight.md's stale-hook bullet
     documents the shape); a malformed layer contributes nothing rather than
     raising, because an unreadable arming must read as NOT armed, never crash.
+    The EVENT is part of the identity on purpose: a guard command sitting under
+    hooks.Stop is never invoked before a tool call, so an event-blind read would
+    certify an arming that enforces nothing.
     """
-    out: list[tuple[str | None, str]] = []
+    out: list[tuple[str, str | None, str]] = []
     hooks = settings.get("hooks")
     if not isinstance(hooks, dict):
         return out
-    for groups in hooks.values():
-        if not isinstance(groups, list):
+    for event, groups in hooks.items():
+        if not isinstance(event, str) or not isinstance(groups, list):
             continue
         for group in groups:
             if not isinstance(group, dict):
@@ -635,7 +638,13 @@ def _hook_commands(settings: dict) -> list[tuple[str | None, str]]:
                 continue
             for entry in inner:
                 if isinstance(entry, dict) and isinstance(entry.get("command"), str):
-                    out.append((matcher if isinstance(matcher, str) else None, entry["command"]))
+                    out.append(
+                        (
+                            event,
+                            matcher if isinstance(matcher, str) else None,
+                            entry["command"],
+                        )
+                    )
     return out
 
 
@@ -658,9 +667,9 @@ def _assert_hooks(project_root: Path) -> dict:
             "matcher_all_tools": False,
             "ok": False,
         }
-    pairs = _hook_commands(settings)
-    guard = [(m, c) for m, c in pairs if _GUARD_SCRIPT in c]
-    budget = [c for _, c in pairs if _BUDGET_SCRIPT in c]
+    triples = _hook_commands(settings)
+    guard = [(m, c) for e, m, c in triples if _GUARD_SCRIPT in c and e == "PreToolUse"]
+    budget = [c for e, _, c in triples if _BUDGET_SCRIPT in c and e == "Stop"]
     matcher_ok = bool(guard) and all(m is None or m == "*" for m, _ in guard)
     return {
         "settings_readable": True,
@@ -679,12 +688,15 @@ def _assert_hook_env(project_root: Path) -> dict:
     settings_path = project_root / ".claude" / "settings.local.json"
     try:
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        commands = " ".join(c for _, c in _hook_commands(settings))
+        commands = [c for _, _, c in _hook_commands(settings)]
     except (OSError, ValueError, UnicodeDecodeError):
-        commands = ""
+        commands = []
     sources: dict[str, str] = {}
     for var in HOOK_ENV_VARS:
-        if f"{var}=" in commands:
+        # Boundary-anchored per command: `X_ULTRACODE_MAX_TURNS=1` must not
+        # certify ULTRACODE_MAX_TURNS as injected.
+        pattern = re.compile(r"(^|[\s;\"'`])" + re.escape(var) + "=")
+        if any(pattern.search(c) for c in commands):
             sources[var] = "settings"
         elif var in os.environ:
             sources[var] = "process"
@@ -718,8 +730,14 @@ def _read_latch(impl_artifacts: Path, run_id: str | None) -> dict:
     path = impl_artifacts / ".mem-state.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, UnicodeDecodeError):
+    except OSError:
         return {"state": "absent", "certifies": None}
+    except (ValueError, UnicodeDecodeError):
+        return {"state": "unreadable", "certifies": None}
+    if not isinstance(data, dict):
+        # Valid JSON that is not an object is still not a latch; reporting it
+        # must not crash the manifest (the latch never moves the exit code).
+        return {"state": "unreadable", "certifies": None}
     latch_run = data.get("run_id")
     out: dict = {
         "state": "present",
@@ -759,26 +777,36 @@ def _commits_past(project_root: Path, baseline_sha: str) -> int | None:
         return None
 
 
-def _story_gate_artifacts_present(trace_output: Path, story: str) -> bool:
-    """Does any per-story trace/gate-decision artifact resolve for this story?
+def _story_gate_artifacts_present(trace_output: Path, story: str) -> bool | None:
+    """Does a trace/gate-decision artifact resolve for this story? None = unknown.
 
     Resolution identity is imported from gate_eval rather than re-implemented,
-    so the manifest and the gate cannot disagree about what names a story.
+    so the manifest and the gate cannot disagree about what names a story:
+    a story-named artifact matches by gate_eval's own stem rule, and in a
+    directory gate_eval would treat as NOT per-story-named (TEA's untouched
+    generic output), the generic artifacts count as this story's, exactly as
+    gate_eval's documented unscoped fallback reads them. An unreadable or
+    nonexistent directory returns None: unverifiable is never verified-absent.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import gate_eval  # noqa: PLC0415  (sibling script, path set above)
 
     if not trace_output.is_dir():
-        return False
+        return None
+    generic_stems = {"-".join(prefix) for prefix in gate_eval._ARTIFACT_PREFIXES}
+    saw_generic = False
     for path in trace_output.iterdir():
         if not path.is_file():
             continue
         stem = path.stem
-        if (
-            stem.startswith(("trace-", "gate-decision-"))
-            and gate_eval._stem_matches_story(stem, story)
+        if stem.startswith(("trace-", "gate-decision-")) and gate_eval._stem_matches_story(
+            stem, story
         ):
             return True
+        if stem in generic_stems:
+            saw_generic = True
+    if saw_generic and not gate_eval._is_per_story_named(trace_output):
+        return True
     return False
 
 
@@ -815,7 +843,10 @@ def _assert_story(
     out["commits_past_baseline"] = commits
     if trace_output is not None and baseline:
         gated = _story_gate_artifacts_present(trace_output, story)
-        out["gate_artifacts"] = "present" if gated else "absent"
+        if gated is None:
+            out["gate_artifacts"] = "unknown"
+        else:
+            out["gate_artifacts"] = "present" if gated else "absent"
     else:
         out["gate_artifacts"] = "unknown"
     if not baseline:

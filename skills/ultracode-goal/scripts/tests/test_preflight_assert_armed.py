@@ -31,6 +31,7 @@ Run: uv run --with pytest pytest scripts/tests/test_preflight_assert_armed.py
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -47,19 +48,26 @@ _ENV_VARS = (
 )
 
 
+# Hermeticity WITHOUT stripping the environment: a hardcoded POSIX PATH breaks
+# windows-latest CI (git/python live elsewhere and Windows needs SystemRoot),
+# so the inherited env is kept and git is isolated from user/system config the
+# way test_drive_epic.py does it.
+_GIT_ENV = {
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@t",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_SYSTEM": os.devnull,
+}
+
+
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(
         ["git", "-C", str(repo), *args],
         check=True,
         capture_output=True,
-        env={
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
-            "HOME": str(repo),
-        },
+        env={**os.environ, **_GIT_ENV},
     )
 
 
@@ -126,7 +134,10 @@ def _run(
 ) -> tuple[int, dict]:
     impl_dir = impl if impl is not None else root / "impl"
     impl_dir.mkdir(exist_ok=True)
-    base_env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(root)}
+    # Start from the real environment (Windows needs SystemRoot et al.), then
+    # strip the five hook vars so a dev machine's own injection cannot leak a
+    # green "process" source into a case that never set them.
+    base_env = {k: v for k, v in os.environ.items() if k not in _ENV_VARS}
     if env:
         base_env.update(env)
     proc = subprocess.run(
@@ -327,6 +338,24 @@ def test_committed_green_ungated_routes_to_gate_owed(tmp_path: Path) -> None:
     assert story["route"] == "gate-owed"
 
 
+def test_no_commits_past_baseline_blocks_gate_owed(tmp_path: Path) -> None:
+    """Marker fresh, dir present, but nothing committed: the discriminator's
+    commits leg must hold, or a story that died before its commit skips its
+    own implementation."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    impl.mkdir()
+    base = _head(root)
+    _story_files(impl, "7-2", baseline=base, marker_baseline=base)
+    trace = root / "trace"
+    trace.mkdir()
+    _, out = _run(root, "--story", "7-2", "--trace-output", str(trace), impl=impl)
+    story = out["checks"]["story"]
+    assert story["commits_past_baseline"] == 0
+    assert story["route"] == "mid-story"
+
+
 def test_gate_owed_requires_trace_output_evidence(tmp_path: Path) -> None:
     """Without --trace-output the discriminator cannot hold in full: absence of
     evidence must route to the ordinary loop, never past steps 1-4."""
@@ -343,6 +372,81 @@ def test_gate_owed_requires_trace_output_evidence(tmp_path: Path) -> None:
     story = out["checks"]["story"]
     assert story["gate_artifacts"] == "unknown"
     assert story["route"] == "mid-story"
+
+
+def test_a_nonexistent_trace_dir_is_unknown_not_absent(tmp_path: Path) -> None:
+    """An unverifiable location is never verified absence: gate-owed must not
+    fire on a --trace-output that does not exist or is not a directory."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    impl.mkdir()
+    base = _head(root)
+    _story_files(impl, "7-2", baseline=base, marker_baseline=base)
+    (root / "work.txt").write_text("done\n", encoding="utf-8")
+    _git(root, "add", "work.txt")
+    _git(root, "commit", "-q", "-m", "story 7-2")
+    _, out = _run(root, "--story", "7-2", "--trace-output", str(root / "no-such"), impl=impl)
+    assert out["checks"]["story"]["gate_artifacts"] == "unknown"
+    assert out["checks"]["story"]["route"] == "mid-story"
+
+
+def test_generic_artifacts_in_an_isolated_dir_read_present(tmp_path: Path) -> None:
+    """TEA's untouched generic output (gate-decision.json with no story id) is
+    the one-story-directory shape gate_eval's unscoped fallback reads; the
+    manifest must agree, or it routes gate-owed past a real gate decision."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    impl.mkdir()
+    base = _head(root)
+    _story_files(impl, "7-2", baseline=base, marker_baseline=base)
+    (root / "work.txt").write_text("done\n", encoding="utf-8")
+    _git(root, "add", "work.txt")
+    _git(root, "commit", "-q", "-m", "story 7-2")
+    trace = root / "trace"
+    trace.mkdir()
+    (trace / "gate-decision.json").write_text(
+        json.dumps({"gate_status": "PASS"}), encoding="utf-8"
+    )
+    _, out = _run(root, "--story", "7-2", "--trace-output", str(trace), impl=impl)
+    assert out["checks"]["story"]["gate_artifacts"] == "present"
+    assert out["checks"]["story"]["route"] == "mid-story"
+
+
+def test_guard_under_the_wrong_event_is_not_armed(tmp_path: Path) -> None:
+    """A guard command sitting under hooks.Stop is never invoked before a tool
+    call; an event-blind read certified exactly that arming."""
+    root = _repo(tmp_path)
+    settings = {
+        "hooks": {
+            "Stop": [
+                {
+                    "hooks": [
+                        {"type": "command", "command": "uv run scripts/hooks/guard_pretooluse.py"},
+                        {"type": "command", "command": "uv run scripts/hooks/budget_stop.py"},
+                    ]
+                }
+            ]
+        }
+    }
+    claude_dir = root / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    (claude_dir / "settings.local.json").write_text(json.dumps(settings), encoding="utf-8")
+    code, out = _run(root)
+    assert code == 1
+    assert out["checks"]["hooks"]["guard_present"] is False
+
+
+def test_a_non_object_latch_is_unreadable_not_a_crash(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    impl.mkdir()
+    (impl / ".mem-state.json").write_text("[1, 2, 3]", encoding="utf-8")
+    code, out = _run(root, impl=impl)
+    assert code == 0
+    assert out["checks"]["latch"] == {"state": "unreadable", "certifies": None}
 
 
 def test_a_gated_story_is_mid_story_not_gate_owed(tmp_path: Path) -> None:
@@ -395,14 +499,53 @@ def test_story_and_latch_blocks_never_flip_a_failed_arming_green(tmp_path: Path)
     assert out["checks"]["story"]["route"] == "story-boundary"
 
 
+def test_an_owned_latch_reports_true_and_still_never_certifies(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    impl.mkdir()
+    (impl / ".mem-state.json").write_text(
+        json.dumps({"claude_mem": "present", "recall": "on", "run_id": "epic-7-X"}),
+        encoding="utf-8",
+    )
+    code, out = _run(root, "--run-id", "epic-7-X", impl=impl)
+    latch = out["checks"]["latch"]
+    assert code == 0
+    assert latch["owned_by_this_run"] is True
+    assert latch["certifies"] is None
+
+
+def test_an_epic_branch_that_is_also_protected_fails(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root, "--protected-branch", "ultracode/epic-7")
+    assert code == 1
+    assert out["checks"]["branch"]["ok"] is False
+
+
 # --- the doc contract ---------------------------------------------------------
 
 
 def test_execute_resume_rule_names_the_manifest_invocation() -> None:
-    """The mechanization must live where the sweep it replaces is mandated."""
+    """The mechanization must live where the sweep it replaces is mandated —
+    and as a runnable command, not a flag mention."""
+    import re
+
     execute = (SCRIPTS.parent / "references" / "execute.md").read_text(encoding="utf-8")
-    assert "--assert-armed" in execute
-    assert "reported, never certified" in execute.lower() or "reported and never certified" in execute.lower()
+    spans = re.findall(r"`([^`]*--assert-armed[^`]*)`", execute)
+    assert spans, "no backticked --assert-armed invocation in execute.md"
+    cmd = max(spans, key=len)
+    for token in (
+        "preflight_check.py",
+        "--project-root",
+        "--impl-artifacts",
+        "--epic-branch-prefix",
+        "--story",
+        "--run-id",
+        "--trace-output",
+    ):
+        assert token in cmd, f"invocation is missing {token}: {cmd}"
+    assert "reported, never certified" in execute.lower()
 
 
 def test_preflight_step5_names_the_assert_mode() -> None:
