@@ -132,8 +132,7 @@ reproducible from the run itself.
 
 ## Scope
 
-This targets the **sequential spine only**. Under the experimental `--parallel` fan-out
-each worktree agent sees its own copy of the implementation-artifacts directory and writes
-no shared heartbeat, so there is no single snapshot for this to read. The watch surface for
-a fan-out run is the workflow progress view and its run log, as the launch briefing says.
-Do not imply this render covers a fan-out run.
+This targets the **sequential spine**, which is the only execution path: the experimental
+`--parallel` fan-out is retired. (Under that mode each worktree agent saw its own copy of
+the implementation-artifacts directory and wrote no shared heartbeat, so there was no
+single snapshot for this to read - the reason this scope note existed.)

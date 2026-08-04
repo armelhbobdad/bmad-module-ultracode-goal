@@ -145,7 +145,7 @@ build_headless_envelope(<blocker list>, <path to this run's .decision-log.md>, r
 
 **Both emits are also written to `{workflow.implementation_artifacts}/run-result.json` by `scripts/headless_envelope.py` itself, which is the writer of that file** — so an automator reads a file at a pinned path instead of scraping the transcript for the terminal verdict. The adapter serializes once and hands the same string to both sinks, so the file is byte-identical to what you emit on stdout: print exactly what it produced, do not re-serialize the dict yourself. The write is best-effort and never a gate on the exit — if it fails, the adapter logs `WARN run-result-write-failed` to `.decision-log.md` and the run still emits.
 
-Three constraints on that file:
+Two constraints on that file:
 
 - **Headless only.** An attended run writes no `run-result.json`. An operator who found a stale one from an attended run would read it as a headless terminal, so do not "helpfully" write it in both modes.
 - **Path-pinned and overwrite-in-place**, exactly like `run-status.json`: a second run against the same `{workflow.implementation_artifacts}` overwrites the first run's result.

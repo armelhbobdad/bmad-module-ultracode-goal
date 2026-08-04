@@ -235,4 +235,4 @@ def test_story_token_budget_deprecated_in_place() -> None:
         idx += 1
     assert any(
         "story_token_budget" in s and "max_turns_per_story" in s for s in sections
-    ), "no Deprecated section names story_token_budget with its replacement" 
+    ), "no Deprecated section names story_token_budget with its replacement"

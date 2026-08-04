@@ -4,14 +4,9 @@ Future work planned for UltraCode Goal. Items here are **directional, not a prom
 
 ---
 
-## `--parallel` worktree fan-out: end-to-end empirical validation
+## Parallel execution: retired, not promoted
 
-The `--parallel` execution mode (worktree fan-out instead of the sequential `/goal` spine) is shipped as **experimental** for a reason. Two interactions need real-run evidence before it can be promoted:
-
-- the **workflow ↔ skill interplay** when many stories run concurrently across worktrees, and
-- **shared Auto Memory across worktrees**: whether concurrent captures land coherently or step on each other.
-
-The sequential spine is the default and the validated path. `--parallel` stays opt-in until fan-out runs demonstrate both of these hold up under load.
+The experimental `--parallel` worktree fan-out was retired rather than promoted: the empirical validation this item used to plan never arrived, and the mode's own limit list (no mid-run input, shared Auto Memory, no heartbeat, no post-commit re-verify) never closed. The flag is still accepted and ignored for compatibility. Any future parallel execution would be a fresh design measured against the sequential spine's guarantees, not a revival of the removed workflow.
 
 ## Hook-protocol behavior across Claude Code versions
 

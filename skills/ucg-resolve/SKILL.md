@@ -224,6 +224,7 @@ mid-story HEAD.
 
 This is a decide-surface, not a runner. It launches nothing itself: it reads artifacts,
 records answers, applies what a `close` resolves, and hands off. Like the read-only status
-view, it targets the **sequential spine** — under the experimental `--parallel` fan-out each
-worktree agent sees its own implementation-artifacts directory, so there is no single set of
-pending decisions for this to reconstruct.
+view, it targets the **sequential spine**, which is the only execution path: the
+experimental `--parallel` fan-out is retired. (Under that mode each worktree agent saw its
+own implementation-artifacts directory, so there was no single set of pending decisions to
+reconstruct - the reason this scope note existed.)
