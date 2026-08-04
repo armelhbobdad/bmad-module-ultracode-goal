@@ -706,11 +706,130 @@ def apply_production_and(
     return verdict, nfr_status, review_score
 
 
+# Severity order for the roll-up aggregate: the epic's status is its WORST
+# story's status, and an unknown status is treated as the worst there is.
+_ROLLUP_SEVERITY = ("PASS", "WAIVED", "CONCERNS", "FAIL", "NOT_EVALUATED")
+
+
+def rollup_gate(
+    trace_output: Path, sprint_status: Path, epic: str, reasons: list[str]
+) -> dict:
+    """Aggregate the epic verdict from per-story artifacts, fail-closed.
+
+    The story set comes from sprint-status.yaml (the authority on which stories
+    the epic owes), never from a caller-typed list - a story omitted from a
+    typed list would simply not be aggregated, which is the fabrication channel
+    this reader exists to close. Refusals, all NOT_EVALUATED -> escalate:
+    an unreadable sprint-status, an epic with no stories, any story not `done`
+    (the roll-up's own trigger is every-story-done, so running it early is
+    refused rather than answered), and any done story whose own gate artifact
+    does not resolve - a `done` row nothing ever gated is exactly what this
+    aggregate must surface, not paper over.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import preflight_check  # noqa: PLC0415  (sibling script, path set above)
+
+    try:
+        text = sprint_status.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        reasons.append(f"sprint-status unreadable at {sprint_status}; roll-up refused")
+        return {
+            "gate_status": "NOT_EVALUATED",
+            "p0_status": None,
+            "p1_status": None,
+            "overall_status": None,
+        }
+    statuses = preflight_check._parse_development_status(text)
+    stories = [
+        key
+        for key in statuses
+        if preflight_check._is_story_key(key)
+        and preflight_check._epic_id_of(key) == str(epic)
+    ]
+    refused = None
+    if not stories:
+        refused = f"no stories for epic {epic} in {sprint_status.name}; roll-up refused"
+    else:
+        not_done = [key for key in stories if statuses[key] != "done"]
+        if not_done:
+            refused = (
+                "roll-up refused: %d of %d stories not done (%s)"
+                % (len(not_done), len(stories), ", ".join(not_done[:5]))
+            )
+    if refused:
+        reasons.append(refused)
+        return {
+            "gate_status": "NOT_EVALUATED",
+            "p0_status": None,
+            "p1_status": None,
+            "overall_status": None,
+        }
+
+    # A generically-named directory (TEA's untouched single-story output) has
+    # exactly one gate artifact, and the unscoped fallback would hand that one
+    # file to EVERY story here - a multi-story epic advancing on a single
+    # artifact, each reason line asserting a per-story status the directory
+    # cannot support. One story may legitimately live in such a directory
+    # (gate_eval's documented isolated-dir rule); two or more cannot.
+    if len(stories) > 1 and not _is_per_story_named(trace_output):
+        reasons.append(
+            "roll-up refused: %s is not per-story-named, so one shared artifact "
+            "would decide all %d stories" % (trace_output, len(stories))
+        )
+        return {
+            "gate_status": "NOT_EVALUATED",
+            "p0_status": None,
+            "p1_status": None,
+            "overall_status": None,
+        }
+
+    worst = "PASS"
+    for key in stories:
+        sub: list[str] = []
+        gate = load_gate(trace_output, sub, key)
+        status = (gate["gate_status"] or "NOT_EVALUATED").upper()
+        if status not in _ROLLUP_SEVERITY:
+            reasons.append(
+                f"story {key}: unrecognized gate_status {status!r}; treated as NOT_EVALUATED"
+            )
+            status = "NOT_EVALUATED"
+        elif status == "NOT_EVALUATED":
+            reasons.append(
+                f"story {key}: gate_status NOT_EVALUATED - a done row with no "
+                "resolvable gate artifact of its own"
+            )
+        else:
+            reasons.append(f"story {key}: gate_status {status}")
+        # The resolver's own record (which file decided, any refused hint) must
+        # not be dropped by the aggregation - the trail has to agree with the
+        # gate about which file decided. Surface it for every non-PASS story,
+        # and always for a refused or honoured hint.
+        for line in sub:
+            if status != "PASS" or "hint" in line.lower():
+                reasons.append(f"story {key}: {line}")
+        if _ROLLUP_SEVERITY.index(status) > _ROLLUP_SEVERITY.index(worst):
+            worst = status
+    reasons.append(
+        "roll-up over %d stories: worst gate_status %s" % (len(stories), worst)
+    )
+    return {
+        "gate_status": worst,
+        "p0_status": None,
+        "p1_status": None,
+        "overall_status": None,
+    }
+
+
 def evaluate(args: argparse.Namespace) -> dict:
     reasons: list[str] = []
     trace_output = Path(args.trace_output)
 
-    gate = load_gate(trace_output, reasons, getattr(args, "story", None))
+    if getattr(args, "rollup", False):
+        gate = rollup_gate(
+            trace_output, Path(args.sprint_status), args.story, reasons
+        )
+    else:
+        gate = load_gate(trace_output, reasons, getattr(args, "story", None))
     gate_status = (gate["gate_status"] or "NOT_EVALUATED").upper()
     verdict = GATE_VERDICT.get(gate_status, "escalate")
     if gate_status not in GATE_VERDICT:
@@ -787,7 +906,30 @@ def main(argv: list[str] | None = None) -> int:
         "NFR/test-review ANDs, which TEA writes per story and never per epic. "
         "Without it, --profile production requires both --nfr and --test-review.",
     )
+    parser.add_argument(
+        "--rollup",
+        action="store_true",
+        help="Compute the epic roll-up from the per-story gate artifacts and "
+        "the sprint-status story set, instead of reading a single epic-named "
+        "artifact. Requires --epic-level, --story <epic id> and "
+        "--sprint-status. Fail-closed: any not-done story, and any done story "
+        "with no resolvable gate artifact of its own, refuses to NOT_EVALUATED.",
+    )
+    parser.add_argument(
+        "--sprint-status",
+        help="PATH to sprint-status.yaml (rollup only): the authority on which "
+        "stories the epic owes, read so the story set can never be a "
+        "caller-typed list with a story quietly left off.",
+    )
     args = parser.parse_args(argv)
+
+    if args.rollup and not (args.epic_level and args.story and args.sprint_status):
+        parser.error(
+            "--rollup is the epic roll-up computed from per-story artifacts: it "
+            "requires --epic-level, --story <epic id> and --sprint-status"
+        )
+    if args.sprint_status and not args.rollup:
+        parser.error("--sprint-status is only meaningful with --rollup")
 
     # Mutually exclusive by meaning: --epic-level asserts there is no aggregate to
     # AND, so supplying one anyway is a contradiction, and the flag would win
