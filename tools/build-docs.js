@@ -48,7 +48,7 @@ async function main() {
   const artifactsDir = generateArtifacts(docsDir);
   const siteDir = buildSite(artifactsDir);
 
-  writeBuildInputsManifest(docsDir);
+  writeBuildInputsManifest();
 
   printBuildSummary(docsDir, artifactsDir, siteDir);
 }
@@ -64,21 +64,12 @@ async function main() {
  * stale render against unchanged inputs, so a matching manifest never proves
  * the render is current - only a MISmatching one proves it is stale.
  */
-function writeBuildInputsManifest(docsDir) {
-  const crypto = require('node:crypto');
-  const inputs = {};
-  const sha1 = (file) => crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
-  for (const name of fs.readdirSync(docsDir).sort()) {
-    if (name.endsWith('.md')) {
-      inputs[`docs/${name}`] = sha1(path.join(docsDir, name));
-    }
-  }
-  for (const rel of ['website/src/rehype-markdown-links.js', 'website/astro.config.mjs', 'tools/build-docs.js']) {
-    const file = path.join(PROJECT_ROOT, rel);
-    if (fs.existsSync(file)) {
-      inputs[rel] = sha1(file);
-    }
-  }
+function writeBuildInputsManifest() {
+  // The input set is owned by the validator (collectBuildInputs), so the
+  // manifest writer and the freshness checker can never disagree about what
+  // shapes the render.
+  const { collectBuildInputs } = require('./validate-docs-links.js');
+  const inputs = collectBuildInputs(PROJECT_ROOT);
   const manifestPath = path.join(BUILD_DIR, '.build-inputs.json');
   fs.writeFileSync(manifestPath, `${JSON.stringify({ inputs }, null, 2)}\n`, 'utf-8');
   console.log(`  \u2192 Wrote build-inputs manifest (${Object.keys(inputs).length} inputs)`);

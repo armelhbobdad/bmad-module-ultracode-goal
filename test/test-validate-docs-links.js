@@ -306,6 +306,40 @@ async function main() {
     assert.strictEqual(buildInputsStatus(cfg).state, 'missing');
   });
 
+  await testAsync('run() prints the definite STALE block when inputs changed', async () => {
+    const lines = [];
+    const { root, cfg } = fixture({
+      docs: { 'a.md': '# A\n' },
+      build: { 'index.html': page('<p>hi</p>') },
+    });
+    fs.mkdirSync(path.join(root, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'build', '.build-inputs.json'), JSON.stringify({ inputs: { 'docs/a.md': 'deadbeef' } }));
+    await run(cfg, (m) => lines.push(m));
+    const text = lines.join('\n');
+    assert.match(text, /STALE BUILD: 1 input\(s\) changed/);
+    assert.match(text, /docs\/a\.md/);
+    assert.doesNotMatch(text, /may be cached/, 'the hedge yields to the definite block');
+  });
+
+  await testAsync('run() keeps the hedged note on a matching manifest', async () => {
+    const crypto = require('node:crypto');
+    const lines = [];
+    const { root, cfg } = fixture({
+      docs: { 'a.md': '# A\n' },
+      build: { 'index.html': page('<p>hi</p>') },
+    });
+    const sha = crypto
+      .createHash('sha1')
+      .update(fs.readFileSync(path.join(root, 'docs', 'a.md')))
+      .digest('hex');
+    fs.mkdirSync(path.join(root, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'build', '.build-inputs.json'), JSON.stringify({ inputs: { 'docs/a.md': sha } }));
+    await run(cfg, (m) => lines.push(m));
+    const text = lines.join('\n');
+    assert.doesNotMatch(text, /STALE BUILD/);
+    assert.match(text, /may be cached/, 'a match never claims freshness');
+  });
+
   // --- llms.txt route coverage -----------------------------------------------
   // This link class is not HTML, so the built pass never sees it; a deleted
   // page's index entry survived every check exactly this way.

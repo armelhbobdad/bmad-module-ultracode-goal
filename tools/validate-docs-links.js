@@ -385,6 +385,43 @@ function checkBuilt({ projectRoot, buildDir }, base, report) {
  * @param {(msg: string) => void} [log] - Output sink; defaults to console.log
  * @returns {Promise<{issues: Array<{file: string, detail: string}>, sourceCount: number, builtCount: number, haveBuild: boolean, missingRequiredBuild: boolean, ok: boolean}>} Outcome
  */
+const BUILD_INFRA_INPUTS = [
+  'website/src/rehype-markdown-links.js',
+  'website/src/rehype-base-paths.js',
+  'website/src/lib/site-url.js',
+  'website/astro.config.mjs',
+  'tools/build-docs.js',
+];
+
+/**
+ * One sha1 per build input: the flat docs/*.md set plus BUILD_INFRA_INPUTS,
+ * the route-shaping infrastructure (BOTH rehype rewriters, the base/site
+ * resolver, the Astro config, and the builder itself). Canonical for both the
+ * manifest writer in tools/build-docs.js and the freshness check below - the
+ * first cut duplicated the list in both tools and both copies missed the
+ * second rehype rewriter, which is exactly the drift a single owner prevents.
+ */
+function collectBuildInputs(projectRoot) {
+  const crypto = require('node:crypto');
+  const sha1 = (file) => crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
+  const inputs = {};
+  const docsDir = path.join(projectRoot, 'docs');
+  if (fs.existsSync(docsDir)) {
+    for (const name of fs.readdirSync(docsDir).sort()) {
+      if (name.endsWith('.md')) {
+        inputs[`docs/${name}`] = sha1(path.join(docsDir, name));
+      }
+    }
+  }
+  for (const rel of BUILD_INFRA_INPUTS) {
+    const file = path.join(projectRoot, rel);
+    if (fs.existsSync(file)) {
+      inputs[rel] = sha1(file);
+    }
+  }
+  return inputs;
+}
+
 /**
  * Compare the build-inputs manifest against the tree as it is NOW.
  *
@@ -396,7 +433,6 @@ function checkBuilt({ projectRoot, buildDir }, base, report) {
  * stale branch speaks definitely and the match branch stays hedged.
  */
 function buildInputsStatus({ projectRoot, buildDir }) {
-  const crypto = require('node:crypto');
   const manifestPath = path.join(path.dirname(buildDir), '.build-inputs.json');
   let manifest;
   try {
@@ -407,22 +443,7 @@ function buildInputsStatus({ projectRoot, buildDir }) {
   if (!manifest || typeof manifest.inputs !== 'object' || manifest.inputs === null) {
     return { state: 'missing', changed: [] };
   }
-  const sha1 = (file) => crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
-  const current = {};
-  const docsDir = path.join(projectRoot, 'docs');
-  if (fs.existsSync(docsDir)) {
-    for (const name of fs.readdirSync(docsDir).sort()) {
-      if (name.endsWith('.md')) {
-        current[`docs/${name}`] = sha1(path.join(docsDir, name));
-      }
-    }
-  }
-  for (const rel of ['website/src/rehype-markdown-links.js', 'website/astro.config.mjs', 'tools/build-docs.js']) {
-    const file = path.join(projectRoot, rel);
-    if (fs.existsSync(file)) {
-      current[rel] = sha1(file);
-    }
-  }
+  const current = collectBuildInputs(projectRoot);
   const changed = [];
   for (const key of new Set([...Object.keys(manifest.inputs), ...Object.keys(current)])) {
     if (manifest.inputs[key] !== current[key]) {
@@ -620,6 +641,7 @@ module.exports = {
   assetUrls,
   walk,
   buildInputsStatus,
+  collectBuildInputs,
   checkLlmsIndex,
 };
 
