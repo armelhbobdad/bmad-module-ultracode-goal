@@ -48,12 +48,31 @@ Absence of sprint-status.yaml is a reportable fact (sprint_status_present:
 false, epics: []), not an error — rollup still exits 0.
 
   uv run preflight_check.py --rollup --project-root <path> --impl-artifacts <path>
+
+Resume-manifest mode (`--assert-armed`): the one deterministic read a resumed
+run makes in place of the tool-action-per-fact environment sweep the resume
+rule otherwise costs (references/execute.md, resume). It asserts the epic
+branch, both hooks with the all-tools PreToolUse matcher, and the five injected
+hook env vars (accepted from the hook command strings OR the inherited process
+env, both of which preflight step 5 permits), reports the recall latch WITHOUT
+certifying it (re-latching stays a model-owned Stage 1 step on every resume),
+and, given --story, derives the story's resume route from artifacts alone:
+story-boundary (no baseline), gate-owed (committed, green, un-gated - requires
+--trace-output evidence; without it that route never fires), or mid-story.
+Exit 0 iff branch+hooks+env are armed; the latch and story blocks never move
+the exit code, because they inform model-owned actions rather than certify
+them.
+
+  uv run preflight_check.py --assert-armed --project-root <path> \
+      --impl-artifacts <path> [--story <id>] [--run-id <rid>] \
+      [--trace-output <dir>] [--protected-branch <name>]...
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -569,6 +588,297 @@ def build_report(
     }
 
 
+# --- Resume manifest (--assert-armed) ----------------------------------------
+# One deterministic read of the environment a resume must re-assert, replacing
+# the tool-action-per-fact sweep the resume rule otherwise spends turns on.
+# The script ASSERTS; it never acts: the two model-owned writes on a resume
+# (re-latching from this run's own measurement, and writing a boundary story's
+# fresh baseline) stay with the conductor, and exit 0 certifies neither.
+
+# The five env vars preflight step 5 injects so the hooks enforce the resolved
+# config rather than their hardcoded fallbacks. A var may live either in the
+# hook command string in settings.local.json or in the process env the hooks
+# inherit (preflight.md permits both); this checker accepts both, because
+# fail-closing on a legitimate arming would teach operators to skip the check.
+HOOK_ENV_VARS = (
+    "ULTRACODE_PROTECTED_BRANCHES",
+    "ULTRACODE_IMPL_ARTIFACTS",
+    "ULTRACODE_MAX_TURNS",
+    "ULTRACODE_EPIC_BRANCH_PREFIX",
+    "ULTRACODE_TEST_ARTIFACTS",
+)
+
+_GUARD_SCRIPT = "guard_pretooluse.py"
+_BUDGET_SCRIPT = "budget_stop.py"
+
+
+def _hook_commands(settings: dict) -> list[tuple[str | None, str]]:
+    """Every (matcher, command) pair nested under hooks.<Event>[].hooks[].
+
+    The entries are nested, not top-level (preflight.md's stale-hook bullet
+    documents the shape); a malformed layer contributes nothing rather than
+    raising, because an unreadable arming must read as NOT armed, never crash.
+    """
+    out: list[tuple[str | None, str]] = []
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return out
+    for groups in hooks.values():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            matcher = group.get("matcher")
+            inner = group.get("hooks")
+            if not isinstance(inner, list):
+                continue
+            for entry in inner:
+                if isinstance(entry, dict) and isinstance(entry.get("command"), str):
+                    out.append((matcher if isinstance(matcher, str) else None, entry["command"]))
+    return out
+
+
+def _assert_hooks(project_root: Path) -> dict:
+    """Are both UCG hooks armed, with the PreToolUse matcher in all-tools form?
+
+    Matcher assertion mirrors preflight step 5: `*` or an absent matcher key both
+    select every tool; anything narrower (the observed `Bash`-only arming) leaves
+    the Cross-Session Recall invariant enforcing nothing. Fail-closed: a missing
+    or unparseable settings file is NOT armed.
+    """
+    settings_path = project_root / ".claude" / "settings.local.json"
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {
+            "settings_readable": False,
+            "guard_present": False,
+            "budget_present": False,
+            "matcher_all_tools": False,
+            "ok": False,
+        }
+    pairs = _hook_commands(settings)
+    guard = [(m, c) for m, c in pairs if _GUARD_SCRIPT in c]
+    budget = [c for _, c in pairs if _BUDGET_SCRIPT in c]
+    matcher_ok = bool(guard) and all(m is None or m == "*" for m, _ in guard)
+    return {
+        "settings_readable": True,
+        "guard_present": bool(guard),
+        "budget_present": bool(budget),
+        "matcher_all_tools": matcher_ok,
+        "ok": bool(guard) and bool(budget) and matcher_ok,
+    }
+
+
+def _assert_hook_env(project_root: Path) -> dict:
+    """Where each injected hook var lives: the hook command string, the process
+    env, or nowhere. `ok` is all-five-present — a missing var is an invariant
+    silently enforcing nothing, which is the exact state this mode exists to
+    surface."""
+    settings_path = project_root / ".claude" / "settings.local.json"
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        commands = " ".join(c for _, c in _hook_commands(settings))
+    except (OSError, ValueError, UnicodeDecodeError):
+        commands = ""
+    sources: dict[str, str] = {}
+    for var in HOOK_ENV_VARS:
+        if f"{var}=" in commands:
+            sources[var] = "settings"
+        elif var in os.environ:
+            sources[var] = "process"
+        else:
+            sources[var] = "absent"
+    missing = [v for v, s in sources.items() if s == "absent"]
+    return {"sources": sources, "missing": missing, "ok": not missing}
+
+
+def _assert_branch(
+    project_root: Path, epic_branch_prefix: str, protected: tuple[str, ...]
+) -> dict:
+    branch = _git_branch(project_root)
+    ok = bool(branch) and branch.startswith(epic_branch_prefix) and branch not in protected
+    return {
+        "current": branch,
+        "expected_prefix": epic_branch_prefix,
+        "protected": list(protected),
+        "ok": ok,
+    }
+
+
+def _read_latch(impl_artifacts: Path, run_id: str | None) -> dict:
+    """The on-disk recall latch, REPORTED and never certified.
+
+    `certifies` is a literal None on purpose: a green manifest must not become an
+    inherited-latch claim by proxy. Whatever this reports, the resume re-latches
+    from its own measurement (Stage 1's latch step), and a latch whose run_id is
+    not this run's is another run's artifact (references/execute.md, resume).
+    """
+    path = impl_artifacts / ".mem-state.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {"state": "absent", "certifies": None}
+    latch_run = data.get("run_id")
+    out: dict = {
+        "state": "present",
+        "claude_mem": data.get("claude_mem"),
+        "recall": data.get("recall"),
+        "run_id": latch_run,
+        "certifies": None,
+    }
+    if run_id is not None:
+        out["owned_by_this_run"] = latch_run == run_id
+    return out
+
+
+def _marker_line(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _tests_ran_baseline(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    match = re.search(r"^baseline=(.*)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _commits_past(project_root: Path, baseline_sha: str) -> int | None:
+    code, out = _git(["rev-list", "--count", f"{baseline_sha}..HEAD"], project_root)
+    if code != 0:
+        return None
+    try:
+        return int(out.strip())
+    except ValueError:
+        return None
+
+
+def _story_gate_artifacts_present(trace_output: Path, story: str) -> bool:
+    """Does any per-story trace/gate-decision artifact resolve for this story?
+
+    Resolution identity is imported from gate_eval rather than re-implemented,
+    so the manifest and the gate cannot disagree about what names a story.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import gate_eval  # noqa: PLC0415  (sibling script, path set above)
+
+    if not trace_output.is_dir():
+        return False
+    for path in trace_output.iterdir():
+        if not path.is_file():
+            continue
+        stem = path.stem
+        if (
+            stem.startswith(("trace-", "gate-decision-"))
+            and gate_eval._stem_matches_story(stem, story)
+        ):
+            return True
+    return False
+
+
+def _assert_story(
+    project_root: Path,
+    impl_artifacts: Path,
+    story: str,
+    trace_output: Path | None,
+) -> dict:
+    """Classify the resume story by artifacts, never by prose.
+
+    Routes mirror references/execute.md's resume rule exactly:
+      - `story-boundary`: no baseline marker — the normal `--max-stories` case;
+        step 0 writes the baseline fresh.
+      - `gate-owed`: committed, green and un-gated (commits past the baseline,
+        a tests-ran marker still matching it, and NO per-story gate artifact) —
+        enter at step 5. This route REQUIRES --trace-output: with no artifact
+        evidence the discriminator cannot hold in full, and skipping steps 1-4
+        on a guess is the fail-open this mode must not introduce.
+      - `mid-story`: everything else — re-read the baseline, run the ordinary
+        loop from step 0.
+    """
+    baseline_path = impl_artifacts / f".baseline-{story}"
+    marker_path = impl_artifacts / f".tests-ran-{story}"
+    baseline = _marker_line(baseline_path)
+    marker_baseline = _tests_ran_baseline(marker_path)
+    out: dict = {
+        "id": story,
+        "baseline": "present" if baseline else "absent",
+        "tests_ran": "present" if marker_path.is_file() else "absent",
+        "tests_ran_fresh": bool(baseline) and marker_baseline == baseline,
+    }
+    commits = _commits_past(project_root, baseline) if baseline else None
+    out["commits_past_baseline"] = commits
+    if trace_output is not None and baseline:
+        gated = _story_gate_artifacts_present(trace_output, story)
+        out["gate_artifacts"] = "present" if gated else "absent"
+    else:
+        out["gate_artifacts"] = "unknown"
+    if not baseline:
+        out["route"] = "story-boundary"
+    elif (
+        out["gate_artifacts"] == "absent"
+        and out["tests_ran_fresh"]
+        and (commits or 0) > 0
+    ):
+        out["route"] = "gate-owed"
+    else:
+        out["route"] = "mid-story"
+    return out
+
+
+def build_assert_armed(
+    *,
+    project_root: Path,
+    impl_artifacts: Path,
+    epic_branch_prefix: str,
+    protected: tuple[str, ...],
+    story: str | None,
+    run_id: str | None,
+    trace_output: Path | None,
+) -> dict:
+    branch = _assert_branch(project_root, epic_branch_prefix, protected)
+    hooks = _assert_hooks(project_root)
+    hook_env = _assert_hook_env(project_root)
+    checks: dict = {
+        "branch": branch,
+        "hooks": hooks,
+        "hook_env": hook_env,
+        "latch": _read_latch(impl_artifacts, run_id),
+    }
+    if story:
+        checks["story"] = _assert_story(project_root, impl_artifacts, story, trace_output)
+    reasons: list[str] = []
+    if not branch["ok"]:
+        reasons.append(
+            "branch %r is not an epic branch under prefix %r (or is protected)"
+            % (branch["current"], epic_branch_prefix)
+        )
+    if not hooks["ok"]:
+        if not hooks["settings_readable"]:
+            reasons.append("settings.local.json is missing or unreadable; hooks NOT armed")
+        if not hooks["guard_present"]:
+            reasons.append("PreToolUse guard (guard_pretooluse.py) not armed")
+        if not hooks["budget_present"]:
+            reasons.append("Stop budget hook (budget_stop.py) not armed")
+        if hooks["guard_present"] and not hooks["matcher_all_tools"]:
+            reasons.append(
+                "PreToolUse matcher is not the all-tools form; the recall "
+                "invariant enforces nothing (preflight.md step 5)"
+            )
+    if not hook_env["ok"]:
+        reasons.append(
+            "hook env not fully injected; enforcing hardcoded fallbacks for: %s"
+            % ", ".join(hook_env["missing"])
+        )
+    armed = branch["ok"] and hooks["ok"] and hook_env["ok"]
+    return {"armed": armed, "checks": checks, "reasons": reasons}
+
+
 def _resolve(path_arg: str, project_root: Path) -> Path:
     """Expand a possible {project-root} token and resolve relative to project_root."""
     resolved = path_arg.replace("{project-root}", str(project_root))
@@ -601,12 +911,42 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Protected branch name; repeatable. Defaults to main, master.",
     )
+    parser.add_argument(
+        "--assert-armed",
+        action="store_true",
+        help="Emit only the resume manifest: branch, hooks (incl. the all-tools "
+        "matcher), injected hook env, the recall latch (reported, never "
+        "certified), and, with --story, the story's artifact-derived resume "
+        "route. Exit 0 iff branch+hooks+env are armed. When set, --epic, "
+        "--tea-config, and the mechanical preflight checks do not run.",
+    )
+    parser.add_argument(
+        "--story",
+        help="assert-armed only: the story the resume will drive; adds the "
+        "artifact-derived route (story-boundary / mid-story / gate-owed).",
+    )
+    parser.add_argument(
+        "--run-id",
+        help="assert-armed only: this run's id, for reporting whether the "
+        "on-disk latch is owned by this run (reported, never certified).",
+    )
+    parser.add_argument(
+        "--trace-output",
+        help="assert-armed only: the per-story trace artifacts dir; required "
+        "evidence for the gate-owed route (without it that route never fires).",
+    )
+    parser.add_argument(
+        "--epic-branch-prefix",
+        default=os.environ.get("ULTRACODE_EPIC_BRANCH_PREFIX", "ultracode/epic-"),
+        help="assert-armed only: the resolved epic branch prefix. Defaults to "
+        "$ULTRACODE_EPIC_BRANCH_PREFIX, then the shipped default.",
+    )
     args = parser.parse_args(argv)
 
     # Preserve the normal-mode contract: --epic and --tea-config are required
     # unless --rollup is in effect. parser.error() reproduces argparse's usage
     # line + "error:" message and exits 2, exactly as required=True did.
-    if not args.rollup:
+    if not args.rollup and not args.assert_armed:
         missing = [
             name
             for name, value in (("--epic", args.epic), ("--tea-config", args.tea_config))
@@ -632,6 +972,23 @@ def main(argv: list[str] | None = None) -> int:
         rollup = build_rollup(project_root=project_root, impl_artifacts=impl_artifacts)
         print(json.dumps(rollup, indent=2))
         return 0
+
+    if args.assert_armed:
+        manifest = build_assert_armed(
+            project_root=project_root,
+            impl_artifacts=impl_artifacts,
+            epic_branch_prefix=args.epic_branch_prefix,
+            protected=tuple(args.protected_branch)
+            if args.protected_branch
+            else DEFAULT_PROTECTED,
+            story=args.story,
+            run_id=args.run_id,
+            trace_output=_resolve(args.trace_output, project_root)
+            if args.trace_output
+            else None,
+        )
+        print(json.dumps(manifest, indent=2))
+        return 0 if manifest["armed"] else 1
 
     tea_config = _resolve(args.tea_config, project_root)
     protected = tuple(args.protected_branch) if args.protected_branch else DEFAULT_PROTECTED
