@@ -48,7 +48,31 @@ async function main() {
   const artifactsDir = generateArtifacts(docsDir);
   const siteDir = buildSite(artifactsDir);
 
+  writeBuildInputsManifest();
+
   printBuildSummary(docsDir, artifactsDir, siteDir);
+}
+
+/**
+ * Record what this render was built FROM, so the validator can detect a stale
+ * build instead of hedging. One sha1 per input: the flat docs/*.md set plus
+ * the three files that shape routes (the rehype rewriter, the Astro config,
+ * this builder). Written to build/, NOT build/site/ - the site dir is uploaded
+ * to Pages and this manifest is local bookkeeping, not a public artifact.
+ *
+ * Deliberately NOT a freshness certificate: Astro's content cache can replay a
+ * stale render against unchanged inputs, so a matching manifest never proves
+ * the render is current - only a MISmatching one proves it is stale.
+ */
+function writeBuildInputsManifest() {
+  // The input set is owned by the validator (collectBuildInputs), so the
+  // manifest writer and the freshness checker can never disagree about what
+  // shapes the render.
+  const { collectBuildInputs } = require('./validate-docs-links.js');
+  const inputs = collectBuildInputs(PROJECT_ROOT);
+  const manifestPath = path.join(BUILD_DIR, '.build-inputs.json');
+  fs.writeFileSync(manifestPath, `${JSON.stringify({ inputs }, null, 2)}\n`, 'utf-8');
+  console.log(`  \u2192 Wrote build-inputs manifest (${Object.keys(inputs).length} inputs)`);
 }
 
 main().catch((error) => {
