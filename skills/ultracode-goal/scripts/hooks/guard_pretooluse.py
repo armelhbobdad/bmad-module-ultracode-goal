@@ -545,7 +545,10 @@ def _marker_freshness_gate(marker: Path, baseline: Path) -> None:
             "be a marker replayed from an earlier code state. Failing closed. "
             "Re-run the story's test/lint/build to green, then rewrite "
             f"{marker} with a `baseline=<sha>` line copied verbatim from "
-            f"{baseline}, then commit."
+            f"{baseline}, then commit. The rewrite must be its own, prior tool "
+            "call: this guard pre-evaluates the command string, so a marker "
+            "written in the same compound command as the commit does not exist "
+            "yet when the commit is evaluated."
         )
     baseline_sha = _recorded_baseline_sha(baseline)
     if baseline_sha is None:
@@ -553,10 +556,14 @@ def _marker_freshness_gate(marker: Path, baseline: Path) -> None:
             "Marker-freshness guard: refusing `git commit` — this story's "
             f"recorded baseline {baseline} is missing or unreadable, so the "
             f"tests-ran marker {marker} cannot be checked against it. Failing "
-            "closed. Restore that file (the full 40-hex commit this story "
-            "started from, one line), re-run the story's test/lint/build to "
-            f"green, then rewrite {marker} with a `baseline=<sha>` line copied "
-            "verbatim from it, then commit."
+            "closed. If this story has already committed, restore that file "
+            "(the full 40-hex commit this story started from, one line); if it "
+            "has not yet committed — a fresh story at a resume boundary never "
+            "had one — write it now from `git rev-parse HEAD` exactly as step 0 "
+            "does. Then re-run the story's test/lint/build to green, rewrite "
+            f"{marker} with a `baseline=<sha>` line copied verbatim from it, "
+            "and commit — each write its own, prior tool call, never chained "
+            "into the commit command."
         )
     if marker_sha != baseline_sha:
         _deny(
@@ -568,7 +575,10 @@ def _marker_freshness_gate(marker: Path, baseline: Path) -> None:
             f"test/lint/build to green, then rewrite {marker} with a "
             f"`baseline=<sha>` line copied verbatim from {baseline} (copied, "
             "never re-derived from `git rev-parse HEAD` — the baseline does "
-            "not move while the story runs), then commit."
+            "not move while the story runs), then commit. The rewrite must be "
+            "its own, prior tool call: the guard pre-evaluates the command "
+            "string, so a marker written in the same compound command as the "
+            "commit does not exist yet when the commit is evaluated."
         )
 
 

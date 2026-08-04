@@ -764,8 +764,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Current story id; scopes gate-file resolution to that story's "
         "artifacts in a shared multi-story trace dir. Omit for a single-story dir.",
     )
-    parser.add_argument("--nfr", help="Path to nfr-assessment.md (production only).")
-    parser.add_argument("--test-review", help="Path to test-review.md (production only).")
+    parser.add_argument(
+        "--nfr",
+        help="PATH to the story's nfr-assessment markdown (production only) — a file "
+        "path, never a status word. The file must carry a literal "
+        "'**Overall Status:** <PASS|CONCERNS|FAIL|NOT_ASSESSED>' line; a value "
+        "passed here instead of a path is read as a missing file and treated as "
+        "failing.",
+    )
+    parser.add_argument(
+        "--test-review",
+        help="PATH to the story's test-review markdown (production only) — a file "
+        "path, never a score. The file must carry '**Quality Score**: N/100' "
+        "(the /100 denominator is required) and a '**Recommendation**:' line; a "
+        "value passed here instead of a path is read as a missing file and "
+        "treated as failing.",
+    )
     parser.add_argument(
         "--epic-level",
         action="store_true",

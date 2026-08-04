@@ -148,8 +148,11 @@ _CHECKS = {
     "step0 rules out /tmp with its reason": lambda t: bool(
         re.search(r"Not `/tmp`", _step(0, t))
     ),
-    "step0 requires the scratch dir be removed before the commit": lambda t: bool(
-        re.search(r"remove the directory before the step-4 commit", _step(0, t), re.I)
+    # The removal used to sit before the step-4 commit, which forced any sweep
+    # harness built for step 2 to be re-authored verbatim for step 5's re-verify
+    # — a real, measured cost. The lifetime now ends after step 5 goes green.
+    "step0 bounds the scratch dir's lifetime at step 5's green re-verify": lambda t: bool(
+        re.search(r"remove the directory after step 5's re-verify goes green", _step(0, t), re.I)
     ),
 }
 
