@@ -73,7 +73,7 @@ Every UCG run that reaches Finalize ends with a health-check reflection step tha
 - **Triage** by the `health-check` plus `fp-*` labels. The `fp-*` label is the dedup key; the `health-check` label scopes the queue.
 - **Maintainers must pre-create the labels** the loop and the Action depend on: `health-check`, `workflow-improvement`, `bug`, `friction`, `gap`, `duplicate`. The dedup Action assumes they exist.
 - If you skipped the terminal step in-session, ask the conductor to run the health check for that run, or file via the [Workflow Health Check](.github/ISSUE_TEMPLATE/workflow-health-check.md) template directly.
-- **When you fix a finding, record it as `resolved`.** The reporter's machine keeps a local seen-cache (default `~/.ultracode-goal/health-check-seen.json`) that suppresses a repeat report of a fingerprint it has already handled. Fixing the defect does not clear that entry, so without this step the fingerprint suppresses forever and a later *regression* of the same defect is silently swallowed. After the fix merges, and at the same moment you delete the local queue file:
+- **When you fix a finding, record it as `resolved`.** The reporter's machine keeps a local seen-cache (default `~/.ultracode-goal/health-check-seen.json`) that suppresses a repeat report of a fingerprint it has already handled. Fixing the defect does not clear that entry, so without this step the fingerprint suppresses forever and a later *regression* of the same defect is silently swallowed. After the fix merges, and at the same moment you retire the local queue file (delete it, or archive it into a `resolved/` subfolder of the queue dir; the archive form is what keeps `seen --queue-path`'s prior-filing lookup able to show a later collision or regression the original text):
 
   ```bash
   uv run skills/ultracode-goal/scripts/health_check_fp.py record \
@@ -82,7 +82,7 @@ Every UCG run that reaches Finalize ends with a health-check reflection step tha
     --action resolved --date YYYY-MM-DD
   ```
 
-  A `resolved` record does not suppress: the next sighting reports as a regression and links the original. Prefer this over deleting the entry, which restores the signal but throws away the fact that the defect was ever seen.
+  A `resolved` record does not suppress: the next sighting reports as a regression and links the original. A `defect_slug` recorded earlier for the fp survives this call automatically (re-pass `--defect-slug` only to change it), so the regression can still name which defect regressed under a colliding fingerprint. Prefer this over deleting the entry, which restores the signal but throws away the fact that the defect was ever seen.
 - **Two limits worth knowing.** The cache is machine-local, so a `resolved` you record is not visible to other users; where the finding has a real issue URL, the shared truth is the issue's own state, and the health check consults it in preference to the local record. It accepts only a *completed* close (or a merged PR) as a fix: closing as **not planned** deliberately does not count, since that is how the dedup Action closes duplicates and how a wontfix is closed. And nothing detects a skipped `resolved`, so this remains a convention rather than an enforced step.
 
 ## Releasing
