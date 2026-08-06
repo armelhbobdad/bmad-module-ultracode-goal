@@ -176,6 +176,30 @@ def write_target_without_channel(custom: Path, with_workflow: bool = True) -> Pa
     return target
 
 
+# `uv run --script` auto-provisions the script's PEP-723 dependency, and on a
+# COLD cache it narrates that on stderr ("Installed 1 package in 3ms", plus a
+# `+ tomli-w==…` line). A developer machine has the package cached and prints
+# none of it, so an assertion that counts stderr lines passes locally and reds
+# on CI - which is exactly how this surfaced. Strip the provisioner's own
+# chatter before counting, rather than loosening the count: the property under
+# test is that the missing-engine path emits ONE clean warning and not a
+# traceback, and a traceback's lines match none of these patterns, so they
+# still survive the filter and still fail the count.
+_UV_NOISE = re.compile(
+    r"^(?:Resolved|Installed|Downloading|Downloaded|Prepared|Audited|Uninstalled|Updated|Built)\s"
+    r"|^\s*[+~-]\s\S+==",
+)
+
+
+def _tool_stderr_lines(stderr: str) -> list[str]:
+    """Non-blank stderr lines the TOOL wrote, minus the uv provisioner's."""
+    return [
+        ln
+        for ln in stderr.splitlines()
+        if ln.strip() and not _UV_NOISE.search(ln)
+    ]
+
+
 def run_tool(target: Path, fragment: Path | None = None, extra=None):
     # Invoke the tool exactly as production will: through its `uv run --script`
     # shebang, which auto-provisions tomli-w from the script's PEP-723 block.
@@ -403,8 +427,11 @@ def test_guarded_import_and_no_reimplement(tmp_path):
     after = target.read_bytes()
     assert proc_missing.returncode == 2
     assert sha256(before) == sha256(after)  # wrote nothing
-    warning_lines = [ln for ln in proc_missing.stderr.splitlines() if ln.strip()]
+    warning_lines = _tool_stderr_lines(proc_missing.stderr)
     assert len(warning_lines) == 1, proc_missing.stderr
+    # And it is the guarded warning, not the first line of a traceback. Without
+    # this the line count alone could be satisfied by a one-line crash.
+    assert warning_lines[0].startswith("warning:"), warning_lines
 
     # Anti-vacuous twin: with the engine PRESENT, the SAME invocation reaches
     # the merge and exits 0 (not 2) — exit 2 is the missing-dep signal, not the
