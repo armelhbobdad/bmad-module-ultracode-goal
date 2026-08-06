@@ -209,6 +209,52 @@ def test_frontmatter_hint_resolves_gate_file(tmp_path):
     assert any("custom-gate.json" in r for r in result["reasons"])
 
 
+def test_undecodable_report_does_not_advance_on_an_unpointed_at_file(tmp_path):
+    """An unreadable report is a hint that could not be READ, not a missing hint.
+
+    The catch that keeps a non-UTF-8 markdown file from crashing resolution must
+    not also classify it as carrying no hint: `reports` here is the unfiltered
+    `*.md` glob, so this reader cannot know the file it failed to decode was not
+    a trace report pointing at a FAILING gate. Skipping it silently let
+    resolution fall through to the unpointed-at `gate-decision.json` and advance.
+    """
+    (tmp_path / "traceability-matrix.md").write_bytes(
+        b"---\nworkflowType: 'testarch-trace'\ngateDecisionFile: real-gate.json\n"
+        b"note: \xff\xfe not utf-8\n---\n# report\n"
+    )
+    # The file the undecodable report points at says FAIL.
+    (tmp_path / "real-gate.json").write_text(
+        json.dumps({"gate_status": "FAIL", "p0_status": "NOT_MET", "p1_status": "MET", "overall_status": "MET"}),
+        encoding="utf-8",
+    )
+    # The file nobody pointed at says PASS. Resolving THIS one is the fail-open.
+    write_slim(tmp_path, "PASS")
+
+    result = run_gate(tmp_path, profile="light")
+
+    assert result["verdict"] != "advance", (
+        "a story whose only gate hint could not be decoded must not advance on a "
+        "file nobody pointed at"
+    )
+    assert result["gate_status"] != "PASS"
+
+
+def test_decodable_non_trace_report_still_does_not_refuse(tmp_path):
+    """Twin: the catch must stay narrow.
+
+    A readable markdown file that simply is not a trace report carries no hint,
+    and must not fail the gate closed - otherwise any stray note in the artifact
+    directory would block every story.
+    """
+    (tmp_path / "notes.md").write_text("# just a note, no frontmatter\n", encoding="utf-8")
+    write_slim(tmp_path, "PASS")
+
+    result = run_gate(tmp_path, profile="light")
+
+    assert result["gate_status"] == "PASS"
+    assert result["verdict"] == "advance"
+
+
 # --- Production AND with nfr / test-review -----------------------------------
 
 def test_production_all_green_advances(tmp_path):

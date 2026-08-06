@@ -5,6 +5,14 @@
 # is load-bearing; a plain run is unaffected or strictly improved.
 # Idempotent strip-then-reappend is merge_customization.py's concern, matched by the
 # per-directive [ucg:{skill}-NN] id marker each entry carries.
+#
+# WIRING: authored, not auto-enrolled. The installer's Step 6b enrolls only the four
+# planning-workflow fragments (bmad-prd, bmad-architecture, bmad-create-epics-and-stories,
+# bmad-create-story); the TEA fragments are deliberately excluded there, so a stock install
+# never merges this file. It applies only when an operator runs it explicitly:
+#   merge_customization.py --target _bmad/custom/bmad-testarch-test-design.toml \
+#     --fragment <this file>          (--remove to uninstall)
+# Until then this shaping is inert and the gate alone is load-bearing, as above.
 
 persistent_facts = [
   "Extract every NFR threshold (latency, size, count, rate, timeout) from the PRD, architecture, ADRs, epics, or stories and cite the source artifact it came from; never guess a number — a genuinely-unknown threshold is marked UNKNOWN and converted into a risk, assumption, or deferral rather than an invented value. [ucg:bmad-testarch-test-design-01]",

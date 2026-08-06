@@ -79,6 +79,21 @@ async function testModuleYaml() {
       'health_check_repo default is an owner/repo slug',
       moduleYaml.health_check_repo?.default,
     );
+
+    // module.yaml's entry is a MIRROR: customize.toml [workflow].health_check_repo
+    // is what the live run reads, and nothing in the installer copies this one
+    // across. Two hand-maintained copies of the same default drift silently and
+    // in the direction that matters least visibly - a fork edits module.yaml,
+    // sees no behaviour change, and the run keeps filing against the original
+    // repo. Nothing else pins them together, so this does.
+    const customizeToml = await fs.readFile(path.join(SKILL_DIR, 'customize.toml'), 'utf8');
+    const tomlMatch = customizeToml.match(/^health_check_repo\s*=\s*"([^"]*)"/m);
+    assert(tomlMatch !== null, 'customize.toml declares health_check_repo');
+    assert(
+      tomlMatch && tomlMatch[1] === moduleYaml.health_check_repo?.default,
+      'module.yaml health_check_repo default mirrors customize.toml (the value the run reads)',
+      `module.yaml=${moduleYaml.health_check_repo?.default} customize.toml=${tomlMatch && tomlMatch[1]}`,
+    );
   } catch (error) {
     assert(false, 'module.yaml parses as YAML', error.message);
   }

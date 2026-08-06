@@ -2432,6 +2432,112 @@ def test_dash_c_recursion_disabled_allows_payload_commit(guard_module, monkeypat
     )
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -lc 'git commit -m x'",
+        'sh -lc "git commit -m x"',
+        "bash -cx 'git commit -m x'",
+        "bash -xc 'git commit -m x'",
+        "zsh -ic 'git push'",
+        "bash -ec 'git push --force'",
+        "dash -lc 'git push'",
+        "timeout 30 bash -lc 'git commit -m x'",
+    ],
+)
+def test_shell_flag_cluster_payload_commit_denied(tmp_path: Path, command: str) -> None:
+    """A combined flag cluster carrying `-c` still locates the payload.
+
+    Matching only the bare `-c` token was a fail-open: every form here located
+    no payload, returned an empty verb set, and took the allow path BEFORE the
+    protected-branch, tests-ran, marker-freshness and empty-index gates — the
+    whole commit gate, skipped by one extra letter in the flag.
+
+    The `c` is matched anywhere in the cluster because the shells treat it
+    positionally-indifferently: `bash -cx` and `bash -xc` both run the next
+    token (verified against bash, sh and dash, not assumed).
+    """
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_hook(_bash_event(protected, command), protected)
+
+    assert code == 2, command
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_unlocatable_shell_payload_falls_back_rather_than_allowing(guard_module) -> None:
+    """A listed wrapper whose payload cannot be found fails CLOSED.
+
+    `_shell_payload_verbs` returns None (not an empty set) so the caller scans
+    the raw segment instead of reading "no payload found" as "no git write
+    here". A LISTED wrapper failing open is not part of the accepted residual —
+    that allowance covers UNLISTED wrappers only (see
+    test_unlisted_wrapper_is_an_accepted_fail_open).
+    """
+    assert guard_module._shell_payload_verbs(["-lc"], 0) is None, (
+        "no operand after the flag: unlocatable, not clean"
+    )
+    assert guard_module._shell_payload_verbs(["-x", "-v"], 0) is None, (
+        "no payload flag at all: unlocatable, not clean"
+    )
+    # Reached through the real entry point, the None becomes the anywhere-scan.
+    assert guard_module._git_writes("bash -x git commit -m x") == {"commit"}
+
+
+def test_flag_cluster_match_excludes_long_options(guard_module) -> None:
+    """`--login` must not read as a payload flag, or the operand after a long
+    option would be mistaken for the command string."""
+    assert not guard_module._PAYLOAD_FLAG.match("--login")
+    assert not guard_module._PAYLOAD_FLAG.match("-i")
+    assert guard_module._PAYLOAD_FLAG.match("-c")
+    assert guard_module._PAYLOAD_FLAG.match("-lc")
+    assert guard_module._PAYLOAD_FLAG.match("-cx")
+    # The real form still routes past the long option to the actual `-c`.
+    assert guard_module._git_writes("bash --login -c 'git push'") == {"push"}
+
+
+def test_flag_cluster_fix_removed_restores_the_bypass(guard_module, monkeypatch) -> None:
+    """Twin: the hole reopens only when BOTH halves of the fix are removed.
+
+    The two halves are deliberately redundant, which this pins rather than
+    glosses. Narrowing the matcher alone does not restore the bypass, because
+    an unlocatable payload now falls back to the anywhere-scan; disabling the
+    fallback alone does not restore it either, because the matcher locates the
+    payload. Each half independently denies the commit, and only removing both
+    reproduces the original fail-open.
+    """
+    import re as _re
+
+    bypass = "bash -lc 'git commit -m x'"
+    bare_matcher = _re.compile(r"^-c$")
+    assert guard_module._git_writes(bypass) == {"commit"}
+
+    # Half 1 alone: matcher narrowed, fallback intact -> still denied.
+    with monkeypatch.context() as m:
+        m.setattr(guard_module, "_PAYLOAD_FLAG", bare_matcher)
+        assert guard_module._git_writes(bypass) == {"commit"}, (
+            "the fail-closed fallback catches what the matcher missed"
+        )
+
+    # Half 2 alone: fallback neutered, matcher intact -> still denied.
+    with monkeypatch.context() as m:
+        m.setattr(guard_module, "_anywhere_write_verbs", lambda segment: set())
+        assert guard_module._git_writes(bypass) == {"commit"}, (
+            "the cluster matcher locates the payload without needing the fallback"
+        )
+
+    # Both removed: the original bypass is back, which is what the fix closes.
+    monkeypatch.setattr(guard_module, "_PAYLOAD_FLAG", bare_matcher)
+    monkeypatch.setattr(guard_module, "_anywhere_write_verbs", lambda segment: set())
+    assert guard_module._git_writes(bypass) == set(), (
+        "with neither half, the cluster form locates no payload and the empty "
+        "set is what waved a real commit past every gate"
+    )
+    assert guard_module._git_writes("bash -c 'git commit -m x'") == {"commit"}, (
+        "and the bare form is unaffected: the twin narrows the matcher only"
+    )
+
+
 def test_dash_c_payload_split_mid_quote_still_denies(tmp_path: Path) -> None:
     """The segment split runs BEFORE the `-c` recursion, so a chained payload is
     cut mid-quote into `sh -c 'git add -A` and `git commit'`.

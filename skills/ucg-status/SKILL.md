@@ -31,6 +31,11 @@ one move: run the renderer and show what came back.
 - `{workflow.implementation_artifacts}` and `{workflow.deferred_work_path}` resolve from
   the parent module's `customize.toml` workflow block (the same scalars the autonomous
   run reads).
+- Of the `[workflow]` block's three universal defaults, this skill loads
+  `{workflow.persistent_facts}` (read-only context, and this skill runs cold) and executes
+  **neither** `{workflow.activation_steps_prepend}` nor `{workflow.activation_steps_append}`.
+  Those are operator-configured actions, and running one here would break the promise
+  below. `ucg-formalize` and `ucg-resolve` state the same split.
 - This skill writes nothing, including no decision-log entry. A status read is not an
   event in the run's history, and recording every glance at a run would bury the
   decisions the log exists to carry.
@@ -61,11 +66,26 @@ independent in the parent `customize.toml`, and the renderer defaults the ledger
 `deferred-work.md` *inside* `--impl-artifacts` when the flag is absent — so omitting it on
 a project that moved the ledger renders `n/a`, or a different checkout's ledger, while
 looking exactly like a clean read. Pass it and the render reads the same ledger the gate writes,
-the same way `references/finalize.md` threads that scalar to `mem_observation.py`.
+the same way `{ucg-root}/references/finalize.md` threads that scalar to `mem_observation.py`.
 
-Add `--run-dir <the run folder>` when the operator named a specific run, so the render
-carries that run's decision-log tail. The runs index in the render lists the folders
-available to name.
+`--run-dir <the run folder>` is what makes the decision-log tail render at all, so the
+invocation above - which omits it - always renders that row `n/a`. Do not ship that as the
+normal answer:
+
+- **When the operator named a run**, pass it. The runs index in the render lists the
+  folders available to name.
+- **When the operator named none**, resolve it: pass the run folder whose Epic matches the
+  heartbeat's `epic` row, so the default read carries the log of the run it is describing.
+  If no folder matches, or more than one does, leave the flag off **and say the tail is
+  unscoped** - otherwise `n/a` reads as "this run has an empty log" when it means "nobody
+  told the renderer which log to read".
+
+The two halves can disagree, and the render does not say so. The heartbeat is a single
+project-level file that whichever run ran last overwrote, while run folders are per-Epic
+siblings; naming a run other than the one the heartbeat describes yields a header, stories,
+escalations and ledger belonging to the **latest** run above a decision-log tail belonging
+to the **named** one. When they differ, say which is which above the render, because
+nothing in the render itself distinguishes them.
 
 Pass `--runs-root <dir>` when the operator named a different runs root - runs kept under
 a non-default output root, or another checkout's runs read from here. The invocation
@@ -75,9 +95,13 @@ flag is where an operator whose runs live elsewhere says so. Only the runs index
 `--impl-artifacts` is required and the renderer refuses to run without it (exit 2, nothing
 rendered). Every **source** it reads is optional: an absent, empty or unparseable file
 renders `n/a` and the render continues. That split is deliberate and matches the rest of
-the module - a status read has no authority, so failing closed on a missing artifact would
-turn a reporting gap into a dead end, while an invocation rooted nowhere would produce a
-confident answer about the wrong run.
+the module; `status_render.py` carries the reasoning behind it.
+
+Pass `--impl-artifacts <dir>` yourself when the operator names an **isolated-track** run,
+taking the dir that run recorded in its `.decision-log.md`
+(`{ucg-root}/references/ingest-and-scope.md`, the cross-file/colliding-epic rule). The
+configured scalar is the shared track's: rooted there, the render reads the shared track's
+heartbeat, escalations and baselines and presents them as the answer about a different run.
 
 ## 2. Show what came back
 
@@ -85,16 +109,22 @@ Print the render. Do not re-derive, re-order, or re-judge any row: the renderer 
 files, and a second opinion formed here would be a second, later reading of artifacts that
 may have moved on since.
 
-Two things are worth saying out loud alongside it:
+Three things are worth saying out loud alongside it:
 
 - **The `[machine-derived]` suffix is exclusive.** Only two rendered fields carry it: the
   gate's own reason strings, copied across unedited from the gate result the spine last
-  read, and the turn counter the Stop hook maintains. Every other row is model-maintained.
-  The label carries information *because* it is exclusive - if everything were labeled it
-  would say nothing.
+  read, and the turn counter the Stop hook maintains. Every other row is copied from an
+  artifact a model wrote - except the runs index's `live` / `terminal` word, which the
+  renderer derives from the files on disk, not from anything a model maintained.
 - **`no run:` means no heartbeat file, not a broken read.** The runs index still renders
   below it, so a reader who is simply pointed at the wrong artifacts directory can see
   which runs do exist.
+- **`live` means no run report is on disk yet, not that a process is attached.** A run
+  whose session died mid-flight renders `live` for good. The one recency signal is the
+  heartbeat's `Updated` row, and it belongs to the run that wrote the heartbeat rather
+  than to every row of the index - so when the operator asked whether a run is still
+  going, quote that timestamp (with `Phase`) alongside the index row instead of reading
+  `live` as the answer.
 
 ## What the render carries
 
@@ -104,18 +134,32 @@ Two things are worth saying out loud alongside it:
 | last verdict | the gate's most recent verdict word |
 | last reason(s) | the gate's reason strings, verbatim `[machine-derived]` |
 | budget used | turns spent against the per-story ceiling `[machine-derived]` |
+| re-loops this run | how many times this run re-entered a story, from the heartbeat |
+| profile | the profile the run is on, from the heartbeat |
+| updated | when the heartbeat was last written: this with `phase` is how a reader judges liveness |
 | stories | one row per in-scope story: phase, verdict, attempts, re-loops |
 | escalations | one block per escalation on disk (see below) |
 | deferred work | every row of the ledger, across every run it has accumulated |
-| decision log tail | the run's own account of itself, last lines |
+| decision log tail | the run's own account of itself, last lines - only when `--run-dir` was passed (§1) |
 | runs index | every known run folder, `terminal` once it holds a run report, else `live` |
 
-**Escalations render from the typed sidecar where one exists.** Where only the Stop hook's
-raw marker is on disk, the block instead reads `escalation (unpromoted: session ended
-before Execute promoted it)`. That is not an error state to clean up: it is the residual of
-a session that died between the hook writing the marker and Execute promoting it, and it is
-the only evidence that escalation happened at all. Report it as a pending escalation whose
-typed record was never written, and leave the marker alone.
+**Escalations render from the typed sidecar where one exists.** Where no readable one does,
+the block carries one of two lines, and they mean different things:
+
+- `escalation (unpromoted: session ended before Execute promoted it)` - only the Stop
+  hook's raw marker is on disk. That is not an error state to clean up: it is the residual
+  of a session that died between the hook writing the marker and Execute promoting it, and
+  it is the only evidence that escalation happened at all. Report it as a pending
+  escalation whose typed record was never written, and leave the marker alone.
+- `escalation (typed record present but unreadable)` - the `escalation-<story>.json` named
+  on the `- source:` line was written and then would not parse, which is the half-written
+  file a session killed mid-write leaves. "Never promoted" would be the opposite of what
+  happened: report it as a typed record that needs repair, because `/ucg-resolve` reads
+  that same file to reconstruct the pending decision and cannot parse it either.
+
+A marker and an unreadable sidecar can both be on disk for one story, and the marker wins
+the render, so an `unpromoted` block is worth one directory check before you report the
+typed record as never written.
 
 ## Optional diff-viewer affordance
 
@@ -126,13 +170,4 @@ unchanged.
 
 It is an affordance, never a dependency, and it is confined to stdout. The probe's result
 never reaches an artifact: the run's gate artifacts and its headless envelope are
-byte-identical whether or not the viewer is installed. A run whose recorded evidence
-depended on which tools the reader happened to have installed would no longer be
-reproducible from the run itself.
-
-## Scope
-
-This targets the **sequential spine**, which is the only execution path: the experimental
-`--parallel` fan-out is retired. (Under that mode each worktree agent saw its own copy of
-the implementation-artifacts directory and wrote no shared heartbeat, so there was no
-single snapshot for this to read - the reason this scope note existed.)
+byte-identical whether or not the viewer is installed.
