@@ -69,3 +69,11 @@ node_modules/
 
 # Learning material scaffold: gitignored, so npm would otherwise pack a stale copy
 _ucg-learn/
+
+# Local build and generated output. These are gitignored, but the presence of
+# this file disables npm's .gitignore fallback entirely, so they must be listed
+# here too or a pack from a working tree carries them (measured: 367 files /
+# 21.2 MB against the 97 a release publishes from a clean CI checkout).
+build/
+data/
+graphify-out/
