@@ -3,15 +3,15 @@ title: Architecture
 description: "How UltraCode Goal works as a conductor over BMAD, TEA, and Claude Code primitives: the three enforcement layers, file layout, and customization resolution."
 ---
 
-UltraCode Goal is a conductor. It orchestrates the installed BMAD epic toolbox and the TEA gates, composing Claude Code primitives (`/goal`, Auto Mode, Auto Memory, hooks, git/worktree isolation) and replaces none of them. This page covers the conductor model, the three enforcement layers in depth, the file layout, customization resolution, and why the hooks live where they do.
+UltraCode Goal is a conductor. It orchestrates the installed BMAD epic toolbox and the TEA gates, composing Claude Code primitives (`/goal`, Auto Mode, Auto Memory, hooks, git branch isolation) and replaces none of them. This page covers the conductor model, the three enforcement layers in depth, the file layout, customization resolution, and why the hooks live where they do.
 
 ## The conductor model
 
 The skill owns no implementation logic of its own for building features or running tests. What it owns is the *order*, the *gates*, and the *enforcement*. It delegates:
 
-- **Epic toolbox**: `bmad-sprint-planning`, `bmad-create-story`, `bmad-check-implementation-readiness`, `bmad-dev-story`, `bmad-code-review`, `bmad-correct-course`, `bmad-sprint-status`, `bmad-retrospective`.
+- **Epic toolbox**: `bmad-sprint-planning`, `bmad-create-story`, `bmad-dev-story`, `bmad-code-review`, `bmad-correct-course`, `bmad-retrospective`.
 - **TEA gates**: `bmad-testarch-framework`, `-ci`, `-test-design`, `-atdd`, `-automate`, `-test-review`, `-nfr`, `-trace`.
-- **Claude Code primitives**: the `/goal` loop drives execution; Auto Mode and ultracode session effort make the unattended run possible; Auto Memory carries learnings forward; hooks enforce invariants; git branches and worktrees provide isolation and rollback.
+- **Claude Code primitives**: the `/goal` loop drives execution; Auto Mode and ultracode session effort make the unattended run possible; Auto Memory carries learnings forward; hooks enforce invariants; git branches provide isolation and rollback.
 
 Because it is a conductor, the truth of "is this done" lives in the artifacts its delegates produce, not in the conductor's own reasoning. That is the whole design: the model arranges the work, but a script reads the verdict.
 
@@ -60,6 +60,7 @@ skills/ultracode-goal/
 │   ├── formalize_check.py         #   readiness kernel behind the /ucg-formalize gate
 │   ├── status_render.py           #   read-side render behind /ucg-status
 │   ├── red_ids.py                 #   preflight-RED identity (the resolve join key)
+│   ├── story_sizing.py            #   decomposition sizing + parent-AC claim reconciliation
 │   ├── drive_epic.py              #   one `claude -p` per story (--max-stories work bound)
 │   ├── headless_envelope.py       #   the one five-key headless-envelope adapter
 │   ├── health_check_fp.py         #   health-check fingerprint + seen-cache plumbing
@@ -72,16 +73,20 @@ skills/ultracode-goal/
 │   └── hooks/
 │       ├── guard_pretooluse.py    #   commit invariants (PreToolUse)
 │       └── budget_stop.py         #   turn budget (Stop)
-├── skills/
-│   ├── ucg-formalize/             # Standalone readiness gate
-│   ├── ucg-resolve/               # Decide-surface for a blocked or escalated run
-│   └── ucg-status/                # Read-only status view over a run
 └── assets/
     ├── module.yaml · module-setup.md · module-help.csv   # install metadata
     └── ucg-awareness/             # shift-left planning customization fragments
+
+skills/ucg-formalize/              # Standalone readiness gate
+skills/ucg-resolve/                # Decide-surface for a blocked or escalated run
+skills/ucg-status/                 # Read-only status view over a run
+                                   #   Top-level siblings of `ultracode-goal`, not children:
+                                   #   the IDE's skill loader enumerates one level, so a
+                                   #   nested command never resolves. Each stays thin and
+                                   #   reaches back into the parent via `{ucg-root}`.
 ```
 
-`SKILL.md` carries the routing and the contract; the `references/*.md` files carry each stage's procedure and testable routing conditions; the `scripts/*.py` files carry the deterministic facts the model cannot fudge (the gate, preflight, readiness kernel, hooks, and the install-time/recall plumbing); the `skills/` subskills are the operator-facing surfaces (`ucg-formalize` the standalone readiness gate, `ucg-resolve` the decide-surface for a stopped run, `ucg-status` the read-only run view); and the `assets/` hold install metadata and the planning-customization fragments. See [how it works](./how-it-works.md) for the stages.
+`SKILL.md` carries the routing and the contract; the `references/*.md` files carry each stage's procedure and testable routing conditions; the `scripts/*.py` files carry the deterministic facts the model cannot fudge (the gate, preflight, readiness kernel, hooks, and the install-time/recall plumbing); the top-level sibling skills `skills/ucg-*` are the operator-facing surfaces (`ucg-formalize` the standalone readiness gate, `ucg-resolve` the decide-surface for a stopped run, `ucg-status` the read-only run view); and the `assets/` hold install metadata and the planning-customization fragments. See [how it works](./how-it-works.md) for the stages.
 
 ## Customization resolution
 

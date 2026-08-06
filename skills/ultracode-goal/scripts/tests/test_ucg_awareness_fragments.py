@@ -3,10 +3,11 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest"]
 # ///
-"""Structural tests for the four UCG-awareness planning shaping fragments.
+"""Structural tests for the six UCG-awareness planning shaping fragments.
 
-The four fragments at assets/ucg-awareness/{bmad-prd,bmad-architecture,
-bmad-create-epics-and-stories,bmad-create-story}.toml are static, additive
+The six fragments at assets/ucg-awareness/{bmad-prd,bmad-architecture,
+bmad-create-epics-and-stories,bmad-create-story,bmad-testarch-test-design,
+bmad-testarch-nfr}.toml are static, additive
 guardrail-fact artifacts. They land in the ONE universal sanctioned append
 channel the installed customize.toml schema exposes — persistent_facts —
 each carrying a single [ucg] identity stamp and a per-directive id marker that
@@ -39,7 +40,7 @@ FRAGMENT_DIR = (
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DECISION_DOC = FRAGMENT_DIR / "shaping-decision.md"
 
-# The four — and only four — fragments this story authors.
+# The six — and only six — fragments this story authors.
 EXPECTED_FRAGMENTS = {
     "bmad-prd.toml",
     "bmad-architecture.toml",
@@ -147,7 +148,7 @@ def _parse_decision_blocks(text: str) -> dict[str, dict]:
 # --- channel is persistent_facts, nothing else ------------------------
 
 
-def test_four_fragments_land_only_in_persistent_facts():
+def test_all_fragments_land_only_in_persistent_facts():
     paths = _fragment_paths()
     basenames = {p.name for p in paths}
     assert basenames == EXPECTED_FRAGMENTS, basenames

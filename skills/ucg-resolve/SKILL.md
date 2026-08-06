@@ -33,8 +33,12 @@ more than a note-taker.
 - `{workflow.implementation_artifacts}` and `{workflow.deferred_work_path}` resolve from
   the parent module's `customize.toml` workflow block (the same scalars the autonomous
   run reads and writes).
-- The decision log (`.decision-log.md`) is canonical memory: record each answer and the
-  disposition applied to it as you go.
+- The decision log is canonical memory: record each answer and the disposition applied to
+  it as you go. It lives in the run's own folder,
+  `{project-root}/_bmad-output/ultracode-goal/<run folder>/.decision-log.md` — the module's
+  default runs root, which no `customize.toml` scalar carries. Write to the folder whose
+  Epic the enumerated artifacts belong to; ask the operator when more than one could be it,
+  and when none exists append nothing rather than create a stray log.
 
 ## On Activation
 
@@ -46,12 +50,24 @@ scalars before reading any artifact. Run `python3
 `{project-root}/_bmad/custom/ultracode-goal.toml` →
 `{project-root}/_bmad/custom/ultracode-goal.user.toml`, scalars override / arrays append).
 
+That block also carries the module's three universal defaults, and this entry point takes
+**one of them**: load `{workflow.persistent_facts}` — read-only context, and a cold session
+is the one that most needs it. Do **not** execute `{workflow.activation_steps_prepend}` or
+`{workflow.activation_steps_append}`: those are operator-configured actions belonging to the
+autonomous run, and a standalone decide-surface stays side-effect-free apart from the answers
+it is here to record. `ucg-formalize` and `ucg-status` state the same split, so the three
+sub-skills agree on what the shared override file reaches.
+
 If a scalar cannot be resolved, do not pass an unresolved `{…}` token to a path: say
 which scalar failed and stop. A decision surface rooted at a path nobody resolved would
 enumerate some other run's pending work, or none at all, while looking exactly like a
 real answer.
 
 ## 1. Enumerate the pending decisions
+
+This surface applies answers and clears artifacts, so it is for a run that has **stopped**.
+An operator who only wants to know what is pending gets that from the read-only
+`/ucg-status`; begin this pass only when they are here to decide.
 
 Three sources, all on disk. Read these and nothing else — the run's transcript is gone,
 and anything not written down is not a pending decision this surface can honor.
@@ -68,48 +84,49 @@ and anything not written down is not a pending decision this surface can honor.
 3. **The deferred-work ledger** — `{workflow.deferred_work_path}`, restricted to its
    `decision:` rows. Those are the rows whose `source` column reads `decision` (as opposed
    to `gate` or `code-review`) **and** whose `status` is still `open`; a row already marked
-   `resolved` is not a pending decision. The ledger is a markdown table per Epic, and the
-   in-repo parser is table-only and fails soft — match that behavior: a malformed or
-   bullet-list ledger yields no rows here, never a crash.
+   `resolved` is not a pending decision. The ledger is a markdown table per Epic: read
+   **every** table, not just the first (earlier runs' parked work sits under the earlier
+   headings), locate columns by header **name** rather than by position, and let a malformed
+   or bullet-list ledger yield no rows here rather than a crash — the same three properties
+   the in-repo reader has (`{ucg-root}/scripts/status_render.py`, `ledger_rows()`).
 
 **Every pending item is keyed by a stable `id`.**
 
 **For a preflight RED, read the `id` off the sidecar entry — never re-derive it.** Each
 entry in `.preflight-reds.json` carries its own minted `id`, written there by the preflight
-that found it (`{ucg-root}/references/preflight.md`, step 3). That stored value is the
-one the next preflight matches an answer against, so it is the only id that can close the
-loop — and because it is stored rather than recomputed, a RED a later scan re-detects
-**inherits its existing id** instead of arriving as something nobody has answered. That
-holds while the scan restates the decision unchanged; a reworded one is deliberately
-treated as a new decision and asked again, which is why an answer you record here is
-keyed to the wording the operator actually saw. Re-deriving your own from the entry's other fields would be guesswork against a
-recipe run by a different session: the moment your version and the stored one diverge, the
-`close` you record names an id no scan ever produces, the RED stands, and the run blocks
-forever on a question the operator already answered — while this surface, matching on its
-own self-consistent id, never offers it again.
+that found it (`{ucg-root}/references/preflight.md`, step 3). The id is a pure function of
+the decision — its `kind`, the bare artifact path, and a digest of the wording — so a RED a
+later scan restates unchanged **inherits its existing id**, and the value on the entry is
+the same one the next preflight derives for that finding; a reworded decision derives a new
+id and is asked again. Re-deriving your own by hand would be guesswork against a recipe run
+by a different session: the moment your version and the derived one diverge, the `close` you
+record names an id no scan ever produces, the RED stands, and the run blocks forever on a
+question the operator already answered.
 
 **For a typed escalation sidecar, ask the id layer for the id** — that file is hard-capped
-at four fields and cannot carry one, so it is the one case where an id is derived rather
-than read:
+at four fields and cannot carry one, so its id is derived rather than read:
 
 ```
 uv run {ucg-root}/scripts/red_ids.py --mint-one <kind> <artifact path> <decision_needed>
 ```
 
-It prints the id and touches nothing. **Never derive an id by hand at either surface.** The
-id is the join key between this session and a preflight that ran days ago or will run days
-from now, and a value two model invocations have to agree on by hand is a value they will
-eventually disagree on. One implementation mints it; both surfaces read it.
+It prints the id and touches nothing. **A ledger `decision:` row is keyed by the same
+call** — kind `decision`, the ledger path, and the row's reason — because the row's own
+`id` column is unique only within its Epic heading, so `d1` under one Epic and `d1` under
+another would key to a single entry in a project-wide `.decisions.json` and one answer
+would silently suppress a decision the operator was never shown.
 
-Both forms keep **line numbers excluded**: the scan reports `source` as
+**Never derive an id by hand at any of these surfaces.** The id is the join key between
+this session and a preflight that ran days ago or will run days from now, and a value two
+model invocations have to agree on by hand is a value they will eventually disagree on. One
+implementation mints it; every surface reads it.
+
+Every minted form keeps **line numbers excluded**: the scan reports `source` as
 `<artifact path:line>`, and the id layer strips that `:line` suffix before deriving
-anything, so an id is never minted from the raw `source` value. A line-bearing id would
-evaporate the moment anyone edited above the finding, taking the operator's answer with it. The id also carries a
-digest of the decision itself, which is what keeps it unique: one artifact routinely carries
-several findings of the same `kind`, and on `kind` plus path alone they would collide, so
-answering one would clear every other decision sharing that id. At this surface that means
-an operator sees one question where two were pending, and the one they never saw silently
-stops blocking.
+anything, so an id is never minted from the raw `source` value. Why the recipe is shaped
+that way — including the digest that keeps two findings of the same `kind` in one artifact
+apart — lives in `{ucg-root}/references/preflight.md`, step 3, and in
+`{ucg-root}/scripts/red_ids.py`.
 
 ## 2. Walk them in one guided pass
 
@@ -139,10 +156,6 @@ Every answer lands in `{workflow.implementation_artifacts}/.decisions.json`:
                 "answer": "<what the operator decided, one line>",
                 "action": "close|defer"}]}
 ```
-
-Three keys per entry — `id`, `answer`, `action` — and the action enum has exactly the two
-values shown. There is no third one to reach for; in particular, a re-presented `defer` is
-answered by **replacing** its entry, not by inventing a third action word for it.
 
 **Write the file read-modify-write, keyed by `id`.** Read any existing `.decisions.json`
 first, merge this pass's answers into its `decisions[]` — a new answer for an `id` already
@@ -191,40 +204,54 @@ The two dispositions are genuinely different things, not two names for one:
   Stop event, before it has done a single turn of the work the operator just authorized, and
   the close would apply in name only. Answering a budget overrun by re-scoping, splitting,
   or handing off the story *is* the operator granting it a fresh budget, so the counter that
-  recorded the exhausted one has no claim on the resumed run. This is the one artifact a
-  `close` resets beyond the record that carried the decision.
+  recorded the exhausted one has no claim on the resumed run.
 - **`defer`** — the decision is not made yet. Record the entry **without clearing
   anything**. The artifact stays exactly where it is, the item stays pending, and the next
-  preflight still blocks on it. A deferred answer clears nothing, which is what makes it
-  honest: it parks a decision, it does not resolve one.
+  preflight still blocks on it.
 
 Record each answer and its disposition in `.decision-log.md` as you apply it.
 
 ## 4. Hand control back to the existing resume
 
-`/ucg-resolve` defines no resume of its own. Once the pass is done, hand back to the
-resume the module already has: **re-enter Execute at the first story whose last verdict is
-not advance**; advanced stories are not re-run; and **re-assert** — never rebuild — the
-Epic branch, both hooks, the allowlist, the `.mem-state.json` recall latch, and the
-in-flight story's baseline marker. The latch belongs on that list here more than anywhere:
-this skill is reached from a blocked run, whose Stage 6 already deleted it.
+`/ucg-resolve` defines no resume of its own. Close the pass by stating what closed, what is
+still pending, and that anything still pending re-blocks at the next preflight. **Hand back
+only when the pass closed at least one item, or when the operator asks for the resume**: a
+pass that deferred everything hands into a run blocked on the identical items, and an empty
+enumeration means the run stopped for a non-decision reason — say so, point at the read-only
+`/ucg-status`, and hand nothing back.
 
-That rule is not restated here in a second form. It already lives in the module's Execute
-reference and in the parent skill's Resume paragraph, and a second copy would become a
-second, divergent rule the first time one of them changed.
+Otherwise hand back to the resume the module already has, which **routes by the last stage
+the blocked run reached**, not by story. Which branch applies is not a detail this surface
+may skip, because the two arrive from different places:
 
-There is no other re-entry point. It is not the first story of the Epic, and not the story
-the answered decision happened to name — either would re-run stories that already
-advanced, which is precisely what the shipped resume rule exists to prevent. The baseline
-marker in particular is **re-read, never regenerated**: the in-flight story may already
-carry commits, and a regenerated baseline silently re-anchors its evidence range to a
-mid-story HEAD.
+- **Blocked at Stage 1 or Stage 2** — epic unresolved, or a preflight RED, which is the
+  arrival this skill's own trigger advertises. Re-run **from that stage**, so the hard
+  preflight gate is never skipped and the answered RED is consumed by the scan that
+  applies the override. Such a run blocked before any story, so it carries no gate
+  verdicts and there is no story to re-enter at.
+- **The log carries gate verdicts** — re-enter Execute at the first story whose last
+  verdict is not advance; advanced stories are not re-run. Within that branch there is
+  no other re-entry point: it is not the first story of the Epic, and not the story the
+  answered decision happened to name, either of which would re-run stories that already
+  advanced, which is precisely what the shipped resume rule exists to prevent.
+
+Either branch **re-asserts** — never rebuilds — the Epic branch, both hooks, the
+allowlist, the `.mem-state.json` recall latch, and the in-flight story's baseline marker.
+The latch belongs on that list here more than anywhere: this skill is reached from a
+blocked run, whose Stage 6 already deleted it. The baseline marker splits on whether
+`.baseline-<story_id>` exists: mid-story it is **re-read, never regenerated** — the story
+may already carry commits, and a regenerated baseline silently re-anchors its evidence
+range to a mid-story HEAD — while at a story boundary there is none to re-read and one is
+written fresh at `HEAD`, which is the half the Execute reference owns.
+
+What this section pins is the routing branch and the re-assert set, nothing further. The
+rule itself already lives in `{ucg-root}/references/execute.md`'s resume paragraph and in
+the parent skill's Resume paragraph, which are loaded at hand-back time and carry the
+current script call and both halves of that split. Where those two and this one ever
+disagree, they are the owners and this is the stale copy.
 
 ## Scope
 
 This is a decide-surface, not a runner. It launches nothing itself: it reads artifacts,
 records answers, applies what a `close` resolves, and hands off. Like the read-only status
-view, it targets the **sequential spine**, which is the only execution path: the
-experimental `--parallel` fan-out is retired. (Under that mode each worktree agent saw its
-own implementation-artifacts directory, so there was no single set of pending decisions to
-reconstruct - the reason this scope note existed.)
+view, it targets the **sequential spine**, which is the only execution path.

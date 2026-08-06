@@ -43,6 +43,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import gate_trail  # sibling script; the ledger's table parser lives there
 from lib import mem_common as mc
 
 _DEAD_LETTER = "mem-outbox.dead.jsonl"
@@ -85,12 +86,34 @@ def _signature(cls: str, path: str, fingerprint: str | None) -> str:
     return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
 
 
-def _count_deferred(deferred_path: Path | None, epic: str) -> int:
-    """Count '- ' list items under this epic's heading in a deferred ledger.
+def _heading_names_epic(heading_text: str, epic_token: str) -> bool:
+    """True iff the heading names THIS epic, matched as a whole token.
 
-    The heading is any markdown heading line whose text contains the epic id. We
-    count '- ' bullet lines until the next heading of the same-or-shallower
-    level. Absent file or no matching heading -> 0.
+    A plain substring test made every epic a prefix of its own successors: epic
+    `1` matched the heading "Epic 11", and `epic-1` matched "epic-10", so the
+    count reported a neighbour's parked items as this run's. The digits and
+    letters on either side are what distinguish them, so the boundary is
+    alphanumeric rather than `\\b` - `\\b` would not fire between `-` and `1`,
+    which is exactly where an `epic-1` token ends.
+    """
+    return bool(
+        re.search(
+            rf"(?<![0-9A-Za-z]){re.escape(epic_token)}(?![0-9A-Za-z])", heading_text
+        )
+    )
+
+
+def _count_deferred(deferred_path: Path | None, epic: str) -> int:
+    """Count this epic's parked items in a deferred-work ledger.
+
+    The heading is any markdown heading line whose text contains the epic id; the
+    section runs until the next heading of the same-or-shallower level. The
+    ledger the run actually writes is a pipe TABLE (one row per parked item), so
+    rows carrying a non-empty `id` cell are counted first, through the same
+    parser `status_render.ledger_rows` reads the ledger with — a second format
+    guess here is how the two readers drift apart. A hand-written section with no
+    such table falls back to its '- ' bullets. Absent file or no matching
+    heading -> 0.
     """
     if deferred_path is None or not deferred_path.is_file():
         return 0
@@ -103,7 +126,7 @@ def _count_deferred(deferred_path: Path | None, epic: str) -> int:
     heading_re = re.compile(r"^(#{1,6})\s+(.*)$")
     in_section = False
     section_level = 0
-    count = 0
+    section: list[str] = []
     epic_token = str(epic).strip()
 
     for line in lines:
@@ -114,13 +137,28 @@ def _count_deferred(deferred_path: Path | None, epic: str) -> int:
             if in_section and level <= section_level:
                 # A sibling or shallower heading ends our section.
                 in_section = False
-            if not in_section and epic_token and epic_token in heading_text:
+            if not in_section and epic_token and _heading_names_epic(heading_text, epic_token):
                 in_section = True
                 section_level = level
+            if in_section:
+                # Keep a blank in the heading's place so a nested heading can
+                # never glue two adjacent tables into one.
+                section.append("")
             continue
-        if in_section and line.lstrip().startswith("- "):
-            count += 1
-    return count
+        if in_section:
+            section.append(line)
+
+    count = 0
+    for headers, rows in gate_trail._tables("\n".join(section)):
+        if "id" not in headers:
+            continue
+        id_at = headers.index("id")
+        for row in rows:
+            if id_at < len(row) and row[id_at].strip():
+                count += 1
+    if count:
+        return count
+    return sum(1 for line in section if line.lstrip().startswith("- "))
 
 
 def cmd_build(args: argparse.Namespace) -> int:

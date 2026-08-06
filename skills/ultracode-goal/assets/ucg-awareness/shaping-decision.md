@@ -1,11 +1,12 @@
 # UCG Awareness Fragment Shaping Decision
 
 This is the decision-doc gate. Content adequacy of a shaping
-fragment is a human judgment, so for each of the four planning fragments an
-operator confirms that every shift-left shaping bullet for that workflow
-appears as a `persistent_facts` guardrail entry, names the permanent floor classes
-the fragment targets, and records an `ACCEPTED` or `REWORK` verdict with a
-reviewer and a date.
+fragment is a human judgment, so for each shaping fragment below a reviewer
+(the operator, or the conductor with operator ratification batched to the
+end-of-epic review) confirms that every shift-left shaping bullet for that
+workflow appears as a `persistent_facts` guardrail entry, names the permanent
+floor classes the fragment targets, and records an `ACCEPTED` or `REWORK`
+verdict with a reviewer and a date.
 
 Every block below is signed against the downgrade note: these fragments are
 run-scoped guardrail facts, narrower than per-acceptance-criterion machine

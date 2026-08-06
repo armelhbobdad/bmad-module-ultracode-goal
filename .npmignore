@@ -32,6 +32,7 @@ tools/validate-file-refs.js
 # Skill dev/test artifacts (not needed at runtime)
 skills/**/.analysis/
 skills/**/.decision-log.md
+skills/**/.memlog.md
 skills/**/scripts/tests/
 skills/**/__pycache__/
 skills/**/.pytest_cache/

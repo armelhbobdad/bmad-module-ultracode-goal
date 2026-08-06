@@ -70,6 +70,16 @@ _CHECKS = {
     "requires the AC mapping be checked mechanically": lambda s: bool(
         re.search(r"[Cc]heck that mapping mechanically", s)
     ),
+    # The word alone was satisfiable by prose, and was: the section demanded a
+    # mechanical check while the module shipped no tool to do it, so every
+    # decomposition improvised a parser and one of them reported two false
+    # double-claims. Naming the script is what makes the demand answerable.
+    "names the script that performs the mechanical check": lambda s: bool(
+        re.search(r"story_sizing\.py", s)
+    ),
+    "states that a failing check blocks the split": lambda s: bool(
+        re.search(r"fixed before the child rows are written", s, re.I)
+    ),
     "cites the false-double-claim that motivated it": lambda s: bool(
         re.search(r"REQ-1", s)
     ),

@@ -152,7 +152,7 @@ UCG is a conductor over primitives it does not replace. It builds on:
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | [BMAD Method](https://github.com/bmad-code-org/BMAD-METHOD)            | The epic toolbox UCG orchestrates (sprint planning, story creation, dev, review) |
 | [TEA Test Architect](https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise) | Machine-checked quality gates: test-design, ATDD, NFR, trace; the gate artifact |
-| [Claude Code](https://claude.com/product/claude-code)                   | `/goal`, Auto Mode, Auto Memory, hooks, and git worktrees, the primitives UCG composes |
+| [Claude Code](https://claude.com/product/claude-code)                   | `/goal`, Auto Mode, Auto Memory, hooks, and git branches, the primitives UCG composes |
 
 ## Contributing
 

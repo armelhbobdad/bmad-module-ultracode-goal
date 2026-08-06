@@ -317,6 +317,17 @@ _SUBSTITUTION_MARKERS = ("$(", "`", "<(")
 # Depth cap on `sh -c` recursion: a bound, not a behavior anyone should rely on.
 _MAX_SHELL_DEPTH = 4
 
+# A short-option cluster that carries `-c`, whose operand is the command string.
+# Matching only the bare `-c` token was a fail-open: every real combined form
+# (`bash -lc`, `sh -lc`, `bash -cx`, `zsh -ic`, `bash -ec`) located no payload,
+# so the segment classified as carrying no git write and took the allow path
+# BEFORE the protected-branch, tests-ran, marker-freshness and empty-index gates.
+# The `c` is matched anywhere in the cluster, not just at the end, because the
+# shells treat it positionally-indifferently: `bash -cx` and `bash -xc` both run
+# the next token (verified against bash, sh and dash). A long option (`--login`)
+# cannot match, since the character after the lone leading dash must be a letter.
+_PAYLOAD_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
+
 
 def _tokenize(segment: str) -> list[str]:
     """Split one shell segment into words; raises ValueError on bad quoting.
@@ -350,14 +361,25 @@ def _git_subcommand(tokens: list[str]) -> str | None:
     return None
 
 
-def _shell_payload_verbs(tokens: list[str], depth: int) -> set[str]:
-    """Verbs written by the string payload of a `sh -c '…'`-style invocation."""
+def _shell_payload_verbs(tokens: list[str], depth: int) -> set[str] | None:
+    """Verbs written by the string payload of a `sh -c '…'`-style invocation.
+
+    Returns ``None`` — not an empty set — when the payload cannot be located at
+    all, so the caller can fall back to the anywhere-scan instead of reading
+    "no payload found" as "no git write here". A LISTED shell wrapper failing
+    open is not part of the accepted residual (an UNLISTED one is; see
+    test_unlisted_wrapper_is_an_accepted_fail_open), and every other lane that
+    cannot honestly read a segment — unbalanced quotes, `$(…)`/backticks —
+    already biases toward the deny. This one now matches them.
+    """
     if depth >= _MAX_SHELL_DEPTH:
-        return set()
+        # The cap is a recursion bound, not a verdict: refusing to look deeper
+        # is exactly the "cannot read it" case, so it fails closed too.
+        return None
     for index, token in enumerate(tokens):
-        if token == "-c" and index + 1 < len(tokens):
+        if _PAYLOAD_FLAG.match(token) and index + 1 < len(tokens):
             return _command_write_verbs(tokens[index + 1], depth + 1)
-    return set()
+    return None
 
 
 def _strip_leading_noise(tokens: list[str]) -> list[str]:
@@ -383,8 +405,12 @@ def _strip_leading_noise(tokens: list[str]) -> list[str]:
         tokens = stripped
 
 
-def _token_write_verbs(tokens: list[str], depth: int) -> set[str]:
-    """Classify one tokenized segment: which write verbs would it actually run?"""
+def _token_write_verbs(tokens: list[str], depth: int) -> set[str] | None:
+    """Classify one tokenized segment: which write verbs would it actually run?
+
+    ``None`` propagates the "cannot honestly read this" signal up to
+    :func:`_segment_write_verbs`, which owns the raw segment the fallback needs.
+    """
     tokens = _strip_leading_noise(tokens)
     if not tokens:
         return set()
@@ -427,7 +453,13 @@ def _segment_write_verbs(segment: str, depth: int) -> set[str]:
         # exception escape would exit non-zero, which is neither a clean allow
         # nor a clean deny.
         return _anywhere_write_verbs(segment)
-    return _token_write_verbs(tokens, depth)
+    verbs = _token_write_verbs(tokens, depth)
+    if verbs is None:
+        # A listed shell wrapper whose payload could not be located. Same
+        # treatment as the two lanes above: scan the raw segment rather than
+        # let an unreadable invocation classify as carrying no write.
+        return _anywhere_write_verbs(segment)
+    return verbs
 
 
 def _command_write_verbs(command: str, depth: int) -> set[str]:

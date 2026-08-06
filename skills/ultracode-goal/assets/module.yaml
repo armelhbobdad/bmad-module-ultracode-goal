@@ -2,7 +2,7 @@ code: ultracode-goal
 name: "UltraCode Goal"
 header: "Run a BMAD Epic autonomously to a deterministic, TEA-gated Definition-of-Done"
 subheader: "Preflight to a remediated green light, define done as executable tests, advance only on a machine-checked gate verdict"
-description: "Orchestrates the BMAD epic toolbox + TEA quality gates + Claude Code primitives (/goal, Auto Mode, Auto Memory, hooks, worktree isolation) to deliver an Epic unattended. Completion is decided by a deterministic gate_eval.py reading TEA's gate-decision.json — never the model's own judgment."
+description: "Orchestrates the BMAD epic toolbox + TEA quality gates + Claude Code primitives (/goal, Auto Mode, Auto Memory, hooks, git branch isolation) to deliver an Epic unattended. Completion is decided by a deterministic gate_eval.py reading TEA's gate-decision.json — never the model's own judgment."
 default_selected: false
 
 # LLM-readable module documentation. The installer registers this as the
@@ -13,8 +13,13 @@ docs_llms: "https://armelhbobdad.github.io/bmad-module-ultracode-goal/llms.txt"
 # Repository that receives workflow health-check findings (fingerprint-deduped).
 # Empty = health check off (the repo doubles as the on/off switch).
 # MIRROR, not source: the canonical default lives in customize.toml
-# [workflow].health_check_repo — that is what the live run reads; this entry
-# only seeds the installer catalog. If you fork the module, change both.
+# [workflow].health_check_repo — that is what the live run reads. Nothing in
+# this repo's installer reads the entry below: the assembled help catalog's
+# _meta row is built from `name` + `docs_llms` alone, and merge_config.py
+# copies only name/description/module_version/default_selected into
+# config.yaml. It is declared here so BMad-core consumers of the installed
+# {ucgFolder}/module.yaml see the module's default. If you fork the module,
+# change both — editing this entry alone changes nothing the run reads.
 # Per-project overrides go in _bmad/custom/ultracode-goal.toml as usual.
 health_check_repo:
   prompt: false

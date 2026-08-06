@@ -66,6 +66,13 @@ MACHINE = "[machine-derived]"
 # evidence of a real escalation; it just never got typed.
 UNPROMOTED = "escalation (unpromoted: session ended before Execute promoted it)"
 
+# The other thin record: the typed sidecar IS on disk but is empty or does not
+# parse, so there is nothing to render out of it. Distinct from UNPROMOTED
+# because the typed file was written - two of the three escalation routes write
+# it with no raw marker beside it - so "never promoted" would be a false account
+# of a run that promoted just fine and then wrote badly.
+UNREADABLE = "escalation (typed record present but unreadable)"
+
 # The typed sidecar's four fields, rendered in this order.
 SIDECAR_FIELDS = ("kind", "source", "decision_needed", "evidence")
 
@@ -378,7 +385,14 @@ def render(
         if sha:
             lines.append(f"  - baseline `{sha}`")
             if viewer:
-                lines.append(f"  - {VIEWER} show {sha}")
+                # The affordance has to point at THIS story's diff, so it shows
+                # the end commit `.commit-<story>` records. The baseline is the
+                # commit that preceded the story's work, so showing it renders
+                # the previous story's diff - silently, since it is a real diff
+                # from the same repo. Only where no end commit was recorded is
+                # the anchor the sole sha there is to hand the reader.
+                end = gate_trail.commit_sha(impl, story) or sha
+                lines.append(f"  - {VIEWER} show {end}")
     lines.append("")
 
     # Escalations.
@@ -390,7 +404,11 @@ def render(
         lines.append(f"### {story}")
         lines.append("")
         if payload is None:
-            lines.append(f"- {UNPROMOTED}")
+            # Two different states arrive with no payload, and the path is the
+            # discriminator: the Stop hook's raw marker means the escalation was
+            # never promoted, while a typed sidecar that would not parse means
+            # the record is there and cannot be read. Report what was observed.
+            lines.append(f"- {UNREADABLE if path.suffix == '.json' else UNPROMOTED}")
             lines.append(f"- source: {path.name}")
         else:
             for key in SIDECAR_FIELDS:

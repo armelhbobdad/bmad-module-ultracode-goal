@@ -89,8 +89,38 @@ GATE_VERDICT = {
 _FRONTMATTER_GATE_KEYS = ("gateDecisionFile", "gateDecisionPath", "gate_decision_path")
 
 
-def _read_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _read_json(path: Path) -> dict | None:
+    """The JSON object in a file, or None when it cannot be read as one.
+
+    Unreadable, non-UTF-8, not JSON, and JSON that is not an object all land on
+    None together, because they mean the same thing to the callers below: this
+    file yields no gate fields, so it gets the fail-closed NOT_EVALUATED an
+    absent artifact already gets. A bare ``json.loads`` here RAISED instead: a
+    zero-byte or half-written gate file (the residue of a killed TEA write), a
+    trailing comma in a hand-authored ``gate-decision-<id>.json``, or a JSON
+    array crashed the gate with a traceback and no verdict JSON at all — and
+    under ``--rollup`` one such file aborted the whole epic aggregate after
+    every story was already done.
+    """
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # ValueError covers JSONDecodeError and UnicodeDecodeError alike.
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _read_text(path: Path) -> str | None:
+    """The file's text, or None when it cannot be read.
+
+    The production-signal scanners below declare a FAIL-CLOSED CONTRACT for
+    evidence they cannot read; a bare ``read_text`` raised out of that function
+    on an unreadable or non-UTF-8 artifact instead of failing closed.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
 
 
 def _frontmatter(text: str) -> dict[str, str]:
@@ -233,8 +263,34 @@ def _is_per_story_named(trace_output: Path) -> bool:
     `gate_trail._only_generic_artifacts`, which decides the same question from
     the other side, has always globbed both; the two now see one directory.
     """
-    candidates = list(trace_output.glob("*.md")) + list(trace_output.glob("*.json"))
-    return any(_has_trailing_id(p.stem) for p in candidates)
+    return _per_story_naming_kind(trace_output) is not None
+
+
+def _per_story_naming_kind(trace_output: Path) -> str | None:
+    """The artifact KIND whose per-story name makes this directory per-story-named.
+
+    The boolean above answers "is it"; this answers "because of what", so a
+    fail-closed reason can say which artifact class flipped the directory. That
+    is not derivable from the docs: the rule counts every prefix in
+    `_ARTIFACT_PREFIXES`, so a lone `nfr-assessment-<id>.md` or
+    `test-review-<id>.md` — files `references/gate.md` ORDERS the non-web author
+    to write into this same directory — is enough on its own, and an operator
+    who reads only the two gate-bearing names goes hunting for a trace/gate stem
+    mismatch that does not exist.
+
+    The KIND only, never the filename: the story this reason is written for is
+    ABSENT, and quoting a neighbour's id in its verdict is the shape of the
+    fail-open this branch exists to prevent. Sorted, so the answer is stable.
+    """
+    candidates = sorted(list(trace_output.glob("*.md")) + list(trace_output.glob("*.json")))
+    for path in candidates:
+        if not _has_trailing_id(path.stem):
+            continue
+        parts = [p for p in re.split(r"[-._]", path.stem) if p]
+        for prefix in _ARTIFACT_PREFIXES:
+            if len(parts) > len(prefix) and tuple(parts[: len(prefix)]) == prefix:
+                return "-".join(prefix)
+    return None
 
 
 def _per_story_slim(trace_output: Path, story: str | None) -> Path | None:
@@ -420,7 +476,27 @@ def _resolve_gate_file(
     for report in reports:
         try:
             fm = _frontmatter(report.read_text(encoding="utf-8"))
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # UnicodeDecodeError is NOT an OSError, so a single non-UTF-8 markdown
+            # file anywhere in the directory crashed resolution here. Catching it
+            # is right; treating it as "carries no hint" is NOT, and `reports` is
+            # the UNFILTERED `*.md` glob on this path (the `_declares_trace_report`
+            # filter applies only to the story-scoped branch above), so this reader
+            # cannot know whether the file it failed to decode was a trace report
+            # carrying a `gateDecisionFile` hint.
+            #
+            # An unreadable report is a hint that could not be READ, never a report
+            # with no hint - the same distinction the `refused_hint` branch below
+            # exists to hold. Skipping silently let resolution fall through to the
+            # unscoped `gate-decision.json`: measured, a story whose hinted file
+            # said FAIL advanced on a neighbour's PASS, and the log read like an
+            # ordinary successful resolution because the fallback named a real file.
+            if notes is not None:
+                notes.append(
+                    f"{report.name} could not be decoded; any gate hint it carries "
+                    f"was not read, so no unpointed-at file is resolved in its place"
+                )
+            refused_hint = True
             continue
         if fm.get("workflowType") not in _TRACE_WORKFLOW_TYPES:
             continue
@@ -525,9 +601,20 @@ def load_gate(trace_output: Path, reasons: list[str], story: str | None = None) 
         # Fail-closed: the dir names its artifacts per story and none is this
         # story's, so there is nothing to read. Do NOT fall back to the unscoped
         # read — it would report a neighbouring story's gate as this one's.
+        # Name WHY the fallback was refused. "The directory is named per story"
+        # alone is not diagnosable: the rule fires on any known artifact prefix
+        # followed by an id, so a per-story NFR or test-review is enough, and a
+        # reader who assumes only the gate-bearing names hunts for a stem
+        # mismatch that is not there.
+        kind = _per_story_naming_kind(trace_output)
+        why = (
+            f"the directory is named per story (a {kind}-* file there carries a story id)"
+            if kind
+            else "the gate file the trace report hinted at was refused above"
+        )
         reasons.append(
             f"story {story} has no trace report or gate decision in {trace_output}; "
-            "the directory is named per story, so no unscoped fallback was taken"
+            f"{why}, so no unscoped fallback was taken"
         )
         return {
             "gate_status": "NOT_EVALUATED",
@@ -538,6 +625,19 @@ def load_gate(trace_output: Path, reasons: list[str], story: str | None = None) 
 
     if gate_file.is_file():
         slim = _read_json(gate_file)
+        if slim is None:
+            # Present but unreadable is not "no artifact": the file exists, so no
+            # fallback below is this story's gate either. Fail closed on it.
+            reasons.append(
+                f"{gate_file.name} in {trace_output} is present but is not readable as a "
+                "JSON object (empty, malformed, or not an object); treated as no gate decision"
+            )
+            return {
+                "gate_status": "NOT_EVALUATED",
+                "p0_status": None,
+                "p1_status": None,
+                "overall_status": None,
+            }
         reasons.append(f"gate read from {gate_file.name}")
         return {
             "gate_status": slim.get("gate_status", "NOT_EVALUATED"),
@@ -559,8 +659,9 @@ def load_gate(trace_output: Path, reasons: list[str], story: str | None = None) 
         # different filename. A per-story-named summary is still honored above.
         reasons.append(
             f"story {story} has no per-story gate decision or summary in {trace_output}; "
-            "the directory is named per story, so the shared e2e-trace-summary.json "
-            "was not read as this story's gate"
+            "the directory is named per story (a "
+            f"{_per_story_naming_kind(trace_output)}-* file there carries a story id), "
+            "so the shared e2e-trace-summary.json was not read as this story's gate"
         )
         return {
             "gate_status": "NOT_EVALUATED",
@@ -569,10 +670,22 @@ def load_gate(trace_output: Path, reasons: list[str], story: str | None = None) 
             "overall_status": None,
         }
     if summary_file.is_file():
+        summary = _read_json(summary_file)
+        if summary is None:
+            reasons.append(
+                f"{gate_file.name} absent and {summary_file.name} is not readable as a "
+                "JSON object (empty, malformed, or not an object); treated as no gate decision"
+            )
+            return {
+                "gate_status": "NOT_EVALUATED",
+                "p0_status": None,
+                "p1_status": None,
+                "overall_status": None,
+            }
         reasons.append(
             f"{gate_file.name} absent; gate read from {summary_file.name} (not a failure)"
         )
-        return _gate_fields_from_summary(_read_json(summary_file))
+        return _gate_fields_from_summary(summary)
 
     reasons.append(
         f"neither {gate_file.name} nor e2e-trace-summary.json present in {trace_output}"
@@ -647,8 +760,14 @@ def apply_production_and(
     failed = False
 
     if nfr_path is not None and nfr_path.is_file():
-        nfr_status = _scan_nfr_overall_status(nfr_path.read_text(encoding="utf-8"))
-        if nfr_status == "FAIL":
+        nfr_text = _read_text(nfr_path)
+        if nfr_text is None:
+            # A file that exists but cannot be read is the fail-closed contract's
+            # own case, not a crash: report it as its own failing signal rather
+            # than as the "field not found" one two branches down.
+            reasons.append(f"nfr file {nfr_path} could not be read; treated as failing")
+            failed = True
+        elif (nfr_status := _scan_nfr_overall_status(nfr_text)) == "FAIL":
             reasons.append("nfr overallStatus is FAIL")
             failed = True
         elif nfr_status == "NOT_ASSESSED":
@@ -677,18 +796,26 @@ def apply_production_and(
         failed = True
 
     if review_path is not None and review_path.is_file():
-        review_text = review_path.read_text(encoding="utf-8")
-        review_score = _scan_review_score(review_text)
-        recommendation = _scan_review_recommendation(review_text)
-        if review_score is None:
-            reasons.append(f"test-review score not found in {review_path.name}; treated as failing")
+        review_text = _read_text(review_path)
+        if review_text is None:
+            # Same fail-closed case as the NFR read above: present but unreadable
+            # is a failing signal, not an exception out of this function.
+            reasons.append(f"test-review file {review_path} could not be read; treated as failing")
             failed = True
-        elif review_score < 80:
-            reasons.append(f"test-review score {review_score} < 80")
-            failed = True
-        if recommendation is not None and recommendation.lower() == "block":
-            reasons.append("test-review recommendation is Block")
-            failed = True
+        else:
+            review_score = _scan_review_score(review_text)
+            recommendation = _scan_review_recommendation(review_text)
+            if review_score is None:
+                reasons.append(
+                    f"test-review score not found in {review_path.name}; treated as failing"
+                )
+                failed = True
+            elif review_score < 80:
+                reasons.append(f"test-review score {review_score} < 80")
+                failed = True
+            if recommendation is not None and recommendation.lower() == "block":
+                reasons.append("test-review recommendation is Block")
+                failed = True
     elif review_path is not None:
         reasons.append(f"test-review file {review_path} not found; treated as failing")
         failed = True

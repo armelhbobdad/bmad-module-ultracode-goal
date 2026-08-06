@@ -244,6 +244,62 @@ def test_deferred_count_parses_ledger(tmp_path):
     assert payload["deferred_count"] == 3  # only Epic 7's three bullets
 
 
+PREFIX_COLLIDING_LEDGER = """# Deferred Work
+
+## Epic 1 deferred
+
+- the one item Epic 1 actually parked
+
+## Epic 11 deferred
+
+- eleven's first
+- eleven's second
+- eleven's third
+- eleven's fourth
+"""
+
+
+def test_deferred_count_does_not_match_an_epic_that_merely_starts_the_same(tmp_path):
+    """Epic `1` must not claim Epic `11`'s parked items.
+
+    The heading match was a plain substring test, so every epic was a prefix of
+    its own successors and the count reported a neighbour's backlog as this
+    run's - a number that goes into the observation an autonomous run leaves
+    behind for the next one.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ledger = tmp_path / "deferred-work.md"
+    ledger.write_text(PREFIX_COLLIDING_LEDGER)
+    out = json.loads(_run(
+        "build", "--impl-artifacts", str(tmp_path / "impl"),
+        "--epic", "1", "--run-id", "r1", "--gate-status", "PASS",
+        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
+        "--deferred", str(ledger),
+    ).stdout)
+    payload = _payload_from_build(out["text"])
+    assert payload["deferred_count"] == 1, (
+        "Epic 1 owns exactly one parked item; 5 would mean Epic 11's section was "
+        "swept in by a prefix match"
+    )
+
+
+def test_deferred_count_still_matches_the_epic_it_names(tmp_path):
+    """Twin: the boundary must not be so tight that a real heading stops matching."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ledger = tmp_path / "deferred-work.md"
+    ledger.write_text(PREFIX_COLLIDING_LEDGER)
+    out = json.loads(_run(
+        "build", "--impl-artifacts", str(tmp_path / "impl"),
+        "--epic", "11", "--run-id", "r1", "--gate-status", "PASS",
+        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
+        "--deferred", str(ledger),
+    ).stdout)
+    payload = _payload_from_build(out["text"])
+    assert payload["deferred_count"] == 4
+
+
 def test_deferred_count_absent_file_is_zero(tmp_path):
     repo = tmp_path / "repo"
     _init_repo(repo)
