@@ -375,16 +375,6 @@ function checkBuilt({ projectRoot, buildDir }, base, report) {
 
 // ---------------------------------------------------------------------------
 
-/**
- * Run both passes and return what happened, without touching the process.
- *
- * Separated from the CLI so tests can drive it against a fixture tree and
- * assert on the result rather than on stdout or an exit code.
- *
- * @param {object} cfg - From resolveConfig()
- * @param {(msg: string) => void} [log] - Output sink; defaults to console.log
- * @returns {Promise<{issues: Array<{file: string, detail: string}>, sourceCount: number, builtCount: number, haveBuild: boolean, missingRequiredBuild: boolean, ok: boolean}>} Outcome
- */
 const BUILD_INFRA_INPUTS = [
   'website/src/rehype-markdown-links.js',
   'website/src/rehype-base-paths.js',
@@ -515,6 +505,16 @@ function checkLlmsIndex({ buildDir }, report) {
   return checked;
 }
 
+/**
+ * Run both passes and return what happened, without touching the process.
+ *
+ * Separated from the CLI so tests can drive it against a fixture tree and
+ * assert on the result rather than on stdout or an exit code.
+ *
+ * @param {object} cfg - From resolveConfig()
+ * @param {(msg: string) => void} [log] - Output sink; defaults to console.log
+ * @returns {Promise<{issues: Array<{file: string, detail: string}>, sourceCount: number, builtCount: number, haveBuild: boolean, missingRequiredBuild: boolean, ok: boolean}>} Outcome
+ */
 async function run(cfg, log = console.log) {
   const issues = [];
   const report = (file, detail) => issues.push({ file, detail });
@@ -549,7 +549,9 @@ async function run(cfg, log = console.log) {
     // survives both `rm -rf website/.astro` and a rebuild - a stale render can
     // report a clean pass against unchanged inputs (this bit the author while
     // writing this tool). CI is immune because `npm ci` starts cold.
-    // Suppressed under --require-build, which is the CI path.
+    // Only the hedged branch is suppressed under --require-build (the CI
+    // path); a provable STALE always speaks, since a cold CI build that
+    // still mismatches its inputs is worth saying out loud.
     const freshness = buildInputsStatus(cfg);
     if (freshness.state === 'stale') {
       log('');
