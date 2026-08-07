@@ -19,6 +19,29 @@ All notable changes to this project will be documented in this file. The format 
 - `test:python` no longer passes `-v`: a passing run's log drops ~27x in size while failure output (tracebacks, FAILED summary lines, exit code) is byte-equivalent. For localizing a failure, re-run the single test file serially with `-v` as CONTRIBUTING.md describes.
 - `npm test` is now an alias for `npm run quality`. The two scripts were set-identical 12-stage chains that only differed in order, with nothing asserting parity, so a stage added to one could silently never run at the other's door (pre-push and release both call `npm test`).
 
+## [2.1.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v2.0.0...v2.1.0) (2026-08-07)
+
+### Features
+
+* --assert-armed, the one-call resume manifest ([176ca0d](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/176ca0dceb49cdd9ab64add8e6d82a1390538afb))
+* fingerprint collisions get an inline prior and a defect slug ([7854e70](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/7854e708e3bc067b3fc7beb538e635868c0150de))
+* gate_eval --rollup, the epic verdict as a computation ([ea294f2](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/ea294f20da13034ceab157f7470648c9db5205f1))
+* retire the experimental --parallel worktree fan-out ([b6840a5](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/b6840a522f3c5a1f5f56bb46c37ee5ad7143b853))
+* the docs build records its inputs, and llms.txt joins the link check ([9345124](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/9345124228ff9e2326b87126c4ba2e370a5ab625))
+
+### Bug Fixes
+
+* a resolve must not erase the defect slug it will need ([02aa268](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/02aa2683eb1f990de99072c0ea2c59aecfaefa4f))
+* close the 11 confirmed review findings on the rollup ([0ef3366](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/0ef3366f6224b97f974db62f8fb84677f803b7b4))
+* close the 14 confirmed review findings on the resume manifest ([584206e](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/584206e162887cf68d281b47daa3dd001d7a04b3))
+* close the quality scan's findings, including two guard-layer fail-opens ([976553e](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/976553e70eba8ec31376360826f587acd22fedd2))
+* **docs-links:** reattach run's JSDoc and scope the suppression note ([e5fd295](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/e5fd2956c315a3d93046becc59151806fb565856))
+* drain the improvement queue - 28 filings, one behavior change ([0ca1861](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/0ca18611f34805d5bff0dd4ba370754bc9a4836a))
+* make the evidence trail agree with the gate about which file decided ([3afaee0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/3afaee0948502f5ba860eab237d1298d66e52de0))
+* one owner for the build-input set, and it now knows both rewriters ([51bca82](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/51bca822892e121f23982a1b5e1d35645a3f7689))
+* pin the artifact-resolution property and close six fail-opens it found ([d0b454b](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/d0b454ba39639491aefa8e7fccc315abf4c7863e))
+* stop a stderr line count reding on a cold uv cache ([b5a2c86](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/b5a2c86db73265e2633602f7a4edea19fff24b6d))
+* sweep the second wave of fan-out references the review found ([764d5b2](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/764d5b228c8c505a9d4f79f8f47312d047029ed0))
 ## [2.0.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v1.0.1...v2.0.0) (2026-08-02)
 ### ⚠ BREAKING CHANGES
 
