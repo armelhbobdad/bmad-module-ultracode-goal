@@ -1,11 +1,11 @@
 ---
 title: Stability and Public Contract
-description: "The 1.x stability posture: which CLI, config, JSON, and gate surfaces are the supported public contract, what a major costs, and everything that is @internal and free to change."
+description: "The 2.x stability posture: which CLI, config, JSON, and gate surfaces are the supported public contract, what a major costs, and everything that is @internal and free to change."
 ---
 
-> **Status:** 1.x. The surfaces below are the public contract. Per [Semantic Versioning 2.0.0](https://semver.org/), a breaking change to any of them requires a MAJOR bump; everything marked `@internal` may change in any release. This document is what a consumer pins against.
+> **Status:** 2.x. The surfaces below are the public contract. Per [Semantic Versioning 2.0.0](https://semver.org/), a breaking change to any of them requires a MAJOR bump; everything marked `@internal` may change in any release. This document is what a consumer pins against.
 
-This is the stability posture for `bmad-module-ultracode-goal` at `1.x`. It enumerates the surfaces a downstream consumer or automator may reasonably depend on, versus everything else, which is `@internal`.
+This is the stability posture for `bmad-module-ultracode-goal` at `2.x`. It enumerates the surfaces a downstream consumer or automator may reasonably depend on, versus everything else, which is `@internal`.
 
 ## Public contract
 
