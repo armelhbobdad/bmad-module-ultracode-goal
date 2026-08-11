@@ -294,10 +294,12 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
     #   3. the sweep-scope AND paragraph: --tests-ran reads the marker's scope=
     #      line and caps a scoped cycle's advance/defer at reloop;
     #   4. and 5. the two invocation blocks, which now carry --tests-ran - they
-    #      REPLACE the fixture's two, so they surface in `added` as well.
+    #      REPLACE the fixture's two, so they surface in `added` as well;
+    #   6. the delta cycle profile paragraph: --cycle-profile delta re-runs only
+    #      the previously failed dimension and is capped at reloop.
     live = _gate_run_section()
     added = [p for p in _paragraphs(live) if p not in _paragraphs(fixture)]
-    assert len(added) == 5, [p[:60] for p in added]
+    assert len(added) == 6, [p[:60] for p in added]
     assert _print_paragraph(live) in added, "the verdict-print paragraph must be one of them"
     provenance = [p for p in added if "gate-provenance" in p]
     assert len(provenance) == 1, [p[:60] for p in added]
@@ -305,6 +307,8 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
     assert len(sweep) == 1, [p[:60] for p in added]
     commands = [p for p in added if p.startswith("```") and "--tests-ran" in p]
     assert len(commands) == 2, [p[:60] for p in added]
+    delta = [p for p in added if "delta cycle profile" in p and "--cycle-profile" in p]
+    assert len(delta) == 1, [p[:60] for p in added]
 
     # The removed side, asserted rather than commented: the ONLY fixture
     # paragraphs allowed to go missing from the live section are the two

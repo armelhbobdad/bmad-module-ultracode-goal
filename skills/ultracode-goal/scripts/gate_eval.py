@@ -1074,6 +1074,21 @@ def evaluate(args: argparse.Namespace) -> dict:
     if tests_ran is not None:
         verdict, sweep_scope = apply_sweep_scope(verdict, Path(tests_ran), reasons)
 
+    # The delta cycle profile: a mid-loop gate that re-ran only the previously
+    # failed assessor dimension(s) declares itself and is capped exactly as a
+    # scoped sweep is - it may say "not yet, and here is why", never advance.
+    # defer moves too, for the same reason as the sweep cap: defer's route
+    # advances the story. The choices list means an unrecognised value is an
+    # argparse error (exit 2), never a silently-full gate.
+    cycle_profile = getattr(args, "cycle_profile", None)
+    if cycle_profile == "delta" and verdict in ("advance", "defer"):
+        reasons.append(
+            f"{verdict} capped at reloop: a delta-profile gate re-ran only the "
+            "previously failed dimension(s), so it may not move the story - "
+            "run the full gate (every assessor, over a scope=full sweep) to advance"
+        )
+        verdict = "reloop"
+
     result = {
         "verdict": verdict,
         "gate_status": gate_status,
@@ -1096,6 +1111,9 @@ def evaluate(args: argparse.Namespace) -> dict:
         # as a shape change; a caller only sees this one by opting in). The
         # value is the recognised scope= reading, or null when none was.
         result["sweep_scope"] = sweep_scope
+    if cycle_profile is not None:
+        # Same conditional-presence contract as sweep_scope, same reason.
+        result["cycle_profile"] = cycle_profile
     return result
 
 
@@ -1135,6 +1153,17 @@ def main(argv: list[str] | None = None) -> int:
         "skips the check (invocations that predate the flag keep their "
         "verdicts); the skill instructions require it on every per-story gate. "
         "Cannot be combined with --epic-level.",
+    )
+    parser.add_argument(
+        "--cycle-profile",
+        choices=["full", "delta"],
+        help="Which gate cycle this is (per-story gates only). 'delta' declares "
+        "a mid-loop gate that re-ran in full only the previously failed "
+        "assessor dimension(s), the others re-checking their prior artifact "
+        "against the diff: its verdict is capped at reloop - advance/defer "
+        "require the full gate. Omitting the flag is the full behaviour; the "
+        "JSON carries cycle_profile exactly when the flag was supplied. Cannot "
+        "be combined with --epic-level.",
     )
     parser.add_argument(
         "--epic-level",
@@ -1190,6 +1219,16 @@ def main(argv: list[str] | None = None) -> int:
             "--epic-level is the epic roll-up: it gates no sweep of its own, so "
             "it cannot be combined with --tests-ran; drop the flag for a "
             "per-story gate, or drop the path for the epic roll-up"
+        )
+
+    # The roll-up is by definition the final full instrument over the per-story
+    # record - a delta roll-up is a contradiction, and even an explicit 'full'
+    # is per-story vocabulary the roll-up does not speak. Same refusal lane.
+    if args.epic_level and args.cycle_profile is not None:
+        parser.error(
+            "--epic-level is the epic roll-up, always the full instrument: it "
+            "cannot be combined with --cycle-profile; drop the flag for a "
+            "per-story gate"
         )
 
     result = evaluate(args)

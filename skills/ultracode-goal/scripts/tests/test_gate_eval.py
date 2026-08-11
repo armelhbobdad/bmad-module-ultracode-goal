@@ -53,6 +53,7 @@ def run_gate(
     story=None,
     epic_level=False,
     tests_ran=None,
+    cycle_profile=None,
 ):
     cmd = [sys.executable, str(SCRIPT), "--trace-output", str(trace_output), "--profile", profile]
     if nfr is not None:
@@ -65,6 +66,8 @@ def run_gate(
         cmd += ["--epic-level"]
     if tests_ran is not None:
         cmd += ["--tests-ran", str(tests_ran)]
+    if cycle_profile is not None:
+        cmd += ["--cycle-profile", str(cycle_profile)]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
@@ -1460,3 +1463,151 @@ def test_mutant_capping_only_advance_lets_defer_slip(tmp_path):
     result = json.loads(proc.stdout)
 
     assert result["verdict"] == "defer"
+
+
+# --- The delta cycle profile (--cycle-profile) --------------------------------
+
+
+def test_delta_profile_caps_advance_at_reloop(tmp_path):
+    write_slim(tmp_path, "PASS")
+
+    result = run_gate(tmp_path, cycle_profile="delta")
+
+    assert result["verdict"] == "reloop"
+    assert result["cycle_profile"] == "delta"
+    assert any("full gate" in r for r in result["reasons"])
+
+
+def test_delta_profile_caps_defer_too(tmp_path):
+    """Same rationale as the sweep cap: defer's route advances the story."""
+    write_slim(tmp_path, "CONCERNS")
+
+    result = run_gate(tmp_path, cycle_profile="delta")
+
+    assert result["gate_status"] == "CONCERNS"
+    assert result["verdict"] == "reloop"
+
+
+def test_delta_profile_leaves_failing_verdicts_alone(tmp_path):
+    write_slim(tmp_path, "FAIL")
+    assert run_gate(tmp_path, cycle_profile="delta")["verdict"] == "reloop"
+
+    write_slim(tmp_path, "NOT_EVALUATED")
+    assert run_gate(tmp_path, cycle_profile="delta")["verdict"] == "escalate"
+
+
+def test_explicit_full_cycle_profile_passes_through(tmp_path):
+    write_slim(tmp_path, "PASS")
+
+    result = run_gate(tmp_path, cycle_profile="full")
+
+    assert result["verdict"] == "advance"
+    assert result["cycle_profile"] == "full"
+
+
+def test_omitted_cycle_profile_keeps_the_shape(tmp_path):
+    """Omission is the full behaviour AND the pre-flag printed shape: the key
+    is absent, not null, same conditional-presence contract as sweep_scope."""
+    write_slim(tmp_path, "PASS")
+
+    result = run_gate(tmp_path)
+
+    assert result["verdict"] == "advance"
+    assert "cycle_profile" not in result
+
+
+def test_delta_cap_is_independent_of_sweep_scope(tmp_path):
+    """A full-scope sweep does not buy a delta gate an advance: the two caps
+    guard different halves of the evidence (what was re-run vs who re-judged)."""
+    write_slim(tmp_path, "PASS")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=full")
+
+    result = run_gate(tmp_path, tests_ran=marker, cycle_profile="delta")
+
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] == "full"
+    assert result["cycle_profile"] == "delta"
+
+
+def test_cycle_profile_refused_with_epic_level(tmp_path):
+    write_slim(tmp_path, "PASS")
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--trace-output", str(tmp_path),
+         "--profile", "production", "--epic-level", "--cycle-profile", "full"],
+        capture_output=True, text=True, check=False,
+    )
+
+    assert proc.returncode == 2
+    assert "--cycle-profile" in proc.stderr
+
+
+def test_unrecognised_cycle_profile_is_an_argparse_error(tmp_path):
+    """choices=[full, delta]: a typo is an invocation error, never a gate that
+    silently ran as full."""
+    write_slim(tmp_path, "PASS")
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--trace-output", str(tmp_path),
+         "--profile", "light", "--cycle-profile", "partial"],
+        capture_output=True, text=True, check=False,
+    )
+
+    assert proc.returncode == 2
+
+
+_DELTA_CAP_CLAUSE = '    if cycle_profile == "delta" and verdict in ("advance", "defer"):\n'
+_DELTA_CAP_REMOVED = "    if False:\n"
+
+
+def test_mutant_without_delta_cap_advances_a_delta_gate(tmp_path):
+    """Twin for test_delta_profile_caps_advance_at_reloop: delete the cap and a
+    partial-instrument gate advances the story, which is the fail-open the
+    profile exists to refuse."""
+    mutant = _write_mutant(
+        tmp_path / "src", "no_delta_cap", (_DELTA_CAP_CLAUSE, _DELTA_CAP_REMOVED)
+    )
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    write_slim(trace, "PASS")
+
+    proc = subprocess.run(
+        [sys.executable, str(mutant), "--trace-output", str(trace),
+         "--profile", "light", "--cycle-profile", "delta"],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+
+    assert result["verdict"] == "advance"
+
+
+def test_delta_profile_caps_under_production_too(tmp_path):
+    """The documented delta usage is production (light omits the flag), so the
+    cap must fire there: a profile-gated mutant that only capped light gates
+    survived the whole suite before this test existed."""
+    write_slim(tmp_path, "PASS")
+    nfr = tmp_path / "nfr-assessment.md"
+    review = tmp_path / "test-review.md"
+    write_nfr(nfr, "PASS")
+    write_review(review, 95, "Approve")
+
+    result = run_gate(
+        tmp_path, profile="production", nfr=nfr, test_review=review, cycle_profile="delta"
+    )
+
+    assert result["verdict"] == "reloop"
+    assert result["cycle_profile"] == "delta"
+    assert any("full gate" in r for r in result["reasons"])
+
+
+def test_explicit_full_cycle_profile_never_resurrects(tmp_path):
+    """--cycle-profile full is a declaration, not a lift: failing verdicts are
+    untouched. Pins against a mutant that promotes reloop/escalate to advance
+    whenever the flag says full."""
+    marker_free_expectations = [("FAIL", "reloop"), ("NOT_EVALUATED", "escalate")]
+    for gate_status, verdict in marker_free_expectations:
+        write_slim(tmp_path, gate_status)
+        result = run_gate(tmp_path, cycle_profile="full")
+        assert result["verdict"] == verdict, gate_status
+        assert result["cycle_profile"] == "full"
