@@ -97,6 +97,10 @@ Two boundaries:
 
 The verdict JSON carries the recognised value as `sweep_scope` (or `null`), so an advance that proved a full sweep is distinguishable from one that was never asked about its sweep.
 
+## The delta cycle profile
+
+A mid-loop re-gate may declare `--cycle-profile delta`: only the assessor dimension(s) whose findings produced the previous reloop re-run in full, while the other assessors re-check their prior artifact against the diff since the commit they assessed. The script caps a delta gate's verdict at `reloop` (defer too, for the sweep-cap reason): a delta gate can say "not yet, and here is why", never move the story. Advancing requires the full instrument, every assessor over a `scope=full` sweep, so the oracle's finality is untouched and a wrong guess costs one extra full gate rather than an unearned advance. The fallback is mechanical: any prior finding without a clean dimension attribution means the full gate runs. `--epic-level` refuses the flag (invocation error, exit 2); omitting it is the full behaviour, and the `cycle_profile` JSON key appears exactly when the flag was supplied.
+
 ## The thresholds
 
 The P0/P1/overall percentage thresholds (**P0 = 100%, P1 >= 90%, overall >= 80%**) are decided **upstream by the TEA trace workflow** and written into the gate artifact; `gate_eval.py` reads the resulting `gate_status`, `p0_status`, `p1_status`, and `overall_status` rather than recomputing the percentages. The script's own production AND adds the two coarser signals above (NFR != FAIL, review score >= 80 and recommendation != Block). Do not restate or recompute the TEA percentages elsewhere; they are TEA-owned, and the test-design stage's job is only to assign the P0-P3 priorities honestly so those upstream thresholds key off real priorities.
