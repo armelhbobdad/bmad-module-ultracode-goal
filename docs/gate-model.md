@@ -86,6 +86,17 @@ flowchart TD
 
 Under `--profile light` none of this applies: the trace gate is the whole decision, and `--epic-level` is a no-op there.
 
+## The sweep-scope cap
+
+Independent of profile, a per-story gate is also handed the story's `.tests-ran-<story_id>` marker via `--tests-ran`. Execute writes a `scope=<full|scoped>` line into that marker beside `baseline=`, naming which sweep form the green run behind this gate was: the full three-axis sweep, or a re-loop iteration's affected-set sweep (changed packages plus their dependents, still cache-defeated, with the resolved package list printed and recorded on a `packages=` line). The script reads the line and applies one rule: **a story only moves forward off a full-scope sweep.** `scope=full` passes the verdict through; `scope=scoped` caps `advance` at `reloop`, and caps `defer` too, because defer's route advances the story after parking its concerns. A missing marker, a marker with no `scope=` line, or an unrecognised value gets the same cap, fail-closed, with a reason naming what was wrong.
+
+Two boundaries:
+
+- `--epic-level` refuses `--tests-ran` outright (an invocation error, exit 2): the epic roll-up gates no sweep of its own, since every story proved its own scope before reaching `done`.
+- Omitting the flag skips the check. That is deliberate: making omission failing would change the verdict of documented invocations that predate the flag, which is exactly the 2.0.0 lesson in the [stability policy](./_internal/STABILITY.md). The skill instructions require the flag on every per-story gate; the script does not retrofit that requirement onto older callers.
+
+The verdict JSON carries the recognised value as `sweep_scope` (or `null`), so an advance that proved a full sweep is distinguishable from one that was never asked about its sweep.
+
 ## The thresholds
 
 The P0/P1/overall percentage thresholds (**P0 = 100%, P1 >= 90%, overall >= 80%**) are decided **upstream by the TEA trace workflow** and written into the gate artifact; `gate_eval.py` reads the resulting `gate_status`, `p0_status`, `p1_status`, and `overall_status` rather than recomputing the percentages. The script's own production AND adds the two coarser signals above (NFR != FAIL, review score >= 80 and recommendation != Block). Do not restate or recompute the TEA percentages elsewhere; they are TEA-owned, and the test-design stage's job is only to assign the P0-P3 priorities honestly so those upstream thresholds key off real priorities.
@@ -109,9 +120,12 @@ The script prints one JSON object (`evaluate()` in the script):
   "overall_status": "...",
   "nfr_status": "...",
   "review_score": 0,
+  "sweep_scope": "full|scoped|null",
   "reasons": ["..."]
 }
 ```
+
+The `sweep_scope` key is present exactly when `--tests-ran` was supplied and absent otherwise, so an invocation that predates the flag prints the same shape it always did.
 
 ### Example: a clean production advance
 
@@ -126,6 +140,7 @@ A story whose slim gate file reads `PASS`, with an NFR audit of `PASS` and a tes
   "overall_status": "PASS",
   "nfr_status": "PASS",
   "review_score": 92,
+  "sweep_scope": "full",
   "reasons": [
     "gate read from gate-decision.json",
     "gate_status PASS -> advance"
@@ -146,6 +161,7 @@ The same `PASS` gate, but with a test review scoring 74, downgrades to `reloop`;
   "overall_status": "PASS",
   "nfr_status": "PASS",
   "review_score": 74,
+  "sweep_scope": "full",
   "reasons": [
     "gate read from gate-decision.json",
     "gate_status PASS -> advance",
