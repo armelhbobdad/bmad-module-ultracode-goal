@@ -173,7 +173,9 @@ def test_restore_wins_even_when_the_command_edits_the_target(tmp_path):
     (project / "check.py").write_text(
         CHECKER.replace(
             'print("all green")',
-            'open("code.py", "a", encoding="utf-8").write("# scribble\\n")\n'
+            # Binary append: a text-mode "a" would translate \n to \r\n on
+            # Windows and break the byte-exact expectation below.
+            'open("code.py", "ab").write(b"# scribble\\n")\n'
             'print("all green")',
         ),
         encoding="utf-8",
