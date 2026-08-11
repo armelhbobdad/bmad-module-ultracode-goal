@@ -36,7 +36,7 @@ parallel_max_concurrency = 8
 # per-story baseline SHA with `git rev-parse HEAD` before any implementation, and the evidence
 # trail bounds a story's commit range from it. Omitting them makes an unattended run stop for a
 # permission prompt exactly where walk-away autonomy is claimed.
-allowlist_commands = ["git status", "git add", "git commit", "git rev-parse", "git diff", "npm test", "npm run lint", "npm run build", "pytest", "uv run"]
+allowlist_commands = ["git status", "git add", "git commit", "git rev-parse", "git diff", "npm test", "npm run lint", "npm run build", "pytest", "uv run", "date"]
 
 # --- Hook fired at epic completion (prompt or shell command); empty = none ---
 on_epic_complete = ""
