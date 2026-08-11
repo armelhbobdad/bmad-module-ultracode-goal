@@ -833,6 +833,88 @@ def apply_production_and(
     return verdict, nfr_status, review_score
 
 
+# The marker's scope line, written by execute.md steps 2/5 beside baseline=.
+_SWEEP_SCOPE_RE = re.compile(r"^scope=(\S+)\s*$", re.MULTILINE)
+
+
+def apply_sweep_scope(
+    verdict: str, tests_ran_path: Path, reasons: list[str]
+) -> tuple[str, str | None]:
+    """Cap a story-moving verdict at reloop unless the sweep behind it was full.
+
+    Reads the story's ``.tests-ran-<story_id>`` marker for its
+    ``scope=<full|scoped>`` line. ``full`` passes the verdict through;
+    ``scoped`` is legitimate mid-loop evidence whose verdict is capped at
+    reloop - a scoped sweep must not impersonate a full one at the one place
+    the distinction pays. Unlike the production AND's floor, the cap moves
+    ``defer`` as well as ``advance``, because defer's route ADVANCES the story
+    (ledger, then advance anyway), and a story moving forward off mid-loop
+    evidence is exactly what the cap exists to refuse.
+
+    FAIL-CLOSED like every other signal: a missing or unreadable marker, a
+    marker with no ``scope=`` line, and a value this reader does not recognise
+    all get the same cap, with a reason naming what was wrong. Only the OMITTED
+    FLAG is a no-op, and that is deliberate rather than a soft spot: making
+    omission failing would change the verdict of documented invocations that
+    predate the flag (docs/_internal/STABILITY.md carries the 2.0.0 lesson on
+    exactly that), so the always-pass-it rule is the instruction layer's to
+    state, not this reader's to retrofit.
+
+    Returns ``(verdict, sweep_scope)`` where ``sweep_scope`` is the recognised
+    value read from the marker, or None when none was.
+    """
+    scope: str | None = None
+    problem: str | None = None
+    text = _read_text(tests_ran_path) if tests_ran_path.is_file() else None
+    if text is None:
+        problem = f"tests-ran marker {tests_ran_path} missing or unreadable"
+    else:
+        values = _SWEEP_SCOPE_RE.findall(text)
+        if not values:
+            problem = (
+                f"tests-ran marker {tests_ran_path.name} carries no scope= line "
+                "(execute.md step 2 writes scope=full|scoped beside baseline=)"
+            )
+        elif len(set(values)) > 1:
+            # Disagreeing duplicates are a marker that was APPENDED to rather
+            # than rewritten - and picking either line would be a guess. Taking
+            # the first is the trap specifically: a re-loop cycle appending its
+            # scoped line under a first pass's scope=full would read as full,
+            # which is the one impersonation this reader exists to refuse.
+            problem = (
+                f"tests-ran marker {tests_ran_path.name} carries "
+                f"{len(values)} disagreeing scope= lines ({', '.join(values)}); "
+                "rewrite the marker with exactly one"
+            )
+        elif values[0] not in ("full", "scoped"):
+            problem = (
+                f"tests-ran marker {tests_ran_path.name} carries unrecognised "
+                f"scope={values[0]!r}"
+            )
+        else:
+            scope = values[0]
+
+    if scope == "full":
+        return verdict, scope
+    if verdict in ("advance", "defer"):
+        reasons.append(
+            f"{problem}; treated as failing" if problem is not None else "sweep scope is scoped"
+        )
+        reasons.append(
+            f"{verdict} capped at reloop: a story only advances off a full-scope "
+            "sweep - re-run the full three-axis sweep, refresh the marker with "
+            "scope=full, and re-run the gate"
+        )
+        verdict = "reloop"
+    elif problem is not None:
+        # A verdict already at reloop/escalate is not moved, but the marker
+        # problem still gets a line - the re-loop should fix the marker too.
+        reasons.append(f"{problem} (verdict already {verdict}; not moved)")
+    else:
+        reasons.append(f"sweep scope scoped (verdict already {verdict}; not moved)")
+    return verdict, scope
+
+
 # Severity order for the roll-up aggregate: the epic's status is its WORST
 # story's status, and an unknown status is treated as the worst there is.
 _ROLLUP_SEVERITY = ("PASS", "WAIVED", "CONCERNS", "FAIL", "NOT_EVALUATED")
@@ -984,7 +1066,15 @@ def evaluate(args: argparse.Namespace) -> dict:
                 verdict, nfr_path, review_path, reasons
             )
 
-    return {
+    # `is not None`, never truthiness: an explicitly-passed empty value is a
+    # caller error to fail closed on (Path("") is never a file, so it caps),
+    # not a silent way back to the pre-flag behaviour. Only true omission skips.
+    tests_ran = getattr(args, "tests_ran", None)
+    sweep_scope: str | None = None
+    if tests_ran is not None:
+        verdict, sweep_scope = apply_sweep_scope(verdict, Path(tests_ran), reasons)
+
+    result = {
         "verdict": verdict,
         "gate_status": gate_status,
         "p0_status": gate["p0_status"],
@@ -999,6 +1089,14 @@ def evaluate(args: argparse.Namespace) -> dict:
         "epic_level": bool(getattr(args, "epic_level", False)),
         "reasons": reasons,
     }
+    if tests_ran is not None:
+        # Present exactly when --tests-ran was supplied, absent otherwise - so
+        # the printed shape of every pre-flag invocation is unchanged (the
+        # stability policy classes a new key in a documented invocation's JSON
+        # as a shape change; a caller only sees this one by opting in). The
+        # value is the recognised scope= reading, or null when none was.
+        result["sweep_scope"] = sweep_scope
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1025,6 +1123,18 @@ def main(argv: list[str] | None = None) -> int:
         "(the /100 denominator is required) and a '**Recommendation**:' line; a "
         "value passed here instead of a path is read as a missing file and "
         "treated as failing.",
+    )
+    parser.add_argument(
+        "--tests-ran",
+        help="PATH to the story's .tests-ran-<story_id> marker (per-story gates "
+        "only). The marker must carry a scope=<full|scoped> line naming which "
+        "sweep form its green run was (execute.md steps 2/5 write it beside "
+        "baseline=). scope=full passes the verdict through; scope=scoped - and, "
+        "fail-closed, a missing marker, a missing scope= line, or an "
+        "unrecognised value - caps advance/defer at reloop. Omitting the flag "
+        "skips the check (invocations that predate the flag keep their "
+        "verdicts); the skill instructions require it on every per-story gate. "
+        "Cannot be combined with --epic-level.",
     )
     parser.add_argument(
         "--epic-level",
@@ -1068,6 +1178,18 @@ def main(argv: list[str] | None = None) -> int:
             "--epic-level asserts there is no epic-level aggregate to AND, so it "
             "cannot be combined with --nfr/--test-review; drop the flag for a "
             "per-story gate, or drop the paths for the epic roll-up"
+        )
+
+    # Same lane as the hybrid above: the epic roll-up gates no sweep of its own
+    # (every story proved its own scope before reaching `done`), so an
+    # epic-level --tests-ran is a contradiction to refuse, never to evaluate.
+    # `is not None`, not truthiness: --epic-level --tests-ran "" is the same
+    # contradiction spelled with an empty value, not a way around the refusal.
+    if args.epic_level and args.tests_ran is not None:
+        parser.error(
+            "--epic-level is the epic roll-up: it gates no sweep of its own, so "
+            "it cannot be combined with --tests-ran; drop the flag for a "
+            "per-story gate, or drop the path for the epic roll-up"
         )
 
     result = evaluate(args)

@@ -21,7 +21,7 @@ These are the module's non-negotiables. Each exists because the documented mecha
 
 ### 1. Deterministic gate truth
 
-`scripts/gate_eval.py` reads TEA's `gate-decision.json` and maps its gate status to a routing verdict (`PASS`/`WAIVED` → advance, `CONCERNS` → defer, `FAIL` → reloop, `NOT_EVALUATED` → escalate). It never re-derives TEA's thresholds and never reads the transcript. The `/goal` evaluator that drives execution can only see what the run surfaces, it cannot open the gate file, so it is structurally incapable of being the completion authority. The script is. In production, two extra signals can only downgrade an `advance`, never lift a lower verdict. See the [gate model](./gate-model.md) for the full mapping diagram, thresholds, and the fail-closed contract.
+`scripts/gate_eval.py` reads TEA's `gate-decision.json` and maps its gate status to a routing verdict (`PASS`/`WAIVED` → advance, `CONCERNS` → defer, `FAIL` → reloop, `NOT_EVALUATED` → escalate). It never re-derives TEA's thresholds and never reads the transcript. The `/goal` evaluator that drives execution can only see what the run surfaces, it cannot open the gate file, so it is structurally incapable of being the completion authority. The script is. In production, two extra signals can only downgrade an `advance`, never lift a lower verdict; in both profiles a `scope=scoped` tests-ran marker caps a story-moving verdict at `reloop`, so a scoped re-loop sweep can never advance a story. See the [gate model](./gate-model.md) for the full mapping diagram, thresholds, and the fail-closed contract.
 
 ### 2. Hooks as invariants
 

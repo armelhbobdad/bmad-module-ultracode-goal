@@ -215,14 +215,25 @@ def test_the_pre_edit_fixture_is_a_real_snapshot():
 
 
 def test_step5_still_inherits_step2s_full_scope():
-    """Widening step 2 is worthless if step 5 re-runs something narrower."""
+    """Widening step 2 is worthless if step 5 re-runs something narrower.
+
+    Since the scoped re-loop rule, step 2's scope is per-cycle (full on a first
+    pass and any advance-bound cycle; the affected set on a mid-loop re-loop
+    cycle), so what step 5 inherits is THIS CYCLE's scope - and the narrowing
+    must be anchored to step 2's re-loop rule, never free-form, or step 5
+    becomes the place a sweep quietly shrinks.
+    """
     step5 = _step(5, _text())
-    assert re.search(r"same wide scope as step 2", step5, re.I)
+    assert re.search(r"same scope step 2 ran this cycle", step5, re.I)
     assert re.search(r"all three axes", step5, re.I), (
         "step 5 must name the axes it inherits, or a reader re-runs only the "
         "package-breadth half"
     )
     assert re.search(r"declared gate set", step5, re.I)
+    assert re.search(r"re-loop rule", step5, re.I), (
+        "the scoped case must cite step 2's re-loop rule, or step 5 licenses "
+        "an unbounded narrowing"
+    )
 
 
 def test_the_checks_are_anchored_to_their_step_not_to_the_file():

@@ -281,21 +281,41 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
     assert "gate_eval.py --trace-output {workflow.trace_output_dir} --story <story_id>" in fixture
     assert "--profile light" in fixture and "--profile production" in fixture
 
-    # It is a real slice of the shipped file, not a summary of one: everything in
-    # the fixture is still present, byte-for-byte, in the live section. What was
-    # added on top is ENUMERATED rather than counted, so a new paragraph has to
-    # be named here instead of quietly raising a threshold:
+    # It is a real slice of the shipped file, not a summary of one: everything
+    # in the fixture except its two invocation blocks (modified in place by the
+    # sweep-scope flag, below) is still present, byte-for-byte, in the live
+    # section. What was added on top is ENUMERATED rather than counted, so a
+    # new paragraph has to be named here instead of quietly raising a threshold:
     #   1. the attended per-story verdict print;
     #   2. the gate-provenance record, which says whether TEA or the run itself
     #      authored the artifacts the verdict rests on (the hand-authored path is
     #      sanctioned, but on it the model writes the file the gate reads, and
-    #      the two were previously indistinguishable in the log and the report).
+    #      the two were previously indistinguishable in the log and the report);
+    #   3. the sweep-scope AND paragraph: --tests-ran reads the marker's scope=
+    #      line and caps a scoped cycle's advance/defer at reloop;
+    #   4. and 5. the two invocation blocks, which now carry --tests-ran - they
+    #      REPLACE the fixture's two, so they surface in `added` as well.
     live = _gate_run_section()
     added = [p for p in _paragraphs(live) if p not in _paragraphs(fixture)]
-    assert len(added) == 2, [p[:60] for p in added]
+    assert len(added) == 5, [p[:60] for p in added]
     assert _print_paragraph(live) in added, "the verdict-print paragraph must be one of them"
     provenance = [p for p in added if "gate-provenance" in p]
     assert len(provenance) == 1, [p[:60] for p in added]
+    sweep = [p for p in added if "sweep-scope AND" in p and "--tests-ran" in p]
+    assert len(sweep) == 1, [p[:60] for p in added]
+    commands = [p for p in added if p.startswith("```") and "--tests-ran" in p]
+    assert len(commands) == 2, [p[:60] for p in added]
+
+    # The removed side, asserted rather than commented: the ONLY fixture
+    # paragraphs allowed to go missing from the live section are the two
+    # pre-flag invocation blocks the --tests-ran commands replaced. Any other
+    # disappearance (a deleted resolution paragraph, a dropped rule) must red
+    # here rather than hide behind the additions.
+    removed = [p for p in _paragraphs(fixture) if p not in _paragraphs(live)]
+    assert len(removed) == 2, [p[:60] for p in removed]
+    assert all(p.startswith("```") and "--tests-ran" not in p for p in removed), [
+        p[:60] for p in removed
+    ]
 
 
 # --- the launch briefing ------------------------------------------------------

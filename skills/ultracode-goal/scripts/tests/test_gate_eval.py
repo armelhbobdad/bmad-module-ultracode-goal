@@ -46,7 +46,13 @@ gate_eval_module = _load_gate_eval()
 
 
 def run_gate(
-    trace_output, profile="light", nfr=None, test_review=None, story=None, epic_level=False
+    trace_output,
+    profile="light",
+    nfr=None,
+    test_review=None,
+    story=None,
+    epic_level=False,
+    tests_ran=None,
 ):
     cmd = [sys.executable, str(SCRIPT), "--trace-output", str(trace_output), "--profile", profile]
     if nfr is not None:
@@ -57,6 +63,8 @@ def run_gate(
         cmd += ["--story", str(story)]
     if epic_level:
         cmd += ["--epic-level"]
+    if tests_ran is not None:
+        cmd += ["--tests-ran", str(tests_ran)]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
@@ -1161,3 +1169,294 @@ def test_single_story_generic_dir_still_uses_the_unscoped_fallback(tmp_path):
 
     assert result["gate_status"] == "PASS"
     assert result["verdict"] == "advance"
+
+
+# --- The sweep-scope AND (--tests-ran) ---------------------------------------
+
+
+_MARKER_BASELINE = "baseline=" + "a" * 40
+
+
+def _write_marker(tmp_path, *lines, name=".tests-ran-4-2"):
+    path = tmp_path / name
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def test_sweep_scope_full_passes_the_verdict_through(tmp_path):
+    write_slim(tmp_path, "PASS")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=full")
+
+    result = run_gate(tmp_path, tests_ran=marker)
+
+    assert result["verdict"] == "advance"
+    assert result["sweep_scope"] == "full"
+
+
+def test_sweep_scope_scoped_caps_advance_at_reloop(tmp_path):
+    write_slim(tmp_path, "PASS")
+    marker = _write_marker(
+        tmp_path, _MARKER_BASELINE, "scope=scoped", "packages=pkg-a,pkg-b"
+    )
+
+    result = run_gate(tmp_path, tests_ran=marker)
+
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] == "scoped"
+    assert any("full-scope" in r for r in result["reasons"])
+
+
+def test_sweep_scope_scoped_caps_defer_too(tmp_path):
+    """defer's route ADVANCES the story (ledger, then advance anyway), so the
+    cap moves it as well — a deliberate deviation from the production AND's
+    advance-only floor, not an accident of shared code."""
+    write_slim(tmp_path, "CONCERNS")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=scoped")
+
+    result = run_gate(tmp_path, tests_ran=marker)
+
+    assert result["gate_status"] == "CONCERNS"
+    assert result["verdict"] == "reloop"
+
+
+def test_sweep_scope_missing_marker_fails_closed(tmp_path):
+    write_slim(tmp_path, "PASS")
+
+    result = run_gate(tmp_path, tests_ran=tmp_path / ".tests-ran-nowhere")
+
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] is None
+    assert any("missing or unreadable" in r for r in result["reasons"])
+
+
+def test_sweep_scope_missing_line_fails_closed(tmp_path):
+    """A pre-flag marker (baseline= only) proves a green run but not its scope."""
+    write_slim(tmp_path, "PASS")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE)
+
+    result = run_gate(tmp_path, tests_ran=marker)
+
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] is None
+    assert any("no scope= line" in r for r in result["reasons"])
+
+
+def test_sweep_scope_unrecognised_value_fails_closed(tmp_path):
+    write_slim(tmp_path, "PASS")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=partial")
+
+    result = run_gate(tmp_path, tests_ran=marker)
+
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] is None
+
+
+def test_sweep_scope_leaves_a_failing_verdict_alone(tmp_path):
+    write_slim(tmp_path, "FAIL")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=scoped")
+
+    result = run_gate(tmp_path, tests_ran=marker)
+
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] == "scoped"
+
+
+def test_sweep_scope_leaves_escalate_alone(tmp_path):
+    write_slim(tmp_path, "NOT_EVALUATED")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=scoped")
+
+    result = run_gate(tmp_path, tests_ran=marker)
+
+    assert result["verdict"] == "escalate"
+
+
+def test_omitted_tests_ran_flag_is_backward_compatible(tmp_path):
+    """Omission skips the check on purpose: making it failing would change the
+    verdict of documented invocations that predate the flag, which is the 2.0.0
+    breaking-change lesson docs/_internal/STABILITY.md records. The JSON shape
+    is part of that: the key is ABSENT, not null, so a pre-flag consumer
+    validating the printed shape strictly sees no change either."""
+    write_slim(tmp_path, "PASS")
+
+    result = run_gate(tmp_path)
+
+    assert result["verdict"] == "advance"
+    assert "sweep_scope" not in result
+
+
+def test_sweep_scope_applies_under_production_too(tmp_path):
+    write_slim(tmp_path, "PASS")
+    nfr = tmp_path / "nfr-assessment.md"
+    review = tmp_path / "test-review.md"
+    write_nfr(nfr, "PASS")
+    write_review(review, 95, "Approve")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=scoped")
+
+    result = run_gate(
+        tmp_path, profile="production", nfr=nfr, test_review=review, tests_ran=marker
+    )
+
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] == "scoped"
+
+
+def test_sweep_scope_full_never_resurrects_a_verdict(tmp_path):
+    """scope=full is a pass-THROUGH, not a lift: a failing gate stays failing
+    and a CONCERNS gate stays defer. Pins the `return verdict, scope` branch
+    against a mutant that returns advance."""
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=full")
+
+    write_slim(tmp_path, "FAIL")
+    assert run_gate(tmp_path, tests_ran=marker)["verdict"] == "reloop"
+
+    write_slim(tmp_path, "CONCERNS")
+    assert run_gate(tmp_path, tests_ran=marker)["verdict"] == "defer"
+
+
+def test_sweep_scope_full_keeps_a_production_downgrade(tmp_path):
+    """A full sweep does not undo the production AND: gate PASS + review Block
+    is a reloop with or without the marker."""
+    write_slim(tmp_path, "PASS")
+    nfr = tmp_path / "nfr-assessment.md"
+    review = tmp_path / "test-review.md"
+    write_nfr(nfr, "PASS")
+    write_review(review, 95, "Block")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=full")
+
+    result = run_gate(
+        tmp_path, profile="production", nfr=nfr, test_review=review, tests_ran=marker
+    )
+
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] == "full"
+
+
+def test_disagreeing_duplicate_scope_lines_fail_closed_in_both_orders(tmp_path):
+    """An appended-to marker (full then scoped, the natural newest-last order)
+    must not read as full: first-match-wins was fail-open in exactly that
+    direction, so disagreeing duplicates cap the verdict whichever way they
+    are ordered."""
+    write_slim(tmp_path, "PASS")
+
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=full", "scope=scoped")
+    result = run_gate(tmp_path, tests_ran=marker)
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] is None
+    assert any("disagreeing scope= lines" in r for r in result["reasons"])
+
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=scoped", "scope=full")
+    result = run_gate(tmp_path, tests_ran=marker)
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] is None
+
+
+def test_agreeing_duplicate_scope_lines_still_resolve(tmp_path):
+    """Duplicates that agree carry one answer; only disagreement is a guess."""
+    write_slim(tmp_path, "PASS")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=full", "scope=full")
+
+    result = run_gate(tmp_path, tests_ran=marker)
+
+    assert result["verdict"] == "advance"
+    assert result["sweep_scope"] == "full"
+
+
+def test_empty_tests_ran_value_fails_closed(tmp_path):
+    """--tests-ran "" is an explicitly-passed caller error, not an omission:
+    it enters the check and caps, never silently reverts to pre-flag behaviour
+    (the same empty-value lesson --nfr already encodes)."""
+    write_slim(tmp_path, "PASS")
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--trace-output", str(tmp_path),
+         "--profile", "light", "--tests-ran", ""],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] is None
+    assert any("missing or unreadable" in r for r in result["reasons"])
+
+
+def test_empty_tests_ran_value_still_refused_with_epic_level(tmp_path):
+    """--epic-level --tests-ran "" is the same contradiction spelled with an
+    empty value: exit 2, not a silent skip."""
+    write_slim(tmp_path, "PASS")
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--trace-output", str(tmp_path),
+         "--profile", "production", "--epic-level", "--tests-ran", ""],
+        capture_output=True, text=True, check=False,
+    )
+
+    assert proc.returncode == 2
+    assert "--tests-ran" in proc.stderr
+
+
+def test_tests_ran_refused_with_epic_level(tmp_path):
+    """The epic roll-up gates no sweep of its own — the combination is an
+    invocation error (exit 2), the same lane as --epic-level with --nfr."""
+    write_slim(tmp_path, "PASS")
+    marker = _write_marker(tmp_path, _MARKER_BASELINE, "scope=full")
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--trace-output", str(tmp_path),
+         "--profile", "production", "--epic-level", "--tests-ran", str(marker)],
+        capture_output=True, text=True, check=False,
+    )
+
+    assert proc.returncode == 2
+    assert "--tests-ran" in proc.stderr
+
+
+# The whole cap clause. Deleting it is the pre-fix behaviour: a scoped sweep
+# advances exactly as a full one, which is the impersonation the cap refuses.
+_SWEEP_CAP_CLAUSE = '    if verdict in ("advance", "defer"):\n'
+_SWEEP_CAP_ADVANCE_ONLY = '    if verdict in ("advance",):\n'
+_SWEEP_CAP_REMOVED = "    if False:\n"
+
+
+def test_mutant_without_sweep_cap_advances_on_a_scoped_marker(tmp_path):
+    """Twin for test_sweep_scope_scoped_caps_advance_at_reloop."""
+    mutant = _write_mutant(
+        tmp_path / "src", "no_sweep_cap", (_SWEEP_CAP_CLAUSE, _SWEEP_CAP_REMOVED)
+    )
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    write_slim(trace, "PASS")
+    marker = _write_marker(trace, _MARKER_BASELINE, "scope=scoped")
+
+    proc = subprocess.run(
+        [sys.executable, str(mutant), "--trace-output", str(trace),
+         "--profile", "light", "--tests-ran", str(marker)],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+
+    # The fail-open the cap exists to close, reproduced against the mutant.
+    assert result["verdict"] == "advance"
+
+
+def test_mutant_capping_only_advance_lets_defer_slip(tmp_path):
+    """Twin for test_sweep_scope_scoped_caps_defer_too: drop "defer" from the
+    cap's tuple and a CONCERNS story advances-anyway off scoped evidence."""
+    mutant = _write_mutant(
+        tmp_path / "src", "advance_only_cap", (_SWEEP_CAP_CLAUSE, _SWEEP_CAP_ADVANCE_ONLY)
+    )
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    write_slim(trace, "CONCERNS")
+    marker = _write_marker(trace, _MARKER_BASELINE, "scope=scoped")
+
+    proc = subprocess.run(
+        [sys.executable, str(mutant), "--trace-output", str(trace),
+         "--profile", "light", "--tests-ran", str(marker)],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+
+    assert result["verdict"] == "defer"
