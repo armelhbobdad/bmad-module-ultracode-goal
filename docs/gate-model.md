@@ -93,7 +93,7 @@ Independent of profile, a per-story gate is also handed the story's `.tests-ran-
 Two boundaries:
 
 - `--epic-level` refuses `--tests-ran` outright (an invocation error, exit 2): the epic roll-up gates no sweep of its own, since every story proved its own scope before reaching `done`.
-- Omitting the flag skips the check. That is deliberate: making omission failing would change the verdict of documented invocations that predate the flag, which is exactly the 2.0.0 lesson in the [stability policy](./_internal/STABILITY.md). The skill instructions require the flag on every per-story gate; the script does not retrofit that requirement onto older callers.
+- Omitting the flag skips the check. That is deliberate: making omission failing would change the verdict of documented invocations that predate the flag, which is exactly the 2.0.0 lesson in the [stability policy](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/docs/_internal/STABILITY.md). The skill instructions require the flag on every per-story gate; the script does not retrofit that requirement onto older callers.
 
 The verdict JSON carries the recognised value as `sweep_scope` (or `null`), so an advance that proved a full sweep is distinguishable from one that was never asked about its sweep.
 
