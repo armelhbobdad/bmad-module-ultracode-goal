@@ -53,6 +53,10 @@ The decision log carries the full blocker list with what each needs to clear. Re
 
 Note this is fail-closed on purpose: a missing or unreadable gate artifact escalates rather than being assumed green. The slim file's *absence alone* is not the problem: the script falls back to the summary, and that fallback is explicitly not a failure. See the [gate model](./gate-model.md) for how the artifact resolves into a `gate_status` and the full verdict mapping.
 
+## Gate re-loops on a sweep-scope or delta cap
+
+A per-story gate can return `reloop` with a `PASS` gate status when a cap fired rather than a finding: the `reasons` name either the sweep-scope cap (the `.tests-ran` marker says `scope=scoped`, or the marker/`scope=` line is missing) or the delta-profile cap (`--cycle-profile delta` was declared). Neither is an error; both mean "not yet, and here is why": a story only advances off a full-scope sweep judged by the full gate instrument. The remedy is the cap-only re-loop, which skips the generalize ceremony entirely: re-run the full three-axis sweep, refresh the marker with `scope=full`, and re-run the gate without `--cycle-profile`. See the cap sections in the [gate model](./gate-model.md).
+
 ## Hooks not firing
 
 **Symptom.** A commit lands on a protected branch, or a commit lands before a story's tests ran: the invariants the PreToolUse hook should enforce did not block.

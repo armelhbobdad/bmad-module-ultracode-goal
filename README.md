@@ -50,6 +50,7 @@ That verdict is a small, real JSON object; here is the actual output of `gate_ev
   "overall_status": "88%",
   "nfr_status": null,
   "review_score": null,
+  "epic_level": false,
   "reasons": [
     "gate read from gate-decision.json",
     "gate_status PASS -> advance"
@@ -104,7 +105,7 @@ UCG's closest peer is [bmad-loop](https://github.com/bmad-code-org/bmad-loop) (f
 
 You don't have to take the gate's word for it. The deterministic pieces ship with a test suite, and you can run the evaluator on a real artifact yourself.
 
-Run the Python suite (600+ tests across the preflight, gate, hook, readiness, memory, and customization scripts):
+Run the Python suite (1,700+ tests across the preflight, gate, hook, readiness, memory, mutation-runner, and customization scripts):
 
 ```bash
 uv run --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest skills/ultracode-goal/scripts/tests/ -n auto

@@ -150,7 +150,9 @@ The gate is a real verdict and worth trusting. The prose around it is not eviden
 
 **Prefer executed mutation over a modeled mutant.** A hand-written mutant that differs from the real pre-fix code proves nothing about the real branch. Where a story claims a mutation-proof, re-run one yourself against the shipped code.
 
-**Make the mutation harness hard-error on a missing anchor.** Observed: a harness silently skipped its mutation twice when a refactor moved the anchor, and reported the suite's ordinary green as a passing twin.
+**Use the shipped runner rather than hand-rolling the harness.** `uv run <skill-root>/scripts/mutate_check.py --table <rows.json>` builds the properties every hand-rolled harness eventually lost in as refusals: a green-baseline precheck, per-row anchor uniqueness (a missing anchor is reported as STALE, the formatter-reflow signature, never silently skipped), an attributable red, a byte-identical restore, and a generated `mutation-ledger-<story_id>.md` that leads with GREEN survivors. The two tips below are what the runner automates; they remain worth knowing for reading its output and for the rare harness it cannot drive.
+
+**Make any hand-rolled harness hard-error on a missing anchor.** Observed: a harness silently skipped its mutation twice when a refactor moved the anchor, and reported the suite's ordinary green as a passing twin.
 
 **Back files up with `cp` and restore from the backup.** Never `git checkout -- <path>` or `git restore <path>` to undo a mutation: both restore from the *index*, and an intent-to-add entry (`git add -N`) holds the empty blob, so they truncate the file to zero bytes and exit 0 (measured on git 2.47). For a file that has a committed version, `git checkout HEAD -- <path>` is safe. For a file the story just created, nothing git offers is: `git checkout HEAD --` refuses, and `git restore --source=HEAD --` deletes the file with exit 0. The `cp` backup is the only restore that always works.
 

@@ -124,12 +124,14 @@ The script prints one JSON object (`evaluate()` in the script):
   "overall_status": "...",
   "nfr_status": "...",
   "review_score": 0,
+  "epic_level": false,
   "sweep_scope": "full|scoped|null",
+  "cycle_profile": "full|delta",
   "reasons": ["..."]
 }
 ```
 
-The `sweep_scope` key is present exactly when `--tests-ran` was supplied and absent otherwise, so an invocation that predates the flag prints the same shape it always did.
+`epic_level` is always present. The `sweep_scope` and `cycle_profile` keys are conditional by the same contract: each is present exactly when its flag (`--tests-ran`, `--cycle-profile`) was supplied and absent otherwise, so an invocation that predates the flags prints the same shape it always did.
 
 ### Example: a clean production advance
 
@@ -144,6 +146,7 @@ A story whose slim gate file reads `PASS`, with an NFR audit of `PASS` and a tes
   "overall_status": "PASS",
   "nfr_status": "PASS",
   "review_score": 92,
+  "epic_level": false,
   "sweep_scope": "full",
   "reasons": [
     "gate read from gate-decision.json",
@@ -165,6 +168,7 @@ The same `PASS` gate, but with a test review scoring 74, downgrades to `reloop`;
   "overall_status": "PASS",
   "nfr_status": "PASS",
   "review_score": 74,
+  "epic_level": false,
   "sweep_scope": "full",
   "reasons": [
     "gate read from gate-decision.json",

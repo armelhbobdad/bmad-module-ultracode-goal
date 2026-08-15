@@ -1102,7 +1102,6 @@ def evaluate(args: argparse.Namespace) -> dict:
         # an advance that ANDed both production signals from one that skipped
         # them, and `nfr_status: null` alone does not say which.
         "epic_level": bool(getattr(args, "epic_level", False)),
-        "reasons": reasons,
     }
     if tests_ran is not None:
         # Present exactly when --tests-ran was supplied, absent otherwise - so
@@ -1114,6 +1113,10 @@ def evaluate(args: argparse.Namespace) -> dict:
     if cycle_profile is not None:
         # Same conditional-presence contract as sweep_scope, same reason.
         result["cycle_profile"] = cycle_profile
+    # reasons goes last, after any conditional keys, so the printed object
+    # reads verdict-first, evidence-last exactly as the documented examples
+    # show. Key ORDER is cosmetic; the contract is the key SET.
+    result["reasons"] = reasons
     return result
 
 
