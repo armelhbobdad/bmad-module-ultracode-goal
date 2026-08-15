@@ -100,7 +100,7 @@ What counts as breaking, stated so it is not re-litigated per release:
 
 - Removing or renaming an enumerated CLI flag, subcommand, config key, or JSON key.
 - **Changing the verdict an unchanged, previously-documented invocation returns.** This is the one that bites, and it bit at 2.0.0: `gate_eval.py --profile production` with neither signal flag was the documented epic-level invocation and returned `advance`; it now returns `reloop` unless `--epic-level` is passed. That the old answer was unearned did not make the change non-breaking — a consumer's pipeline still changed behaviour on an upgrade they did not ask for.
-- Adding a key to the printed verdict JSON or the headless envelope, for a consumer validating the shape strictly.
+- Adding a key to the JSON an UNCHANGED invocation prints (the verdict object or the headless envelope), for a consumer validating the shape strictly. A key that appears only when a newly introduced flag is supplied is additive, not breaking: `sweep_scope` and `cycle_profile` are the worked example, present exactly when `--tests-ran` / `--cycle-profile` are passed and absent from every pre-flag invocation's output.
 
 What does not:
 
