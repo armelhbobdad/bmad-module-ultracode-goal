@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [2.2.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v2.1.0...v2.2.0) (2026-08-15)
+
+### Features
+
+* gate on a worktree of the commit, and add the delta cycle profile ([c5a0fb2](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/c5a0fb252e37ebddc571fdf757b99674b4ab1f7b))
+* generalize re-loops to the defect class and scope mid-loop sweeps ([05759d2](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/05759d2012337e89c7e81dac9b90af2fe7250f7b))
+* ship the mutation runner, and heartbeat/stall sidecars for dead air ([2b38a29](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/2b38a299a4b349096c24c0dd3407cf43bd6394dc))
+
+### Bug Fixes
+
+* binary-append the scribble fixture so Windows newline translation cannot skew it ([2d9a67b](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/2d9a67bf949606801cc2df416faf7fe99538926a))
+* link the stability policy by its GitHub URL from gate-model ([781e6ad](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/781e6ad8328708734e43337d0a9dc4e6eb6ea2b2))
 ## [2.1.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v2.0.0...v2.1.0) (2026-08-07)
 
 ### Added
