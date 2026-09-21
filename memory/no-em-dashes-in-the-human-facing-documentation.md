@@ -1,0 +1,8 @@
+---
+created: "2026-06-27 20:48"
+session: "2d4de9bc-e430-4e16-aa26-f6ccf00749ea"
+---
+
+# No em-dashes in the human-facing documentation
+
+README.md, docs/ (including docs/\_internal/), the root CONTRIBUTING.md, SECURITY.md, ROADMAP.md, CONTRIBUTORS.md and CHANGELOG.md, and since 2026-09-21 MEMORY.md and the memory/ notes (the user chose "Strip them" when asked whether the rule reaches the memory store) must contain no em-dashes (U+2014): each is rewritten with a comma, colon, parentheses, semicolon or a sentence split, never a literal `--`, and range en-dashes become plain hyphens. The rule is the user's (the legacy auto-memory note records "Armel's rule (2026-06-27)"; the statement itself is in no transcript on disk), reaches inside fenced blocks where prose renders (mermaid node labels, code comments) while mermaid syntax and `-->` arrows stay, and leaves verbatim-quoted external text alone (the scanner string quoted in the scan-scripts-sys-exit note). `skills/**/*.md` are excluded: they are functional prompt files whose strings tests assert (commit 4c059bf: "skills/\*\*/\*.md left untouched (functional, test-asserted)"), so a rewrite there is a separate, test-guarded pass on explicit request. Nothing enforces it: `.markdownlint-cli2.yaml` enables only structural rules and the only em-dash test (`test_the_adapter_injects_no_em_dash_into_its_output`) guards the headless adapter's output, so check by hand with `git ls-files README.md docs CONTRIBUTING.md SECURITY.md ROADMAP.md CONTRIBUTORS.md CHANGELOG.md MEMORY.md memory | xargs grep -cP '\x{2014}' | grep -v ':0$'` (expect no output). Residue at v2.2.0 for the next sweep: CHANGELOG.md's [2.0.0] Fixed entries (lines 126-134) and docs/\_internal/STABILITY.md lines 92, 102 and 111.

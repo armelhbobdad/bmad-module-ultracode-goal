@@ -89,3 +89,8 @@ graphify-out
 
 # UCG
 _ucg-learn
+
+# IWE memory: per-machine session bookkeeping. The policy (MEMORY.md), the
+# notes under memory/ and .iwe/config.toml + .iwe/schemas/ are tracked — iwe
+# hides gitignored paths from the graph, so memory cannot live in ignored files.
+/.iwe/claude/

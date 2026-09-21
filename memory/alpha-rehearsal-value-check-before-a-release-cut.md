@@ -1,0 +1,8 @@
+---
+created: "2026-07-28 19:01"
+session: "5f3680c8-d5d8-4591-8abe-e1a7bd118f15"
+---
+
+# Alpha rehearsal value check before a release cut
+
+For the v1.0.0 cut (2026-07-28) the alpha rehearsal that [RELEASING.md](../docs/_internal/RELEASING.md) step 2 prefers ("Prefer an `alpha` for the first cut after any pipeline change") was skipped on the assistant's recommendation, and the user confirmed by asking "let's launch the first major release by following @docs/\_internal/RELEASING.md . Do you agree?" and then picking the option "Fix the doc drift, then dispatch major (Recommended)" over "Alpha rehearsal first". The reasoning: the alpha guards drift in `.github/workflows/release.yaml` and in the ruleset's required contexts, both checkable directly (`git diff --stat <last-tag>..HEAD -- .github/workflows/release.yaml`, and `gh api repos/armelhbobdad/bmad-module-ultracode-goal/rulesets/17255028 --jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context'` against quality.yaml's job names), and an alpha dispatched from stable v0.5.1 would have produced 0.5.2-alpha.0, rehearsing neither the major nor any distinct code path. So the check before paying a published version for a rehearsal is whether it rehearses anything: a quality.yaml-only change does not warrant it, a release.yaml or ruleset change would. Two facts not in the docs: release.yaml had a single commit (e90ccda, 2026-06-04) at the time, and the ruleset id 17255028 appears nowhere in RELEASING.md (release.yaml reads it from the repo variable RELEASE_RULESET_ID). Whether the user wants an alpha at the first cut after release.yaml does change is unsettled (v0.1.1-alpha.0 is the only alpha ever cut; `git tag | grep alpha`).

@@ -1,0 +1,8 @@
+---
+created: "2026-07-20 20:26"
+session: "ad4abc7b-66f9-43d5-953f-cce6c9aa00d6"
+---
+
+# validate-module.py orphan-entry false positives for the ucg sub-skills
+
+`python3 .claude/skills/bmad-module-builder/scripts/validate-module.py skills/ultracode-goal` (the installed, gitignored BMad builder validator, byte-identical to upstream bmad-builder) returns `"status": "fail"` with three high `orphan-entry` findings: `CSV references skill 'ucg-formalize' which does not exist in the module folder`, and the same for 'ucg-resolve' and 'ucg-status'. All three are false positives: the standalone branch sets `skill_folders = [standalone_dir.name]` and then flags every other skill row in `skills/ultracode-goal/assets/module-help.csv` as an orphan without looking at the parent folder (`if standalone_dir or not (module_dir / skill / "SKILL.md").is_file()` short-circuits the filesystem check), so the sibling sub-skills at `skills/ucg-formalize`, `skills/ucg-resolve` and `skills/ucg-status` (menu codes UF, UR, US, moved out of the old nested location by c6f161d) are reported missing wherever they live. Pointing the validator at `skills/` or the repo root fails instead with the critical `No setup skill found (*-setup directory) and no standalone module detected`, so no invocation passes on this module at v2.2.0. The CSV rows are correct and stay (the rule is the assistant's contemporaneous record of session ad4abc7b): read the fail by ignoring exactly these three findings and treat any further finding as real. The only tracked record is commit 62579a0's "known blind spot for nested sub-skills", whose "nested" wording is stale after c6f161d; a fix lands upstream in the bmad-builder checkout, not here.
