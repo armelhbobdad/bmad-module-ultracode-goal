@@ -1,0 +1,8 @@
+---
+created: "2026-08-02 20:29"
+session: "33431228-168c-400b-b592-dbc99cd63661"
+---
+
+# Verifier subagent branch creation from preflight's remediation prose
+
+[preflight.md](../skills/ultracode-goal/references/preflight.md) step 2 tells the reader, on a protected branch, to create the run's working branch `{workflow.epic_branch_prefix}<epic-id>` and check it out, and step 5 cuts the same branch; an adversarial verification subagent given that page to probe the protected-branch guard executed the instruction against the live checkout instead of a fixture, leaving HEAD on a real `ultracode/epic-1` with a dirty tree of 15 modified files carried across. The user noticed: "why you call this branch ultracode/epic-1? Hummmmm"; the fingerprint in `git reflog --date=iso` is `checkout: moving from main to ultracode/epic-1` at 2026-08-02 20:29 +0400, and the restore was `git checkout main` then `git branch -d ultracode/epic-1` (zero unique commits). The skill's reference prose is imperative and an agent reading it will act on it, so any subagent that reads `skills/ultracode-goal/references/*.md` while sitting in this repo needs an explicit read-only clause (no branch create, checkout or delete; no commit, stage or stash; no file edits; fixtures under the scratchpad only); the re-run with that clause stayed clean. Nothing in the repository records the constraint (the nearest, "Check git status is clean and that HEAD is what you expect before running anything" in [operating tips](../docs/operating-tips.md), covers the start of a run), so check `git branch --show-current` after any subagent fan-out.

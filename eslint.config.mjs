@@ -24,6 +24,9 @@ export default [
       '.codex/**',
       'temp/**',
       '.playwright-mcp/**',
+      // IWE workspace: config, schemas and per-machine session state written by
+      // the iwe CLI in its own YAML style (single quotes), not by this repo.
+      '.iwe/**',
       // Skill quality-analysis artifacts (local-only, gitignored)
       'skills/**/.analysis/**',
       // Workflow-script dialect: top-level await + return, runtime-injected

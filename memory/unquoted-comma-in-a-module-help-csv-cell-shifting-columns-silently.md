@@ -1,0 +1,8 @@
+---
+created: "2026-07-28 16:39"
+session: "4b6014b2-89d9-43d8-9f34-9dd378b63e21"
+---
+
+# Unquoted comma in a module-help.csv cell shifting columns silently
+
+An unquoted comma inside a cell of `skills/ultracode-goal/assets/module-help.csv` makes that row parse as 14 fields against the 13-column CATALOG_HEADER, shifting phase, preceded-by, followed-by, required, output-location and outputs one place right, and nothing whole-file goes red: `test/test-installation-components.js` asserts the header string, row prefixes and a few substrings but never a per-row field count, `tools/cli/lib/help-catalog.js` and `scripts/merge_help_csv.py` filter only all-empty rows, and `tools/validate-file-refs.js` parses with `relax_column_count: true`. The only width guards are per-row pytest pins for the ucg-resolve and ucg-status rows, so a comma in the ultracode-goal or ucg-formalize row (whose args cells are unquoted) or in any later cell shifts silently through `npm run quality`; verified at v2.2.0 by injecting one: widths `[13,14,13,13,13]`, `npm run test:install` still `Passed: 96 Failed: 0`, while csv-parse throws `Invalid Record Length: expect 13, got 14 on line 2`. A shifted row ships into the consumer's assembled help catalog. After any edit, count fields with the repo's own parser (`node -e "const {parseCsv}=require('./tools/cli/lib/help-catalog.js');console.log(parseCsv(require('fs').readFileSync('skills/ultracode-goal/assets/module-help.csv','utf8')).map(r=>r.length))"`) and wrap the cell in double quotes as the description cells already are (both parsers are RFC 4180). The trap is the assistant's contemporaneous record (PR #60, session 4b6014b2).
