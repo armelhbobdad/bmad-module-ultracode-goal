@@ -27,6 +27,10 @@ export default [
       // IWE workspace: config, schemas and per-machine session state written by
       // the iwe CLI in its own YAML style (single quotes), not by this repo.
       '.iwe/**',
+      // Local tool state (gitignored): the ccc semantic index with its settings,
+      // and agent-skill workspace artifacts, each in its own tool's YAML style.
+      '.cocoindex_code/**',
+      'forge-data/**',
       // Skill quality-analysis artifacts (local-only, gitignored)
       'skills/**/.analysis/**',
       // Workflow-script dialect: top-level await + return, runtime-injected

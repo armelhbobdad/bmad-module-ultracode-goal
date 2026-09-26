@@ -13,6 +13,12 @@ _bmad-output/
 .claude/
 .cursor/
 
+# Generated agent skills: committed to git, but project tooling, not module content
+/skf-skills/
+
+# Agent-skill workspace artifacts (briefs, improvement queue): never module content
+/forge-data/
+
 # Development tools and config
 test/
 *.test.js
@@ -69,6 +75,7 @@ node_modules/
 
 # Learning material scaffold: gitignored, so npm would otherwise pack a stale copy
 _ucg-learn/
+_skf-learn/
 
 # Local build and generated output. These are gitignored, but the presence of
 # this file disables npm's .gitignore fallback entirely, so they must be listed
@@ -77,6 +84,7 @@ _ucg-learn/
 build/
 data/
 graphify-out/
+/.cocoindex_code/
 
 # IWE workspace and project memory for AI sessions: repository knowledge, not
 # part of the module. Root MEMORY.md is already covered by the /*.md rule above.
