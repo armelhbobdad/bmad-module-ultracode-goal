@@ -20,6 +20,9 @@ temp/
 # Dotfile directories (tool-specific runtime data)
 .*
 
+# Generated agent skills (tracked): written and validated by their own toolchain
+/skf-skills/
+
 # Skill quality-analysis artifacts (local-only, gitignored)
 skills/**/.analysis/
 
