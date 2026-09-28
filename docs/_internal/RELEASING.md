@@ -51,12 +51,13 @@ These must exist before the first `main`-dispatch release. Order matters.
 
 ### 1. Required-check contexts must exist
 
-Branch-protection rulesets can only require status checks that have reported at least once. Open any PR (or dispatch `quality.yaml` manually) so these eight contexts exist:
+Branch-protection rulesets can only require status checks that have reported at least once. Open any PR (or dispatch `quality.yaml` manually) so these nine contexts exist:
 
 ```text
 prettier
 eslint
 markdownlint
+lintlang
 validate (ubuntu-latest)
 validate (windows-latest)
 python (ubuntu-latest)
@@ -68,7 +69,7 @@ This list is the setup seed, not the source of truth: the ruleset is. Whenever `
 
 ### 2. Main-branch ruleset
 
-Create a ruleset on `main` requiring the seven contexts above, with `bypass_actors` = Admin RepositoryRole, `bypass_mode: pull_request`. Then record its id in the repo variable the workflow reads:
+Create a ruleset on `main` requiring the contexts above, with `bypass_actors` = Admin RepositoryRole, `bypass_mode: pull_request`. Then record its id in the repo variable the workflow reads:
 
 ```bash
 gh api /repos/armelhbobdad/bmad-module-ultracode-goal/rulesets --jq '.[] | {id, name}'

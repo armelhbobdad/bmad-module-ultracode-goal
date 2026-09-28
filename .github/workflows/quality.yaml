@@ -4,6 +4,7 @@ name: Quality & Validation
 # - Prettier (formatting)
 # - ESLint (linting)
 # - markdownlint (markdown quality)
+# - LintLang (agent instructions under skills/)
 # - Installation component tests (module.yaml, SKILL.md, scripts)
 # - CLI integration tests (install/update/uninstall flows)
 # - Skill structure validation
@@ -77,6 +78,35 @@ jobs:
 
       - name: markdownlint
         run: npm run lint:md
+
+  # Lints the text UCG hands a model (the SKILL.md files and the prose under
+  # skills/) with LintLang, a deterministic linter for agent instructions. Gates
+  # on HIGH and CRITICAL findings only; MEDIUM and LOW findings are advisory, and
+  # validate:skills already owns the description and naming rules. The scan skips
+  # skills/**/scripts/tests/fixtures/, the same hand-crafted and partly malformed
+  # artifact sets .prettierignore skips: LintLang reports an unreadable fixture
+  # as an input error. Linux only: the scan reads text, so a Windows run would
+  # only repeat it.
+  lintlang:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+
+      # No `npm ci`: the script only calls uvx, which fetches the pinned
+      # LintLang release itself.
+      - name: LintLang
+        run: npm run lint:instructions
 
   validate:
     # Matrix Linux + Windows to catch platform-divergence bugs (path handling,
