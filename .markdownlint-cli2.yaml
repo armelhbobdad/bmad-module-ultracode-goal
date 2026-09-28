@@ -13,6 +13,14 @@ ignores:
   - temp/**
   - build/**
   - graphify-out/**
+  # Installed learning scaffolds and agent-skill workspace artifacts
+  # (local-only, gitignored), and the generated agent skills (tracked);
+  # none of them is authored to this repo's style rules.
+  - _ucg-learn/**
+  - _skf-learn/**
+  - forge-data/**
+  - skf-skills/**
+  # Skill quality-analysis artifacts and decision logs (local-only, gitignored)
   - skills/**/.analysis/**
   - skills/**/.decision-log.md
 

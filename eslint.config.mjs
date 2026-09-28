@@ -31,6 +31,12 @@ export default [
       // and agent-skill workspace artifacts, each in its own tool's YAML style.
       '.cocoindex_code/**',
       'forge-data/**',
+      // Installed learning scaffolds (local-only, gitignored)
+      '_ucg-learn/**',
+      '_skf-learn/**',
+      // Generated agent skills (tracked): written and validated by their own
+      // toolchain, not authored to this repo's lint rules.
+      'skf-skills/**',
       // Skill quality-analysis artifacts (local-only, gitignored)
       'skills/**/.analysis/**',
       // Workflow-script dialect: top-level await + return, runtime-injected
