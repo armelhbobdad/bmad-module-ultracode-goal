@@ -4,6 +4,16 @@ Future work planned for UltraCode Goal. Items here are **directional, not a prom
 
 ---
 
+## Story creation and implementation on `bmad-build`
+
+UCG delegates story creation to `bmad-create-story` and implementation to `bmad-dev-story`. BMAD Method 6.11 deprecated both in favour of `bmad-build`, 6.12 made them opt-in shims (a fresh install leaves them out unless asked for with `--shims`), and BMAD's v7 removes them. Until then, preflight refuses to launch without them, which stops a run from quietly working around a missing skill; at v7 that check has no fix left to offer. Moving the delegation is a contract change, not a rename:
+
+- `bmad-build` writes `spec-<slug>.md` with a frontmatter status. Its full route writes unnumbered Given/When/Then criteria, and its oneshot route for small changes writes no acceptance criteria at all. The formalize check, by contrast, finds story files by their story-key name and parses numbered acceptance criteria, which Execute also cites by number.
+- On its full route, `bmad-build` stops for plan approval unless it is handed a spec already at `ready-for-dev`, `in-progress` or `in-review` (a `done` spec is read as context and planning starts over). It takes the lighter oneshot route only when the change has no intent gaps, nothing irreversible and a small footprint; that route skips plan approval but can still stop for a human, when a review finding needs a fix that is not simple, when review subagents cannot be launched, or when implementation hits a replan trigger that sends it back to the plan checkpoint. Both routes commit inside the skill, where UCG commits at green behind its PreToolUse guard. `bmad-build-auto` is BMAD's unattended variant and carries the same commit question.
+- `bmad-build` first ships in BMAD Method 6.11, so the move sets a BMAD minimum and ends support for 6.10 and earlier.
+
+It ships as a major release, after a design pass and a validating run on a real Epic, and before BMAD's v7 cut.
+
 ## Parallel execution: retired, not promoted
 
 The experimental `--parallel` worktree fan-out was retired rather than promoted: the empirical validation this item used to plan never arrived, and the mode's own limit list (no mid-run input, shared Auto Memory, no heartbeat, no post-commit re-verify) never closed. The flag is still accepted and ignored for compatibility. Any future parallel execution would be a fresh design measured against the sequential spine's guarantees, not a revival of the removed workflow.

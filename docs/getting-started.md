@@ -22,6 +22,8 @@ UltraCode Goal conducts BMAD and TEA skills and runs deterministic Python under 
 
 The run also depends on recent Claude Code primitives: `/goal`, dynamic workflows, and Auto Memory. The preflight script version-gates these and reports a mechanical blocker if the installed Claude Code is below the minimum any of them needs (see [troubleshooting](./troubleshooting.md)).
 
+**On BMAD Method 6.12 or later, install BMAD with `--shims`.** UltraCode Goal delegates story creation to `bmad-create-story` and implementation to `bmad-dev-story`. From 6.12, BMAD ships both as deprecated shims: a fresh install leaves them out unless asked for (`--shims`, or Yes at the installer's shim prompt), and an update removes them when told not to keep them (its prompt recommends No). While either is missing from `.claude/skills/`, preflight reports a non-remediable blocker and the run does not launch. To add them to an existing install, run `npx bmad-method@<version> install --directory . --shims --yes` from the project root, where `<version>` is the installed one (`installation.version` in `_bmad/_config/manifest.yaml`), so the fix does not also upgrade BMAD Method itself; the blocker's detail prints this command with the version filled in. Keep `--directory .`: without it the installer still asks for the directory despite `--yes`. With `--yes` the installer also takes newer minor and patch releases of the external modules it manages, TEA included; to hold one where it is, add `--pin <module>=<version>` with the `version` of that module's entry under `modules:` in the same manifest. BMAD Method 6.2 through 6.11 install both skills by default; earlier releases named them differently and need an upgrade.
+
 ## Install
 
 ```bash

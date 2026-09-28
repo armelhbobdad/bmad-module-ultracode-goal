@@ -18,6 +18,9 @@ What counts as a mechanical blocker (each adds 1 to `budget`):
     minimum versions the run depends on (`/goal`, dynamic workflows, auto memory),
   - no test framework is detected (no playwright/cypress/jest/vitest config,
     no pytest config/conftest.py, and no real package.json `test` script),
+  - a BMAD skill the run delegates story creation or implementation to
+    (`bmad-create-story`, `bmad-dev-story`) is not installed where Claude Code
+    loads skills,
   - the working tree is dirty (a per-green-story commit needs a clean base),
   - the current branch is a protected branch (the epic must run on its own branch).
 
@@ -28,8 +31,9 @@ cannot and does not evaluate.
 
 Severity is advisory metadata for the LLM, not a gate. `remediable` flags
 blockers the remediation pass can plausibly auto-clear (e.g. scaffold the
-framework, branch off, commit/stash) vs. ones that need a human (none here are
-inherently un-remediable; true-RED items never reach this script).
+framework, branch off, commit/stash) vs. ones that need a human (the Claude
+Code version, a broken git repo, a missing BMAD story skill; true-RED items
+never reach this script).
 
 Version gates (from the grounded constraints in .decision-log.md):
   /goal >= 2.1.139, dynamic workflows >= 2.1.154, auto memory >= 2.1.59.
@@ -52,15 +56,16 @@ false, epics: []), not an error — rollup still exits 0.
 Resume-manifest mode (`--assert-armed`): the one deterministic read a resumed
 run makes in place of the tool-action-per-fact environment sweep the resume
 rule otherwise costs (references/execute.md, resume). It asserts the epic
-branch, both hooks with the all-tools PreToolUse matcher, and the five injected
+branch, both hooks with the all-tools PreToolUse matcher, the five injected
 hook env vars (accepted from the hook command strings OR the inherited process
-env, both of which preflight step 5 permits), reports the recall latch WITHOUT
+env, both of which preflight step 5 permits), and the BMAD story skills (a
+BMAD update between spawns can remove them), reports the recall latch WITHOUT
 certifying it (re-latching stays a model-owned Stage 1 step on every resume),
 and, given --story, derives the story's resume route from artifacts alone:
 story-boundary (no baseline), gate-owed (committed, green, un-gated - requires
 --trace-output evidence; without it that route never fires), or mid-story.
-Exit 0 iff branch+hooks+env are armed; the latch and story blocks never move
-the exit code, because they inform model-owned actions rather than certify
+Exit 0 iff branch+hooks+env+skills are armed; the latch and story blocks
+never move the exit code, because they inform model-owned actions rather than certify
 them.
 
   uv run preflight_check.py --assert-armed --project-root <path> \
@@ -125,6 +130,16 @@ DEFAULT_PROTECTED = ("main", "master")
 # Order here is the order counts are reported in the rollup; "done" first so the
 # in-scope decision (not-yet-done) reads off the leading count.
 STORY_STATUSES = ("done", "in-progress", "ready-for-dev", "review", "backlog")
+
+# The BMAD skills the run delegates story creation (Stage 2 remediation, Stage 3)
+# and implementation (Stage 4) to. BMAD Method 6.12 ships both as deprecated
+# shims: a fresh install leaves them out unless asked for (--shims, or Yes at the
+# installer's shim prompt), and an update removes them when told not to keep
+# them, which its prompt recommends. The rest of the BMAD toolbox the run uses
+# installs unconditionally, so only these two are probed.
+# (bmad-generate-project-context is a shim too, but its preflight step is
+# advisory and never blocks.)
+BMAD_STORY_SKILLS = ("bmad-create-story", "bmad-dev-story")
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
@@ -470,6 +485,117 @@ def _project_context_count(project_root: Path) -> int:
     return sum(1 for _ in project_root.rglob("project-context.md"))
 
 
+def _skill_roots(project_root: Path) -> tuple[Path, ...]:
+    """Where Claude Code loads a skill that a bare-name invocation reaches: the
+    project's .claude/skills (where the BMAD installer copies BMAD's skills)
+    and the personal skills dir, under $CLAUDE_CONFIG_DIR when that relocates
+    Claude Code's home-directory files, else ~/.claude."""
+    roots = [project_root / ".claude" / "skills"]
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if config_dir:
+        # Taken as given, the way Claude Code takes it: no ~ expansion, which
+        # would also raise on a ~user this machine does not have.
+        roots.append(Path(config_dir) / "skills")
+    else:
+        try:
+            roots.append(Path.home() / ".claude" / "skills")
+        except RuntimeError:
+            # No resolvable home directory: the project root is the only place.
+            pass
+    return tuple(roots)
+
+
+def _skill_file_present(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        # A root this process cannot traverse holds no skill it can confirm;
+        # reporting the skill missing beats crashing without a payload.
+        return False
+
+
+def _bmad_skills_installed(project_root: Path) -> dict[str, bool]:
+    """Per story skill, whether a SKILL.md exists under any skill root.
+
+    The skill directory is the evidence, not BMAD's skill-manifest.csv: the CSV
+    lists every installed skill whichever tools the install selected, so a row
+    does not prove Claude Code can load it, and a skill directory without its
+    SKILL.md is not a skill Claude Code loads.
+    """
+    roots = _skill_roots(project_root)
+    return {
+        skill_id: any(_skill_file_present(root / skill_id / "SKILL.md") for root in roots)
+        for skill_id in BMAD_STORY_SKILLS
+    }
+
+
+def _bmad_install(project_root: Path) -> dict:
+    """installation.version and installation.installShims from BMAD's
+    _bmad/_config/manifest.yaml, read only to word the missing-skill fix.
+
+    installShims first appears in 6.12 and is written only when the selected
+    modules ship shims, so None means "not recorded", never "declined". A line
+    read is enough for the flat, two-space `installation:` block BMAD writes.
+    """
+    out: dict = {"version": None, "install_shims": None}
+    try:
+        text = (project_root / "_bmad" / "_config" / "manifest.yaml").read_text(
+            encoding="utf-8"
+        )
+    except (OSError, UnicodeDecodeError):
+        return out
+    in_installation = False
+    for raw in text.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        if not raw[0].isspace():
+            in_installation = _strip_inline_comment(raw) == "installation:"
+            continue
+        if not in_installation:
+            continue
+        key, sep, value = raw.strip().partition(":")
+        if not sep:
+            continue
+        value = _strip_inline_comment(value).strip('"').strip("'")
+        if key == "version" and value:
+            out["version"] = value
+        elif key == "installShims" and value.lower() in ("true", "false"):
+            out["install_shims"] = value.lower() == "true"
+    return out
+
+
+def _bmad_skills_detail(project_root: Path, missing: list[str], install: dict) -> str:
+    """One line (the headless `reason` flattens a blocker to one): what is
+    missing, why the run cannot proceed without it, and the fix."""
+    detail = (
+        "BMAD skill(s) not installed: %s. The run delegates story creation to "
+        "bmad-create-story and implementation to bmad-dev-story, and has no "
+        "substitute for either (looked for <skill>/SKILL.md under %s)."
+        % (", ".join(missing), " and ".join(str(r) for r in _skill_roots(project_root)))
+    )
+    if install["install_shims"] is False:
+        version = install["version"]
+        package = "bmad-method@%s" % version if version else "bmad-method"
+        # --directory is what makes the installer non-interactive here: --yes
+        # alone still prompts for the directory, and without a TTY that prompt
+        # exits 0 having installed nothing.
+        return detail + (
+            " BMAD Method %s was installed without its deprecated shim skills "
+            "(installShims: false in _bmad/_config/manifest.yaml), and from 6.12 "
+            "these two ship only as shims. Operator fix (the run never installs "
+            "them itself), from the project root: "
+            "`npx %s install --directory . --shims --yes`."
+            % (version or "(version not recorded)", package)
+        )
+    return detail + (
+        " Operator fix (the run never installs them itself): re-run the BMAD "
+        "Method installer from the project root with claude-code among its "
+        "tools, adding --shims on BMAD 6.12 or later, so both skills land in "
+        ".claude/skills (BMAD before 6.2 names them differently and needs an "
+        "upgrade)."
+    )
+
+
 def build_report(
     project_root: Path,
     epic: str,
@@ -493,6 +619,8 @@ def build_report(
     test_artifacts_dirs = _test_artifacts_dirs(artifacts_root)
     sprint_status_present = _sprint_status_present(project_root, impl_artifacts)
     project_context_count = _project_context_count(project_root)
+    bmad_skills = _bmad_skills_installed(project_root)
+    bmad_install = _bmad_install(project_root)
 
     checks = {
         "cc_version": cc_raw,
@@ -507,6 +635,8 @@ def build_report(
         "sprint_status_present": sprint_status_present,
         "project_context_count": project_context_count,
         "tea_flags": tea_flags,
+        "bmad_skills": bmad_skills,
+        "bmad_install": bmad_install,
     }
 
     blockers: list[dict] = []
@@ -533,6 +663,21 @@ def build_report(
                 "severity": "high",
                 "detail": detail,
                 # The script can't upgrade the host; the LLM prompts the user.
+                "remediable": False,
+            }
+        )
+
+    missing_skills = [s for s, present in bmad_skills.items() if not present]
+    if missing_skills:
+        blockers.append(
+            {
+                "id": "bmad_skills",
+                "kind": "dependency",
+                "severity": "high",
+                "detail": _bmad_skills_detail(project_root, missing_skills, bmad_install),
+                # Installing BMAD skills is the operator's call (BMAD itself
+                # recommends against keeping its shims); the remediation pass
+                # neither installs them nor works around their absence.
                 "remediable": False,
             }
         )
@@ -712,6 +857,15 @@ def _assert_hook_env(project_root: Path) -> dict:
     return {"sources": sources, "missing": missing, "ok": not missing}
 
 
+def _assert_bmad_skills(project_root: Path) -> dict:
+    """The story skills a resumed spawn will delegate to, still installed. A
+    BMAD update between spawns (its prompt recommends dropping the shims) can
+    remove them from a run that passed preflight."""
+    installed = _bmad_skills_installed(project_root)
+    missing = [s for s, present in installed.items() if not present]
+    return {"installed": installed, "missing": missing, "ok": not missing}
+
+
 def _assert_branch(
     project_root: Path, epic_branch_prefix: str, protected: tuple[str, ...]
 ) -> dict:
@@ -881,10 +1035,12 @@ def build_assert_armed(
     branch = _assert_branch(project_root, epic_branch_prefix, protected)
     hooks = _assert_hooks(project_root)
     hook_env = _assert_hook_env(project_root)
+    skills = _assert_bmad_skills(project_root)
     checks: dict = {
         "branch": branch,
         "hooks": hooks,
         "hook_env": hook_env,
+        "skills": skills,
         "latch": _read_latch(impl_artifacts, run_id),
     }
     if story:
@@ -912,7 +1068,11 @@ def build_assert_armed(
             "hook env not fully injected; enforcing hardcoded fallbacks for: %s"
             % ", ".join(hook_env["missing"])
         )
-    armed = branch["ok"] and hooks["ok"] and hook_env["ok"]
+    if not skills["ok"]:
+        reasons.append(
+            _bmad_skills_detail(project_root, skills["missing"], _bmad_install(project_root))
+        )
+    armed = branch["ok"] and hooks["ok"] and hook_env["ok"] and skills["ok"]
     return {"armed": armed, "checks": checks, "reasons": reasons}
 
 
@@ -952,10 +1112,11 @@ def main(argv: list[str] | None = None) -> int:
         "--assert-armed",
         action="store_true",
         help="Emit only the resume manifest: branch, hooks (incl. the all-tools "
-        "matcher), injected hook env, the recall latch (reported, never "
-        "certified), and, with --story, the story's artifact-derived resume "
-        "route. Exit 0 iff branch+hooks+env are armed. When set, --epic, "
-        "--tea-config, and the mechanical preflight checks do not run.",
+        "matcher), injected hook env, the BMAD story skills, the recall latch "
+        "(reported, never certified), and, with --story, the story's "
+        "artifact-derived resume route. Exit 0 iff branch+hooks+env+skills are "
+        "armed. When set, --epic, --tea-config, and the mechanical preflight "
+        "checks do not run.",
     )
     parser.add_argument(
         "--story",
