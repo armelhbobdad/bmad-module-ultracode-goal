@@ -10,9 +10,11 @@ resume rule costs on every `--max-stories` spawn. These tests pin the four
 properties that make it trustworthy rather than merely convenient:
 
 1. FAIL-CLOSED ARMING. Exit 0 requires the epic branch, both hooks with the
-   all-tools PreToolUse matcher, and all five injected env vars. A missing or
-   unreadable settings file, a `Bash`-only matcher (the observed inert-control
-   state), or an uninjected var each fail the exit, with a reason naming it.
+   all-tools PreToolUse matcher, all five injected env vars, and the two BMAD
+   story skills the run delegates to. A missing or unreadable settings file, a
+   `Bash`-only matcher (the observed inert-control state), an uninjected var,
+   or a story skill a BMAD update removed between spawns each fail the exit,
+   with a reason naming it.
 2. LEGITIMATE ARMINGS PASS. preflight step 5 permits the env vars either in the
    hook command strings or in the process env the hooks inherit; fail-closing
    on the inherited form would teach operators to skip the check.
@@ -32,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -79,6 +82,12 @@ def _repo(tmp_path: Path, branch: str = "ultracode/epic-7") -> Path:
     _git(root, "add", "seed.txt")
     _git(root, "commit", "-q", "-m", "seed")
     _git(root, "checkout", "-q", "-b", branch)
+    # The BMAD story skills the run delegates to, where the BMAD installer
+    # copies them for Claude Code.
+    for skill_id in ("bmad-create-story", "bmad-dev-story"):
+        skill_dir = root / ".claude" / "skills" / skill_id
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"---\nname: {skill_id}\n---\n", encoding="utf-8")
     return root
 
 
@@ -137,7 +146,17 @@ def _run(
     # Start from the real environment (Windows needs SystemRoot et al.), then
     # strip the five hook vars so a dev machine's own injection cannot leak a
     # green "process" source into a case that never set them.
-    base_env = {k: v for k, v in os.environ.items() if k not in _ENV_VARS}
+    base_env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in _ENV_VARS and k != "CLAUDE_CONFIG_DIR"
+    }
+    # An empty home, so a skill the host keeps under ~/.claude/skills (or a
+    # relocated CLAUDE_CONFIG_DIR) cannot satisfy a case (HOME on POSIX,
+    # USERPROFILE on Windows).
+    home = root.parent / "home"
+    home.mkdir(exist_ok=True)
+    base_env.update({"HOME": str(home), "USERPROFILE": str(home)})
     if env:
         base_env.update(env)
     proc = subprocess.run(
@@ -197,6 +216,29 @@ def test_missing_settings_file_is_not_armed(tmp_path: Path) -> None:
     assert code == 1
     assert out["checks"]["hooks"]["settings_readable"] is False
     assert any("missing or unreadable" in r for r in out["reasons"])
+
+
+def test_a_story_skill_removed_since_launch_fails_the_resume(tmp_path: Path) -> None:
+    """A BMAD update between spawns (answering the installer's recommended No to
+    keeping its deprecated shims) removes bmad-dev-story from an armed run."""
+    root = _repo(tmp_path)
+    _arm(root)
+    shutil.rmtree(root / ".claude" / "skills" / "bmad-dev-story")
+    code, out = _run(root)
+    assert code == 1 and out["armed"] is False
+    skills = out["checks"]["skills"]
+    assert skills["installed"] == {"bmad-create-story": True, "bmad-dev-story": False}
+    assert skills["missing"] == ["bmad-dev-story"]
+    assert skills["ok"] is False
+    assert any(r.startswith("BMAD skill(s) not installed: bmad-dev-story.") for r in out["reasons"])
+
+
+def test_an_unexpandable_config_dir_still_emits_the_manifest(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root, env={"CLAUDE_CONFIG_DIR": "~nosuchuser_zz/claude"})
+    assert code == 0 and out["armed"] is True
+    assert out["checks"]["skills"]["ok"] is True
 
 
 def test_missing_guard_or_budget_each_fail(tmp_path: Path) -> None:

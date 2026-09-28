@@ -9,7 +9,7 @@ UltraCode Goal is a conductor. It orchestrates the installed BMAD epic toolbox a
 
 The skill owns no implementation logic of its own for building features or running tests. What it owns is the *order*, the *gates*, and the *enforcement*. It delegates:
 
-- **Epic toolbox**: `bmad-sprint-planning`, `bmad-create-story`, `bmad-dev-story`, `bmad-code-review`, `bmad-correct-course`, `bmad-retrospective`.
+- **Epic toolbox**: `bmad-sprint-planning`, `bmad-create-story`, `bmad-dev-story`, `bmad-code-review`, `bmad-correct-course`, `bmad-retrospective`. On BMAD Method 6.12 or later, `bmad-create-story` and `bmad-dev-story` are deprecated shims that a fresh install leaves out unless asked for (`--shims`); preflight refuses to launch without them.
 - **TEA gates**: `bmad-testarch-framework`, `-ci`, `-test-design`, `-atdd`, `-automate`, `-test-review`, `-nfr`, `-trace`.
 - **Claude Code primitives**: the `/goal` loop drives execution; Auto Mode and ultracode session effort make the unattended run possible; Auto Memory carries learnings forward; hooks enforce invariants; git branches provide isolation and rollback.
 

@@ -7,8 +7,8 @@
 
 Covers the green-vs-blockers contract: a fully-prepared tree returns green with
 budget 0, and each mechanical fault (stale primitive versions, missing test
-framework, dirty tree, protected branch, broken git) surfaces exactly the
-expected blocker and increments the budget. Also covers TEA-flag parsing
+framework, missing BMAD story skills, dirty tree, protected branch, broken git)
+surfaces exactly the expected blocker and increments the budget. Also covers TEA-flag parsing
 (YAML scalars) and the CLI exit codes.
 
 The `claude --version` shell-out is monkeypatched so version-gate behavior is
@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -51,6 +53,20 @@ def _hermetic_git_env(monkeypatch):
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", "/")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch) -> Path:
+    """Point the home directory at an empty temp dir, so a skill the host
+    happens to have under ~/.claude/skills cannot satisfy a case (HOME on
+    POSIX, USERPROFILE on Windows: Path.home() reads whichever applies), and
+    drop a host CLAUDE_CONFIG_DIR, which would relocate that directory."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    return home
+
+
 def _load_module():
     spec = importlib.util.spec_from_file_location("preflight_check", SCRIPT)
     module = importlib.util.module_from_spec(spec)
@@ -72,6 +88,17 @@ def _git(repo: Path, *args: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+STORY_SKILLS = ("bmad-create-story", "bmad-dev-story")
+
+
+def _seed_story_skills(skills_dir: Path, ids=STORY_SKILLS) -> None:
+    for skill_id in ids:
+        (skills_dir / skill_id).mkdir(parents=True, exist_ok=True)
+        (skills_dir / skill_id / "SKILL.md").write_text(
+            f"---\nname: {skill_id}\n---\n", encoding="utf-8"
+        )
 
 
 @pytest.fixture
@@ -113,6 +140,10 @@ def project(tmp_path: Path) -> Path:
     impl.mkdir(parents=True)
     (impl / "sprint-status.yaml").write_text("development_status:\n  epic-7: backlog\n", encoding="utf-8")
     (root / "project-context.md").write_text("# ctx\n", encoding="utf-8")
+
+    # The BMAD story skills the run delegates to, where the BMAD installer
+    # copies them for Claude Code.
+    _seed_story_skills(root / ".claude" / "skills")
 
     # Commit all scaffolding so the green-path tree is genuinely clean.
     _git(root, "add", "-A")
@@ -330,6 +361,147 @@ def test_multiple_blockers_accumulate_budget(project, monkeypatch):
     assert {"cc_version", "framework_present", "git_clean"} <= ids
     assert report["budget"] == len(report["blockers"]) >= 3
     assert report["green"] is False
+
+
+# --- BMAD story skills ------------------------------------------------------
+# BMAD Method 6.12 ships bmad-create-story and bmad-dev-story as deprecated
+# shims that a fresh install leaves out unless asked for. The run delegates
+# story creation and implementation to them, so their absence has to stop the
+# launch rather than surface mid-run.
+
+
+def _write_bmad_manifest(root: Path, version: str, install_shims: str | None) -> None:
+    lines = ["installation:", f"  version: {version}", "  installDate: 2026-09-04T00:00:00.000Z"]
+    if install_shims is not None:
+        lines.append(f"  installShims: {install_shims}")
+    lines += ["modules:", "  - name: bmm", f"    version: {version}", ""]
+    config = root / "_bmad" / "_config"
+    config.mkdir(parents=True, exist_ok=True)
+    (config / "manifest.yaml").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _skills_blocker(report: dict) -> dict:
+    hits = [b for b in report["blockers"] if b["id"] == "bmad_skills"]
+    assert len(hits) == 1, report["blockers"]
+    return hits[0]
+
+
+def test_missing_story_skill_is_a_non_remediable_blocker(project, monkeypatch):
+    shutil.rmtree(project / ".claude" / "skills" / "bmad-dev-story")
+    report = _report(project, monkeypatch)
+    blocker = _skills_blocker(report)
+    assert blocker["kind"] == "dependency"
+    assert blocker["severity"] == "high"
+    # The remediation pass cannot install BMAD skills; the operator does.
+    assert blocker["remediable"] is False
+    # Only the missing skill is named as missing.
+    assert blocker["detail"].startswith("BMAD skill(s) not installed: bmad-dev-story.")
+    assert report["checks"]["bmad_skills"] == {
+        "bmad-create-story": True,
+        "bmad-dev-story": False,
+    }
+    assert report["green"] is False
+    assert report["budget"] == len(report["blockers"])
+
+
+def test_present_story_skills_raise_no_blocker(project, monkeypatch):
+    # Anti-vacuous twin of the case above: the same tree with both skills in
+    # place carries no bmad_skills blocker.
+    report = _report(project, monkeypatch)
+    assert "bmad_skills" not in _blocker_ids(report)
+    assert report["checks"]["bmad_skills"] == {
+        "bmad-create-story": True,
+        "bmad-dev-story": True,
+    }
+
+
+def test_a_skill_dir_without_skill_md_is_not_installed(project, monkeypatch):
+    (project / ".claude" / "skills" / "bmad-create-story" / "SKILL.md").unlink()
+    blocker = _skills_blocker(_report(project, monkeypatch))
+    assert blocker["detail"].startswith("BMAD skill(s) not installed: bmad-create-story.")
+
+
+def test_a_personal_skill_counts_as_installed(project, monkeypatch, _isolated_home):
+    shutil.rmtree(project / ".claude" / "skills" / "bmad-dev-story")
+    _seed_story_skills(_isolated_home / ".claude" / "skills", ids=("bmad-dev-story",))
+    report = _report(project, monkeypatch)
+    assert "bmad_skills" not in _blocker_ids(report)
+    assert report["checks"]["bmad_skills"]["bmad-dev-story"] is True
+
+
+def test_a_relocated_config_dir_replaces_the_personal_root(
+    project, monkeypatch, tmp_path, _isolated_home
+):
+    # With CLAUDE_CONFIG_DIR set, Claude Code keeps its home-directory files
+    # there, so a skill under it counts and one left in ~/.claude does not.
+    shutil.rmtree(project / ".claude" / "skills" / "bmad-dev-story")
+    config = tmp_path / "claude-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    _seed_story_skills(_isolated_home / ".claude" / "skills", ids=("bmad-dev-story",))
+    assert _report(project, monkeypatch)["checks"]["bmad_skills"]["bmad-dev-story"] is False
+    _seed_story_skills(config / "skills", ids=("bmad-dev-story",))
+    report = _report(project, monkeypatch)
+    assert "bmad_skills" not in _blocker_ids(report)
+
+
+def test_an_unexpandable_config_dir_still_returns_a_report(project, monkeypatch):
+    # Claude Code takes CLAUDE_CONFIG_DIR as given; expanding a ~user this
+    # machine does not have would raise and lose the whole payload.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~nosuchuser_zz/claude")
+    shutil.rmtree(project / ".claude" / "skills" / "bmad-dev-story")
+    report = _report(project, monkeypatch)
+    assert report["checks"]["bmad_skills"]["bmad-dev-story"] is False
+    assert "~nosuchuser_zz" in _skills_blocker(report)["detail"]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs POSIX permissions enforced for a non-root user",
+)
+def test_an_untraversable_personal_root_still_reports_the_blocker(
+    project, monkeypatch, _isolated_home
+):
+    shutil.rmtree(project / ".claude" / "skills" / "bmad-dev-story")
+    locked = _isolated_home / ".claude"
+    locked.mkdir()
+    locked.chmod(0)
+    try:
+        report = _report(project, monkeypatch)
+    finally:
+        locked.chmod(0o755)
+    assert report["checks"]["bmad_skills"]["bmad-dev-story"] is False
+    assert _skills_blocker(report)["remediable"] is False
+
+
+def test_shims_declined_names_the_pinned_shims_remedy(project, monkeypatch):
+    shutil.rmtree(project / ".claude" / "skills")
+    _write_bmad_manifest(project, "6.12.0", "false")
+    report = _report(project, monkeypatch)
+    detail = _skills_blocker(report)["detail"]
+    assert detail.startswith("BMAD skill(s) not installed: bmad-create-story, bmad-dev-story.")
+    assert "installShims: false" in detail
+    # --directory keeps the installer from prompting for it, which --yes alone
+    # does not; without a TTY that prompt exits 0 having installed nothing.
+    assert "`npx bmad-method@6.12.0 install --directory . --shims --yes`" in detail
+    assert "\n" not in detail  # headless `reason` flattens the first blocker to one line
+    assert report["checks"]["bmad_install"] == {"version": "6.12.0", "install_shims": False}
+
+
+def test_shims_not_declined_names_the_tool_selection_remedy(project, monkeypatch):
+    # Twin of the case above: a pre-6.12 manifest carries no installShims, so
+    # the detail must not claim the shims were declined.
+    shutil.rmtree(project / ".claude" / "skills")
+    _write_bmad_manifest(project, "6.10.0", None)
+    report = _report(project, monkeypatch)
+    detail = _skills_blocker(report)["detail"]
+    assert "installShims: false" not in detail
+    assert "claude-code" in detail
+    assert report["checks"]["bmad_install"] == {"version": "6.10.0", "install_shims": None}
+
+
+def test_no_bmad_manifest_reports_unknown_install(project, monkeypatch):
+    report = _report(project, monkeypatch)
+    assert report["checks"]["bmad_install"] == {"version": None, "install_shims": None}
 
 
 # --- TEA flag parsing -------------------------------------------------------

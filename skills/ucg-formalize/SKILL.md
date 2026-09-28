@@ -134,10 +134,17 @@ own unreadable content).
 reflects the fixes — the remediate-then-re-run loop. The verdict mapping in step 4
 reads the post-remediation kernel verdict.
 
-**Remediation halt catch-all.** If a remediation sub-skill itself fails or blocks on
-interactive input, do not re-invoke it blind: record a non-remediable gap naming the
-sub-skill and the exact input it needed, and let the verdict mapping route the run to
-`status=blocked`. Likewise cap the loop at one pass per gap: if a kernel re-run still
+**Remediation halt catch-all.** If a remediation sub-skill itself fails, is not installed
+(the Skill tool does not know its name), or blocks on interactive input, do not re-invoke
+it blind: record a non-remediable gap naming the sub-skill and the exact input it needed,
+and let the verdict mapping route the run to `status=blocked`. A `bmad-create-story` that
+is not installed is the likely case (BMAD Method 6.12 or later ships it as a deprecated
+shim a fresh install leaves out unless asked for): name the operator's fix, run from the
+project root and pinned to the installed version (`installation.version` in
+`_bmad/_config/manifest.yaml`) so it does not also upgrade BMAD:
+`npx bmad-method@<version> install --directory . --shims --yes`. Never substitute another
+skill (`bmad-build`, `bmad-build-auto`) or write the story file or its acceptance criteria
+by hand. Likewise cap the loop at one pass per gap: if a kernel re-run still
 reports a gap whose `kind`+`source` a prior pass already remediated, the fix did not take —
 record it as a non-remediable blocker and route to `status=blocked` rather than re-entering
 step 2, so the remediate-then-re-run loop always converges instead of spinning silently.
