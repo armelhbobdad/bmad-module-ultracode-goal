@@ -26,7 +26,7 @@ If you're not sure where a change belongs, open an issue and ask before writing 
 ```bash
 git clone https://github.com/armelhbobdad/bmad-module-ultracode-goal.git
 cd bmad-module-ultracode-goal
-npm install           # also wires husky pre-commit hooks via "prepare"
+npm install           # also wires husky hooks and links the reference skills
 npm run quality       # run the full local pre-flight
 ```
 
@@ -37,6 +37,26 @@ uv run --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest skills/ultracode-g
 ```
 
 When a failure needs localizing, re-run just that file serially and verbosely: `uv run --with pytest==9.1.1 pytest skills/ultracode-goal/scripts/tests/test_<name>.py -v`.
+
+### Reference skills
+
+`skf-skills/` tracks version-pinned reference skills for the tools UCG conducts: BMAD Method 6.12.0 (`bmad-method-bmm`, `bmad-method-installer`), TEA 1.27.2 (`tea-testarch`), Claude Code 2.1.283 (`cc-primitives`), BMad Builder 2.2.2 (`bmad-builder`), and a stack skill that ties them together (`bmad-module-ultracode-goal-stack`). Load the relevant one before changing code that drives or reads one of these tools.
+
+Claude Code loads project skills only from `.claude/skills/`, which is gitignored, so `npm install` links each skill there through the `active` version of its group. The link step is `tools/link-reference-skills.js`, run from npm's `postprepare` script, and the links follow a newly activated version on their own. Re-run it with `npm run skills:link` after the BMAD or UCG installer rewrites `.claude/skills/`, or after a pull that adds a skill; `node tools/link-reference-skills.js --check` reports what is missing or stale without changing anything. It only ever touches its own links: a real folder or another link with the same name is left in place and reported, and it refuses to run when `.claude/` or `.claude/skills/` is itself a link. On Windows without symlink support, git checks `active` out as a plain file holding the version. The linker then links that version's folder directly, with a junction when symlinks are not allowed, so re-run it after `active` changes.
+
+For another agent (Codex, Cursor, GitHub Copilot, OpenCode, Gemini CLI and others read `.agents/skills/`), install each skill with the [`skills`](https://www.npmjs.com/package/skills) CLI, one version folder per command. The loop reads `active` in either form:
+
+```bash
+for a in skf-skills/*/active; do
+  g=$(dirname "$a"); v=$(basename "$(readlink "$a" || cat "$a")")
+  npx -y skills@1.7.0 add "./$g/$v/${g##*/}" -a codex -y || break
+done
+```
+
+- Pass one version folder per skill, as the loop does. Pointing the CLI at `./skf-skills` as a whole installs the oldest version of a group that keeps several.
+- Always pass `-a`. Without it, `-y` picks the agents itself. When it detects agents, it installs into those plus `.agents/skills/`, and for Claude Code that replaces the linker's link with one to a copy that no longer follows `active`. When it detects none, it installs into every agent it knows, including this repository's `skills/` folder.
+- Never run `npx skills remove --all` here. It scans every agent's folder, `skills/` included, so it deletes the tracked `skills/ultracode-goal/` source along with the installer-written skills in `.claude/skills/`.
+- The CLI copies each skill, so re-run the loop after the reference skills change. Its `skills-lock.json` cannot restore skills for Claude Code; both it and `.agents/` are gitignored. Set `DISABLE_TELEMETRY=1` to turn off the CLI's usage telemetry.
 
 ## Workflow for Changes
 

@@ -16,6 +16,10 @@ _bmad-output/
 # Generated agent skills: committed to git, but project tooling, not module content
 /skf-skills/
 
+# Written by `npx skills add` in a contributor's checkout: never module content
+/skills-lock.json
+/.agents/
+
 # Agent-skill workspace artifacts (briefs, improvement queue): never module content
 /forge-data/
 
@@ -34,6 +38,7 @@ prettier.config.mjs
 # Dev-only validation tools (not needed at runtime)
 tools/validate-skills.js
 tools/validate-file-refs.js
+tools/link-reference-skills.js
 
 # Skill dev/test artifacts (not needed at runtime)
 skills/**/.analysis/
