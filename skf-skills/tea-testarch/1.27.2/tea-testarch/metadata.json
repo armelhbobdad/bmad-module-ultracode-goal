@@ -1,0 +1,369 @@
+{
+  "name": "tea-testarch",
+  "version": "1.27.2",
+  "skill_type": "single",
+  "scope_type": "reference-app",
+  "source_authority": "community",
+  "source_repo": "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise",
+  "source_root": "/home/armel/.skf/workspace/repos/github.com/bmad-code-org/bmad-method-test-architecture-enterprise",
+  "source_commit": "d99ad29c62697c152e3393351406686d5bcd323c",
+  "source_ref": "v1.27.2",
+  "confidence_tier": "Deep",
+  "spec_version": "1.3",
+  "generation_date": "2026-09-28T21:13:39+04:00",
+  "last_update": "2026-09-28T21:13:39+04:00",
+  "description": "TEA (Test Architect) v1.27.2 test-architecture workflows that UltraCode Goal uses as its quality gate — framework, ci, test-design, atdd, automate, test-review, nfr and trace — with their inputs, output paths and _bmad/tea/config.yaml keys, and the exact gate-decision.json contract written by bmad-testarch-trace (step-05-gate-decision.md). Use when invoking a TEA workflow from an orchestrator, locating the files it reads or writes, or reading the PASS/CONCERNS/FAIL gate decision. Not for writing tests by hand or for the unreleased scoped-output layout that follows v1.27.2.",
+  "language": "typescript",
+  "ast_node_count": 25,
+  "exports": [
+    "bmad-testarch-test-design",
+    "bmad-testarch-framework",
+    "bmad-testarch-ci",
+    "bmad-testarch-atdd",
+    "bmad-testarch-automate",
+    "bmad-testarch-test-review",
+    "bmad-testarch-nfr",
+    "bmad-testarch-trace",
+    "bmad-tea"
+  ],
+  "tool_versions": {
+    "ast_grep": "0.45.3",
+    "qmd": "2.8.3",
+    "skf": "2.2.0"
+  },
+  "confidence_distribution": {
+    "t1": 25,
+    "t1_low": 724,
+    "t2": 22,
+    "t3": 0
+  },
+  "stats": {
+    "exports_documented": 9,
+    "exports_public_api": 9,
+    "exports_internal": 0,
+    "exports_total": 9,
+    "public_api_coverage": 1.0,
+    "total_coverage": 1.0,
+    "scripts_count": 0,
+    "assets_count": 0,
+    "pattern_surfaces_documented": 9,
+    "notes": "reference-app: export counts are pattern-surface proxies (8 workflow skills + bmad-tea agent), not library exports"
+  },
+  "generated_by": "create-skill",
+  "dependencies": [],
+  "compatibility": "1.27.2",
+  "doc_sources": [
+    {
+      "url": "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/reference/execution-targets/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:57062ad8ce5bc77eb47cbc036d7dd1fcdf003679221bf23fb24f9a55ecc0d0d0",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/reference/live-verification-results/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:74c6295b6192c9ab3e82dae4acf28abd912b38e214eb3d1f80bdd62232f1070b",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/reference/tea-test-review-cli/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:5f5f7d0c76fb080786239e71c3c2568771c289905e483a63a3bea1cec93b43ef",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/reference/configuration/#output-layout",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:a75ef1f4cd6c6784a84b16ab5c898fe500d4fbaf4fe68a4e4b5259cc3c0341f6",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/reference/configuration/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:a75ef1f4cd6c6784a84b16ab5c898fe500d4fbaf4fe68a4e4b5259cc3c0341f6",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/reference/knowledge-base/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:45d0e82698961cc29bfcc4d0ac60ea23d1fbf22b5c2feb2f43ba9f72817ea2cb",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://geminicli.com/docs/cli/headless/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:26caf47715778284640274391535969cae6ab4403587372272e73903473f7da0",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://github.com/bmad-code-org/BMAD-METHOD/blob/main/docs/how-to/customize-bmad.md",
+      "detected_via": "readme_link",
+      "content_hash": null,
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://bmad-code-org.github.io/bmad-method-test-architecture-enterprise/",
+      "detected_via": "pages_api",
+      "content_hash": "sha256:0655e82299e0190cb25a3c370342b0116937545104adfbe027556bafb7b1311c",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/404.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:cae92f8e0964b6d316c3004d346fdae739c938fbf3afe320b921f283e85884a8",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/engagement-models.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9034290109cac60affb5fea1ebe07e0827ff8c365d5b2b3ab9146f829097d46d",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/eval-quality-adoption-guide.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7a0d8402a53d1ea19a6b96c3458d41b905f5c9253fb42de3c75a90a55e3c4ef7",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/eval-quality-command-adapter.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:bcafe3208b932f037c47413c5582874f8ba38c020dcb5b550964f2d9af579755",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/eval-quality-roadmap.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:20e61c9f529a2ca04df608f67d7bf324ea7a1cfdfa1618d5352215d0f6082d9f",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/fixture-architecture.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:1e287498c534b2beb176e715618dca6834f510eaa6da14595b3e29d777c06c72",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/knowledge-base-system.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4e463413c9187aa70cef9468e152d21541e729a6106d7a4eca53b1447f0e3bc6",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/network-first-patterns.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:709dffe2c4192bdf5ec0e6d31c6ae355ad02b2ea497b3bb8bc0457b9ca90b9bb",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/risk-based-testing.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b12403a39ef82afcbfe37f87b2a1929bb071ed400d0d18ade85a29b77b866835",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/step-file-architecture.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:22f5665bfa31c3fe768fe7ac5702914d4e537b84971b8e4afd76fd3592179910",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/tea-overview.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0157d32099ea5e4d274532750c60f0540a6168bf67fb2ffe6e993025210c415b",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/test-quality-standards.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:72b6147c0464a2b03378fdecf182e11c10d2840ccd1d4957a118b0cfaa1af18b",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/test-review-cli-architecture.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:f8b3bc9d4981092faf22fad41e8a34cf7a6591651456789421f7ebb10f856ba4",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/testing-as-engineering.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:78d940d0f983c22a85da59fe2c24a9740e43cdd1146df477711e1020d33f5504",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/explanation/verification-architecture.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0ac6676aff014139cd53e0bc686fcfa393b58bd3fa576a4bea1601ba361048d3",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/glossary/index.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c9a007912c6796613188311379f17374140721693f379b114e35556b89c7f07a",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/brownfield/use-tea-for-enterprise.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9cb1b11a237a162f7e1a8c766e284773dc83791a0f54b76e317410bbd9a6ced1",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/brownfield/use-tea-with-existing-tests.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e0ed3cc82ebff95cc18e3fa000bd627aab2aa908289e52fa5cdbe62bf7e247f1",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/customization/configure-browser-automation.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7f79c7d667aab788bd17439318d70cb55b9d18f940dfdad518ab827fa576b615",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/customization/extend-tea-with-custom-workflows.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:bf7722b03381a3062d9a328e9609808465f909c3be0d1f3f92f8c6dacb9e6613",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/customization/integrate-pactjs-utils.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3ba888c39dbf976c19509b6a09da2270b53fdb54902b35889475c473ad873cc7",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/customization/integrate-playwright-utils.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:5019cc8beaf48300d43b254bd9fa0209b477703569865d7ee921cd5fcf66551a",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/install-behind-firewall.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9bf4b6ed2cbd58fe2ebaf7229ecf8b3ece74e7c365758077eacc1a8fc478b79f",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/workflows/run-atdd.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:17510e513b85df53fd819df67ff97b1b0d0de7505e8141e14feb0c6a1cc442c4",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/workflows/run-automate.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:46b9df949e6df94c31144338d3ebfaed54cc1944b69a46dd9c5de69157040523",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/workflows/run-nfr-assess.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:f30d2c50c08067d52cff0524c665462b4454cea1cc206f616095d6fca566f190",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/workflows/run-test-design.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:53f49915d8e45d09bc194f06bdfa79718b4a3c5f5869c45fcf109ab84a97ef66",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/workflows/run-test-review.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:078aafc1f4ae431ff30e16912fbf9a5f6149ff795eba4289ebd696c25f72b7ba",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/workflows/run-trace.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:1d0dcc09bc3ab38945be7d515bf89b774d6b52ccb1eb13dfc7f5da53f9788ec3",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/workflows/setup-ci.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:db183798ecae17f488bfc1b72d2ce2abd19c547783953c839f1c2261c2fa9ca7",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/workflows/setup-test-framework.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9c89a8966ed143cd3e46a23b5b0e79d422bccb6fafa1b4f707b46bbeffac98de",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/how-to/workflows/teach-me-testing.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0f4518119649c2710691c69192be23681ad6fb115263749d227ce852d0610826",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/index.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0d041ae8c1607b5ccd769243665827608d06fc43d613639b6448d7940d21926d",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/reference/commands.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:96b195ba05dd4f2c6e49f6d3b0a7d61561793e63bb8dd9c9bc82c6381f3d6206",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/reference/configuration.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:78d974302d9d45f668da626e9d4e3464a3fde6a02814e6f0b636f5bc5fc37c64",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/reference/execution-targets.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3b1e80105d59f644b9d161e8d2ba45c4c427c732e7e9ba933284d0a39cbc6342",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/reference/knowledge-base.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:16180cacc228e2b3b2145f4b1d6c43de7dca6453d4a085ee6866a1c176deae81",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/reference/live-verification-results.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:cc28d6b0a73cd43200205ba2a16eff62289d48000b4e50b528ca7b449627b46e",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/reference/tea-test-review-cli.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9497f7d2ccdc32f023da7155df29692e113049e35c8d26790c7bf8d5f675c462",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/reference/troubleshooting.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6f7a70ad935ff1d0b6e3a8fa11bc4d6f1826329ae93081821a1bfeeb63e3f9e6",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/tutorials/learn-testing-tea-academy.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:f000d8117cd3b6a51b96f5a0d7f86d578efef1e4caeca7de60fa287dc036e523",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/bmad-method-test-architecture-enterprise/v1.27.2/docs/tutorials/tea-lite-quickstart.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c525dad1735e1e4a5453032b8de0a87523905ad2f68ac61b16c43727125dc75a",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    },
+    {
+      "url": "https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise/blob/main/README.md",
+      "detected_via": "readme_always",
+      "content_hash": "sha256:621cef560f5b99949a9ef3021a620c587346b34ddfea9dfcdebb9bbc9826adfb",
+      "recorded_at": "2026-09-28T15:58:12+04:00"
+    }
+  ]
+}

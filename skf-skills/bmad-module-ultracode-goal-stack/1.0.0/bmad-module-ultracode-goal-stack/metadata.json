@@ -1,0 +1,72 @@
+{
+  "skill_type": "stack",
+  "name": "bmad-module-ultracode-goal-stack",
+  "version": "1.0.0",
+  "description": "Stack skill for bmad-module-ultracode-goal — 3 libraries with 3 integration patterns, composed from version-pinned skills for BMAD Method v6.12.0 (BMM skills and the installer) and BMad Builder v2.2.2. Use when reasoning about how a BMAD module is discovered, configured and registered by the installer next to BMM and BMad Builder, or how deprecated core IDs flow through the v6 shims. NOT for: individual library usage outside this project's conventions.",
+  "generation_date": "2026-09-28T16:15:34+04:00",
+  "forge_tier": "Deep",
+  "confidence_tier": "T1-low",
+  "spec_version": "1.3",
+  "source_authority": "community",
+  "generated_by": "create-stack-skill",
+  "exports": [],
+  "library_count": 3,
+  "integration_count": 3,
+  "libraries": [
+    "bmad-method-installer",
+    "bmad-method-bmm",
+    "bmad-builder"
+  ],
+  "integration_pairs": [
+    [
+      "bmad-method-installer",
+      "bmad-method-bmm"
+    ],
+    [
+      "bmad-method-installer",
+      "bmad-builder"
+    ],
+    [
+      "bmad-method-bmm",
+      "bmad-builder"
+    ]
+  ],
+  "language": "javascript",
+  "confidence_distribution": {
+    "t1": 9,
+    "t1_low": 13,
+    "t2": 0,
+    "t3": 0
+  },
+  "tool_versions": {
+    "ast_grep": "0.45.3",
+    "qmd": "2.8.3",
+    "skf": "2.2.0"
+  },
+  "stats": {
+    "exports_documented": 0,
+    "exports_public_api": 0,
+    "exports_internal": 0,
+    "exports_total": 0,
+    "public_api_coverage": 0.0,
+    "total_coverage": 0.0,
+    "scripts_count": 0,
+    "assets_count": 0
+  },
+  "dependencies": [
+    {
+      "name": "bmad-method-installer",
+      "version": "6.12.0"
+    },
+    {
+      "name": "bmad-method-bmm",
+      "version": "6.12.0"
+    },
+    {
+      "name": "bmad-builder",
+      "version": "2.2.2"
+    }
+  ],
+  "compatibility": "bmad-method 6.12.0; bmad-builder 2.2.2",
+  "mode": "compose"
+}
