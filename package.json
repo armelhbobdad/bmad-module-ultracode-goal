@@ -39,7 +39,7 @@
     "format:fix": "prettier --write \"**/*.{js,cjs,mjs,json,yaml}\"",
     "lint": "eslint . --ext .js,.cjs,.mjs,.yaml --max-warnings=0",
     "lint:fix": "eslint . --ext .js,.cjs,.mjs,.yaml --fix",
-    "lint:instructions": "uvx lintlang@0.8.0 scan skills --exclude \"**/scripts/tests/fixtures/**\" --fail-on fail",
+    "lint:instructions": "uvx lintlang@0.8.1 scan skills --exclude \"**/scripts/tests/fixtures/**\" --fail-on fail",
     "lint:md": "markdownlint-cli2 \"**/*.md\"",
     "prepare": "husky || exit 0",
     "postprepare": "node tools/link-reference-skills.js --quiet || exit 0",
