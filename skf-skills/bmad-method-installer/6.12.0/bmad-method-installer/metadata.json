@@ -1,0 +1,1359 @@
+{
+  "name": "bmad-method-installer",
+  "version": "6.12.0",
+  "skill_type": "single",
+  "scope_type": "reference-app",
+  "source_authority": "community",
+  "source_repo": "https://github.com/bmad-code-org/BMAD-METHOD",
+  "source_root": "/home/armel/.skf/workspace/repos/github.com/bmad-code-org/BMAD-METHOD",
+  "source_commit": "05bfbd46d00766ec88eb9b42e76be2c575d64d7b",
+  "source_ref": "v6.12.0",
+  "confidence_tier": "Deep",
+  "spec_version": "1.3",
+  "generation_date": "2026-09-28T14:54:31+04:00",
+  "description": "Module discovery and registration internals of the bmad-method v6.12.0 installer (npx bmad-method install): where it finds module.yaml for built-in, external and custom modules, how module-help.csv rows are merged into _bmad/_config/bmad-help.csv, how per-module config.yaml and the central config.toml / config.user.toml are generated and what a quick update rewrites, plus manifest.yaml, skill-manifest.csv, deprecation shims and removals.txt. Use when building or debugging a BMAD module that the installer must discover, register, configure, preserve or clean up. Not for the BMM skill workflows themselves (see bmad-method-bmm).",
+  "language": "javascript",
+  "ast_node_count": 369,
+  "exports": [
+    "AGENT_SEGMENT",
+    "BMAD_FOLDER_NAME",
+    "CLIUtils",
+    "Config",
+    "ConfigDrivenIdeSetup",
+    "CustomModuleManager",
+    "ExistingInstall",
+    "ExternalModuleManager",
+    "FileOps",
+    "IdeManager",
+    "InstallPaths",
+    "Installer",
+    "LEGACY_PATHS",
+    "MIN_NATIVE_SKILLS_VERSION",
+    "MIN_PYTHON",
+    "MODULE_HELP_CSV_HEADER",
+    "Manifest",
+    "ManifestGenerator",
+    "MessageLoader",
+    "OfficialModules",
+    "PluginResolver",
+    "UI",
+    "_clearTagCache",
+    "applySetOverrides",
+    "autocomplete",
+    "autocompleteMultiselect",
+    "box",
+    "buildPlan",
+    "bundledTargetWarnings",
+    "cancel",
+    "checkUvEnvironment",
+    "checkWindowsNodeFromWsl",
+    "classifyUpgrade",
+    "clearCache",
+    "confirm",
+    "copy",
+    "customAgentDashName",
+    "decideChannelForModule",
+    "describeShim",
+    "detectPython3",
+    "detectUv",
+    "detectWindowsNodeFromWsl",
+    "directory",
+    "discoverOfficialModuleYamls",
+    "discoverShims",
+    "ensureDir",
+    "fetchStableTags",
+    "findProjectRoot",
+    "findStaleLegacyDirs",
+    "formatOptionsList",
+    "formatPlatformList",
+    "formatRemovedShimNotice",
+    "formatRetainedShimNotice",
+    "formatWindowsNodeFromWslMessage",
+    "formatYamlContent",
+    "getArtifactType",
+    "getCanonicalId",
+    "getClack",
+    "getColor",
+    "getExternalModuleCachePath",
+    "getInstalledCanonicalIds",
+    "getModulePath",
+    "getProjectRoot",
+    "getSourcePath",
+    "gitEnv",
+    "handleCancel",
+    "inferShimPreference",
+    "intro",
+    "isBmadOwnedEntry",
+    "isDashFormat",
+    "isPreNativeSkillsVersion",
+    "isShimSkill",
+    "loadPlatformCodes",
+    "loadSkillManifest",
+    "log",
+    "move",
+    "multiselect",
+    "normalizeStableTag",
+    "note",
+    "orphanPinWarnings",
+    "outro",
+    "parseChannelOptions",
+    "parseDashName",
+    "parseGitHubRepo",
+    "parsePinSpec",
+    "parsePythonVersion",
+    "parseSetEntries",
+    "parseSetEntry",
+    "parseSkillMetadata",
+    "parseUvVersion",
+    "password",
+    "pathExists",
+    "processMarkdownFile",
+    "processYamlFile",
+    "prompt",
+    "pythonMeetsMinimum",
+    "readInstalledShims",
+    "readInstalledSkillIds",
+    "readJsonSync",
+    "releaseNotesUrl",
+    "remove",
+    "resolveChannel",
+    "resolveDirectoryInput",
+    "resolveInstalledModuleYaml",
+    "resolveModuleVersion",
+    "resolveSkillName",
+    "select",
+    "selectShimOutcome",
+    "spinner",
+    "tagExists",
+    "tasks",
+    "text",
+    "toDashName",
+    "toDashPath",
+    "tomlString",
+    "upsertTomlKey",
+    "warnPreNativeSkillsLegacy",
+    "writeJson"
+  ],
+  "tool_versions": {
+    "ast_grep": "0.45.3",
+    "qmd": "2.8.3",
+    "skf": "2.2.0"
+  },
+  "confidence_distribution": {
+    "t1": 369,
+    "t1_low": 438,
+    "t2": 22,
+    "t3": 0
+  },
+  "stats": {
+    "exports_documented": 20,
+    "exports_public_api": 20,
+    "exports_internal": 0,
+    "exports_total": 20,
+    "public_api_coverage": 1.0,
+    "total_coverage": 1.0,
+    "scripts_count": 0,
+    "assets_count": 0,
+    "pattern_surfaces_documented": 20,
+    "notes": "reference-app: export counts are pattern-surface proxies, not library exports"
+  },
+  "generated_by": "create-skill",
+  "dependencies": [],
+  "compatibility": "6.12.0",
+  "doc_sources": [
+    {
+      "url": "https://docs.astral.sh/uv/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:7c3325cc75ae6fc6ee89470e3f51b59336c7037d5bfd98f859bf0a7111b618a5",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://docs.bmad-method.org/start/build-your-first-change/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:728e987fdc53bef8f6c4c3f4d199b9f3c072e8b42372f5d3e54541032eb8ade2",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://docs.bmad-method.org/existing-codebases/start-in-an-existing-codebase/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:8787b49ef3c89ce1bcc1703df70b90a65fb7c66ad9da2c4e89c5bd2518cc333d",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://docs.bmad-method.org/plan/choose-a-planning-path/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:6b1b564a966f650947a71188ca7a6b6d1d66999790427a4689e40b984db10880",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "http://docs.bmad-method.org/",
+      "detected_via": "pages_api",
+      "content_hash": "sha256:4146d30fbadf865e432f0b5e935c41986c097ee2591737ffe333d98a090b7c8b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/404.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0dd7d0d5f8523bc717efc01bdb1b396424d2654dfda7e8be8745abeefce6958d",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/_STYLE_GUIDE.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b8cdfc12c6e375bf62b45d140741928f4289cdf2fac95533dabed8255419cc14",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/build/autonomous-development-loops.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:34e860cda48dd6cacdf51f2103535be240677ec1041583c334de35afbd357581",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/build/build-a-change.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d285ef6fcdb5d4600f9339e806d59802644c27d9b7c43efe9a6d0d13d2fc3e70",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/build/finish-an-epic.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c7934c11d6954d8d03bcf68478d79106b265c1c62fc017f5fc5146cdf4664dda",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/build/review-a-change.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:f8d84f3845c5e33cb190337ca844ff370a87694962ce9456722463970e563df7",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/build/test-completed-work.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:efa658dd95ddea1f68f2ff115b6a38f0ba9f83d55c04539a3eefc7609727f8c5",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/build/walk-through-a-change.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d8a2dd06cf1bf988eefee616fca48edaba707d7ffd1d04a23782b1969b56c2f2",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/404.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b000ec36863e869660167a6e16b90d7078d1b9e713a4d279dff37cccf926e177",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/_STYLE_GUIDE.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:1766c08f3315da68ed213a678a809ebf8307e4b26bf983ad27db0289029259fb",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/explanation/advanced-elicitation.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:25dbe0dd6c73a27f9efde8084680f0b88aa52a16306302caa44b9db91ac636f4",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/explanation/analysis-phase.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:dcdec3a961c923aa26c0141cc260c0af5788cce75dcfc7092d83e2f2865ca542",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/explanation/brainstorming.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4ed21906e8f6c5110e1317046c0ff8a5ec55aee047ffabd9719702df2ebc2ccd",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/explanation/build.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:72d63b6c113beb4e005652f362dc149a80dea980e7c9d284c75afaeaaa96439e",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/explanation/established-projects-faq.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:ab189ad18ac30a4273af1a67e4960b11e9312b0a2520878314c0ab4a4bcf0b85",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/explanation/party-mode.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:27faba3a4a0a8f3c8bf98f571b518d34ec77d736cb670462d4e2e0142a1035bc",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/explanation/preventing-agent-conflicts.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c5236bf6ea811595b65ef658ae62c3db3ef27fed2da002c1eb46145ff3395465",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/explanation/project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9eaaaee2bb4a6d133ec79aab651d6b04efa7a31e48f6b49905380aec6ad7f6e5",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/explanation/why-solutioning-matters.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b46769a988553065708ee801409ac463c1178a344a3c9cd28397530121f5055b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/how-to/customize-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:1f47d424de6b1ba0f591a5abb8718f5d6fd08c66d0b3f7a898d00ca2eabbabad",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/how-to/established-projects.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7655405059865b7b00810334f693b3dc01aa1a42085856e927e8833dafd9b292",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/how-to/get-answers-about-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4e41eb3a6a06f1ca704413b846d5d392f895717cb95cf0c65e7b7ca51966ba50",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/how-to/install-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a0a1e7f591069a193d87c6edb352b2a040c3e278027397ecb353a175f252a570",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/how-to/project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:de8ef457f9cb6e0eb763e9b5e4174893173e0a8be44d552d9a4ce7fd4fc77a5d",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/how-to/quick-fixes.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3fedfa919bd937b49fa580a64c3350b79afcc759da2901514dd8ba895b768bce",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/how-to/upgrade-to-v6.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6cb61054a6a59bd2a1e0a3db2afddf62e488911b16aa5d84aa6dfa757ebf2200",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/index.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:ccf85a592129ce77d2e79ab6a7ea48ba4e793eefb85aa3a12331c7b4bc818279",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/reference/agents.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a5a3a33fb9ed5ad3480382346e1af3c18553f1f345df8f7ba6e3560e9edaee1c",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/reference/commands.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:99d32cf8122e8e0be6089390fd6eaa1f4dc4cd33ff93e315ac34d3aee23b6cf7",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/reference/core-tools.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6c2957edbdace02e8fdbe0db117c2be336fe72394a552aec3ed26b04972698e9",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/reference/modules.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:f6fe6c8d9af5d8dd3a26faf6556c25bed824df7e6542adf8495475b1f0cdb444",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/reference/testing.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3fed33be42c84fdea836f1893aeff392bc2bdf64d87b54e6dd2b2ea111ddf255",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/reference/workflow-map.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b4095529ffe6bc40e0dad1650514f29fc12a3ddffd424a432219035729595039",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/cs/tutorials/getting-started.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a93f7bc54018086dcca9d22116ec119be2be50e739d2725d5e4d695b6bc91f5b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/customize/add-modules.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e96e95278b06774d1d941315a216d42086febf8443e602d64593d7a254f193ca",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/customize/adopt-bmad-across-a-team.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b5209d47384b9b708ce8f6ee2a4f3281b77e88dcc6f335ac9bec09dfae864ed8",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/customize/customize-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7abb79fedf7c9ef96e199b4ee93621553c829e381c3c25ec498c5f492f554f73",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/customize/run-multi-agent-discussions.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4edb6a1990455056d5b2f04b61b33e23498ccd7b4c1385a66019422ba034b0b7",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/customize/use-web-bundles.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:523733d512ac2bf25701aaf76ce79f034e399d8ba465f76a1da16fc53d8460b4",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/existing-codebases/getting-deeper.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3811ea60fd98dfaee7b721c00c710b3dfbc228ef54d60590b9c8e7a8f42499b0",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/existing-codebases/set-and-maintain-project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:916713034a2099cf7100fe660ef3b23efb878dc326af8b92790f47f1c025ec03",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/existing-codebases/start-in-an-existing-codebase.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:ee58831ba62b9f75aab6fc34a745dc53b1d186c09e11b967c6d9fb65dd365959",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/existing-codebases/theory-of-project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:fc9a14afb287b5975e277af4a97c054672e92325c20368037fceb3f674d8d098",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/404.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4b8fef686d4b387dbc1347529abac71381e941526a614456851623b718d0d837",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/_STYLE_GUIDE.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:204db0ec9ec8c972907fba3f11ca15a1b53748713b94420ee14ba97a36434e85",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/build/walk-through-a-change.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6843695e7e8be0fdea0ca6956542eb50d6542873295faba78a3dd8bdd154ef46",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/advanced-elicitation.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6912d5a823d725195d82f1fe586773f5e7a946602a7ba88b25c9d0fb91b5233c",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/analysis-phase.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a7c4755b472737d23bf777bc28c44563d1e72dfeae919e241fe2942019c764fb",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/brainstorming.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:2a5d0276e9925aab836d72f8c85c76b9b5a3cba51276ef55c987753154735d7e",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/build.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:34e500ea52a55e90be044cd430bad263aff2be4472da9050ab93d347e876dbd3",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/established-projects-faq.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:1776b1af4853de20f7729ed23121a1c63078d78667ec697bb7b8d3c872d1616f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/named-agents.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3be6ad7081cd75a33f610b5c5cd9e4841788922e57d505a6f5082054d5dc8524",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/party-mode.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:ea1906877e4ddb47df4ced7cf3fe01a06cf3bbdfde8d72c55ba29eef532e6878",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/preventing-agent-conflicts.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:072dec466aaf7de56dec7a8dffb740305ca24066ed25a0b76e315900c94e1e39",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:2d8ec15f2f01845743b024f36b3caacb73ca00f20cee2919f586c52251ea70ad",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/web-bundles.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:59018a826e419b063914c35b651788b51dece2acb92027c406e03145063dc6c0",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/explanation/why-solutioning-matters.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3ca67ae8504102729a3da2953860019e73f7deaefa610ddecd79668aeea67f20",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/how-to/customize-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:08a0267a8e9dc18793e92d19669766f2907fad2930285a339ebdb26447db2708",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/how-to/established-projects.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:331bb16b8ce2329f496512f6ff68701e550eeb8ae5b613ea1250262360a8e363",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/how-to/expand-bmad-for-your-org.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:93db078da9642985ae79b1e916dcf183ad936dfb2069c6523f9bf712e3399d1c",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/how-to/get-answers-about-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d36c8db367012a70724ebcf011ad487368d49f15f1db585b8e928de30a5f280a",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/how-to/install-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6c2b63b8c8e2ac05c7a6d5f3c307179cb19c3e5d229a87c941744fcbd7224869",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/how-to/install-custom-modules.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4dad7799ec137910c195ed18555b8f7e9153a4e568e2ff678247618d8ae82bca",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/how-to/project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0086160234d484a40df4dd7e8eccfbd9238a39353f8f8b84316caf0e5cefa4d9",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/how-to/quick-fixes.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:8cebe98a65e43773a832fc1e97586c994c4101a2a31a3088f23be05a5abf9451",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/how-to/upgrade-to-v6.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:2c994ca24e860a32b35cba6150f545614433e46c9e74ddf0783b6d2f4835b6dc",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/how-to/use-web-bundles.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:5098aa5d2afb47bd3481908216b65a6d87df0d983c5269129d69862f6ee5b109",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/index.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:542b42074409f5e228531371574b860cd994644fb1674bf759169c8d7957b3eb",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/reference/agents.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:fbeac49dc17af3906026f35e523138d8fa40887a63bf3c65028bc6a9e493b6d1",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/reference/commands.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9efaf9226b48386512ccf6ab58341c72d2794ac0a07048d34005a193b821ee72",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/reference/core-tools.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6ac0871ecdb80b38f9f471dea3ce7b4d552eebcb0b2ed6125bd89727c93cb4f0",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/reference/modules.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d67bcf7458e59d7ba721916c5e9f69d84ac609b59512cf1595940677e75c227f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/reference/testing.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0254d865ae6d07a74b80d1b465f07d061307ca347bd6ec0b02457bea7d4a3a97",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/reference/workflow-map.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:011632d07972a933ec6590485e79cdbbc5bf41cc84e6a0e8a21e7e9be7283837",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/fr/tutorials/getting-started.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0e174ca805391267bce1488c20bc9324691e1cb4e54fc3489368453d691523d5",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/index.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:964f9331ed3011e837c1a4f867709e8be6884bd194f8c06ebcc9feab79cf280f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/404.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:df67f5d7723024324a4df2c7b70ef71363b7d34b558a61bddf02c8d92010f1ad",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/_STYLE_GUIDE.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:146909ecea8955d1dcec25a38f1d037eb721a44db5755e0b31128cb73fa866cd",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/build/build-a-change.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:ca3e81405cfd57f33e3daea904d9f65a9c7ce60518380bf03488d5eb1795b40d",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/build/test-completed-work.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4669c54c91e0fd5ff2702649f9bccedde06529af93421aae8c78212440eba65f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/build/walk-through-a-change.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e912707364a434b4f2ac32840011808ec55cb94741854ed6b2f85b9117851f0c",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/advanced-elicitation.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0297676fecf7a7f2a97218cad31c5754dfee0bd8668b5b8251366c4971a4344a",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/analysis-phase.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:83a57a796afaeb565d6b15f8cce27308aef945181ac96f87e06f25fe3398feb3",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/brainstorming.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:1739728a6cb0d4d0757c494e43049dfcdc3e6fd27262367703282c6800be6bd9",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/deep-recon.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:44ec6839ba45e3b4e797ff91a8204ac61d902a1a171f6876255f69f624487a8b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/established-projects-faq.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:025f94531421f3b3844046e4d94a933b01972b0dcb3b108f50b9b884138cc04b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/forge-idea.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:2eed96ea826bed581004c5ebf8dd30c8f3d665f4bae1ffb6fc1ea67fab92c215",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/named-agents.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7ad3407788d2ffdf23180585cfd8c6dff1dc3bb20729526388c357c9ab2b8dac",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/party-mode.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4c0b3ff5b864eb83e976764fd895dfd5d33cd8b7a1f344ec502344aa86e6da73",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/preventing-agent-conflicts.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:145ae7a62c74e05c34e898a5e50885d3591f90c081f2fb82151bcb948789c50d",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/project-context-theory.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:95fc7945b0133972982d21d8248aa2b03456b6ea54dfc13719942ae551bb18c9",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:92d80a177479d2b491dbf33150f14442c4f15e18232d3ef1d90fbfd1eec3c766",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/retrospective.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:5719d207ab58f3d57c2a4d378eae2fd448de9bd02e240a1ddd218ee632c8c80d",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/sprint-planning.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c58698a0af3b83cf6acf20bfa58c2ebfd5787784660a967fe1daff390ef3b2af",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/web-bundles.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:707304e81f6c021ee904bee393d004ff5cecdb631efc54f277aeefae9315cf3e",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/explanation/why-solutioning-matters.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:05329499d51b41417cbbb1d6f85806fe1a6cbb7449efd6e6d152903dbd38b274",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/how-to/choose-a-development-path.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9192e497b462b5a78074440e5ab264034c773e99ae22deadd623867f034093ae",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/how-to/customize-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3cf3dc2a5e7f07520ee3d755d3d5dd900253960632032bf2ee1cc223db7ed6a3",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/how-to/established-projects.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d670472fe29edb9ea6d9cf66eaa119f34c2f6b6ce49a2243638c16113263f4c3",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/how-to/expand-bmad-for-your-org.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:73eea6a5c0a0d99cf4f774047ce209b71218b74b9e378ed57d5639227a1d2964",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/how-to/get-answers-about-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e1bb40f5a837aae89b6f2799ef7bd3446f37da7818e0fb3c4bbeaeeaaa91ccfa",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/how-to/install-custom-modules.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:511ab7b76810543a28571c71cde555c295d724d0c199bbe1cd4e1c865fa55f83",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/how-to/pressure-test-an-idea.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4ea2d13b6fd2a6fe236911fea593620ba3ef83b6d0212a9b996eaf3329689345",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/how-to/project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0a9cc9ff108c8095aa3295545e23e801e13627a713cede0b80b6d9bc15b79877",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/how-to/upgrade-to-v6.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4dee9e2e940ceb45388f3e5f65acc4694a8a3e67fd415cb2758cb06ea66ebb07",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/how-to/use-web-bundles.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3055aa0fb8e4d428d30508f86652d1b31cbb9f59801ef2d1eb4f9de20f741147",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/index.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:5bc8a68455a4e6a37b9de4ffc872d7f9a3f7f59c4c495136ca13fbc3cee81d3f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/reference/agents.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:80a4498b15e6a314263788e3be914f23795bd8125b89c2c6f07a5791df830017",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/reference/build-auto.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e89468834194695dcb4798b9ef9bf7075003f4fef996677e108365cef078422e",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/reference/commands.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4099e9d4065ceb79d9e52acf40b2be14937129b531bcdba8dc38e172403935ed",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/reference/core-tools.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:ceb40219339601915d28e4a2df1daa50f75bc2ac5e440a1cf6d78e8532d90ca3",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/reference/modules.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:532819d43cd52f5c8dccf420ce9a421cb9b5a78005e6814c4279f38effdd9650",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/reference/workflow-map.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7067947d89c3137fce59abd51cda76bb5faf00be32cb060df28f1fa65fa61a85",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/start/build-your-first-change.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:715591293599eb01c3f9578f72d07e838fd49cecc8dc44f275562247aba8b6a6",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/start/install-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:47ed8a7d0070ae25188751e545cee9ec5be35e16e616aad5b04102623802f963",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/ko-kr/tutorials/getting-deeper.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7ac1a2d6a944c5aa03eac61ab6576c7d6c157d3b6fc659dad66c507fcc99607a",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/plan/break-work-into-stories-and-track-it.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e61c5f71057e86e26daa06ce54ed83e4dbc4f448545bae0a9d968d80a63e4616",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/plan/choose-a-planning-path.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d4d24a35b6764749ddcf63fceb95f6c3f0580f6c25ea716e29a3f9ce99f6480c",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/plan/define-requirements-and-a-specification.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:1a3ba1416cccfc84efa00626c30cf37f3e56f7da4053796ddb4e95af12d16a89",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/plan/design-ux-and-architecture.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:8fa6dc62e4b606fb235586c9fde45f8cca03e5b3ffb7878982ace553978db2c8",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/plan/explore-and-validate-an-idea.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:5d6ffa2fdbe6b213a59698fa5f0cb71404b3760bbb8e5b918842ef9b78e8aa12",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/plan/plan-inside-an-organization.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:77258f4f4bf90137115975c329612db866107e036a71184773557634d48a0763",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/plan/research-a-decision.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c3b28dedfd947e86262a3e2f58675c876fabcb68b1aeed23c4aebfc4fbdc305f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/reference/skills-and-agents.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:65faf0588c3f3abed399ea236c813eacab475e873314ea2313d7bca6d2662429",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/start/build-your-first-change.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:111f4c24bfe78ac5c30fee0347801f6ff9ef6740ba97ab80caeb5553e778167f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/start/get-answers-about-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:76dcb88f8b8c502c2e19dd64676964639ea5a8d5fe02c6da4c09537a830d771f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/start/install-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:137fa5ba23bf7bfb70f168e4ebd052de02344739c61e21824dbb3a1e1b820a53",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/404.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:cad985130f02827baa24469b601a9d920ff6b846dac7ba2dea0933cb4a74ca3a",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/_STYLE_GUIDE.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:2a7035e21a47f82700ecfb3141fe7d859d333dd8795aaa50f17193933bce7020",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/bmad-developer-guide.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c42b22222726aa6b27f22171f0fc0113c3315ed0b04be0622dac9fc79a6ab0e0",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/build/walk-through-a-change.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:78e5bfa707c811c34995f9dafb4924ba6d8754f4ad08da62511db482af968739",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/explanation/advanced-elicitation.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:15e5474616f0a4d1efc2a2900c6048a25bcd398974253e67f08016d131321cfa",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/explanation/analysis-phase.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:1829a50c3f720bbf2700540008c2098f6bc3f4d9c2190fe9f5385e7ae1038aaf",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/explanation/brainstorming.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:fe87290ade40682e4c6609e2365e4a58fc54882c7b5c23722722e4faec4263de",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/explanation/build.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:dd80e5ad3f7ebd599ca885f8f7646718d83b304c06e0cc89aaa4ecb969cf56da",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/explanation/established-projects-faq.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d2ebd875091fd477f3c54590b96510cb640ec16f6cc57b6c8dcbee009db9e0ec",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/explanation/named-agents.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a06d88aa173b1b17e7dc666c4b4151a09baad834af5b6d9f41cc31b13ecc967b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/explanation/party-mode.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4d7e9359940626177087843c7552dd62f544f73c76d2c9784ec751dbb392eb71",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/explanation/preventing-agent-conflicts.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:51e982e30d91ada76afb8e8c76aa53b632c7d78ec5f42a8d87fd66dc9945a0f3",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/explanation/project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:85d483f10ce8ff0a2156c0ab5e72bca4d50bd7138eba142f581c5038c0307c5b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/explanation/why-solutioning-matters.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4760b170594e072ae64ebcc29880c90c3893720ba8be96caa2eaef7b6bb73c93",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/how-to/customize-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:49ac47e2d813b119dec87f5674a4c183f495847cd679fb20d5a2d33a34f7f02f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/how-to/established-projects.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:fb486479ed9351f7c16ca3b08eadd430e0b59c4a14c7df3cb01f1392bcab0cc0",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/how-to/expand-bmad-for-your-org.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:81c16ac820b17709f3e4c6e1d15d8f1f0d709d52d62bc2aa1b9865dcf8ea4648",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/how-to/get-answers-about-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:dae75a14d33bf6cef4901e35340193f6b21502077fbc1e50c257a7f33c92506c",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/how-to/install-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9ed82dd1a835bc682405cc448ad21b085876b16a3d81de643903e34f3769aaaf",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/how-to/install-custom-modules.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:94a7d794a769ebe9787165ea9760895ee49b67ace6f14d3ebade07df1c3044f5",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/how-to/project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4850e78b35dd82a0bb386d13d74f5e7595f776f423e177a6cb3ee8bc32bd3b52",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/how-to/quick-fixes.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6b4ccfa69a69bd06d0d312bbcdc588b242f4802d35377f33bb8fb9bbc38c9556",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/how-to/upgrade-to-v6.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9f85ee3622869a1288afa2fa86a33e08779ab5bde63464b4e26aeb374e3128a9",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/index.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4679c0f2f2f0a6472168d44ac2418b957ce860bfc57419fbd009cf50ecd30152",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/reference/agents.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c423f2533552651ddba37f2e82deadafcb99b0f1ed38b262e6ce1b091b135f30",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/reference/commands.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:15f37770324cfce00613bb3ca68dd4cd676fbd5e99c87378c1062231a1f21c93",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/reference/core-tools.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:f1d1b13a187ce84895fa4eb85f9ab52d79155cb799b1dde383d38cc4ba9e3087",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/reference/modules.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:12245ddedf55124704ddf0b01dc1c43fafbaa1b483eb87f8e0907dbf349a1262",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/reference/testing.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3f30062b6f2225594a26875a8ec2ab1f50bec3631ea13ffc59ae8b4b21dceafc",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/reference/workflow-map.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:5ba0fc3683727b7df71fae44099ec05604a9565df3bc6b57cf07ccb210e6021d",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/vi-vn/tutorials/getting-started.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:2cbcbfa6212f2d0821616c355b75289d1f56483c100074b8a8a7f0d6aeb50df9",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/404.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e98fad44b7de311cb98d622676b17a80caadb699dfcf8239752af22c855f684b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/_STYLE_GUIDE.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:15e92d984eebc1e31b0186b641fff3a74ddac4763ee18500db1d130d97234467",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/build/walk-through-a-change.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a4087abd2fcaeb4611a5a3634f3f0ff03f0dd5e0bcf519ae8eb36ebe8e82d485",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/advanced-elicitation.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:17e91e9046944619c8a1b304b541fe603aa78b7d99b25d380ae18742cf2b4fe9",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/analysis-phase.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:8a8d8f87d85786e120b35a5c643ad825dcdd91a8cd53abf106074df340efa93f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/brainstorming.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:dcad0529739da66957bea08bf969142cc3808f7cf8d16e41472a25008d0d4a48",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/build.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:8ccbbcc51880b646c6234a62d067e095da6cc144d841402ea37b2a780fe9ef5e",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/established-projects-faq.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d160f0e85a7a423d94a5e1a52aa9bf69b9928f394254be4650b9e11f281eb2b1",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/forge-idea.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a241d481c710979554824ed15bd857517eb2139455fa90257bcf72b3684b6fda",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/named-agents.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:19dcaacbb522b599e3aee454186031d7f2d561cdd052edce7da056d7b9a6eb00",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/party-mode.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:bce2b764fac669ea07b10536beaab4161c5f9f0f19bce00803fae754d7281d3e",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/preventing-agent-conflicts.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c48ba30a123483d6122634424d25d108a7d52a615e6a751c922d527cce31cedc",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:f6b8865fd62e876deb1905440ea58bbc7b00649a97dbee9a0fe96fd27ea9e133",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/web-bundles.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6818c9c16b124020a81a47f1bb3397d61d2357918143d05f3e45883124e2865b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/explanation/why-solutioning-matters.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:939d47fc19b535409ce511073876d4dae7615964568c8fcdf67a40ea0ecfb30b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/customize-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d497874d8c89f9493926bf75751a6299edbe5b6ca05ec099309ec3aa34e895eb",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/established-projects.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7c370726dec06e5feed16ef1c4e388c9e021acae9fb6dc3df0384eaf56a7953b",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/expand-bmad-for-your-org.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d770e630738db557f86954f28ea2dee9fc83efa4d40d6d3b672370132bff2993",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/get-answers-about-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:bc5efaa27d12711d9ed87a094802862a4d7c831bb2319223f83b5e3bb9029ea7",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/install-bmad.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:865d7a540c70ed4a8de2614c0b432fbec35288c39755d44f2c1862137d192657",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/install-custom-modules.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:73cbbdc6be3ffff4bcdb82136552cfd51ee71e424ca46612a83d142c93e45ab4",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/pressure-test-an-idea.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e0eac3d1000ccc25d6bce7ee9c3b9b75142156137485d3387d35090481817c4d",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/project-context.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:94bbe312dd44dfb54d8e3131444cb6f1e8792581c074c812eb3271cbd894f0fc",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/quick-fixes.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:ba4fc1a3dfd4f3f0eb3c2e3b4c62d9778332f63b8387768f55f23737472f5a4a",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/upgrade-to-v6.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:aff8db3b5d92221dae6aecd39bb068ca3bae08468087e5adb717440578b33f7c",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/how-to/use-web-bundles.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:2e82d62f22a2e38b1551be559659c954c2057434e2dacadfb3ce61eb0c03c92d",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/index.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7160a3c2609304d6147d78b29b1613ae5c66fbce5679a5b1ba3a3db0621ef2d7",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/reference/agents.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7a2d2b42c2035dd28e6329ede7be3ea358ac44966d0db49abd3c793543a77c4c",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/reference/build-auto.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6160685d90516b27e4c02fe159efc02a914b431ceb1cc37e0b11a685f40214c2",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/reference/commands.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:964c52b176119a5d42ed18e616f43b05267d4cdde7c7200f108ccb6d16e7a56f",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/reference/core-tools.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0e096fa0beb7dcaef770db961d4dfb129d8fa6135fd6ecb6667327664b09d74d",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/reference/modules.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:30b1443a99c079ddd06f5649689ad3a53a16dfb9d1be2129878853a7ed4d811c",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/reference/testing.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b5a6d58ede032b87593c37a5dcb20f2732058b5cdee123d2ca040d310644a2be",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/reference/workflow-map.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c48404c5f1d3b10d846486c3e99c41f687872b8d5f6541716f344ec6f7bea5f5",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bmad-code-org/BMAD-METHOD/v6.12.0/docs/zh-cn/tutorials/getting-started.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:21ac296641be103bbd0ddf16785c24eaa8b9a05b4ce7791433a492fb23c9e8e5",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    },
+    {
+      "url": "https://github.com/bmad-code-org/BMAD-METHOD/blob/main/README.md",
+      "detected_via": "readme_always",
+      "content_hash": "sha256:1c02b778907bd9727c0bab2ea614d5a701cd8af172731610f12365d9a99c97c1",
+      "recorded_at": "2026-09-28T14:54:53+04:00"
+    }
+  ]
+}

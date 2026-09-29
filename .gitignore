@@ -102,3 +102,7 @@ _skf-learn
 
 # CocoIndex Code (ccc)
 /.cocoindex_code/
+
+# Per-run records written beside generated skills; the skills themselves are tracked
+skf-skills/_batch/
+skf-skills/**/*-result-*.json

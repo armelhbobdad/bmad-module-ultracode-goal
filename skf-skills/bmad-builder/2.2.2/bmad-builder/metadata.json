@@ -1,0 +1,50 @@
+{
+  "name": "bmad-builder",
+  "version": "2.2.2",
+  "description": "Describes the BMad Builder v2.2.2 module (code bmb): the skills it registers under skills/ \u2014 bmad-agent-builder, bmad-workflow-builder, bmad-module-builder, bmad-eval-runner and bmad-bmb-setup \u2014 with their menu codes, actions, arguments and outputs from module-help.csv, and the two config keys from module.yaml. Use when choosing which BMad Builder skill builds, analyzes, converts, scaffolds or validates an agent, workflow or module, or when locating where its outputs and reports are written. Not for the BMAD Method BMM workflows or the installer.",
+  "skill_type": "single",
+  "source_authority": "community",
+  "source_repo": "https://github.com/bmad-code-org/bmad-builder",
+  "source_root": "",
+  "source_commit": "4a1422274a2acb0fb0ec0511753da6263948f072",
+  "source_package": "bmad-builder",
+  "language": "javascript",
+  "generated_by": "quick-skill",
+  "generation_date": "2026-09-28T12:09:31Z",
+  "confidence_tier": "Quick",
+  "spec_version": "1.3",
+  "exports": [
+    "bmad-agent-builder",
+    "bmad-workflow-builder",
+    "bmad-module-builder",
+    "bmad-eval-runner",
+    "bmad-bmb-setup"
+  ],
+  "confidence_distribution": {
+    "t1": 0,
+    "t1_low": 5,
+    "t2": 0,
+    "t3": 0
+  },
+  "tool_versions": {
+    "ast_grep": null,
+    "qmd": null,
+    "skf": "2.2.0"
+  },
+  "stats": {
+    "exports_documented": 5,
+    "exports_public_api": 5,
+    "exports_internal": 0,
+    "exports_total": 5,
+    "public_api_coverage": 1.0,
+    "total_coverage": 1.0,
+    "scripts_count": 0,
+    "assets_count": 0
+  },
+  "dependencies": [],
+  "compatibility": "2.2.2",
+  "provenance": {
+    "language_hint": null,
+    "scope_hint": "skills/"
+  }
+}

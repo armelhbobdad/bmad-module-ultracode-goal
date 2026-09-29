@@ -1,0 +1,146 @@
+{
+  "name": "cc-primitives",
+  "version": "2.1.283",
+  "skill_type": "single",
+  "scope_type": "docs-only",
+  "source_authority": "community",
+  "source_repo": "https://code.claude.com/docs",
+  "source_root": null,
+  "source_commit": null,
+  "source_ref": null,
+  "confidence_tier": "Deep",
+  "spec_version": "1.3",
+  "generation_date": "2026-09-28T20:40:32+04:00",
+  "last_update": "2026-09-28T20:40:32+04:00",
+  "description": "Claude Code v2.1.283 primitives that UltraCode Goal composes, from the official docs: /goal, Auto Mode and permission modes, Auto Memory, PreToolUse and Stop hooks in settings.local.json, skills, subagents, dynamic workflows, headless claude -p and the CLI flags. Use when wiring a BMAD module into Claude Code through hooks, settings, skills, subagents or headless runs, or when checking how one of these primitives behaves. Not for BMAD skill workflows (see bmad-method-bmm).",
+  "language": "documentation",
+  "exports": [
+    "/goal",
+    "permission modes",
+    "autoMode",
+    "hooks",
+    "PreToolUse",
+    "Stop",
+    "SubagentStop",
+    "CLAUDE.md",
+    "auto memory",
+    "settings",
+    "skills",
+    "plugins",
+    "subagents",
+    "dynamic workflows",
+    "claude -p",
+    "CLI flags"
+  ],
+  "tool_versions": {
+    "ast_grep": "0.45.3",
+    "qmd": "2.8.3",
+    "skf": "2.2.0"
+  },
+  "confidence_distribution": {
+    "t1": 0,
+    "t1_low": 0,
+    "t2": 0,
+    "t3": 624
+  },
+  "stats": {
+    "exports_documented": 624,
+    "exports_public_api": 624,
+    "exports_internal": 0,
+    "exports_total": 624,
+    "public_api_coverage": 1.0,
+    "total_coverage": 1.0,
+    "scripts_count": 0,
+    "assets_count": 0
+  },
+  "doc_sources": [
+    {
+      "url": "https://code.claude.com/docs/en/goal",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:c5590bad10b33d7a8262a25c9a53b04d147dcba433401e45c9c8f427d82a7bf5",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/auto-mode-config",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:0625ab29bbe2a10a4d64fbf5400b00aa16586c182f8a3577015b3c7cdc9853a8",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/permission-modes",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:f1ccb4ae23f1be5e54837d69a8920518c86d197d473e5ff153f7abc0bab31851",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/memory",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:f00ddcc9ea5d030b4a4f8c9b34e166d3907bf445b772bb506c46696ad19efab9",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/hooks",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:0ef0dc5aab49df90de0ec7e8c68955b13116ee0bf7bc044aebd009175ce5424a",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/hooks-guide",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:2a03f0f7dd33805365008b606c57f10b96c34fbe08a972e72cf2779e51716c5a",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/skills",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:17347c578b70bb92928619a322b27231b20261b5eb99a8e1893f7e2fbc08c26f",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/sub-agents",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:46788fa10464b3bc29e47fc933bd23c112d3c173cc699fff260d3ff05db12223",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/workflows",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:7d59eedcec543446201cddad57a7d8b6d46cf6ce0119446f9ff83b22cc6d2e6a",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/settings",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:b8d4e5844e56f0626f71d69336dec3b1d9483967f4c085b03238e7a9325b4e21",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/headless",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:2399592c512e00b5a3a1373a2c50fb4de5b9985ef88defd5c19c2e8987dd70fd",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/cli-reference",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:ac627ea2e0ba6af452c87d9c81f85461bf84d9a09d4f1f77a2331aa9af52a41e",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/plugins-reference",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:ea64401c34d80c615e1e8e872346213783b049eac3cbb21f6a98e48d771e5dd9",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/slash-commands",
+      "detected_via": "brief_doc_urls",
+      "content_hash": "sha256:17347c578b70bb92928619a322b27231b20261b5eb99a8e1893f7e2fbc08c26f",
+      "recorded_at": "2026-09-28T11:14:20.848945+00:00"
+    }
+  ],
+  "generated_by": "create-skill",
+  "dependencies": [],
+  "compatibility": "2.1.283",
+  "notes": "Docs-only; pin v2.1.283 = anthropics/claude-code tag at commit 7779afb12e3635f46f56ec823979d68350ae000b, recorded for reference (the docs site is unversioned; fetched 2026-09-28)."
+}
