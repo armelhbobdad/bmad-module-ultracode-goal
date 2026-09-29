@@ -106,3 +106,8 @@ _skf-learn
 # Per-run records written beside generated skills; the skills themselves are tracked
 skf-skills/_batch/
 skf-skills/**/*-result-*.json
+
+# Written by `npx skills add`, the documented install route for agents other than
+# Claude Code; local to each checkout
+/skills-lock.json
+/.agents/

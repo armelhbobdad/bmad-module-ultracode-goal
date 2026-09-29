@@ -173,6 +173,16 @@ jobs:
       - name: Test the docs link guard
         run: npm run test:docs-links-tool
 
+      # These tests pin the linker's ownership rules and the Windows plain-file
+      # `active` form. npm ci above already ran the linker from postprepare, which
+      # never fails the install, so --check is what fails the job if it did not
+      # link every skill on this OS.
+      - name: Test the reference skill linker
+        run: npm run test:skill-links
+
+      - name: Check the reference skill links
+        run: node tools/link-reference-skills.js --check
+
   # Builds the real site and resolves every emitted href against the file tree.
   # Separate from `validate` on purpose: it needs a full Astro build, which the
   # Windows half of that matrix would only duplicate at twice the cost, and the
