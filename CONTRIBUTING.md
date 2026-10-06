@@ -44,6 +44,8 @@ When a failure needs localizing, re-run just that file serially and verbosely: `
 
 Claude Code loads project skills only from `.claude/skills/`, which is gitignored, so `npm install` links each skill there through the `active` version of its group. The link step is `tools/link-reference-skills.js`, run from npm's `postprepare` script, and the links follow a newly activated version on their own. Re-run it with `npm run skills:link` after the BMAD or UCG installer rewrites `.claude/skills/`, or after a pull that adds a skill; `node tools/link-reference-skills.js --check` reports what is missing or stale without changing anything. It only ever touches its own links: a real folder or another link with the same name is left in place and reported, and it refuses to run when `.claude/` or `.claude/skills/` is itself a link. On Windows without symlink support, git checks `active` out as a plain file holding the version. The linker then links that version's folder directly, with a junction when symlinks are not allowed, so re-run it after `active` changes.
 
+Claude Code lists the linked skills in every session, but with many skills installed it can show them without their descriptions. For an always-on index of each skill's version and API, copy the `skf-skills/*/active/*/context-snippet.md` files into your `CLAUDE.local.md`, which Claude Code loads after `CLAUDE.md`. Both files are gitignored, and `CLAUDE.md` is kept for the index an export of these skills writes.
+
 For another agent (Codex, Cursor, GitHub Copilot, OpenCode, Gemini CLI and others read `.agents/skills/`), install each skill with the [`skills`](https://www.npmjs.com/package/skills) CLI, one version folder per command. The loop reads `active` in either form:
 
 ```bash

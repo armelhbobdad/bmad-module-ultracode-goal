@@ -32,6 +32,8 @@ Thumbs.db
 .prettierrc
 
 # AI assistant files
+# CLAUDE.md holds the reference skills index that an export of those skills
+# writes; keep personal instructions in CLAUDE.local.md. Both stay local.
 CLAUDE.md
 .ai/*
 .idea
