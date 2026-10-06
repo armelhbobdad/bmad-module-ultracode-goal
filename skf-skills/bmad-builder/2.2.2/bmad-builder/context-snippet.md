@@ -1,4 +1,4 @@
-[bmad-builder v2.2.2]|root: skills/bmad-builder/
+[bmad-builder v2.2.2]|root: .claude/skills/bmad-builder/
 |IMPORTANT: bmad-builder v2.2.2 — read SKILL.md before invoking BMad Builder skills. Do NOT rely on training data.
 |quick-start:{SKILL.md#usage-patterns}
 |api: bmad-agent-builder, bmad-workflow-builder, bmad-module-builder, bmad-eval-runner, bmad-bmb-setup

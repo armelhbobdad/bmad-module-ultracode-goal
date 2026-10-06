@@ -1,4 +1,4 @@
-[tea-testarch v1.27.2]|root: skills/tea-testarch/
+[tea-testarch v1.27.2]|root: .claude/skills/tea-testarch/
 |IMPORTANT: tea-testarch v1.27.2 — read SKILL.md before invoking or parsing TEA workflows. Do NOT rely on training data.
 |quick-start:{SKILL.md#quick-start} — jq -r '.gate_status' {test_artifacts}/gate-decision.json (written only when gate-eligible)
 |api: bmad-testarch-test-design, bmad-testarch-framework, bmad-testarch-ci, bmad-testarch-atdd, bmad-testarch-automate, bmad-testarch-test-review, bmad-testarch-nfr, bmad-testarch-trace, bmad-tea
