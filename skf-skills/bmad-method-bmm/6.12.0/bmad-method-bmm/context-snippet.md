@@ -1,4 +1,4 @@
-[bmad-method-bmm v6.12.0]|root: skills/bmad-method-bmm/
+[bmad-method-bmm v6.12.0]|root: .claude/skills/bmad-method-bmm/
 |IMPORTANT: bmad-method-bmm v6.12.0 — read SKILL.md before writing bmad-method-bmm code. Do NOT rely on training data.
 |quick-start:{SKILL.md#quick-start} — Phase 4 chain sprint-planning → build → code-review, retrospective -H epic
 |api: bmad-sprint-planning, bmad-build, bmad-build-auto, bmad-code-review, bmad-retrospective, bmad-correct-course, bmad-create-epics-and-stories, bmad-prd, bmad-architecture, bmad-spec

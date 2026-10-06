@@ -1,4 +1,4 @@
-[cc-primitives v2.1.283]|root: skills/cc-primitives/
+[cc-primitives v2.1.283]|root: .claude/skills/cc-primitives/
 |IMPORTANT: cc-primitives v2.1.283 — read SKILL.md before writing cc-primitives code. Do NOT rely on training data.
 |quick-start:{SKILL.md#quick-start} — claude -p "/goal CONDITION" runs the goal loop to completion; /goal is a prompt-based Stop hook
 |api: /goal, --permission-mode, autoMode, hooks.PreToolUse, hooks.Stop, SKILL.md frontmatter, .claude/agents, dynamic workflows, claude -p, --output-format

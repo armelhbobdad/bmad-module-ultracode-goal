@@ -1,4 +1,4 @@
-[bmad-method-installer v6.12.0]|root: skills/bmad-method-installer/
+[bmad-method-installer v6.12.0]|root: .claude/skills/bmad-method-installer/
 |IMPORTANT: bmad-method-installer v6.12.0 — read SKILL.md before writing bmad-method-installer code. Do NOT rely on training data.
 |quick-start:{SKILL.md#quick-start} — npx bmad-method install --yes --directory DIR --modules bmm --tools claude-code
 |api: Installer.install(), Installer.quickUpdate(), OfficialModules.findModuleSource(), ManifestGenerator.generateManifests(), mergeModuleHelpCatalogs(), applySetOverrides(), discoverShims(), resolveInstalledModuleYaml(), loadRemovalLists(), getExternalModuleCachePath()
