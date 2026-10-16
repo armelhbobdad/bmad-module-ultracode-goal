@@ -10,7 +10,8 @@ assertion here is a static read of shipped markdown (plus one adapter source):
   - `references/preflight.md`, "Launch briefing (interactive only)" - the screen
     an operator reads before crossing the autonomy line. It now says what the
     terminal health check does, honestly in both run modes, and it does that
-    WITHOUT disturbing the five bullets already there.
+    WITHOUT disturbing the five bullets already there, except the one a later
+    edit replaced on purpose (`_REPLACED_BULLETS`), whose replacement is pinned.
   - `references/finalize.md`, gate trail - the detection-gated viewer affordance.
 
 Two of the twins are FIXTURE-backed and were captured verbatim from the shipped
@@ -66,6 +67,22 @@ _TICKER_SNAPSHOT = _FIXTURES / "execute_ticker_line.md"
 _RECORD_SENTENCE = (
     "Record the full verdict JSON and its `reasons` in `.decision-log.md` for this story."
 )
+
+# A pre-edit bullet a later edit replaced on purpose, mapped to the text that
+# replaced it, so the preservation check below pins the replacement instead of
+# dropping the bullet from view. The Stop hook's turn count caps neither time nor
+# cost (it cannot see re-loops inside one response), so "up to story count x ceiling
+# turns" was never a worst case.
+_REPLACED_BULLETS = {
+    "- **Worst-case envelope:** up to `story count × {workflow.max_turns_per_story}` "
+    "turns — a smart default from context already in hand, so a first-timer can "
+    "calibrate launch-now vs. launch-after-lunch.": (
+        "- **Turn ceiling:** `{workflow.max_turns_per_story}` turns per story, as the "
+        "Stop hook counts them (one per response). A resumed story already at or "
+        "over the ceiling (unless only its gate is owed), or a re-loop that would "
+        "pass it, escalates instead. It sizes stories; it does not cap time or cost."
+    ),
+}
 
 # Ids that must never reach a shipped doc (this repo's plan-id hygiene rule).
 _PLAN_ID = re.compile(r"\b(?:FR|AD|AC|NFR|INV)-\d+\b")
@@ -357,11 +374,12 @@ def test_briefing_gains_health_check_line_kill_switch_intact():
     # (a) the health check is named, with both dispositions stated honestly.
     assert _states_health_check_dispositions(live)
 
-    # (b) nothing was displaced: every pre-edit bullet survives byte-for-byte.
+    # (b) nothing was displaced: every pre-edit bullet survives byte-for-byte,
+    # or as the exact text that replaced it on purpose.
     assert len(_bullets(pre_edit)) == 5, _bullets(pre_edit)
-    assert set(_bullets(pre_edit)) <= set(_bullets(live)), (
-        set(_bullets(pre_edit)) - set(_bullets(live))
-    )
+    assert set(_REPLACED_BULLETS) <= set(_bullets(pre_edit))
+    expected = {_REPLACED_BULLETS.get(b, b) for b in _bullets(pre_edit)}
+    assert expected <= set(_bullets(live)), expected - set(_bullets(live))
 
     # (c) the kill-switch bullet is string-equal to its pre-edit text.
     assert _kill_switch_bullet(live) == _kill_switch_bullet(pre_edit)

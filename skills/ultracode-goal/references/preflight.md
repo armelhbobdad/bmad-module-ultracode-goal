@@ -168,7 +168,7 @@ Do these in order; each must be asserted, not assumed:
 This is the moment the human leaves the loop. Before the first unattended action — **interactive runs only; headless skips this subsection entirely** — surface a one-screen briefing so the operator decides "should I let go right now?" with eyes open:
 
 - **What is about to run unattended:** the Epic (id + title), in-scope story count, profile (production / `--light`), and the Epic branch (`{workflow.epic_branch_prefix}<epic-id>`).
-- **Worst-case envelope:** up to `story count × {workflow.max_turns_per_story}` turns — a smart default from context already in hand, so a first-timer can calibrate launch-now vs. launch-after-lunch.
+- **Turn ceiling:** `{workflow.max_turns_per_story}` turns per story, as the Stop hook counts them (one per response). A resumed story already at or over the ceiling (unless only its gate is owed), or a re-loop that would pass it, escalates instead. It sizes stories; it does not cap time or cost.
 - **The autonomy line:** state plainly — *"from here I will not ask you anything."*
 - **Kill switch:** Ctrl-C, or delete the Epic branch — and note that `/rewind` will not help (its checkpoints miss the Bash-driven changes that make up the run, the same reason the branch is the real undo).
 - **Where to watch:** the run's `.decision-log.md` (prose account) and `{workflow.implementation_artifacts}/run-status.json` (the machine-readable heartbeat Execute updates as the spine advances).
