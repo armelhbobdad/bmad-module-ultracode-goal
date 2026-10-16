@@ -21,8 +21,12 @@ What counts as a mechanical blocker (each adds 1 to `budget`):
   - a BMAD skill the run delegates story creation or implementation to
     (`bmad-create-story`, `bmad-dev-story`) is not installed where Claude Code
     loads skills,
+  - HEAD has no commit yet (a fresh `git init`, or an orphan branch): the
+    operator commits a baseline on the base branch first, because the run never
+    makes the commit its Epic branch would start from,
   - the working tree is dirty (a per-green-story commit needs a clean base),
-  - the current branch is a protected branch (the epic must run on its own branch).
+  - the current branch is a protected branch (the epic must run on its own
+    branch; an unborn HEAD's branch is read from its symbolic ref).
 
 `green` is true iff `budget == 0`. A green preflight means there is nothing
 MECHANICAL left to clear; the LLM still owns the true-RED hard gate
@@ -32,8 +36,8 @@ cannot and does not evaluate.
 Severity is advisory metadata for the LLM, not a gate. `remediable` flags
 blockers the remediation pass can plausibly auto-clear (e.g. scaffold the
 framework, branch off, commit/stash) vs. ones that need a human (the Claude
-Code version, a broken git repo, a missing BMAD story skill; true-RED items
-never reach this script).
+Code version, a broken git repo, an unborn HEAD, a missing BMAD story skill;
+true-RED items never reach this script).
 
 Version gates (from the grounded constraints in .decision-log.md):
   /goal >= 2.1.139, dynamic workflows >= 2.1.154, auto memory >= 2.1.59.
@@ -137,8 +141,9 @@ STORY_STATUSES = ("done", "in-progress", "ready-for-dev", "review", "backlog")
 # installer's shim prompt), and an update removes them when told not to keep
 # them, which its prompt recommends. The rest of the BMAD toolbox the run uses
 # installs unconditionally, so only these two are probed.
-# (bmad-generate-project-context is a shim too, but its preflight step is
-# advisory and never blocks.)
+# (bmad-generate-project-context is a shim too: from 6.12 it forwards to
+# bmad-project-context, which writes a block into AGENTS.md rather than a
+# project-context.md. The project-context count is advisory and never blocks.)
 BMAD_STORY_SKILLS = ("bmad-create-story", "bmad-dev-story")
 
 
@@ -184,6 +189,31 @@ def _git(args: list[str], project_root: Path) -> tuple[int, str]:
 
 def _git_branch(project_root: Path) -> str | None:
     code, out = _git(["rev-parse", "--abbrev-ref", "HEAD"], project_root)
+    if code != 0 or not out:
+        return None
+    return out
+
+
+def _git_unborn(project_root: Path) -> bool:
+    """True when HEAD names a branch with no commit yet (a fresh `git init`).
+
+    `rev-parse --verify -q HEAD` exits 1 on an unborn HEAD and 128 outside a
+    repository, so only the 1 reads as unborn: a missing or broken repository
+    is the `git_repo` blocker's to report, not this one's.
+    """
+    code, _ = _git(["rev-parse", "--verify", "-q", "HEAD"], project_root)
+    return code == 1
+
+
+def _git_unborn_branch(project_root: Path) -> str | None:
+    """The branch an unborn HEAD names, read from the symbolic ref.
+
+    `_git_branch` needs HEAD to resolve to a commit, so on an unborn HEAD it
+    returns None, and that None used to hide the protected-branch blocker on a
+    repository with nothing committed. `_git_branch` itself keeps returning None
+    there so `--assert-armed` still fails closed on an unborn Epic branch.
+    """
+    code, out = _git(["symbolic-ref", "--short", "-q", "HEAD"], project_root)
     if code != 0 or not out:
         return None
     return out
@@ -608,7 +638,10 @@ def build_report(
     workflows_ok = _meets(cc_ver, MIN_WORKFLOWS)
     automemory_ok = _meets(cc_ver, MIN_AUTOMEMORY)
 
+    git_unborn = _git_unborn(project_root)
     git_branch = _git_branch(project_root)
+    if git_branch is None and git_unborn:
+        git_branch = _git_unborn_branch(project_root)
     git_clean = _git_clean(project_root)
 
     tea_flags = _read_toml_or_yaml_flags(tea_config)
@@ -629,6 +662,7 @@ def build_report(
         "automemory_ok": automemory_ok,
         "git_branch": git_branch,
         "git_clean": git_clean,
+        "git_unborn": git_unborn,
         "framework_present": framework_present,
         "framework_kind": framework_kind,
         "test_artifacts_dirs": test_artifacts_dirs,
@@ -694,6 +728,36 @@ def build_report(
                 "ATDD halts without one.",
                 # Remediation pass scaffolds via bmad-testarch-framework.
                 "remediable": True,
+            }
+        )
+
+    if git_unborn:
+        baseline = "a baseline of the project (its BMAD install, planning artifacts and skeleton)"
+        if git_branch in protected_branches:
+            where = "Commit %s on '%s' yourself, then re-run." % (baseline, git_branch)
+        else:
+            # A baseline committed on an unborn Epic branch would be that
+            # branch's root, with no protected base under it: deleting the
+            # branch, the run's only undo, would delete the pre-run tree too.
+            base = protected_branches[0] if protected_branches else "main"
+            where = (
+                "Point HEAD at your base branch first (`git symbolic-ref HEAD "
+                "refs/heads/%s`), commit %s there yourself, then re-run; never "
+                "commit the baseline on an Epic branch." % (base, baseline)
+            )
+        blockers.append(
+            {
+                "id": "git_unborn",
+                "kind": "git",
+                "severity": "high",
+                "detail": "HEAD on '%s' has no commit yet (a fresh `git init`, or an "
+                "orphan branch). %s The run never makes the commit its Epic branch "
+                "would start from: that commit would sit outside its only rollback, "
+                "the Epic branch." % (git_branch or "HEAD", where),
+                # What the baseline holds is the operator's call. A remediation
+                # commit here would become the root commit, on the protected
+                # branch or on an Epic branch with nothing under it.
+                "remediable": False,
             }
         )
 

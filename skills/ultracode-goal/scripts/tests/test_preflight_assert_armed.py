@@ -251,6 +251,23 @@ def test_missing_guard_or_budget_each_fail(tmp_path: Path) -> None:
     assert code == 1 and any("budget_stop" in r for r in out["reasons"])
 
 
+def test_an_unborn_epic_branch_is_not_armed(tmp_path: Path) -> None:
+    """The epic branch name alone is not enough: with nothing committed under it,
+    the branch has no base and its deletion would take the pre-run tree with it.
+    The branch read stays the commit-resolving one, so this fails closed."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "ultracode/epic-7")
+    for skill_id in ("bmad-create-story", "bmad-dev-story"):
+        skill_dir = root / ".claude" / "skills" / skill_id
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"---\nname: {skill_id}\n---\n", encoding="utf-8")
+    _arm(root)
+    code, out = _run(root)
+    assert code == 1
+    assert out["checks"]["branch"]["ok"] is False
+
+
 def test_wrong_branch_fails_and_names_the_prefix(tmp_path: Path) -> None:
     root = _repo(tmp_path, branch="feature/unrelated")
     _arm(root)

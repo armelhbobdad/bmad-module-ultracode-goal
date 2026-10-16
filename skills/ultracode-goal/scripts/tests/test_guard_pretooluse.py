@@ -144,6 +144,46 @@ def test_protected_branch_denies_push(tmp_path: Path) -> None:
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def _init_unborn_repo(repo: Path, branch: str) -> None:
+    """A fresh `git init` on `branch` with nothing committed: an unborn HEAD."""
+    _git(repo, "init", "-q")
+    _git(repo, "symbolic-ref", "HEAD", f"refs/heads/{branch}")
+    (repo / "f.txt").write_text("x")
+    _git(repo, "add", "-A")
+
+
+def test_unborn_protected_branch_denies_commit(tmp_path: Path) -> None:
+    # rev-parse cannot resolve an unborn HEAD and prints the literal `HEAD`,
+    # which matched no protected name and let this commit through: the branch
+    # has to come from the symbolic ref instead.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_unborn_repo(repo, "main")
+
+    code, out = _run_hook(_commit_event(repo), repo)
+
+    assert code == 2
+    assert "Protected-branch" in _reason(out)
+    assert "'main'" in _reason(out)
+
+
+def test_unborn_epic_branch_reaches_the_tests_ran_clause(tmp_path: Path) -> None:
+    # The same unborn read on a non-protected branch must not invent a
+    # protected-branch denial: the commit is refused by the next clause.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_unborn_repo(repo, "ultracode/epic-42")
+    impl = repo / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_text("STORY-1")
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    assert code == 2
+    assert "Protected-branch" not in _reason(out)
+    assert "Tests-ran guard" in _reason(out)
+
+
 def test_custom_protected_branches_env(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -460,6 +460,29 @@ def test_blocked_envelope_never_carries_an_empty_reason(tmp_path):
     assert he.build_headless_envelope([red], tmp_path / "c.md")["reason"] == he._one_line(red)
 
 
+def test_a_mechanical_blocker_first_still_carries_its_cause(tmp_path):
+    """preflight_check.py's blockers carry {id, detail}, not {source, decision_needed}.
+
+    Reading only the second shape rendered reason "" and a "- :: " log line whenever
+    a mechanical blocker led the list, so a headless run blocked on a missing BMAD
+    story skill or an unborn HEAD said nothing about why.
+    """
+    log = tmp_path / "dl.md"
+    mechanical = {
+        "id": "git_unborn",
+        "kind": "git",
+        "severity": "high",
+        "detail": "HEAD on 'main' has no commit yet.",
+        "remediable": False,
+    }
+    env = he.build_headless_envelope([mechanical], log)
+    assert env["reason"] == "git_unborn - HEAD on 'main' has no commit yet."
+    assert "- git_unborn :: HEAD on 'main' has no commit yet." in log.read_text(encoding="utf-8")
+    # the red shape still wins when a blocker carries both
+    both = {"source": "prd.md:1", "decision_needed": "pick auth", "id": "x", "detail": "y"}
+    assert he._one_line(both) == "prd.md:1 - pick auth"
+
+
 # Case 9: every headless terminal routes through the adapter -----------------
 _WRITE_VERB = re.compile(r"\bwrit(?:e|es|ten|er)\b", re.IGNORECASE)
 

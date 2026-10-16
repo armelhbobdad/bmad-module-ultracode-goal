@@ -143,8 +143,26 @@ def _current_branch(cwd: str | None) -> str | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    branch = out.stdout.strip()
-    return branch or None
+    if out.returncode == 0:
+        branch = out.stdout.strip()
+        return branch or None
+    # An unborn HEAD (a fresh `git init`, nothing committed) fails rev-parse
+    # while still printing the literal `HEAD`, which matched no protected name
+    # and let a commit through on an unborn `main`. The symbolic ref still
+    # names the branch; outside a repository it fails too, and None stands.
+    try:
+        ref = subprocess.run(
+            ["git", "symbolic-ref", "--short", "-q", "HEAD"],
+            cwd=cwd or None,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if ref.returncode != 0:
+        return None
+    return ref.stdout.strip() or None
 
 
 def _staged_index_nonempty(cwd: str | None) -> bool:
