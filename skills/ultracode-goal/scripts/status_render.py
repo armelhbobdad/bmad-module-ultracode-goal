@@ -16,9 +16,11 @@ run doing right now" from five sources and nothing else:
     | runs index        | the runs root's per-run folders                   |
 
 STRICTLY READ-ONLY. It starts no run, attaches to no session, and opens no file
-for output. The one process it starts is the `which` probe for the optional
-diff-viewer affordance below, and that probe's result reaches stdout only - it
-is never recorded anywhere. Everything else is a read. That property is what
+for output. The processes it starts are read-only and serve the optional
+diff-viewer affordance below: the `which` probe, and, only when the viewer is
+present and the repository reads, one `git log` per story listing the commits in
+its range (through `gate_trail._git_log`). Their results reach stdout only and
+are never recorded anywhere. Everything else is a read. That property is what
 makes this safe to run against a LIVE run: a status read that touched the
 artifacts would be a status read that changed the thing it reports on.
 
@@ -78,8 +80,10 @@ SIDECAR_FIELDS = ("kind", "source", "decision_needed", "evidence")
 
 # The optional diff viewer. Absent, nothing about it is rendered and the render
 # is otherwise unchanged; present, each story that recorded a baseline commit
-# gains one copy-paste line. It is an affordance, never a dependency.
+# gains a copy-paste line per commit in its range. It is an affordance, never a
+# dependency.
 VIEWER = "hunk"
+MAX_VIEWER_LINES = 10
 
 
 # --------------------------------------------------------------------------
@@ -329,6 +333,7 @@ def render(
     runs_root: Path | None,
     ledger: Path,
     viewer: bool,
+    repo: Path | None = None,
 ) -> str:
     """The whole render. Assembled once, printed once, written nowhere."""
     status_path = impl / "run-status.json"
@@ -385,14 +390,24 @@ def render(
         if sha:
             lines.append(f"  - baseline `{sha}`")
             if viewer:
-                # The affordance has to point at THIS story's diff, so it shows
-                # the end commit `.commit-<story>` records. The baseline is the
-                # commit that preceded the story's work, so showing it renders
-                # the previous story's diff - silently, since it is a real diff
-                # from the same repo. Only where no end commit was recorded is
-                # the anchor the sole sha there is to hand the reader.
-                end = gate_trail.commit_sha(impl, story) or sha
-                lines.append(f"  - {VIEWER} show {end}")
+                # The affordance has to point at THIS story's diff. The baseline
+                # is the commit that preceded the story's work, so showing it
+                # renders the previous story's diff - silently, since it is a
+                # real diff from the same repo. The end commit `.commit-<story>`
+                # records is the gate's evidence commit once one was made, which
+                # holds the trace files and not the code, so where the repo is
+                # readable every commit in the story's range gets its own line.
+                # Only where no end commit was recorded is the anchor the sole
+                # sha there is to hand the reader.
+                # A range longer than a story ever needs (a baseline that is not
+                # an ancestor of the end commit, say) falls back to one line
+                # rather than printing hundreds.
+                end = gate_trail.commit_sha(impl, story)
+                in_range = gate_trail._git_log(repo, sha, end) if (repo and end) else None
+                if in_range and len(in_range) > MAX_VIEWER_LINES:
+                    in_range = None
+                for commit in reversed(in_range or [end or sha]):
+                    lines.append(f"  - {VIEWER} show {commit}")
     lines.append("")
 
     # Escalations.
@@ -479,6 +494,7 @@ def main(argv: list[str] | None = None) -> int:
             runs_root=runs_root,
             ledger=ledger,
             viewer=viewer_available(),
+            repo=repo,
         ),
         end="",
     )

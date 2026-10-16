@@ -9,7 +9,8 @@
 heartbeat snapshot, the decision-log tail, the deferred-work ledger, the
 escalation files and the runs index, and renders them. It has authority over
 nothing, so its whole contract is about what it does NOT do - it must not write,
-must not spawn, must not crash on a partial run, and must not label a
+must not spawn beyond its read-only viewer probe and `git log`, must not crash on
+a partial run, and must not label a
 model-maintained field as machine-derived.
 
 The tests pin those, in the order they can actually break:
@@ -196,7 +197,9 @@ def read_only_violations(src: str) -> list[str]:
 
     Keys on the CALLS, not on any property of the file as a whole, so the same
     helper can be handed a variant that differs by one added write and must
-    report it. The single permitted spawn is the viewer probe.
+    report it. The single permitted subprocess call site is the viewer probe;
+    the single permitted cross-module spawn is `gate_trail._git_log`, a
+    read-only `git log` the companion test below pins.
     """
     found: list[str] = []
     if re.search(r"""\bopen\s*\([^)]*["'][rbt+]*[wax]""", src):
@@ -211,7 +214,23 @@ def read_only_violations(src: str) -> list[str]:
         window = src[sites[0] : sites[0] + 240]
         if '"which"' not in window or "VIEWER" not in window:
             found.append("the single subprocess call site is not the viewer probe")
+    cross = re.findall(r"\bgate_trail\.(\w+)\s*\(", src)
+    spawning = {"_git_log", "_git", "_run", "commit_cell"}
+    if any(name in spawning and name != "_git_log" for name in cross):
+        found.append("a gate_trail call other than _git_log that runs git")
+    if cross.count("_git_log") > 1:
+        found.append("more than one gate_trail._git_log call site")
     return found
+
+
+def test_the_one_cross_module_spawn_is_a_read_only_git_log():
+    """status_render reaches git only through gate_trail._git_log: pin that it is
+    a plain `git -C <repo> log`, with no write and no other subcommand."""
+    source = (HERE.parent / "gate_trail.py").read_text(encoding="utf-8")
+    start = source.index("def _git_log(")
+    body = source[start : source.index("\ndef ", start + 1)]
+    assert '["git", "-C", str(repo), "log",' in body
+    assert not re.search(r"write_text|write_bytes|\bopen\s*\(", body)
 
 
 # --- provenance labels are exclusive ----------------------------------------
@@ -290,7 +309,8 @@ def test_render_is_read_only_and_spawns_nothing(tmp_path):
     # still move the mtime.
     assert _snapshot(run_dir) == before, "the render mutated its own inputs"
 
-    # Source level: no write call, and exactly one spawn - the viewer probe.
+    # Source level: no write call, one subprocess call site (the viewer probe),
+    # and git reached only through the read-only gate_trail._git_log.
     assert read_only_violations(SCRIPT.read_text(encoding="utf-8")) == []
 
 
@@ -510,6 +530,45 @@ def test_hunk_absent_and_present_differ_only_by_hunk_lines(tmp_path):
     assert len(viewer_lines) == len(committed), "one affordance line per committed story row"
     for line in viewer_lines:
         assert re.fullmatch(rf"\s+- {VIEWER} show [0-9a-f]{{7,40}}", line), line
+
+
+def test_hunk_lists_every_commit_in_the_story_range_when_the_repo_reads(tmp_path):
+    """The gate's evidence commit refreshes `.commit-<story>`, so showing only that
+    end commit would open the trace files and never the code. With a readable
+    repo, every commit in the story's range gets its own line, oldest first."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+                 "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+        ).stdout.strip()
+
+    git("init", "-q")
+    shas = []
+    for name in ("base", "implementation", "evidence"):
+        (repo / f"{name}.txt").write_text(name, encoding="utf-8")
+        git("add", f"{name}.txt")
+        git("commit", "-q", "-m", name)
+        shas.append(git("rev-parse", "HEAD"))
+
+    impl = tmp_path / "impl"
+    shutil.copytree(FIXTURES / "full_run" / "impl", impl)
+    (impl / ".baseline-alpha").write_text(f"baseline={shas[0]}\n", encoding="utf-8")
+    (impl / ".commit-alpha").write_text(f"{shas[2]}\n", encoding="utf-8")
+
+    run = _run(
+        ["--impl-artifacts", str(impl), "--run-dir", str(FIXTURES / "full_run" / "run"),
+         "--runs-root", str(FIXTURES / "runs_root"), "--repo", str(repo)],
+        viewer_dir=_stub_viewer(tmp_path),
+    )
+    assert run.returncode == 0, run.stderr
+    shown = [line.split()[-1] for line in run.stdout.splitlines() if f"{VIEWER} show" in line]
+    assert shown[:2] == [shas[1][:7], shas[2][:7]], shown
+    assert shas[0][:7] not in shown, "the baseline is the previous story's work"
 
 
 def test_hunk_presence_leaves_gate_artifacts_and_envelope_identical(tmp_path):

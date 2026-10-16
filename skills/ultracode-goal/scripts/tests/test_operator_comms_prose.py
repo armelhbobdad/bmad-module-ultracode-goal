@@ -296,10 +296,14 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
     #   4. and 5. the two invocation blocks, which now carry --tests-ran - they
     #      REPLACE the fixture's two, so they surface in `added` as well;
     #   6. the delta cycle profile paragraph: --cycle-profile delta re-runs only
-    #      the previously failed dimension and is capped at reloop.
+    #      the previously failed dimension and is capped at reloop;
+    #   7. the per-story naming paragraph: TEA 1.27.2's trace writes fixed flat
+    #      paths and ignores trace_output, so the run names the per-story paths;
+    #   8. the `--story` paragraph, whose old "isolate into a fresh dir" remedy
+    #      now points at that naming step (the rollup refuses an isolated dir).
     live = _gate_run_section()
     added = [p for p in _paragraphs(live) if p not in _paragraphs(fixture)]
-    assert len(added) == 6, [p[:60] for p in added]
+    assert len(added) == 8, [p[:60] for p in added]
     assert _print_paragraph(live) in added, "the verdict-print paragraph must be one of them"
     provenance = [p for p in added if "gate-provenance" in p]
     assert len(provenance) == 1, [p[:60] for p in added]
@@ -315,11 +319,20 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
     # pre-flag invocation blocks the --tests-ran commands replaced. Any other
     # disappearance (a deleted resolution paragraph, a dropped rule) must red
     # here rather than hide behind the additions.
+    # The one exception is the `--story` paragraph, whose old remedy (isolate the
+    # story into a fresh trace dir) was replaced by the per-story naming step: it
+    # must reappear in its new form among the additions, carrying that pointer.
     removed = [p for p in _paragraphs(fixture) if p not in _paragraphs(live)]
-    assert len(removed) == 2, [p[:60] for p in removed]
-    assert all(p.startswith("```") and "--tests-ran" not in p for p in removed), [
+    assert len(removed) == 3, [p[:60] for p in removed]
+    blocks = [p for p in removed if p.startswith("```")]
+    assert len(blocks) == 2 and all("--tests-ran" not in p for p in blocks), [
         p[:60] for p in removed
     ]
+    story = [p for p in removed if not p.startswith("```")]
+    assert story and story[0].startswith("**`--story` in a shared multi-story trace dir.**")
+    assert "isolate the current story's" in story[0]
+    rewritten = [p for p in added if p.startswith("**`--story` in a shared multi-story trace dir.**")]
+    assert len(rewritten) == 1 and "Never isolate a story into a fresh directory" in rewritten[0]
 
 
 # --- the launch briefing ------------------------------------------------------
