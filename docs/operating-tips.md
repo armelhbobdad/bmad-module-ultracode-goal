@@ -73,7 +73,7 @@ The dangerous part is what it leaves behind. In the observed case the dead sessi
 
 **On any resume, believe the artifacts and the sprint-status row, never the story file's prose.** Check for the gate *file* before treating a story as gated.
 
-The correct recovery is to re-drive the story. The skill re-enters at Execute, re-measures the committed tree, produces the trace evidence (TEA's `bmad-testarch-trace`, or hand-authored to `gate_eval.py`'s shape on a stack where TEA's browser chain cannot run), and runs `gate_eval.py` for real. Because the dead session already committed, make sure the re-drive re-reads the story's existing baseline marker rather than regenerating it: a rebuilt baseline re-anchors the evidence range to a mid-story HEAD, and the trace then measures only the tail of the work.
+The correct recovery is to re-drive the story. The skill re-enters at Execute, re-measures the committed tree, produces the trace evidence (TEA's `bmad-testarch-trace`, which on TEA 1.27.2 runs on any stack, or hand-authored to `gate_eval.py`'s shape where trace cannot run), and runs `gate_eval.py` for real. Because the dead session already committed, make sure the re-drive re-reads the story's existing baseline marker rather than regenerating it: a rebuilt baseline re-anchors the evidence range to a mid-story HEAD, and the trace then measures only the tail of the work.
 
 Do not hand-mark the story `done` on the strength of your own verification, however thorough: that substitutes your judgment for the gate and produces exactly the artifact-free "PASS" the tool exists to prevent.
 

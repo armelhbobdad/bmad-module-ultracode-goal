@@ -786,6 +786,194 @@ def test_light_trace_table_parsed_by_header_not_index(tmp_path):
     assert {row[2] for row in data} == {"COVERED"}
 
 
+# TEA-authored trace reports, in the two shapes a real 1.27.2 run wrote. TEA's
+# template defines no single matrix table, so the parser has to find the
+# criterion-keyed table that names a planned test, and must never mistake TEA's
+# gate-threshold tables (`| Criterion | Threshold | Actual | Status |`) for
+# acceptance criteria.
+_TEA_THRESHOLDS = """
+| Criterion             | Threshold | Actual | Status  |
+| --------------------- | --------- | ------ | ------- |
+| P0 Coverage           | 100%      | 100%   | ✅ PASS |
+| P1 Coverage           | 90%       | 100%   | ✅ PASS |
+"""
+
+_TEA_DESIGN_FIRST = (
+    """
+| AC | FRs | Test design ID | Priority | Risk links (test design) |
+| -- | --- | -------------- | -------- | ------------------------ |
+| AC1 | FR1 | 1.1-UNIT-001 | P0 | R-001 (6) |
+| AC2 | FR2 | 1.1-UNIT-002 | P0 | R-001 (6) |
+
+| Criterion | Description | Priority | Test ID | Test (node) | File:Line | Level | Cases | Result | Coverage |
+| --------- | ----------- | -------- | ------- | ----------- | --------- | ----- | ----- | ------ | -------- |
+| AC1 (FR1) | example | P0 | 1.1-UNIT-001 | `test_prd_example` | tests/test_core.py:8 | unit | 1 | 1/1 passed | FULL |
+| AC2 (FR2) | folding | P0 | 1.1-UNIT-002 | `test_accents_fold` | tests/test_core.py:20 | unit | 3 | 3/3 passed | FULL |
+"""
+    + _TEA_THRESHOLDS
+)
+
+_TEA_MATRIX_FIRST = (
+    """
+| Criterion | Description | Priority | Test ID | Test file:line | Level | Pytest items (passed) | Coverage |
+| --------- | ----------- | -------- | ------- | -------------- | ----- | --------------------- | -------- |
+| AC1 | prints the slug | P1 | 1.2-INT-001 | `tests/test_cli.py:22` | integration | 4/4 | FULL ✅ |
+| AC2 | empty slug | P1 | 1.2-INT-002 | `tests/test_cli.py:35` | integration | 3/3 | FULL ✅ |
+"""
+    + _TEA_THRESHOLDS
+    + """
+| AC | FRs | Test design ID | Priority | Risk links (test design) |
+| -- | --- | -------------- | -------- | ------------------------ |
+| AC1 | FR7 | 1.2-INT-001 | P1 | R-004 (4) |
+"""
+)
+
+
+def test_tea_report_with_a_design_table_first_reads_the_matrix():
+    rows_ = gate_trail.criterion_rows(_TEA_DESIGN_FIRST, prefer_tested=True)
+    assert rows_ == [
+        ("AC1 (FR1)", "`test_prd_example`", "1/1 passed"),
+        ("AC2 (FR2)", "`test_accents_fold`", "3/3 passed"),
+    ]
+
+
+def test_tea_report_with_the_matrix_first_reads_tea_column_names():
+    """`Test file:line` is the planned test, and with no `Result` header the
+    pass count (`Pytest items (passed)`) is the result, never the coverage."""
+    rows_ = gate_trail.criterion_rows(_TEA_MATRIX_FIRST, prefer_tested=True)
+    assert rows_ == [
+        ("AC1", "`tests/test_cli.py:22`", "4/4"),
+        ("AC2", "`tests/test_cli.py:35`", "3/3"),
+    ]
+
+
+def test_no_test_column_anywhere_falls_back_and_never_reads_thresholds():
+    """With no planned-test column anywhere, the trail must not render a gate
+    threshold as a criterion with a PASS beside it."""
+    design_only = _TEA_DESIGN_FIRST.split("| Criterion | Description")[0] + _TEA_THRESHOLDS
+    for prefer_tested in (False, True):
+        rows_ = gate_trail.criterion_rows(design_only, prefer_tested=prefer_tested)
+        assert rows_ == [("AC1", "n/a", "n/a"), ("AC2", "n/a", "n/a")]
+
+
+def test_a_report_with_only_threshold_tables_yields_no_criteria():
+    assert gate_trail.criterion_rows(_TEA_THRESHOLDS, prefer_tested=True) == []
+
+
+def test_tea_columns_are_picked_by_name_not_position():
+    """Swap `Test ID` and `Test (node)`, and `Result` and `Coverage`: the same
+    columns must be picked, the test node over the bare id and the result over
+    the coverage status."""
+    swapped = (
+        "| Criterion | Test (node) | Test ID | Coverage | Result |\n"
+        "| --------- | ----------- | ------- | -------- | ------ |\n"
+        "| AC1 | `test_prd_example` | 1.1-UNIT-001 | FULL | 1/1 passed |\n"
+    )
+    assert gate_trail.criterion_rows(swapped, prefer_tested=True) == [
+        ("AC1", "`test_prd_example`", "1/1 passed")
+    ]
+
+
+# Production acceptance checklists keep "the first criterion-keyed table wins":
+# their first such table is the AC table, and later tables are inventories or
+# case lists. Both shapes below are real checklists the tested-table preference
+# misread when it applied to checklists too.
+_CHECKLIST_WITH_INVENTORY = """
+| AC | Pri | Risk ids | Level | Acceptance test file(s) |
+|----|-----|----------|-------|--------------------------|
+| 1. org context carried | P1 | DATA-03 | schema-source | `org-context.test.ts` |
+
+| # | File | Tests | Level | ACs |
+|---|------|-------|-------|-----|
+| 1 | `org-context.test.ts` | 7 | schema-source | 1 |
+"""
+
+_CHECKLIST_WITH_CASE_TABLES = """
+| AC | Claim | Priority | Planned assertion | Where |
+|---|---|---|---|---|
+| 1 | both schemes registered | **P0** | repo scan + twin | G1.1, G1.2 |
+
+| id | Test | Pri | RED because |
+|---|---|---|---|
+| G1.1 | the repo scan returns zero violations | **P0** | the scanner does not exist |
+"""
+
+
+def test_a_checklist_keeps_its_ac_table_over_an_inventory():
+    assert gate_trail.criterion_rows(_CHECKLIST_WITH_INVENTORY) == [
+        ("1. org context carried", "n/a", "n/a")
+    ]
+
+
+def test_a_checklist_keeps_its_ac_table_over_a_case_table():
+    assert gate_trail.criterion_rows(_CHECKLIST_WITH_CASE_TABLES) == [("1", "n/a", "n/a")]
+
+
+def test_a_trace_never_lets_a_case_list_or_inventory_replace_its_ac_table():
+    """The fail-open: an AC table with no recognised test column, followed by a
+    case list marked PASS, rendered the case ids as criteria and dropped the AC."""
+    case_list = (
+        "| AC | Claim |\n| -- | ----- |\n| AC1 | import | \n| AC2 | fold |\n| AC3 | untested |\n\n"
+        "| ID | Test | Status |\n| -- | ---- | ------ |\n"
+        "| T1 | test_import | PASS |\n| T2 | test_fold | PASS |\n"
+    )
+    rows_ = gate_trail.criterion_rows(case_list, prefer_tested=True)
+    assert [row[0] for row in rows_] == ["AC1", "AC2", "AC3"]
+    assert gate_trail.criterion_rows(_CHECKLIST_WITH_INVENTORY, prefer_tested=True) == [
+        ("1. org context carried", "n/a", "n/a")
+    ]
+
+
+def _tea_atdd_ac_table() -> str:
+    """TEA 1.27.2's ATDD checklist AC table, as its template writes it. The ids
+    are built rather than spelled, so this file carries no planning-style id."""
+    rows = "".join(
+        f"| AC-{n} | supplied/generated | criterion {n} |\n" for n in (1, 2, 3)
+    )
+    return (
+        "| ID   | ID source          | Acceptance criterion     |\n"
+        "| ---- | ------------------ | ------------------------ |\n" + rows
+    )
+
+
+def test_tea_atdd_checklist_ac_table_is_read_in_both_modes():
+    """Its first criterion-like header is `ID`, which alone is ambiguous: the
+    table's keys are all its criterion-like headers, `Acceptance criterion` too."""
+    for prefer_tested in (False, True):
+        rows_ = gate_trail.criterion_rows(_tea_atdd_ac_table(), prefer_tested=prefer_tested)
+        assert [row[0] for row in rows_] == [f"AC-{n}" for n in (1, 2, 3)]
+
+
+def test_tea_atdd_ac_table_is_not_replaced_by_a_following_case_list():
+    case_list = "\n| ID | Test | Status |\n| -- | ---- | ------ |\n| T1 | test_login | PASS |\n"
+    for prefer_tested in (False, True):
+        rows_ = gate_trail.criterion_rows(_tea_atdd_ac_table() + case_list, prefer_tested=prefer_tested)
+        assert [row[0] for row in rows_] == [f"AC-{n}" for n in (1, 2, 3)]
+
+
+def test_a_case_list_never_stands_in_for_a_skipped_criterion_table():
+    """`| Criterion | Description | Priority |` names no test, so it is set aside;
+    a following `| ID | Test | Status |` case list must not take its place."""
+    text = (
+        "| Criterion | Description | Priority |\n| --------- | ----------- | -------- |\n"
+        "| AC1 | import | P0 |\n| AC2 | fold | P1 |\n\n"
+        "| ID | Test | Status |\n| -- | ---- | ------ |\n| T1 | test_import | PASS |\n"
+    )
+    for prefer_tested in (False, True):
+        rows_ = gate_trail.criterion_rows(text, prefer_tested=prefer_tested)
+        assert all(not row[0].startswith("T") for row in rows_), rows_
+
+
+def test_coverage_standing_in_for_a_result_is_labelled():
+    text = (
+        "| Criterion | Test file:line | Coverage |\n| --------- | -------------- | -------- |\n"
+        "| AC1 | `tests/test_cli.py:22` | FULL |\n"
+    )
+    assert gate_trail.criterion_rows(text, prefer_tested=True) == [
+        ("AC1", "`tests/test_cli.py:22`", "coverage: FULL")
+    ]
+
+
 def test_light_profile_ignores_a_checklist_that_happens_to_exist(tmp_path):
     """The acceptance checklist is a production source only.
 

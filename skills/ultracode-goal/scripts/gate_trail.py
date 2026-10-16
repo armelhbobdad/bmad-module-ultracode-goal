@@ -106,9 +106,32 @@ GENERIC_ARTIFACT_STEMS = frozenset("-".join(prefix) for prefix in gate_eval._ART
 # Column headers are matched by NAME, never by position: the house trace table
 # carries an extra split column that a future trace author may drop, and a
 # positional parser would then read the wrong column as the planned test.
-_AC_HEADERS = {"ac", "acs", "ac #", "id", "criterion", "criteria", "acceptance criterion"}
-_TEST_HEADERS = {"verification", "planned test", "planned tests", "test", "tests", "named verification"}
-_RESULT_HEADERS = {"status", "result", "outcome"}
+_AC_HEADERS = {"ac", "acs", "ac #", "id", "criterion", "criteria", "acceptance criterion", "criterion id"}
+# Ordered by preference, because a TEA trace matrix can carry several matching
+# columns (`Test ID` beside `Test (node)`, `Result` beside `Coverage`): the house
+# names first, then TEA's node and file columns, and a bare test id last.
+_TEST_HEADER_PREFERENCE = (
+    "verification",
+    "planned test",
+    "planned tests",
+    "named verification",
+    "test",
+    "tests",
+    "test (node)",
+    "test file:line",
+    "test file",
+    "test id",
+)
+_RESULT_HEADER_PREFERENCE = ("result", "status", "outcome", "coverage", "coverage status")
+# Bare criterion headers that also key tables that are not acceptance criteria:
+# TEA's gate-threshold tables read `| Criterion | Threshold | Actual | Status |`.
+# Keyed only by one of these, a table counts only when it names a planned test.
+_AMBIGUOUS_AC_HEADERS = frozenset({"id", "criterion", "criteria"})
+# Keys that may make a trace report's tested table win over its first one. A
+# bare `ID` keys case lists (`| ID | Test | Status |`) and an `ACs` column is a
+# cross-reference in a file inventory (`| # | File | Tests | Level | ACs |`):
+# either would render test ids or file numbers as criteria.
+_OVERRIDE_AC_HEADERS = frozenset(_AC_HEADERS - {"id", "acs"})
 
 _STORY_HEADING = re.compile(r"^#{2,4}\s+story\s+([0-9][\w.\-]*)", re.IGNORECASE | re.MULTILINE)
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n(\{.*?\})\s*\n```", re.DOTALL)
@@ -188,21 +211,76 @@ def _tables(text: str) -> list[tuple[list[str], list[list[str]]]]:
     return out
 
 
-def criterion_rows(text: str | None) -> list[tuple[str, str, str]]:
+def _column(headers: list[str], preference: tuple[str, ...]) -> int | None:
+    """The index of the most preferred header present, by name, never by position."""
+    for name in preference:
+        if name in headers:
+            return headers.index(name)
+    return None
+
+
+def _result_column(headers: list[str]) -> int | None:
+    """The result column: an exact result name, else a pass count, else coverage.
+
+    A TEA matrix may name its pass count only as `Pytest items (passed)` or
+    `Cases (passed)`; that is a result, while `Coverage` is not, so a header
+    carrying "passed" is preferred before the coverage names.
+    """
+    exact = _column(headers, _RESULT_HEADER_PREFERENCE[:3])
+    if exact is not None:
+        return exact
+    passed = next((i for i, h in enumerate(headers) if "passed" in h), None)
+    if passed is not None:
+        return passed
+    return _column(headers, _RESULT_HEADER_PREFERENCE[3:])
+
+
+def criterion_rows(text: str | None, *, prefer_tested: bool = False) -> list[tuple[str, str, str]]:
     """Extract (criterion, planned test, result) triples from a markdown table.
 
-    The first table carrying a recognizable criterion column wins. Columns are
+    By default the first criterion-keyed table wins: an acceptance checklist's
+    first such table is its AC table, and a later one is an inventory or a
+    case list whose first column is not an acceptance criterion. A trace
+    report is different (`prefer_tested`): TEA puts an AC-to-design summary
+    with no test column ahead of its matrix, so there the first criterion-keyed
+    table that also names a planned test wins, and the first criterion-keyed
+    table only when none does. A table keyed by a bare `ID`, or only by an
+    `ACs` cross-reference column, never wins that way: a case list keyed
+    `| ID | Test | Status |` would render its test ids as criteria with a PASS
+    beside each, and a file inventory would render file numbers.
+
+    In either mode, a table keyed only by a bare `Criterion`, `Criteria` or
+    `ID` header counts only when it names a planned test, so TEA's
+    gate-threshold tables never render as acceptance criteria. Columns are
     located by header name; any column the table does not carry renders `n/a`.
     """
     if not text:
         return []
+    first: list[tuple[str, str, str]] = []
+    skipped_ambiguous = False
     for headers, rows in _tables(text):
-        try:
-            ac_at = next(i for i, h in enumerate(headers) if h in _AC_HEADERS)
-        except StopIteration:
+        ac_cols = [i for i, h in enumerate(headers) if h in _AC_HEADERS]
+        if not ac_cols:
             continue
-        test_at = next((i for i, h in enumerate(headers) if h in _TEST_HEADERS), None)
-        result_at = next((i for i, h in enumerate(headers) if h in _RESULT_HEADERS), None)
+        # The criterion text comes from the first criterion-like column, but the
+        # table's KEYS are all of them: TEA 1.27.2's own checklist AC table reads
+        # `| ID | ID source | Acceptance criterion |`, so judging it by `ID`
+        # alone skipped the one table that names the acceptance criteria.
+        ac_at = ac_cols[0]
+        keys = {headers[i] for i in ac_cols}
+        test_at = _column(headers, _TEST_HEADER_PREFERENCE)
+        result_at = _result_column(headers)
+        # Coverage is not a pass: where it is the only result-like column, its
+        # cells are labelled so `FULL` cannot read as a passing result.
+        coverage_only = result_at is not None and headers[result_at] in _RESULT_HEADER_PREFERENCE[3:]
+        if test_at is None and keys <= _AMBIGUOUS_AC_HEADERS:
+            skipped_ambiguous = True
+            continue
+        if skipped_ambiguous and keys <= {"id"}:
+            # A criterion table was already set aside for naming no test, so a
+            # later table keyed only by `ID` is a case list, never the criteria:
+            # taking it would render test ids with a PASS beside each.
+            continue
 
         def pick(row: list[str], at: int | None) -> str:
             if at is None or at >= len(row):
@@ -216,10 +294,19 @@ def criterion_rows(text: str | None) -> list[tuple[str, str, str]]:
             criterion = row[ac_at].strip()
             if not criterion:
                 continue
-            extracted.append((criterion, pick(row, test_at), pick(row, result_at)))
-        if extracted:
+            result = pick(row, result_at)
+            if coverage_only and result != NA:
+                result = f"coverage: {result}"
+            extracted.append((criterion, pick(row, test_at), result))
+        if not extracted:
+            continue
+        if not prefer_tested:
             return extracted
-    return []
+        if test_at is not None and keys & _OVERRIDE_AC_HEADERS:
+            return extracted
+        if not first:
+            first = extracted
+    return first
 
 
 # --------------------------------------------------------------------------
@@ -566,9 +653,10 @@ def baseline_sha(impl_artifacts: Path | None, story: str) -> str | None:
 def commit_sha(impl_artifacts: Path | None, story: str) -> str | None:
     """The story's recorded END commit, or None when the run wrote no such marker.
 
-    `references/execute.md` step 4 writes `.commit-<story>` once the commit lands
-    and step 5 refreshes it after any amend or remediation re-commit, so it names
-    the story's LAST commit. Reading it is what lets the trail stop inferring a
+    `references/execute.md` step 4 writes `.commit-<story>` once the commit lands,
+    step 5 refreshes it after any amend or remediation re-commit, and the gate's
+    advance route refreshes it after its evidence commit, so it names the
+    story's LAST commit. Reading it is what lets the trail stop inferring a
     range end from the next story's baseline.
 
     The inference it replaces could not be made correct from baselines alone. Two
@@ -591,8 +679,9 @@ def _git_log(repo: Path, start: str, end: str) -> list[str] | None:
             capture_output=True,
             text=True,
             check=False,
+            timeout=30,
         )
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
         return None
@@ -650,7 +739,7 @@ def story_section(
     rows = criterion_rows(checklist_text)
     criteria_source = checklist.name if (rows and checklist is not None) else None
     if not rows:
-        rows = criterion_rows(trace_text)
+        rows = criterion_rows(trace_text, prefer_tested=True)
         criteria_source = trace.name if (rows and trace is not None) else criteria_source
 
     gate_status, gate_source = gate_status_for(trace_output, story)
