@@ -103,6 +103,67 @@ def test_turn_overrun_escalates_but_proceeds(tmp_path: Path) -> None:
     assert (impl / ".escalation-S1.md").is_file()
 
 
+def _no_story_env(impl: Path, max_turns: str = "1") -> dict:
+    # ULTRACODE_STORY_ID is set empty rather than left out, because _run merges
+    # the host environment and a host value must not satisfy the case.
+    return {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "", "ULTRACODE_MAX_TURNS": max_turns}
+
+
+def test_a_whitespace_story_id_falls_through_to_the_marker(tmp_path: Path) -> None:
+    """A blank-but-set ULTRACODE_STORY_ID is no story id: with no marker nothing
+    is counted, and with a marker the marker's story is."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = {**_no_story_env(impl, "25"), "ULTRACODE_STORY_ID": "   "}
+    _run({"hook_event_name": "Stop", "cwd": str(tmp_path)}, tmp_path, env)
+    assert list(impl.iterdir()) == []
+    (impl / ".current-story").write_text("S1\n", encoding="utf-8")
+    _run({"hook_event_name": "Stop", "cwd": str(tmp_path)}, tmp_path, env)
+    assert json.loads((impl / ".budget-S1.json").read_text())["turns"] == 1
+
+
+def test_a_stop_with_no_story_writes_nothing(tmp_path: Path) -> None:
+    """Before the first story's step 0 (hooks armed, no story set yet) a Stop is
+    no story's turn.
+    It used to book the turn to a made-up story and write `.budget-unknown.json`,
+    which nothing reads and which kept preflight's clean-tree check red."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    code, out = _run({"hook_event_name": "Stop", "cwd": str(tmp_path)}, tmp_path, _no_story_env(impl))
+    assert code == 0
+    assert out is None, "a ceiling of 1 would have printed the overrun for a counted turn"
+    assert list(impl.iterdir()) == []
+
+
+def test_a_current_story_marker_is_still_counted(tmp_path: Path) -> None:
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_text("S1\n", encoding="utf-8")
+    code, _ = _run({"hook_event_name": "Stop", "cwd": str(tmp_path)}, tmp_path, _no_story_env(impl, "5"))
+    assert code == 0
+    assert json.loads((impl / ".budget-S1.json").read_text())["turns"] == 1
+
+
+def test_a_stop_with_no_story_leaves_a_story_counter_alone(tmp_path: Path) -> None:
+    """A resume inherits each story's counter; a Stop with no story set must not
+    touch one, or a story could evade or exhaust its ceiling by accident."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".budget-S1.json").write_text(json.dumps({"turns": 5}), encoding="utf-8")
+    _run({"hook_event_name": "Stop", "cwd": str(tmp_path)}, tmp_path, _no_story_env(impl, "25"))
+    assert json.loads((impl / ".budget-S1.json").read_text()) == {"turns": 5}
+    assert not (impl / ".budget-unknown.json").exists()
+
+
+def test_an_empty_story_marker_still_counts_against_unknown(tmp_path: Path) -> None:
+    """An empty marker may hide a story in flight, so its turns still count."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_text("", encoding="utf-8")
+    _run({"hook_event_name": "Stop", "cwd": str(tmp_path)}, tmp_path, _no_story_env(impl, "25"))
+    assert json.loads((impl / ".budget-unknown.json").read_text())["turns"] == 1
+
+
 def test_token_env_vars_are_inert(tmp_path: Path) -> None:
     """A conductor that still injects the old token vars changes nothing.
 
@@ -183,7 +244,7 @@ def test_stage_references_drop_token_budget_ceiling() -> None:
     # positive control on the slice itself
     assert "ULTRACODE_MAX_TURNS={workflow.max_turns_per_story}" in step5
 
-    # the re-loop-becomes-escalate rule is one of the two real bounds; it stays
+    # the re-loop-becomes-escalate rule is what the conductor checks the count against; it stays
     gate = _stage_text("gate")
     assert "treat it as `escalate` instead" in gate
     assert "If the re-loop would exceed `{workflow.max_turns_per_story}`" in gate

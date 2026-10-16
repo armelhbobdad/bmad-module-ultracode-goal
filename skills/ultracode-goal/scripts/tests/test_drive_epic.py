@@ -464,7 +464,8 @@ def test_command_carries_the_work_bound_and_no_invented_flags(project, monkeypat
     assert command[2] == f"/ultracode-goal {EPIC} -H --max-stories 1"
     assert "--output-format" in command and command[command.index("--output-format") + 1] == "json"
     assert command[command.index("--permission-mode") + 1] == drive_epic.DEFAULT_PERMISSION_MODE
-    # Claude Code 2.1.220 defines no such flag; the turn ceiling is the skill's.
+    # The print-mode flag exists but `--help` hides it; it counts agentic
+    # turns, not story turns, so the driver deliberately never passes it.
     assert "--max-turns" not in command
     assert fake.cwds[0] == project["root"]
 

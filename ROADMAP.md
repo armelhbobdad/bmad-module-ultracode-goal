@@ -24,7 +24,7 @@ The `PreToolUse` guard and `Stop` hook implement a documented hook contract, wit
 
 ## `/goal` + custom `Stop`-hook interplay
 
-A `Stop` hook fires only when Claude is *already* trying to stop; it **cannot interrupt a `/goal` condition mid-turn**. Today the in-`/goal`-condition turn cap is the primary runaway guard, and the budget `Stop` hook is a defensive third layer that records overruns and warns. Tightening this interplay, so the budget ceiling is less advisory at the hook layer without fighting `/goal`'s own loop, is open work that depends on what the primitives expose.
+A `Stop` hook fires only when Claude is *already* trying to stop; it **cannot interrupt a `/goal` condition mid-turn**. Today the runaway guard is the conductor reading the budget hook's turn count before each story and each re-loop, a count that advances once per response and so cannot see re-loops inside one response; the in-`/goal`-condition turn cap binds only an operator's own `/goal`, since the conductor cannot start one, and the budget `Stop` hook itself records overruns and warns. Tightening this interplay, so the budget ceiling is less advisory at the hook layer without fighting `/goal`'s own loop, is open work that depends on what the primitives expose.
 
 ## Transient-failure retry before a gate `escalate`
 
@@ -36,7 +36,7 @@ It ships on evidence, not speculation. The trigger is a **first real observed tr
 
 ## Wall-clock budget envelope
 
-The budget guardrail today is **turn count** per story (`max_turns_per_story`); the older `story_token_budget` key is accepted but no-op. There is no per-turn timing signal available, so UCG cannot currently enforce a wall-clock envelope ("stop this story after N minutes"). Adding a time-based budget waits on a timing signal the run can actually read.
+The budget guardrail today is **turn count** per story (`max_turns_per_story`); the older `story_token_budget` key is accepted but no-op. There is no per-turn timing signal available, so outside `drive_epic.py`'s per-spawn `--session-timeout` UCG cannot currently enforce a wall-clock envelope ("stop this story after N minutes"). Adding a time-based budget waits on a timing signal the run can actually read.
 
 ## Health-check autosubmit telemetry review
 

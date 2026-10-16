@@ -125,12 +125,17 @@ every prompt in every story of the Epic, none of which anybody sees.
 
 FLAG VOCABULARY IS PINNED, NOT INVENTED. Verified against Claude Code 2.1.220:
 `--permission-mode` accepts exactly acceptEdits|auto|bypassPermissions|manual|
-dontAsk|plan, `--output-format` accepts text|json|stream-json, and there is NO
-`--max-turns` flag. The per-story turn ceiling is the skill's own
-`{workflow.max_turns_per_story}`, enforced inside the `/goal` condition and the
-`budget_stop.py` Stop hook; do not reach for a CLI flag that does not exist.
-That ceiling counts TURNS, though, so it cannot bound a session wedged inside a
-single tool call - hence `--session-timeout`, a wall clock the driver owns.
+dontAsk|plan, and `--output-format` accepts text|json|stream-json. `--max-turns`
+exists in print mode but `--help` hides it, so a 2.1.220 `--help` read did not
+list it. This driver deliberately does not pass it: it counts agentic turns
+rather than story turns, and a session it cuts off writes no `run-result.json`. The per-story turn
+ceiling is the skill's own `{workflow.max_turns_per_story}`: the `budget_stop.py`
+Stop hook counts Stops, once per response, and the conductor reads that count
+before a story's step 0 and before each re-loop (the `/goal` turn clause binds
+only when an operator starts a `/goal`, which this driver's spawns never do).
+A spawn is usually one long response per story, so that count barely moves
+inside it and cannot bound a session wedged inside a single tool call - hence
+`--session-timeout`, a wall clock the driver owns and the backstop for spawns.
 
 THE INVOCATION STRING IS NOT UNIVERSAL, so it is a flag rather than a constant.
 `/ultracode-goal` is the form an npx/`ucg install` install produces, where the
