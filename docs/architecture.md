@@ -3,7 +3,7 @@ title: Architecture
 description: "How UltraCode Goal works as a conductor over BMAD, TEA, and Claude Code primitives: the three enforcement layers, file layout, and customization resolution."
 ---
 
-UltraCode Goal is a conductor. It orchestrates the installed BMAD epic toolbox and the TEA gates, composing Claude Code primitives (`/goal`, Auto Mode, Auto Memory, hooks, git branch isolation) and replaces none of them. This page covers the conductor model, the three enforcement layers in depth, the file layout, customization resolution, and why the hooks live where they do.
+UltraCode Goal is a conductor. It orchestrates the installed BMAD epic toolbox and the TEA gates, composing Claude Code primitives (Auto Mode, Auto Memory, hooks, git branch isolation) and replaces none of them. This page covers the conductor model, the three enforcement layers in depth, the file layout, customization resolution, and why the hooks live where they do.
 
 ## The conductor model
 
@@ -34,7 +34,7 @@ Both hooks read their config from env first (so the conductor injects per-run va
 
 ### 3. Budget enforcement
 
-Three layers can bound a runaway story, in order of authority: the **in-condition** "…or stop after N turns" clause inside a `/goal` condition (only an operator's own `/goal` condition, which then bounds the session; the conductor cannot start one itself), the **gate re-loop budget** (the conductor reads the hook's turn count before each re-loop, so a `reloop` that would exceed `max_turns_per_story` becomes `escalate`, though that count cannot see re-loops inside one response), and the **Stop hook** as the recorder described above. In a single attended or `-H` session with no operator `/goal`, nothing bounds re-loops spent inside one response; for `drive_epic.py` spawns, the `--session-timeout` wall clock is the backstop. Rollback is git, not `/rewind` (an Epic branch off a protected branch, one commit per green story) because `/rewind` checkpoints miss the Bash-driven changes that make up the run.
+Three layers can bound a runaway story, in order of authority: the **in-condition** "…or stop after N turns" clause inside a `/goal` condition (only an operator's own `/goal` condition, which then bounds the session; the conductor cannot start one itself), the **gate re-loop budget** (the conductor reads the hook's turn count before each re-loop, so a `reloop` that would exceed `max_turns_per_story` becomes `escalate`, though that count cannot see re-loops inside one response), and the **Stop hook** as the recorder described above. In a single attended or `-H` session with no operator `/goal`, nothing bounds re-loops spent inside one response; for `drive_epic.py` spawns, the `--session-timeout` wall clock is the backstop. Rollback is git, not `/rewind` (an Epic branch off a protected branch, one implementation commit per green story plus its gate's evidence commit) because `/rewind` checkpoints miss the Bash-driven changes that make up the run.
 
 ## File layout
 

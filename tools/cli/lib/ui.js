@@ -221,7 +221,7 @@ class UI {
     }
 
     // UCG is Claude-Code-only: its autonomous run composes Claude Code
-    // primitives (/goal, Auto Mode, hooks, dynamic workflows) no other editor
+    // primitives (Auto Mode, hooks, dynamic workflows) no other editor
     // provides, so the skill installs to Claude Code with no IDE prompt.
     const ides = ['claude-code'];
     log.info(`The skill installs for ${brand.light('Claude Code')}.`);

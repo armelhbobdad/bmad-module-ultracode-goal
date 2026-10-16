@@ -41,7 +41,7 @@ If the gate file is missing or unparseable, the contract counts it as a *failing
 
 ## What you get
 
-Completion stops being a feeling in the transcript and becomes a fact on disk. Every green story is one git commit on an isolated epic branch: rollback you can actually trust, not a checkpoint that misses Bash changes. The run ends with a delivered, gate-passed epic, a run report, and a deferred-work ledger of anything safely parked for later.
+Completion stops being a feeling in the transcript and becomes a fact on disk. Every green story lands as an implementation commit, plus its gate's evidence commit, on an isolated epic branch: rollback you can actually trust, not a checkpoint that misses Bash changes. The run ends with a delivered, gate-passed epic, a run report, and a deferred-work ledger of anything safely parked for later.
 
 ## Read the rest
 
