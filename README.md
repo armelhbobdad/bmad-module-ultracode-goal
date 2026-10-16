@@ -78,7 +78,7 @@ npx bmad-module-ultracode-goal install
 
 You'll be prompted for a project name and whether to install the learning material; the skill installs for Claude Code. UCG is also available through the Claude plugin marketplace. See [Getting Started](./docs/getting-started.md) for that path.
 
-> **Hook security:** UCG installs `PreToolUse`/`Stop` hooks into your machine-local, gitignored `.claude/settings.local.json` at preflight, never into a committed file. They run zero-dependency Python scripts shipped in the skill. See [SECURITY.md](SECURITY.md) for exactly what they execute and how to remove them.
+> **Hook security:** UCG installs `PreToolUse`/`Stop` hooks into your machine-local, gitignored `.claude/settings.local.json` at preflight, never into a committed file. They run zero-dependency Python scripts shipped in the skill. Claude Code treats that file as protected, so take a new Epic through preflight in an attended session (see [Getting Started](./docs/getting-started.md#hook-security)). See [SECURITY.md](SECURITY.md) for exactly what they execute and how to remove them.
 
 ## Quick Start
 

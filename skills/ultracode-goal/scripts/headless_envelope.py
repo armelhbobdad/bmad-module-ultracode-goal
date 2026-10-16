@@ -45,10 +45,23 @@ CANONICAL_KEYS = ("status", "skill", "decision_log", "report", "deferred_work")
 RESULT_FILENAME = "run-result.json"
 
 
+def _blocker_fields(blocker: dict) -> tuple[str, str]:
+    """(source, decision) for a blocker of either shape.
+
+    Formalize and semantic-scan reds carry {source, decision_needed};
+    preflight_check.py's mechanical blockers carry {id, detail}. Reading only the
+    first shape rendered an empty `reason` whenever a mechanical blocker led the
+    list (a missing BMAD story skill, an unborn HEAD), so a headless operator got
+    a blocked envelope with no cause in it.
+    """
+    source = str(blocker.get("source") or blocker.get("id") or "").strip()
+    decision = str(blocker.get("decision_needed") or blocker.get("detail") or "").strip()
+    return source, decision
+
+
 def _one_line(blocker: dict) -> str:
-    """Render a blocker {source, decision_needed} as ONE physical line (no newline)."""
-    source = str(blocker.get("source", "")).strip()
-    decision = str(blocker.get("decision_needed", "")).strip()
+    """Render a blocker as ONE physical line (no newline)."""
+    source, decision = _blocker_fields(blocker)
     text = f"{source} - {decision}" if source and decision else (source or decision)
     return re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
 
@@ -95,7 +108,8 @@ def _append_blockers_to_log(decision_log: str, blockers: list[dict]) -> None:
     """Write the full formalize/semantic blockers (source:line + decision_needed) to the log."""
     lines = ["", "## Headless blocked envelope - full blocker list", ""]
     for b in blockers:
-        lines.append(f"- {b.get('source', '')} :: {b.get('decision_needed', '')}")
+        source, decision = _blocker_fields(b)
+        lines.append(f"- {source} :: {decision}")
     _append_to_log(decision_log, lines)
 
 
@@ -167,8 +181,8 @@ def build_headless_envelope(
     :data:`build_blocked_envelope` alias below, which is what new callers should
     read for.
 
-    ``source`` is either an ordered list of blocker dicts (each {source, decision_needed})
-    or a formalize verdict dict (adapted via :func:`fr5_blockers`). Returns exactly the five
+    ``source`` is either an ordered list of blocker dicts (each {source, decision_needed},
+    or a preflight_check.py mechanical blocker {id, detail}) or a formalize verdict dict (adapted via :func:`fr5_blockers`). Returns exactly the five
     canonical keys plus ``reason`` (the one-line rendering of ``blockers[0]``).
 
     ``report`` / ``deferred_work`` are optional because a blocked exit is not

@@ -32,7 +32,7 @@ UCG installs Claude Code hooks at preflight so that a set of invariants is enfor
   Read the failure behavior before you rely on any of these. Invariants 2, 3, 4, and 6 fail **closed**: an unreadable marker, an unanswerable staged-index probe, or a non-green latch denies rather than waving the call through. The other two make no decision when their input is unavailable. Invariant 1 fails **open**: if `git rev-parse` cannot report a branch (git missing, or the 10s timeout), there is no branch to match against the protected list and the command proceeds. Invariant 5 is simply out of scope when `ULTRACODE_TEST_ARTIFACTS` is unset, emitting an advisory note and never a deny, so that hooks armed by a run predating the un-skip proof do not brick commits over a checklist that run never wrote; within scope it fails closed.
 - A **`Stop` hook** that tracks the per-story turn budget and surfaces an escalation when the run overruns `max_turns_per_story`. This hook records the overrun and lets the stop proceed; it never blocks.
 
-**Where they live:** in your **machine-local, gitignored `.claude/settings.local.json`**, auto-merged at preflight. They are never written to a committed file and never travel with the repo.
+**Where they live:** in your **machine-local, gitignored `.claude/settings.local.json`**, auto-merged at preflight. They are never written to a committed file and never travel with the repo. The same write adds `permissions.allow` rules for the commands in `allowlist_commands` (the test, lint and build commands, `git add` and `git commit`, and the like), so an unattended run is not stopped by a permission prompt nobody can answer. Claude Code treats this file as protected: under Auto Mode its permission classifier reviews the write and may refuse it, or the calls after it. An attended run then stops and asks you to approve or apply the change yourself; a headless run stops with a blocker naming the write (see [Getting Started](docs/getting-started.md#hook-security)).
 
 **What they execute:** the hooks run, via `uv run`, two zero-dependency PEP 723 Python scripts shipped inside the skill:
 
@@ -43,7 +43,7 @@ Both declare `dependencies = []`. They read a JSON event on stdin, inspect git/l
 
 **How to inspect them:** read the two scripts. They are plain Python with a documented hook contract in their module docstrings. The guard's docstring enumerates the six invariants above; confirm for yourself that it only ever denies a tool call and never mutates your repo, and that the only thing the budget hook does is count turns.
 
-**How to remove them:** delete the corresponding `PreToolUse` and `Stop` hook entries from `.claude/settings.local.json`. Because the file is machine-local and gitignored, nothing else in your repo depends on them.
+**How to remove them:** delete the corresponding `PreToolUse` and `Stop` hook entries, and the `permissions.allow` entries preflight added, from `.claude/settings.local.json`. Because the file is machine-local and gitignored, nothing else in your repo depends on them.
 
 ## Secrets
 

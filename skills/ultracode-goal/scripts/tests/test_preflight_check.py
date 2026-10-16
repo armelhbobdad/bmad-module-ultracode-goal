@@ -335,6 +335,72 @@ def test_protected_branch_is_a_blocker(project, monkeypatch):
     assert report["checks"]["git_branch"] == "main"
 
 
+def _unborn_project(tmp_path: Path, branch: str, *, hide_scaffold: bool) -> Path:
+    """The green-ready scaffold in a fresh `git init` with nothing committed.
+
+    `hide_scaffold` lists every path in `.git/info/exclude`, so the tree reads
+    clean and the case cannot ride on `git_clean`: an unborn HEAD has to stop
+    the run on its own.
+    """
+    root = tmp_path / "unborn"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "symbolic-ref", "HEAD", f"refs/heads/{branch}")
+    (root / "playwright.config.ts").write_text("export default {};\n", encoding="utf-8")
+    tea = root / "_bmad" / "tea"
+    tea.mkdir(parents=True)
+    (tea / "config.yaml").write_text("test_framework: auto\n", encoding="utf-8")
+    impl = root / "_bmad-output" / "implementation-artifacts"
+    impl.mkdir(parents=True)
+    (impl / "sprint-status.yaml").write_text("development_status:\n  epic-7: backlog\n", encoding="utf-8")
+    _seed_story_skills(root / ".claude" / "skills")
+    if hide_scaffold:
+        (root / ".git" / "info").mkdir(parents=True, exist_ok=True)
+        (root / ".git" / "info" / "exclude").write_text("*\n", encoding="utf-8")
+    return root
+
+
+def test_unborn_protected_branch_raises_the_branch_and_unborn_blockers(tmp_path, monkeypatch):
+    root = _unborn_project(tmp_path, "main", hide_scaffold=True)
+    report = _report(root, monkeypatch)
+    ids = _blocker_ids(report)
+    assert report["checks"]["git_unborn"] is True
+    assert report["checks"]["git_branch"] == "main"
+    assert report["checks"]["git_clean"] is True
+    assert {"git_unborn", "git_branch"} <= ids
+    unborn = next(b for b in report["blockers"] if b["id"] == "git_unborn")
+    assert unborn["remediable"] is False
+    assert "'main'" in unborn["detail"]
+    assert report["green"] is False
+
+
+def test_unborn_epic_branch_raises_the_unborn_blocker_only(tmp_path, monkeypatch):
+    root = _unborn_project(tmp_path, "ultracode/epic-7", hide_scaffold=True)
+    report = _report(root, monkeypatch)
+    ids = _blocker_ids(report)
+    assert report["checks"]["git_branch"] == "ultracode/epic-7"
+    assert "git_unborn" in ids
+    assert "git_branch" not in ids
+    assert report["green"] is False
+    # The baseline belongs on the protected base, never on the unborn Epic
+    # branch, where it would become that branch's root with nothing under it.
+    detail = next(b for b in report["blockers"] if b["id"] == "git_unborn")["detail"]
+    assert "`git symbolic-ref HEAD refs/heads/main`" in detail
+    assert "never commit the baseline on an Epic branch" in detail
+
+
+def test_dirty_unborn_repo_raises_unborn_and_clean(tmp_path, monkeypatch):
+    root = _unborn_project(tmp_path, "main", hide_scaffold=False)
+    ids = _blocker_ids(_report(root, monkeypatch))
+    assert {"git_unborn", "git_clean", "git_branch"} <= ids
+
+
+def test_committed_repo_is_not_unborn(project, monkeypatch):
+    report = _report(project, monkeypatch)
+    assert report["checks"]["git_unborn"] is False
+    assert "git_unborn" not in _blocker_ids(report)
+
+
 def test_non_git_dir_is_a_blocker(tmp_path, monkeypatch):
     bare = tmp_path / "plain"
     bare.mkdir()
@@ -351,6 +417,10 @@ def test_non_git_dir_is_a_blocker(tmp_path, monkeypatch):
     )
     assert "git_repo" in _blocker_ids(report)
     assert report["checks"]["git_clean"] is None
+    # Outside a repository the unborn probe exits 128, not 1: no unborn
+    # blocker rides along with git_repo.
+    assert report["checks"]["git_unborn"] is False
+    assert "git_unborn" not in _blocker_ids(report)
 
 
 def test_multiple_blockers_accumulate_budget(project, monkeypatch):
