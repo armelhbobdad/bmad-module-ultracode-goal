@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [2.3.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v2.2.0...v2.3.0) (2026-10-16)
+
+### Bug Fixes
+
+* **execute:** let a passing gate override the turn-count escalation ([a164d69](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/a164d69733440638440e3f3e92d62f72275e9d17))
+* **execute:** say what bounds a story's turns, and count no Stop with no story ([c80b10c](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/c80b10c2dadfd3f642ebce437c74c490d13521ff))
+* **gate:** trace on any stack, per-story trace paths, evidence commits and the epic row ([6a81499](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/6a8149976f3daa16f54f199555e46ee345dc03bb))
+* **preflight:** call the turn ceiling a sizing bound, not a worst case ([49243e4](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/49243e42685a12b11ede5dfa361dcace04407189))
+* **preflight:** clear an earlier run's story pointer at arming ([c24dfac](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/c24dfacf11870560e7d8b911fcde370d5f7d1f7f))
+* **preflight:** refuse to launch when BMAD's story skills are not installed ([6982d7b](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/6982d7b2e9c7f3f0e67e51fab8f8335fb92712dc))
+* **preflight:** route a refused settings write and stop on an unborn HEAD ([cd68d6d](https://github.com/armelhbobdad/bmad-module-ultracode-goal/commit/cd68d6d9bbd239537fbe066a513a47c4d4c2baa2))
 ## [2.2.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v2.1.0...v2.2.0) (2026-08-15)
 
 ### Added
