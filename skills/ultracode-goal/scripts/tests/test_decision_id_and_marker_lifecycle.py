@@ -27,6 +27,8 @@ Stdlib + pytest only.
 import re
 from pathlib import Path
 
+import pytest
+
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _PREFLIGHT = _SKILL_ROOT / "references" / "preflight.md"
 _INGEST = _SKILL_ROOT / "references" / "ingest-and-scope.md"
@@ -162,6 +164,49 @@ def test_arming_purges_the_turn_counter_but_resume_does_not():
     assert re.search(r"On a resume, purge nothing", block), (
         "the purge must carve out resume, or the turn ceiling becomes unenforceable"
     )
+
+
+_PURGE_BULLET = re.compile(r"- \*\*Purge stale run markers\.\*\*.*?(?=\n- \*\*|\Z)", re.DOTALL)
+_PURGE_PRE_EDIT = Path(__file__).resolve().parent / "fixtures" / "preflight_step5_purge_no_story_pointer.md"
+
+
+def _purges_the_story_pointer(block: str) -> bool:
+    return bool(
+        re.search(r"On a fresh run and a resume alike, delete `\{workflow\.implementation_artifacts\}/\.current-story`", block)
+        and re.search(r"A resume is not exempt", block)
+        and re.search(r"step 0 writes it afresh before any implementation", block)
+    )
+
+
+def test_arming_purges_the_story_pointer_on_every_route():
+    # No stage removes .current-story, so it names an earlier session's last story,
+    # and an armed Stop hook would book this run's pre-Execute Stops to it. A
+    # resume is not exempt: a run blocked at preflight re-enters here as one.
+    m = _PURGE_BULLET.search(_preflight())
+    assert m, "the arming purge bullet must be present"
+    assert _purges_the_story_pointer(m.group(0))
+    assert re.search(r"On a resume, purge nothing", m.group(0)), (
+        "the five marker families keep their resume carve-out"
+    )
+
+
+@pytest.mark.parametrize(
+    "clause",
+    ["On a fresh run and a resume alike, delete", "A resume is not exempt"],
+)
+def test_story_pointer_predicate_rejects_a_single_dropped_clause(clause):
+    m = _PURGE_BULLET.search(_preflight())
+    assert m
+    mutant = m.group(0).replace(clause, "")
+    assert mutant != m.group(0), "the mutant must actually change the text"
+    assert not _purges_the_story_pointer(mutant)
+
+
+def test_story_pointer_predicate_rejects_the_pre_edit_purge():
+    """Twin: the purge bullet as shipped before this edit, captured verbatim."""
+    m = _PURGE_BULLET.search(_PURGE_PRE_EDIT.read_text(encoding="utf-8"))
+    assert m, "the fixture must hold the purge bullet"
+    assert not _purges_the_story_pointer(m.group(0))
 
 
 def test_closing_a_budget_overrun_resets_the_counter_inside_the_close_bullet():

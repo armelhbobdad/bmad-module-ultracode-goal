@@ -48,8 +48,8 @@ are NOT imported).
 Config resolution (all optional, env wins so the conductor can inject per run):
   ULTRACODE_PROTECTED_BRANCHES  comma-separated; default "main,master"
   ULTRACODE_IMPL_ARTIFACTS      dir holding run state (story id + markers)
-  ULTRACODE_STORY_ID            current story id; else read from
-                                <impl_artifacts>/.current-story
+  ULTRACODE_STORY_ID            current story id (blank counts as unset);
+                                else read from <impl_artifacts>/.current-story
   ULTRACODE_TEST_ARTIFACTS      TEA test-artifacts root; arms the un-skip proof.
                                 No default is derived here on purpose (see
                                 _test_artifacts): unset means the check is out
@@ -218,9 +218,11 @@ def _test_artifacts() -> Path | None:
 
 
 def _current_story(impl: Path | None) -> str | None:
-    sid = os.environ.get("ULTRACODE_STORY_ID")
+    # A blank ULTRACODE_STORY_ID counts as unset, as the Stop hook reads it, so
+    # both hooks resolve the same story from the same .current-story marker.
+    sid = (os.environ.get("ULTRACODE_STORY_ID") or "").strip()
     if sid:
-        return sid.strip()
+        return sid
     if impl is not None:
         marker = impl / ".current-story"
         if marker.is_file():
