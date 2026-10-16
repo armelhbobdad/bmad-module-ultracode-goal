@@ -12,13 +12,23 @@ one event per stop and no usage totals, so any other ceiling could never fire
 and none is claimed.
 
 A runaway story is bounded by three layers, in order of authority:
-  1. the in-condition "…or stop after N turns" clause inside the /goal
-     condition — the real in-loop bound;
-  2. the deterministic gate re-loop budget — a reloop that would exceed
-     max_turns_per_story becomes an escalate instead;
+  1. the "…or stop after N turns" clause inside a /goal condition, but only
+     when an operator started a /goal whose own condition carries one, and then
+     it bounds the session rather than the story: the conductor has no way to
+     start a /goal itself, so in most sessions this layer is absent;
+  2. the gate's re-loop budget: before each re-loop the conductor reads the
+     turn count this hook keeps, and a reloop that would exceed
+     max_turns_per_story becomes an escalate. That count advances once per
+     Stop, so it cannot see re-loops spent inside a single response;
   3. this hook, as RECORDER. A Stop hook fires only when Claude is *already*
      trying to stop, so it cannot interrupt a /goal condition mid-turn. It
      records the overrun and warns; it is advisory end to end and never blocks.
+
+A Stop with no current story at all (no ULTRACODE_STORY_ID and no
+.current-story marker, as before a project's first story's step 0 once the
+hooks are armed) is not a story's turn: nothing is counted and nothing is
+written, so the hook never leaves a stray .budget-unknown.json in the tree. An empty or unreadable marker still counts against "unknown", because a
+story may be in flight behind it.
 
 Hook contract (reads one JSON object on stdin):
   in : {session_id, cwd, hook_event_name:"Stop", ...}
@@ -77,10 +87,11 @@ def _impl_artifacts(cwd: str | None) -> Path | None:
     return None
 
 
-def _current_story(impl: Path | None) -> str:
-    sid = os.environ.get("ULTRACODE_STORY_ID")
+def _current_story(impl: Path | None) -> str | None:
+    """The current story id, "unknown" for an unusable marker, None for none at all."""
+    sid = (os.environ.get("ULTRACODE_STORY_ID") or "").strip()
     if sid:
-        return sid.strip()
+        return sid
     if impl is not None:
         marker = impl / ".current-story"
         if marker.is_file():
@@ -88,7 +99,7 @@ def _current_story(impl: Path | None) -> str:
                 return marker.read_text(encoding="utf-8").strip() or "unknown"
             except OSError:
                 return "unknown"
-    return "unknown"
+    return None
 
 
 def _load_state(path: Path) -> dict:
@@ -116,6 +127,8 @@ def main() -> None:
         _emit(None)  # nowhere to keep state; proceed silently
 
     story = _current_story(impl)
+    if story is None:
+        _emit(None)  # no story yet: not a story's turn to count
     max_turns = _int_env("ULTRACODE_MAX_TURNS", DEFAULT_MAX_TURNS)
 
     state_path = impl / f".budget-{story}.json"
@@ -135,8 +148,9 @@ def main() -> None:
             f"# Turn budget escalation — story {story}\n\n"
             f"Story turn budget exceeded ({detail}). UltraCode-Goal stops this story "
             f"and escalates: re-scope, split, or hand off. A Stop hook cannot "
-            f"interrupt a /goal condition mid-turn, so treat this as advisory — "
-            f"the deterministic guard is the gate_eval re-loop budget.\n",
+            f"interrupt a /goal condition mid-turn, so treat this as advisory: "
+            f"the conductor's re-loop budget, checked against this count, is "
+            f"what stops the story.\n",
             encoding="utf-8",
         )
     except OSError:

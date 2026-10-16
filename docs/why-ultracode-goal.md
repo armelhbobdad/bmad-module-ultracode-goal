@@ -17,13 +17,13 @@ Three intuitive shortcuts all push an unattended Epic toward false completion, a
 
 ## The thesis: three enforcement layers
 
-UltraCode Goal answers each shortcut with a layer the model cannot override.
+UltraCode Goal answers each shortcut with a layer the model cannot override, except where a layer says otherwise.
 
 **1. Deterministic gate truth.** Completion is decided by `scripts/gate_eval.py`, which reads TEA's `gate-decision.json` and maps its gate status to a routing verdict: `PASS`/`WAIVED` advance, `CONCERNS` defers, `FAIL` re-loops, `NOT_EVALUATED` escalates. The script never re-derives TEA's thresholds and never consults the transcript; it reads the artifact as given. The model produces evidence; the script reads the verdict. They are different things on purpose. See the [gate model](./gate-model.md).
 
 **2. Hooks as invariants.** The invariants that must hold (no commit on a protected branch, no commit before a story's tests have actually run green, and four more covering marker freshness, an empty staged index, un-skipped acceptance tests, and Cross-Session Recall) live in a **PreToolUse** hook, not in memory. The hook inspects each `git commit`/`git push` and denies it when any of them is violated. It is merged into `.claude/settings.local.json` at preflight and asserted active before the run goes unattended. A denied commit is enforcement; a remembered rule is not. See [architecture](./architecture.md).
 
-**3. Budget enforcement.** A runaway story is bounded three ways. The `/goal` condition carries a literal "…or stop after N turns" escape clause (the real in-loop bound, because a Stop hook cannot interrupt a `/goal` condition mid-turn); a **Stop** hook tracks turns against `max_turns_per_story`, writing an escalation marker when it is breached; and the gate's re-loop budget is the third, deterministic bound: a `reloop` that would exceed the turn budget becomes an `escalate` instead. See [how it works](./how-it-works.md).
+**3. Budget enforcement.** This is the one layer that rests on the conductor following a rule. A **Stop** hook tracks turns against `max_turns_per_story` and writes an escalation marker when it is breached, but it never blocks, and it counts once per response, so re-loops inside one response do not move it. The conductor reads that count before each story and each re-loop, and the gate's re-loop budget turns a `reloop` that would exceed it into an `escalate`. A `/goal` condition's literal "…or stop after N turns" clause binds only when an operator starts a `/goal` (the conductor cannot start one itself), and for `drive_epic.py` spawns a `--session-timeout` wall clock is the backstop. See [how it works](./how-it-works.md).
 
 These three are the module's non-negotiables. They exist because the documented mechanics make the intuitive shortcut wrong, so the skill does not optimize them away.
 

@@ -176,8 +176,10 @@ _OPEN_VOCAB_CHECKS = {
 }
 
 _PROMOTION_CHECKS = {
-    "pins the trigger to /goal returning": lambda s: bool(
-        re.search(r"after `/goal` returns", s, re.I)
+    # The trigger is the end of the story's drive, before Stage 5. It used to
+    # read "after `/goal` returns", but the conductor never starts a `/goal`.
+    "pins the trigger to the end of the story's drive": lambda s: bool(
+        re.search(r"when the story's drive ends, before Stage 5", s, re.I)
     ),
     "names the hook's dotted markdown as the input": lambda s: ".escalation-<story_id>.md" in s,
     "maps source to the markdown's path": lambda s: bool(
