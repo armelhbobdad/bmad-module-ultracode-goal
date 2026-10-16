@@ -1,0 +1,8 @@
+---
+created: "2026-10-06 21:18"
+session: "32c0ba1b-6b80-4f30-bf50-a7a5a6ac2c6d"
+---
+
+# Headless UCG under Auto Mode blocked at hook arming by the Self-Modification classifier
+
+A headless run `claude -p "/ultracode-goal 1 --light -H" --effort ultracode --permission-mode auto` (Claude Code 2.1.291, BMAD Method 6.12.0 with shims, TEA v1.27.2, UCG main `a3cb225`, scratch project `~/Projects/lab/ucg-tested-with`) cleared Stage 2 through the hard gate, then at step 5 wrote `.claude/settings.local.json` with the PreToolUse guard (`matcher: "*"`), the Stop budget hook and `permissions.allow` rules built from `allowlist_commands`; its next Bash call, `preflight_check.py --assert-armed`, was refused by the auto-mode classifier as `[Self-Modification]`, and so were the attempt to delete that file and later read-only Bash calls. The run stopped there with no story driven, and because the `headless_envelope.py` call was itself refused it printed no five-key envelope and wrote no `run-result.json`, which `drive_epic.py` would read as `no-terminal`. A probe that wrote only a hooks block into `settings.local.json` under auto mode was allowed, so the allow rules are a plausible trigger, not a confirmed one. The hard gate in [preflight.md](../skills/ultracode-goal/references/preflight.md) requires Auto Mode, so switching to `acceptEdits` (how GMC's epic-95 cleared a similar settings-file block in an attended session) is no escape for a headless first run. The user chose an attended first pass through arming, after which headless sessions can take over, since a resume routed into Execute only re-asserts the hooks with `--assert-armed` and does not rewrite them.
