@@ -176,10 +176,11 @@ _OPEN_VOCAB_CHECKS = {
 }
 
 _PROMOTION_CHECKS = {
-    # The trigger is the end of the story's drive, before Stage 5. It used to
-    # read "after `/goal` returns", but the conductor never starts a `/goal`.
-    "pins the trigger to the end of the story's drive": lambda s: bool(
-        re.search(r"when the story's drive ends, before Stage 5", s, re.I)
+    # The trigger is the gate escalating the story on its turn count. It used
+    # to be the end of the story's drive, which escalated stories the gate then
+    # passed, and before that "after `/goal` returns", which no run reaches.
+    "pins the trigger to the gate's turn-count escalation": lambda s: bool(
+        re.search(r"When the gate escalates the story on the turn count", s)
     ),
     "names the hook's dotted markdown as the input": lambda s: ".escalation-<story_id>.md" in s,
     "maps source to the markdown's path": lambda s: bool(
@@ -295,9 +296,10 @@ def test_budget_marker_promoted_by_execute_only():
     # green, so the red is attributable to that clause alone.
     mutant = section.replace(
         "**Leave the markdown in place — never delete it, never rewrite it.** It is the "
-        "residual that survives a session which died between the hook's write and this "
-        "promotion, so consuming it would destroy the only evidence that an escalation "
-        "happened at all.",
+        "hook's own record of the count. For a story that advanced it is the sizing note's "
+        "source, and for a story that escalates it is the residual that survives a session "
+        "which died before this promotion, so consuming it could destroy the only evidence "
+        "that an escalation happened at all.",
         "**Delete the markdown once it has been promoted.**",
     )
     assert mutant != section, "mutation did not apply; the twin would be vacuous"

@@ -12,7 +12,7 @@ UltraCode Goal runs an Epic through six stages, in order. Each stage routes to t
 | 1 | Ingest & Scope | one resolved Epic id, or stop |
 | 2 | Preflight | post-remediation budget == 0 and no red, or stop |
 | 3 | Define Done | every in-scope story has a red-phase atdd-checklist |
-| 4 | Execute | every story committed at green, or a turn-bound escalation |
+| 4 | Execute | every story committed at green, or a resume already at the turn ceiling escalates |
 | 5 | Gate | the `gate_eval.py` verdict: advance / defer / reloop / escalate |
 | 6 | Finalize | terminal: report, ledger, memory capture |
 
@@ -40,7 +40,7 @@ flowchart TD
     S3 -->|"ATDD hard-halt on vague ACs"| S3
     S3 -->|"every story has red-phase atdd-checklist"| S4
     S4 -->|"every story committed at green"| S5
-    S4 -->|"turn-bound escalation"| S5
+    S4 -->|"resume already at the turn ceiling: escalate"| S6
     S5 -->|"advance or defer"| S6
     S5 -->|"reloop: gate FAIL within budget"| Correct
     Correct --> S4

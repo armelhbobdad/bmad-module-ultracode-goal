@@ -71,7 +71,8 @@ HELP_CSV = REPO_ROOT / "skills" / "ultracode-goal" / "assets" / "module-help.csv
 VALIDATE_SKILLS = REPO_ROOT / "tools" / "validate-skills.js"
 
 MACHINE = "[machine-derived]"
-UNPROMOTED = "escalation (unpromoted: session ended before Execute promoted it)"
+UNPROMOTED = "escalation (unpromoted: no gate verdict yet, or the session ended before Execute promoted it)"
+CEILING_NOTE = "turn ceiling reached; the story advanced at its gate, so this is a sizing note and nothing is pending"
 VIEWER = "hunk"
 
 MODULE_COLUMN = "UltraCode Goal"
@@ -220,7 +221,19 @@ def read_only_violations(src: str) -> list[str]:
         found.append("a gate_trail call other than _git_log that runs git")
     if cross.count("_git_log") > 1:
         found.append("more than one gate_trail._git_log call site")
+    # preflight_check is reached for its pure sprint-status parser only; several
+    # of its other helpers start processes.
+    if set(re.findall(r"\bpreflight_check\.(\w+)\s*\(", src)) - {"_parse_development_status"}:
+        found.append("a preflight_check call other than the pure _parse_development_status")
     return found
+
+
+def test_a_preflight_check_call_beyond_the_parser_is_a_violation():
+    shipped = SCRIPT.read_text(encoding="utf-8")
+    assert "preflight_check._parse_development_status(" in shipped, "control: the parser is used"
+    variant = shipped + "\npreflight_check._git(Path('.'), 'status')\n"
+    assert "a preflight_check call other than the pure _parse_development_status" in read_only_violations(variant)
+    assert read_only_violations(shipped) == []
 
 
 def test_the_one_cross_module_spawn_is_a_read_only_git_log():
@@ -504,6 +517,87 @@ def test_promoted_escalation_does_not_render_unpromoted(tmp_path):
     assert (FIXTURES / "escalations" / ".escalation-delta.md").is_file(), (
         "the raw marker stays on disk; it is never consumed by promotion"
     )
+
+
+def _ceiling_render(tmp_path: Path, verdict: str | None, sprint_row: str | None = None) -> str:
+    """A run whose story S1 reached its turn ceiling and got `verdict` at its gate.
+
+    With `verdict` None the heartbeat no longer lists S1, as a later invocation's
+    snapshot does once S1 is out of scope; `sprint_row` is S1's sprint-status value.
+    """
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    entries = [] if verdict is None else [{"story": "S1", "phase": "gated", "verdict": verdict,
+                                          "dev_attempts": 1, "reloop_count": 0}]
+    entries.append({"story": "S2", "phase": "resuming", "verdict": None})
+    status = {"epic": "e", "story": "S2", "last_verdict": verdict, "stories": entries}
+    if sprint_row is not None:
+        (impl / "sprint-status.yaml").write_text(
+            f"development_status:\n  epic-1: in-progress\n  S1: {sprint_row}\n  S2: ready-for-dev\n",
+            encoding="utf-8",
+        )
+    (impl / "run-status.json").write_text(json.dumps(status), encoding="utf-8")
+    (impl / ".escalation-S1.md").write_text(
+        "# Turn ceiling reached: story S1\n\nStory turn ceiling reached (turns 26/25).\n",
+        encoding="utf-8",
+    )
+    result = _run(["--impl-artifacts", str(impl), "--runs-root", str(tmp_path / "runs"),
+                   "--repo", str(tmp_path)])
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+@pytest.mark.parametrize("verdict", ["advance", "defer"])
+def test_an_advanced_storys_ceiling_marker_is_a_sizing_note(tmp_path, verdict):
+    # The gate advanced S1, so Execute never promotes its raw marker: it is a
+    # sizing note on the story row, and not a pending escalation.
+    render = _ceiling_render(tmp_path, verdict)
+    stories = render.split("## Stories", 1)[1].split("## Escalations", 1)[0]
+    escalations = render.split("## Escalations", 1)[1].split("## Deferred work", 1)[0]
+    assert CEILING_NOTE in stories
+    assert "### S1" not in escalations
+    assert UNPROMOTED not in render
+
+
+@pytest.mark.parametrize("verdict", ["reloop", "escalate"])
+def test_a_story_that_did_not_advance_keeps_its_marker_pending(tmp_path, verdict):
+    # Twin: the same marker for a story the gate did not advance stays a
+    # pending escalation, so the note above keys on the verdict alone.
+    render = _ceiling_render(tmp_path, verdict)
+    assert UNPROMOTED in _escalation_block(render, "S1")
+    assert CEILING_NOTE not in render
+
+
+def test_a_done_row_marks_the_story_advanced_after_the_heartbeat_drops_it(tmp_path):
+    # Under drive_epic.py a later spawn's heartbeat lists in-scope stories only,
+    # so S1 is gone from it; its `done` row still says the gate advanced it.
+    render = _ceiling_render(tmp_path, None, sprint_row="done")
+    stories = render.split("## Stories", 1)[1].split("## Escalations", 1)[0]
+    escalations = render.split("## Escalations", 1)[1].split("## Deferred work", 1)[0]
+    assert f"- S1: {CEILING_NOTE}" in stories
+    assert "### S1" not in escalations
+    assert UNPROMOTED not in render
+
+
+def test_an_empty_heartbeat_prints_the_note_and_no_na(tmp_path):
+    # A heartbeat listing no story at all, with S1 done and marked: the Stories
+    # section carries S1's note and not an `n/a` above it.
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / "run-status.json").write_text(json.dumps({"epic": "e"}), encoding="utf-8")
+    (impl / "sprint-status.yaml").write_text("development_status:\n  S1: done\n", encoding="utf-8")
+    (impl / ".escalation-S1.md").write_text("# Turn ceiling reached: story S1\n", encoding="utf-8")
+    result = _run(["--impl-artifacts", str(impl), "--runs-root", str(tmp_path / "runs"), "--repo", str(tmp_path)])
+    assert result.returncode == 0, result.stderr
+    stories = result.stdout.split("## Stories", 1)[1].split("## Escalations", 1)[0]
+    assert f"- S1: {CEILING_NOTE}" in stories
+    assert "- n/a" not in stories
+
+
+def test_a_row_that_is_not_done_leaves_the_marker_pending(tmp_path):
+    # Twin: the same dropped heartbeat entry with S1's row still in review.
+    render = _ceiling_render(tmp_path, None, sprint_row="review")
+    assert UNPROMOTED in _escalation_block(render, "S1")
 
 
 # --- the optional viewer affordance ------------------------------------------

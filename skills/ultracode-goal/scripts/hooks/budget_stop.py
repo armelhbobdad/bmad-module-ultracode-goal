@@ -6,10 +6,13 @@
 """UltraCode-Goal turn-budget Stop hook (Claude Code hook).
 
 Counts Stop events (turns) for the current story against max_turns_per_story.
-On overrun it writes an escalation marker and surfaces a clear message, then
-LETS THE STOP PROCEED. Turns are the only thing counted here: this layer sees
-one event per stop and no usage totals, so any other ceiling could never fire
-and none is claimed.
+On overrun it writes its turn-ceiling marker and surfaces a clear message, then
+LETS THE STOP PROCEED. The conductor promotes that marker to a budget-overrun
+escalation only when the story's gate escalates it on this count; a story
+that advances gets a sizing note instead (references/execute.md).
+
+Turns are the only thing counted here: this layer sees one event per stop and
+no usage totals, so any other ceiling could never fire and none is claimed.
 
 A runaway story is bounded by three layers, in order of authority:
   1. the "…or stop after N turns" clause inside a /goal condition, but only
@@ -27,14 +30,15 @@ A runaway story is bounded by three layers, in order of authority:
 A Stop with no current story at all (no ULTRACODE_STORY_ID and no
 .current-story marker, as before a project's first story's step 0 once the
 hooks are armed) is not a story's turn: nothing is counted and nothing is
-written, so the hook never leaves a stray .budget-unknown.json in the tree. An empty or unreadable marker still counts against "unknown", because a
+written, so the hook never leaves a stray .budget-unknown.json in the tree.
+An empty or unreadable marker still counts against "unknown", because a
 story may be in flight behind it.
 
 Hook contract (reads one JSON object on stdin):
   in : {session_id, cwd, hook_event_name:"Stop", ...}
   out: exit 0. We never set decision:"block" (we WANT the stop to proceed);
        on overrun we emit {systemMessage, suppressOutput:false} so the user
-       sees the escalation. JSON is best-effort; absence is also valid.
+       sees the overrun. JSON is best-effort; absence is also valid.
 
 State + config (env wins so the conductor injects per-story values):
   ULTRACODE_IMPL_ARTIFACTS    state dir; default <cwd>/_bmad-output/implementation-artifacts
@@ -44,7 +48,7 @@ State + config (env wins so the conductor injects per-story values):
 Any other ULTRACODE_* variable a conductor still injects is ignored here.
 
 State file: <impl>/.budget-<story>.json  {turns:int}
-Escalation marker: <impl>/.escalation-<story>.md
+Turn-ceiling marker: <impl>/.escalation-<story>.md
 """
 
 import json
@@ -145,21 +149,22 @@ def main() -> None:
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(
-            f"# Turn budget escalation — story {story}\n\n"
-            f"Story turn budget exceeded ({detail}). UltraCode-Goal stops this story "
-            f"and escalates: re-scope, split, or hand off. A Stop hook cannot "
-            f"interrupt a /goal condition mid-turn, so treat this as advisory: "
-            f"the conductor's re-loop budget, checked against this count, is "
-            f"what stops the story.\n",
+            f"# Turn ceiling reached: story {story}\n\n"
+            f"Story turn ceiling reached ({detail}). Unless this story advances at "
+            f"its gate, UltraCode-Goal escalates it: re-scope, split, or hand off. "
+            f"If it advances, this is a sizing note, not an escalation. A Stop hook "
+            f"cannot interrupt a session mid-turn, so this marker is a record: the "
+            f"conductor's checks against this count, at a resume and before each "
+            f"re-loop, are what stop the story.\n",
             encoding="utf-8",
         )
     except OSError:
         pass
 
     _emit(
-        f"UltraCode-Goal turn budget exceeded for story {story} ({detail}). "
-        f"Escalation marker written to {marker}. Stop and escalate this story; "
-        f"do not keep re-looping."
+        f"UltraCode-Goal: story {story} reached its turn ceiling ({detail}). "
+        f"Marker written to {marker}. It escalates if its gate does not advance it; "
+        f"if the gate advances it, the overrun becomes a sizing note."
     )
 
 
