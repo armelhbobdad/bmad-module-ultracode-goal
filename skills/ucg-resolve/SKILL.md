@@ -197,11 +197,11 @@ The two dispositions are genuinely different things, not two names for one:
   **Closing a `budget-overrun` escalation also resets that story's turn counter** — delete
   `{workflow.implementation_artifacts}/.budget-<story_id>.json`, or set its `turns` to `0`.
   The Stop hook's counter is persistent and monotonic
-  (`{ucg-root}/scripts/hooks/budget_stop.py` increments it every Stop event and escalates
-  once it reaches the ceiling), and no ordinary resume clears it — the Stage 2 arming purge
+  (`{ucg-root}/scripts/hooks/budget_stop.py` increments it every Stop event and marks
+  the story once it reaches the ceiling), and no ordinary resume clears it — the Stage 2 arming purge
   (`{ucg-root}/references/preflight.md`, step 5) deliberately skips it on re-entry so a story cannot evade its ceiling by stopping and
-  resuming. Leave it standing here and the resumed story escalates again on its **first**
-  Stop event, before it has done a single turn of the work the operator just authorized, and
+  resuming. Leave it standing here and the resumed story escalates again at the resume's
+  step-0 ceiling check, before it has done a single turn of the work the operator just authorized, and
   the close would apply in name only. Answering a budget overrun by re-scoping, splitting,
   or handing off the story *is* the operator granting it a fresh budget, so the counter that
   recorded the exhausted one has no claim on the resumed run.

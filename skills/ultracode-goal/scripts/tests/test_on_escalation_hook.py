@@ -329,7 +329,8 @@ def test_promotion_precedes_the_fire_in_clause_a():
     )
 
     sentence = (
-        "On the first in-scope marker, promote it to the typed sidecar "
+        "On the first in-scope marker whose story the gate escalated on the turn count, "
+        "promote it to the typed sidecar "
         "`{workflow.implementation_artifacts}/escalation-<story_id>.json` "
         '(see "Escalation sidecar" below) before firing anything, so a hook that '
         "reads the sidecar finds it already on disk."

@@ -6,13 +6,14 @@
 """Render what a run is doing, out of the files that run already produced.
 
 This is the READ side over the spine's own artifacts. It answers "what is this
-run doing right now" from five sources and nothing else:
+run doing right now" from six sources and nothing else:
 
     | what              | source                                            |
     | heartbeat         | <impl-artifacts>/run-status.json                  |
     | decision log tail | the run folder's .decision-log.md                 |
     | ledger            | the deferred-work ledger                          |
     | escalations       | .escalation-<story>.md and escalation-<story>.json|
+    | advanced stories  | <impl-artifacts>/sprint-status.yaml `done` rows   |
     | runs index        | the runs root's per-run folders                   |
 
 STRICTLY READ-ONLY. It starts no run, attaches to no session, and opens no file
@@ -55,6 +56,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import gate_trail  # noqa: E402  (sibling script, path set above)
+import preflight_check  # noqa: E402  (sibling script, path set above)
 
 # Rendered wherever a source was absent, empty or unreadable.
 NA = "n/a"
@@ -63,10 +65,16 @@ NA = "n/a"
 # hook-maintained turn counter carry it.
 MACHINE = "[machine-derived]"
 
-# The residual a session leaves when it died between the Stop hook's write and
-# Execute's promotion of that marker into the typed sidecar. The marker is real
-# evidence of a real escalation; it just never got typed.
-UNPROMOTED = "escalation (unpromoted: session ended before Execute promoted it)"
+# A raw Stop-hook marker with no typed sidecar beside it, for a story that has
+# not advanced. Either its gate has not ruled yet (Execute promotes the marker
+# only when the gate escalates the story on its turn count), or the session
+# died before Execute promoted it. Either way it may be a pending escalation.
+UNPROMOTED = "escalation (unpromoted: no gate verdict yet, or the session ended before Execute promoted it)"
+
+# The same raw marker for a story whose gate advanced it. Execute never promotes
+# that one: the gate decided completion, and the overrun is a sizing note in the
+# decision log, so nothing is pending and it is not listed as an escalation.
+CEILING_NOTE = "turn ceiling reached; the story advanced at its gate, so this is a sizing note and nothing is pending"
 
 # The other thin record: the typed sidecar IS on disk but is empty or does not
 # parse, so there is nothing to render out of it. Distinct from UNPROMOTED
@@ -256,6 +264,39 @@ def escalations(impl: Path) -> list[tuple[str, dict | None, Path]]:
     return [(story, payload, path) for story, (payload, path) in sorted(found.items())]
 
 
+def done_stories(impl: Path) -> set[str]:
+    """Story keys whose `sprint-status.yaml` row reads `done`.
+
+    The gate's advance route writes `done` for every story it advances, and the
+    row outlives the heartbeat: `run-status.json` lists in-scope stories only, so
+    a later invocation's snapshot no longer carries a story an earlier one
+    advanced. Read with preflight's own block-scoped parser, so both agree.
+    """
+    text = read_text(impl / "sprint-status.yaml")
+    if not text:
+        return set()
+    statuses = preflight_check._parse_development_status(text)
+    return {key for key, value in statuses.items() if value == "done"}
+
+
+def advanced_stories(status: dict | None, impl: Path) -> set[str]:
+    """Stories the gate advanced: by this snapshot's verdict, or by a `done` row."""
+    return {
+        str(entry.get("story"))
+        for entry in story_entries(status)
+        if entry.get("story") and entry.get("verdict") in ("advance", "defer")
+    } | done_stories(impl)
+
+
+def ceiling_note_only(impl: Path, story: str, advanced: set[str]) -> bool:
+    """True for an advanced story with the hook's raw marker and no typed sidecar."""
+    return (
+        story in advanced
+        and (impl / f".escalation-{story}.md").is_file()
+        and not (impl / f"escalation-{story}.json").exists()
+    )
+
+
 def known_runs(runs_root: Path | None) -> list[tuple[str, str]]:
     """Every run folder under the runs root, as (name, status).
 
@@ -376,7 +417,18 @@ def render(
     # Stories.
     lines.extend(["## Stories", ""])
     entries = story_entries(status)
-    if not entries:
+    advanced = advanced_stories(status, impl)
+    # An advanced story a later invocation's heartbeat no longer lists still
+    # gets its note, on a line of its own after the listed stories.
+    listed = {str(entry.get("story")) for entry in entries}
+    unlisted_notes = [
+        f"- {story}: {CEILING_NOTE} (`{marker.name}`)"
+        for marker in sorted(impl.glob(".escalation-*.md"))
+        if (story := marker.name[len(".escalation-") : -len(".md")])
+        and story not in listed
+        and ceiling_note_only(impl, story, advanced)
+    ]
+    if not entries and not unlisted_notes:
         lines.append(f"- {NA}")
     for entry in entries:
         story = str(entry.get("story") or NA)
@@ -386,6 +438,8 @@ def render(
             f"attempts={entry.get('dev_attempts') if entry.get('dev_attempts') is not None else NA} "
             f"re-loops={entry.get('reloop_count') if entry.get('reloop_count') is not None else NA}"
         )
+        if ceiling_note_only(impl, story, advanced):
+            lines.append(f"  - {CEILING_NOTE} (`.escalation-{story}.md`)")
         sha = gate_trail.baseline_sha(impl, story)
         if sha:
             lines.append(f"  - baseline `{sha}`")
@@ -408,11 +462,18 @@ def render(
                     in_range = None
                 for commit in reversed(in_range or [end or sha]):
                     lines.append(f"  - {VIEWER} show {commit}")
+    lines.extend(unlisted_notes)
     lines.append("")
 
     # Escalations.
     lines.extend(["## Escalations", ""])
-    pending = escalations(impl)
+    # An advanced story's raw turn-ceiling marker is a sizing note, shown on its
+    # story row above, not a pending escalation.
+    pending = [
+        (story, payload, path)
+        for story, payload, path in escalations(impl)
+        if not ceiling_note_only(impl, story, advanced)
+    ]
     if not pending:
         lines.append(f"- {NA}")
     for story, payload, path in pending:

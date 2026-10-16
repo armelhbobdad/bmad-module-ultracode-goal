@@ -103,6 +103,26 @@ def test_turn_overrun_escalates_but_proceeds(tmp_path: Path) -> None:
     assert (impl / ".escalation-S1.md").is_file()
 
 
+def test_overrun_marker_and_message_defer_to_the_gate(tmp_path: Path) -> None:
+    # The hook cannot know the gate's verdict, so neither its marker nor its
+    # message may declare the story escalated: a story that then advances at
+    # its gate gets a sizing note instead.
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "1"}
+    code, out = _run({"hook_event_name": "Stop", "cwd": str(tmp_path)}, tmp_path, env)
+
+    assert code == 0 and out is not None
+    message = out["systemMessage"]
+    assert "It escalates if its gate does not advance it" in message
+    assert "sizing note" in message
+    assert "Stop and escalate this story" not in message
+    marker = (impl / ".escalation-S1.md").read_text(encoding="utf-8")
+    assert "Unless this story advances at its gate" in marker
+    assert "this is a sizing note, not an escalation" in marker
+    assert "stops this story and escalates" not in marker
+
+
 def _no_story_env(impl: Path, max_turns: str = "1") -> dict:
     # ULTRACODE_STORY_ID is set empty rather than left out, because _run merges
     # the host environment and a host value must not satisfy the case.

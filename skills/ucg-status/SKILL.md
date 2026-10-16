@@ -146,16 +146,27 @@ Three things are worth saying out loud alongside it:
 **Escalations render from the typed sidecar where one exists.** Where no readable one does,
 the block carries one of two lines, and they mean different things:
 
-- `escalation (unpromoted: session ended before Execute promoted it)` - only the Stop
-  hook's raw marker is on disk. That is not an error state to clean up: it is the residual
-  of a session that died between the hook writing the marker and Execute promoting it, and
-  it is the only evidence that escalation happened at all. Report it as a pending
-  escalation whose typed record was never written, and leave the marker alone.
+- `escalation (unpromoted: no gate verdict yet, or the session ended before Execute
+  promoted it)`: only the Stop hook's raw marker is on disk, for a story that has not
+  advanced. Execute promotes that marker only when the story's gate escalates it on its
+  turn count, so while the gate has not ruled this is the expected state; otherwise it
+  is the residual of a session that died before Execute promoted it, and the only
+  evidence that the escalation happened at all. Report it as an escalation that may be
+  pending (the gate may not have ruled yet) whose typed record is not written yet, and
+  leave the marker alone.
 - `escalation (typed record present but unreadable)` - the `escalation-<story>.json` named
   on the `- source:` line was written and then would not parse, which is the half-written
   file a session killed mid-write leaves. "Never promoted" would be the opposite of what
   happened: report it as a typed record that needs repair, because `/ucg-resolve` reads
   that same file to reconstruct the pending decision and cannot parse it either.
+
+A raw marker for a story the gate advanced is not an escalation at all: the gate decided
+completion and the overrun is a sizing note in the decision log. A story counts as
+advanced when its heartbeat entry's verdict is `advance` or `defer`, or when its
+`sprint-status.yaml` row reads `done` (a later invocation's heartbeat no longer lists
+it). It renders under stories as `turn ceiling reached; the story advanced at its gate,
+so this is a sizing note and nothing is pending`, on that story's row, or on a line of
+its own when the heartbeat no longer lists it, and not under escalations.
 
 A marker and an unreadable sidecar can both be on disk for one story, and the marker wins
 the render, so an `unpromoted` block is worth one directory check before you report the
