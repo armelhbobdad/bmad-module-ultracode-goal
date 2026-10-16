@@ -1,7 +1,7 @@
 # BMAD Platform Codes Configuration
 #
 # UltraCode Goal is Claude-Code-only: its autonomous run composes Claude Code
-# primitives (/goal, Auto Mode, Auto Memory, PreToolUse/Stop hooks, dynamic
+# primitives (Auto Mode, Auto Memory, PreToolUse/Stop hooks, dynamic
 # workflows) that no other editor provides, so the installer targets Claude Code
 # and only Claude Code. This file stays config-driven (one entry) so the install
 # machinery has a single source of truth.

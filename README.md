@@ -16,7 +16,7 @@
 [![Docs](https://img.shields.io/badge/docs-online-green)](https://armelhbobdad.github.io/bmad-module-ultracode-goal/)
 [![GitHub stars](https://img.shields.io/github/stars/armelhbobdad/bmad-module-ultracode-goal?style=social)](https://github.com/armelhbobdad/bmad-module-ultracode-goal/stargazers)
 
-**Built for [Claude Code](https://claude.com/product/claude-code), and only Claude Code.** UCG composes `/goal`, Auto Mode, Auto Memory, and runtime hooks; the autonomous run itself requires Claude Code.
+**Built for [Claude Code](https://claude.com/product/claude-code), and only Claude Code.** UCG composes Auto Mode, Auto Memory, runtime hooks, and git branches, and writes each story's Definition-of-Done as a `/goal`-style condition; the autonomous run itself requires Claude Code.
 
 _UCG is a standalone [BMAD](https://github.com/bmad-code-org/BMAD-METHOD) module that delivers a BMAD Epic end to end without a babysitter. It preflights to a remediated green light, turns acceptance criteria into executable tests with the Test Architect (TEA), and advances a story only when a deterministic script reads `PASS` from TEA's gate artifact, not when the model decides it feels done._
 
@@ -102,7 +102,7 @@ A skeptical reader is probably already running one of these. Here is the honest 
 | Completion authority       | `gate_eval.py` reads TEA's `gate-decision.json`      | you, story by story                  | the model's self-assessment      | CI, but only after the agent stops   |
 | Preflight autonomy gate    | hard-gate to remediated green (intervention budget 0)| ad hoc, per story                    | none                             | none: CI runs post-hoc               |
 | Invariants enforcement     | `PreToolUse` hooks in `settings.local.json`          | your attention                       | prompt text (context, not a gate)| CI checks, after the fact            |
-| Rollback                   | git: epic branch, one commit per green story         | manual                               | `/rewind` (misses Bash changes)  | revert after merge                   |
+| Rollback                   | git: epic branch, code + evidence commit per story   | manual                               | `/rewind` (misses Bash changes)  | revert after merge                   |
 | Knowledge capture          | Auto Memory + CLAUDE.md split at Finalize            | none structured                      | none structured                  | none                                 |
 
 The alternatives aren't bad; they solve different problems. **UCG solves exactly one: advancing an epic only when a deterministic script confirms the gate passed, and giving you the verdict JSON to check it yourself.**
@@ -161,7 +161,7 @@ UCG is a conductor over primitives it does not replace. It builds on:
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | [BMAD Method](https://github.com/bmad-code-org/BMAD-METHOD)            | The epic toolbox UCG orchestrates (sprint planning, story creation, dev, review) |
 | [TEA Test Architect](https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise) | Machine-checked quality gates: test-design, ATDD, NFR, trace; the gate artifact |
-| [Claude Code](https://claude.com/product/claude-code)                   | `/goal`, Auto Mode, Auto Memory, hooks, and git branches, the primitives UCG composes |
+| [Claude Code](https://claude.com/product/claude-code)                   | Auto Mode, Auto Memory, hooks, and git branches, the primitives UCG composes; `/goal` if you start one yourself |
 
 ## Contributing
 
