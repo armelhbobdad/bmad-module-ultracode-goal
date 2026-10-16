@@ -133,4 +133,8 @@ def test_pre_edit_fixture_differs_only_by_baseline_sentence():
         "file — without one set, it cannot find the marker and denies every commit."
     )
     assert clause in pre_edit, "fixture lost the verbatim .current-story clause"
-    assert clause in shipped, "shipped step 0 dropped the pre-existing marker semantics"
+    # The shipped clause dropped the `export` alternative: an export inside a
+    # Bash call never reaches the hook processes, so the file is the one route.
+    assert "write the story id to `{workflow.implementation_artifacts}/.current-story`." in shipped
+    assert "an `export` inside a Bash call never reaches their processes" in shipped
+    assert "or export `ULTRACODE_STORY_ID" not in shipped

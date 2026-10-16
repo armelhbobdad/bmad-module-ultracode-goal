@@ -278,6 +278,37 @@ def test_epic_branch_commit_allowed_with_tests_marker(tmp_path: Path) -> None:
     assert out is None
 
 
+def test_blank_story_id_env_falls_through_to_the_marker(tmp_path: Path) -> None:
+    # A whitespace-only ULTRACODE_STORY_ID is unset, as the Stop hook reads it, so
+    # the guard finds STORY-1 from .current-story and lets the green commit through
+    # instead of denying it for a story named "".
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+
+    code, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "   "},
+    )
+
+    assert code == 0
+    assert out is None
+
+
+def test_padded_story_id_env_is_trimmed(tmp_path: Path) -> None:
+    # A real id with stray whitespace still names its story, not the marker's.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    (impl / ".current-story").write_text("OTHER-9")
+
+    code, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": " STORY-1 "},
+    )
+
+    assert code == 0
+    assert out is None
+
+
 def test_epic_branch_commit_allowed_with_nonempty_staged_index(tmp_path: Path) -> None:
     repo, impl = _green_story_repo(tmp_path, stage=True)
 
