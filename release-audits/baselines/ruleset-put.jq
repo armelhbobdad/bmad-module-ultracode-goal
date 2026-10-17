@@ -3,16 +3,16 @@
 # in docs/_internal/RELEASING.md runs it with `jq -f`, so a change here
 # changes them all; record it with the restore drill in that file.
 #
-# PUT replaces the ruleset wholesale, so a field left out is reset
-# server-side; bypass_actors keeps the admin-via-PR bypass. A GET adds
-# do_not_enforce_on_create (and can add a null integration_id) to the
-# required_status_checks rule. A PUT carrying them is expected to fail with
-# HTTP 422 (GitHub's ruleset API does not take them as input), so the filter
-# drops them; the restore drill in RELEASING.md confirms it on this ruleset.
-# Every other rule parameter is kept as the GET returns it.
+# A PUT replaces the rules array wholesale, so the filter keeps every rule
+# and every parameter a PUT takes, and a restore sends the saved value
+# instead of leaving one to the server; bypass_actors keeps the admin-via-PR
+# bypass. A GET can give a required check a null integration_id, and a PUT
+# carrying one fails with HTTP 422 ("data matches no possible input"), so the
+# filter drops a check's null keys. A PUT takes do_not_enforce_on_create (200
+# with it set to false), so it is kept. The restore drill in RELEASING.md
+# records both results.
 {name, target, enforcement, conditions,
   rules: [.rules[] | if .type == "required_status_checks" then
-    .parameters |= (del(.do_not_enforce_on_create)
-      | .required_status_checks |= map(with_entries(select(.value != null))))
+    .parameters.required_status_checks |= map(with_entries(select(.value != null)))
   else . end],
   bypass_actors}
