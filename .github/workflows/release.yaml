@@ -1,16 +1,67 @@
 name: Release
 
-# Canonical OIDC trusted-publishing release workflow for bmad-module-ultracode-goal.
-# Gated on the `release` GitHub Environment (required-reviewer approval).
-# Filename MUST remain literal `release.yaml` — the npm Trusted Publisher is
-# registered character-for-character on `release.yaml` + job id `release`.
-# See docs/_internal/RELEASING.md for the one-time setup and rollback playbook.
+# The only release path for bmad-module-ultracode-goal, dispatched by hand
+# (workflow_dispatch with a version_bump). The job runs in the `release` GitHub
+# Environment, so nothing runs until a required reviewer approves (gate 1).
+#
+# 1. The release gate (`node tools/changes.js gate`) refuses a version_bump
+#    that the change fragments in changes/ and the covered surfaces
+#    (tools/covered-surfaces.js) do not allow, before the tests run and before
+#    anything is committed. A stable bump (patch, minor, major) is refused
+#    from any ref but main.
+# 2. After the tests, a dispatch from main compares the required checks of
+#    the main-protection ruleset with the jobs of quality.yaml
+#    (tools/check-required-checks.js) and stops when they differ. Then the
+#    version is bumped in package.json, package-lock.json and
+#    .claude-plugin/marketplace.json, and the
+#    fragments added since the last stable tag are rendered into
+#    release_notes.md (the GitHub Release body), release_review.md (the
+#    "Review before approving" section of the bot PR, given in full in the
+#    run summary) and, for a stable release only, a new block in
+#    CHANGELOG.md.
+# 3. From main, the release commit goes to a temp branch and a bot PR, because
+#    the main-protection ruleset refuses a direct push to main. The run dispatches the
+#    required checks on that branch, waits for them, then waits for a
+#    maintainer to approve or admin-merge the PR (gate 2). A run that fails
+#    or is cancelled before the PR merges closes it and deletes the temp
+#    branch in its last step. From any other ref (a prerelease), the tag
+#    goes on the CI commit and main does not move.
+# 4. The tag is pushed, npm publishes through OIDC trusted publishing with
+#    provenance under the dist-tag the version step derives from the version
+#    (latest for a stable version, alpha, beta or rc for a prerelease; any
+#    other prerelease id stops the run before anything is written), and the
+#    GitHub Release is created.
+# 5. A stable release then dispatches docs.yaml, which deploys the docs site
+#    at the new tag.
+#
+# version_bump=resume, from main only, is the other path. It
+# finishes the cut main already carries when the run that cut it stopped
+# after its bot PR merged (a failed publish, a required check that failed
+# after an admin merge, a cancellation). `node tools/release-state.js
+# resume` reads the tag, npm, the GitHub Release and the merged bot PR, and
+# the run does only what is missing, in the order of steps 4 and 5: the tag
+# on the commit the tag step would use, the publish from the release commit,
+# the GitHub Release, the docs deploy. It skips the gate, the tests, the
+# bump, the commit and the bot PR, never bumps, and exits without
+# publishing when nothing is missing. While main carries such a version, a
+# main dispatch refuses a minor or major bump past it; patch stays allowed
+# as the ship-forward. The recovery this path serves is
+# docs/_internal/RELEASING.md, "Bot PR merged, but the version was not published".
+#
+# A value from an expression reaches a run: script only through the step's
+# env: block or the runner's GITHUB_* variables, never written into the script
+# text, so no input or step output is ever parsed as shell.
+#
+# The filename MUST stay literally `release.yaml`: the npm Trusted Publisher is
+# registered character-for-character on it and on the environment `release`.
+# Keep the job id `release` as well. See docs/_internal/RELEASING.md § npm
+# Trusted Publisher.
 
 on:
   workflow_dispatch:
     inputs:
       version_bump:
-        description: Version bump type
+        description: Version bump type, or resume to finish the cut main carries
         required: true
         default: alpha
         type: choice
@@ -21,6 +72,7 @@ on:
           - patch
           - minor
           - major
+          - resume
 
 permissions:
   contents: write
@@ -29,7 +81,8 @@ permissions:
   # Without this, gh returns 403 on PR operations.
   pull-requests: write
   # Required by `gh workflow run quality.yaml --ref <branch>` at the force-trigger
-  # step. workflow_dispatch dispatches via GITHUB_TOKEN need actions:write.
+  # step and by `gh workflow run docs.yaml` after a stable
+  # release. workflow_dispatch dispatches via GITHUB_TOKEN need actions:write.
   actions: write
 
 concurrency:
@@ -41,14 +94,17 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     env:
-      # Husky's documented opt-out. The repo's pre-commit (lint-staged) and
-      # pre-push (npm test) hooks are dev-machine guards; in this workflow the
-      # quality gate already ran explicitly, and letting hooks fire on the
-      # bot's release commit/push only adds latency and failure surface.
+      # Keeps the pre-commit hook (lint-staged and the whole `npm test` suite,
+      # which this job has already run) off `Commit version bump`. Husky's
+      # documented opt-out: with HUSKY=0, `npm ci` skips installing the hooks
+      # (the prepare script) and the hook wrapper (.husky/_/h) exits at once.
+      # That step also runs `git commit --no-verify`. Both are there on
+      # purpose: each keeps the hook off alone, so dropping one line cannot
+      # bring the hook back.
       HUSKY: "0"
       # `gh` CLI auth for every gh call in the PR-auto-merge flow + the
-      # tag/merge poll steps. Job-level so every step inherits it without
-      # having to repeat step-level env blocks.
+      # tag/merge poll steps. Job-level so every step inherits
+      # it without having to repeat step-level env blocks.
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
@@ -65,13 +121,14 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
-      # OIDC trusted publishing needs npm 11.5.1 or later. The run publishes
-      # with the npm that ships with the Node version .nvmrc selects, and no
-      # step installs another, so the npm major moves only when a pull
-      # request moves .nvmrc. This step prints both versions and stops the
-      # dispatch before anything is committed, tagged or published when that
-      # npm is below the floor. Should a Node line ever ship an npm below it,
-      # install one exact npm version before this step, never @latest.
+      # OIDC trusted publishing needs npm 11.5.1 or later. The
+      # run publishes with the npm that ships with the Node version .nvmrc
+      # selects, and no step installs another, so the npm major moves only
+      # when a pull request moves .nvmrc. This step prints both versions and
+      # stops every dispatch, the resume path included, before anything is
+      # committed, tagged or published when that npm is below the floor.
+      # Should a Node line ever ship an npm below it, install one exact npm
+      # version before this step, never @latest.
       - name: Verify npm version floor for OIDC trusted publishing
         run: |
           NODE_VERSION=$(node --version)
@@ -83,18 +140,110 @@ jobs:
             exit 1
           fi
 
+      # The Python tests need uv; version_bump=resume runs no tests.
       - name: Install uv
+        if: github.event.inputs.version_bump != 'resume'
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "3.12"
-          # Keyed on package.json, as in quality.yaml's lintlang job.
+          # The uv cache key hashes the files this glob matches. The default
+          # globs (requirements*.txt, pyproject.toml, uv.lock and the like)
+          # match no file here, so setup-uv would warn "No file matched to"
+          # on every run. package.json pins the uv tools, in its scripts'
+          # uvx lintlang@<version> and --with pytest==<version>.
           cache-dependency-glob: package.json
 
       - name: Install dependencies
         run: npm ci
 
+      # version_bump=resume: what the cut main carries still needs. The step
+      # fails, and nothing after it runs, when
+      # tools/release-state.js refuses (its header lists the cases, and each
+      # refusal says why). Its outputs say what is missing
+      # (create_tag, publish, create_release; or done, and then the run stops
+      # here without publishing), where the tag goes, and the --base and
+      # --date of the notes. It runs on main's checkout, before the release
+      # commit is checked out, because that commit may predate
+      # tools/release-state.js.
+      - name: Find what the cut on main still needs (resume)
+        if: github.event.inputs.version_bump == 'resume'
+        id: resume
+        run: node tools/release-state.js resume --ref "$GITHUB_REF" --repo "$GITHUB_REPOSITORY"
+
+      # The release commit is the bot PR's head, the tree a normal run packs,
+      # so a resumed cut publishes from it, with its own lockfile.
+      - name: Check out the release commit (resume)
+        if: github.event.inputs.version_bump == 'resume' && steps.resume.outputs.done == 'false'
+        env:
+          HEAD_SHA: ${{ steps.resume.outputs.head_sha }}
+        run: |
+          git checkout --quiet --detach "$HEAD_SHA"
+          npm ci
+
+      # Refuses a version_bump that would skip past a version main carries
+      # from a merged bot PR and npm does not have: a major or a minor over
+      # an unpublished 3.0.0 would cut 4.0.0 or 3.1.0.
+      # version_bump=resume publishes that version instead, and patch stays
+      # allowed as the ship-forward when it cannot be published. It runs
+      # before the gate, whose own refusal of such a bump (no fragment since
+      # a kept tag, or no breaking one) would point the wrong way.
+      - name: Refuse to bump past an unpublished release
+        if: github.ref == 'refs/heads/main' && github.event.inputs.version_bump != 'resume'
+        env:
+          VERSION_BUMP: ${{ github.event.inputs.version_bump }}
+        run: node tools/release-state.js guard --bump "$VERSION_BUMP"
+
+      # Refuses a version_bump the change fragments (changes/*.yaml) and the
+      # covered surfaces do not allow, before the tests run and before
+      # anything is committed: a bump below the minimum (semver.diff from the
+      # last stable tag to the version the Bump version step will produce) or
+      # below the current version, a removed covered item that no breaking
+      # fragment names, a major with no breaking fragment, a stable release
+      # with no fragment or with text under "## [Unreleased]", a file in
+      # changes/ to fix (a released fragment edited, renamed or copied
+      # included), or a prerelease that cannot reach the minimum (the message
+      # names the hand bump).
+      # `npm run changes:preview -- --bump <type>` gives the same verdict
+      # locally. The input reaches the script through env only.
+      #
+      # A stable bump is refused from any ref but main: it would publish to
+      # `latest` from a commit main never gets, main's package.json and
+      # CHANGELOG.md would not move, and main's next release, which cannot
+      # reach that tag, would render the same fragments into the same version
+      # again. Feature branches cut prereleases only.
+      - name: Check the version bump against the change fragments
+        if: github.event.inputs.version_bump != 'resume'
+        env:
+          VERSION_BUMP: ${{ github.event.inputs.version_bump }}
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          case "$VERSION_BUMP" in
+            patch|minor|major)
+              if [ "$DISPATCH_REF" != "refs/heads/main" ]; then
+                echo "::error::A $VERSION_BUMP release must be dispatched from main, not $DISPATCH_REF. Only alpha, beta and rc can be cut from another branch."
+                exit 1
+              fi
+              ;;
+          esac
+          node tools/changes.js gate --bump "$VERSION_BUMP"
+
       - name: Run tests and validation
+        if: github.event.inputs.version_bump != 'resume'
         run: npm test
+
+      # Compares the required status checks of the live main-protection
+      # ruleset with the checks the jobs of quality.yaml report, before
+      # anything is bumped, committed or pushed. A check the ruleset
+      # requires that no job reports would keep the bot PR waiting until the
+      # Wait for required status checks step times out, after the release
+      # commit is pushed; a job the ruleset does not require gates nothing.
+      # The tool finds the ruleset by name, as that step does, with the
+      # job's GH_TOKEN, and names each missing and extra check. Main
+      # dispatches only: only they open a bot PR. npm test above already
+      # compared quality.yaml with the list in docs/_internal/RELEASING.md.
+      - name: Check the required checks against the ruleset
+        if: github.ref == 'refs/heads/main' && github.event.inputs.version_bump != 'resume'
+        run: node tools/check-required-checks.js --ruleset --repo "$GITHUB_REPOSITORY"
 
       - name: Configure Git
         run: |
@@ -102,26 +251,87 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Bump version
+        if: github.event.inputs.version_bump != 'resume'
+        # tools/changes.js computes the same version for the gate above; keep
+        # the two in step if this case statement changes.
+        env:
+          VERSION_BUMP: ${{ github.event.inputs.version_bump }}
         run: |
-          case "${{ github.event.inputs.version_bump }}" in
-            alpha|beta|rc) npm version prerelease --no-git-tag-version --preid=${{ github.event.inputs.version_bump }} ;;
-            *)             npm version ${{ github.event.inputs.version_bump }} --no-git-tag-version ;;
+          case "$VERSION_BUMP" in
+            alpha|beta|rc) npm version prerelease --no-git-tag-version --preid="$VERSION_BUMP" ;;
+            *)             npm version "$VERSION_BUMP" --no-git-tag-version ;;
           esac
 
+      # Every later step takes the version and the npm dist-tag from here, so
+      # this step fails before marketplace.json or CHANGELOG.md
+      # is written when either one is wrong. The version goes into a plain
+      # assignment first: the default `bash -e` shell stops the step when
+      # node fails there, where a failed command substitution inside echo's
+      # argument would not, and an empty new_version would reach the file
+      # writes, the commit and the tag.
+      #
+      # dist_tag is the one npm dist-tag rule, read by the dry-run, the
+      # publish, the GitHub Release's prerelease flag, the docs deploy and
+      # the summary: latest for a stable version, and alpha, beta or rc for a
+      # prerelease whose first identifier is that id. Any other id stops the
+      # run, so a version the rule does not know never goes to latest, the
+      # tag every `npx bmad-module-ultracode-goal` user gets. The ids are the
+      # prerelease choices of version_bump and PREIDS in tools/changes.js;
+      # keep the three in step.
+      #
+      # A resumed cut runs this step too, on its release commit, so it
+      # publishes under the same rule. Its notes take their base from the
+      # resume step instead of previous_tag: when main moved while the cut
+      # waited, the release commit itself carries the version's tag.
       - name: Get new version and previous tag
+        if: github.event.inputs.version_bump != 'resume' || steps.resume.outputs.done == 'false'
         id: version
         run: |
-          echo "new_version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
-          echo "previous_tag=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)" >> $GITHUB_OUTPUT
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          # The first prerelease identifier, empty for a stable version.
+          # semver (a devDependency, installed by npm ci) gives the version
+          # back unchanged only when it is valid and in its canonical form:
+          # no leading v, no spaces, no build metadata.
+          if ! PREID=$(NEW_VERSION="$NEW_VERSION" node -e '
+            const semver = require("semver");
+            const version = process.env.NEW_VERSION;
+            if (semver.valid(version) !== version) process.exit(1);
+            process.stdout.write(String((semver.prerelease(version) || [""])[0]));
+          '); then
+            echo "::error::package.json holds the version \"$NEW_VERSION\", which is not a valid semantic version (X.Y.Z or X.Y.Z-<id>.<n>, no build metadata). Nothing was committed, tagged or published."
+            exit 1
+          fi
+          case "$PREID" in
+            "")            DIST_TAG=latest ;;
+            alpha|beta|rc) DIST_TAG=$PREID ;;
+            *)
+              echo "::error::$NEW_VERSION is a prerelease with the id $PREID, and only alpha, beta and rc have an npm dist-tag, so the run stops instead of publishing it to latest. Nothing was committed, tagged or published. Use one of those ids, or add the new one to this step, to version_bump's choices and to PREIDS in tools/changes.js."
+              exit 1
+              ;;
+          esac
+          # The last stable tag: prerelease tags are skipped, so the notes and
+          # the compare link of every release, prereleases included, start at
+          # the last stable release, as the gate's minimum bump does. Only
+          # version tags count, so a tag such as `stable` is never the base.
+          # tools/covered-surfaces.js (lastStableTag) runs the same command;
+          # keep the two in step.
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*')
+          {
+            echo "new_version=$NEW_VERSION"
+            echo "dist_tag=$DIST_TAG"
+            echo "previous_tag=$PREVIOUS_TAG"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Update marketplace.json version
+        if: github.event.inputs.version_bump != 'resume'
+        env:
+          VERSION: ${{ steps.version.outputs.new_version }}
         run: |
-          # Targeted JSON edit scoped to .plugins[0].version — resistant to future
+          # Targeted JSON edit scoped to .plugins[0].version, resistant to future
           # schema additions of other `version` keys. Uses a temp file + atomic
           # rename so a partial-write mid-step cannot leave the file in a broken
           # shape (jq has no in-place edit). The VERSION variable is interpolated
           # via jq --arg to avoid shell-quote hazards.
-          VERSION='${{ steps.version.outputs.new_version }}'
           jq --arg v "$VERSION" '.plugins[0].version = $v' .claude-plugin/marketplace.json > .claude-plugin/marketplace.json.tmp
           mv .claude-plugin/marketplace.json.tmp .claude-plugin/marketplace.json
           # Sanity check: the written version matches what we set.
@@ -130,110 +340,86 @@ jobs:
             echo "::error::marketplace.json version write failed: expected $VERSION, got $WROTE"; exit 1
           fi
 
-      - name: Update CHANGELOG.md
+      # Renders the change fragments added since the last stable tag
+      # (tools/changes.js; the format is in changes/README.md). A stable
+      # release inserts the block under the empty "## [Unreleased]" of
+      # CHANGELOG.md and leaves every older release byte-identical; a
+      # prerelease leaves CHANGELOG.md alone, so its fragments are rendered
+      # again for the stable release. Every release writes release_notes.md
+      # (the GitHub Release body) and release_review.md (the "Review before
+      # approving" section of the bot PR). The tool repeats the gate's checks
+      # against the bumped version and fails before the commit step if one
+      # does not pass, or if "## [Unreleased]" is not empty. It keeps each
+      # file under GitHub's size limit (125,000 characters for a release
+      # body, 65,536 for a pull request body): notes too long for it are
+      # shortened and link to the full notes. The tool also writes the full
+      # review into the run summary (within its 1 MiB limit): a prerelease
+      # cut from a feature branch has no bot PR, so the summary is the only
+      # place it is shown. GitHub shows the summary only once the job ends,
+      # so when the review in the bot PR is shortened, this step's log also
+      # shows the full review, and the review points there.
+      - name: Write release notes and CHANGELOG.md
+        if: github.event.inputs.version_bump != 'resume'
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
         run: |
-          npx conventional-changelog-cli -p conventionalcommits -i CHANGELOG.md -s
+          node tools/changes.js release --base "$PREVIOUS_TAG" --version "$NEW_VERSION" --notes release_notes.md --review release_review.md
+          [ -s release_notes.md ] || { echo "::error::release_notes.md is empty or missing; aborting release."; exit 1; }
+          git diff --stat -- CHANGELOG.md
 
-      - name: Restore CHANGELOG preamble
+      # A resumed cut's GitHub Release gets the notes its cut rendered: the
+      # same fragments, rendered by the release commit's own
+      # tools/changes.js, from the stable tag before the version and dated
+      # as its CHANGELOG.md heading (the resume step reads both). The base
+      # is passed, not looked up: seen from main, the version's own tag is
+      # the last stable one once it exists. --notes-only leaves CHANGELOG.md
+      # alone.
+      - name: Write the release notes (resume)
+        if: github.event.inputs.version_bump == 'resume' && steps.resume.outputs.create_release == 'true'
+        env:
+          VERSION: ${{ steps.resume.outputs.version }}
+          BASE: ${{ steps.resume.outputs.base }}
+          DATE: ${{ steps.resume.outputs.date }}
         run: |
-          # conventional-changelog-cli -s prepends the new release entry at byte 0
-          # of CHANGELOG.md, pushing "# Changelog" title + preamble + "## [Unreleased]"
-          # anchor DOWN below it. Restore the canonical Keep-a-Changelog shape:
-          #   # Changelog
-          #   (preamble)
-          #   ## [Unreleased]
-          #   ## [<new release>] (...)
-          #   ## [<older releases>] (...)
-          # Idempotent: if "# Changelog" is already on line 1 (exact match), no-op.
-          [ -s CHANGELOG.md ] || { echo "::error::CHANGELOG.md is empty or missing — aborting release."; exit 1; }
-          if ! head -n 1 CHANGELOG.md | grep -q '^# Changelog$'; then
-            awk '
-              BEGIN { new_entry=""; preamble=""; rest=""; section=0; seen_title=0 }
-              # section 0: new release entry prepended by conventional-changelog -s
-              # section 1: "# Changelog" title + preamble + "## [Unreleased]" anchor
-              # section 2: first released version ("## [X.Y.Z]") onward
-              section==0 && !seen_title && /^# Changelog$/ { seen_title=1; section=1 }
-              section==1 && /^## \[[0-9]/ { section=2 }
-              { if (section==0) new_entry=new_entry $0 "\n";
-                else if (section==1) preamble=preamble $0 "\n";
-                else rest=rest $0 "\n" }
-              END {
-                if (!seen_title) {
-                  print "restore-preamble: # Changelog title not found in CHANGELOG.md — aborting" > "/dev/stderr"
-                  exit 1
-                }
-                printf "%s%s%s", preamble, new_entry, rest
-              }
-            ' CHANGELOG.md > CHANGELOG.md.tmp
-            [ -s CHANGELOG.md.tmp ] || { echo "::error::awk produced empty CHANGELOG.md.tmp — aborting release."; rm -f CHANGELOG.md.tmp; exit 1; }
-            mv CHANGELOG.md.tmp CHANGELOG.md
-            echo "::notice::Restored CHANGELOG preamble ordering (# Changelog → preamble → [Unreleased] → new release → history)"
-          else
-            echo "CHANGELOG preamble already at top — no reordering needed"
-          fi
+          node tools/changes.js release --notes-only --base "$BASE" --version "$VERSION" --date "$DATE" --notes release_notes.md
+          [ -s release_notes.md ] || { echo "::error::release_notes.md is empty or missing, so this run tagged, published and released nothing."; exit 1; }
 
-      - name: Assert no bogus issue refs in CHANGELOG
+      # npm refuses to publish a prerelease without --tag, so the dry-run
+      # passes the dist-tag the publish below uses: without it, every
+      # prerelease cut stops here. Both read the version step's dist_tag. A
+      # resumed cut runs both only when npm does not have its version.
+      - name: Pre-publish dry-run (catch package validation failures before tag push)
+        if: github.event.inputs.version_bump != 'resume' || steps.resume.outputs.publish == 'true'
+        env:
+          # DO NOT REMOVE: defense-in-depth against stale runner-env token auto-pickup;
+          # see docs/_internal/RELEASING.md § npm Trusted Publisher. Paired with the identical override
+          # on the final publish step below.
+          NPM_TOKEN: ""
+          DIST_TAG: ${{ steps.version.outputs.dist_tag }}
         run: |
-          if grep -iE '(closes|fixes|resolves) \[#[^0-9]' CHANGELOG.md; then
-            echo "::error::CHANGELOG.md contains non-numeric '(closes|fixes|resolves) [#...]' refs — aborting release."
+          if [ -z "$DIST_TAG" ]; then
+            echo "::error::The version step set no dist_tag. Nothing was committed, tagged or published."
             exit 1
           fi
-
-      - name: Pre-publish dry-run (catch package validation failures before tag push)
-        env:
-          # DO NOT REMOVE — defense-in-depth against stale runner-env token auto-pickup;
-          # see docs/_internal/RELEASING.md § npm Trusted Publisher. Paired with the
-          # identical override on the final publish step below.
-          NPM_TOKEN: ""
-        run: |
-          VERSION="${{ steps.version.outputs.new_version }}"
-          if   [[ "$VERSION" == *"alpha"* ]]; then TAG=alpha
-          elif [[ "$VERSION" == *"beta"*  ]]; then TAG=beta
-          elif [[ "$VERSION" == *"rc"*    ]]; then TAG=rc
-          else                                     TAG=latest
-          fi
-          npm publish --dry-run --tag "$TAG"
+          npm publish --dry-run --tag "$DIST_TAG"
 
       - name: Commit version bump
+        if: github.event.inputs.version_bump != 'resume'
+        # `npm version` also rewrites the root version in package-lock.json;
+        # leaving it out let the lockfile fall behind package.json.
+        # --no-verify keeps the pre-commit hook off the release commit, as the
+        # job's HUSKY: "0" does; see the comment there for why both stay.
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
         run: |
           git add package.json package-lock.json .claude-plugin/marketplace.json CHANGELOG.md
-          git commit -m "release: bump to v${{ steps.version.outputs.new_version }}"
-
-      - name: Generate release notes
-        id: release_notes
-        run: |
-          COMMITS=$(git log ${{ steps.version.outputs.previous_tag }}..HEAD --pretty=format:"- %s" --reverse)
-          FEATURES=$(echo "$COMMITS" | grep -E "^- (feat|Feature)" || true)
-          FIXES=$(echo "$COMMITS" | grep -E "^- (fix|Fix)" || true)
-          CHORES=$(echo "$COMMITS" | grep -E "^- (chore|Chore)" || true)
-          OTHERS=$(echo "$COMMITS" | grep -v -E "^- (feat|Feature|fix|Fix|chore|Chore|release:|Release:)" || true)
-
-          {
-            echo "## What's New"
-            echo
-            [ -n "$FEATURES" ] && { echo "### New Features"; echo "$FEATURES"; echo; }
-            [ -n "$FIXES" ]    && { echo "### Bug Fixes"; echo "$FIXES"; echo; }
-            [ -n "$OTHERS" ]   && { echo "### Other Changes"; echo "$OTHERS"; echo; }
-            [ -n "$CHORES" ]   && { echo "### Maintenance"; echo "$CHORES"; echo; }
-            echo "## Installation"
-            echo
-            echo '```bash'
-            echo "npx bmad-module-ultracode-goal install"
-            echo '```'
-            echo
-            echo "**Full Changelog**: ${{ github.server_url }}/${{ github.repository }}/compare/${{ steps.version.outputs.previous_tag }}...v${{ steps.version.outputs.new_version }}"
-          } > release_notes.md
-
-          {
-            echo "RELEASE_NOTES<<EOF"
-            cat release_notes.md
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+          git commit --no-verify -m "release: bump to v$NEW_VERSION"
 
       # -----------------------------------------------------------------
       # PR-auto-merge flow (main-dispatch only).
       # -----------------------------------------------------------------
-      # Why this exists: the main-branch ruleset rejects `github-actions[bot]`'s
+      # Why this exists: the main-protection ruleset rejects `github-actions[bot]`'s
       # direct push to `main` (`GH013: Repository rule violations`). The
       # `bypass_actors` list admits only the Admin RepositoryRole with
       # `bypass_mode: pull_request`, and the repo is user-owned (not org-owned)
@@ -246,43 +432,69 @@ jobs:
       # -----------------------------------------------------------------
 
       - name: Push commit to temp branch
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.version_bump != 'resume'
         id: temp_push
         # Main-dispatch must NOT push directly to main. Push the release
         # commit onto a throwaway branch whose name includes `github.run_id` so
         # a retry after a mid-flow failure on the same version string cannot
         # collide with a prior branch (concurrency group serializes dispatches
-        # but same-version re-dispatch after cleanup is a real scenario).
+        # but same-version re-dispatch after cleanup is a real scenario). The
+        # name also carries `github.run_attempt`: "Re-run failed jobs" keeps
+        # the run id and rebuilds the release commit with a new SHA, so a
+        # branch named after the run id alone refused the re-run's push as a
+        # non-fast-forward.
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
         run: |
-          TEMP_BRANCH="release/bot/v${{ steps.version.outputs.new_version }}-${{ github.run_id }}"
+          TEMP_BRANCH="release/bot/v$NEW_VERSION-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           git push origin "HEAD:refs/heads/$TEMP_BRANCH"
           echo "temp_branch=$TEMP_BRANCH" >> "$GITHUB_OUTPUT"
           echo "::notice::Pushed release commit to temp branch $TEMP_BRANCH"
 
       - name: Open bot PR
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.version_bump != 'resume'
         id: open_pr
         # Open a PR from the temp branch to main so branch protection's
-        # required checks gate the release commit. `--body-file` (not --body)
+        # required checks gate the release commit. Their count is deliberately
+        # not written here or in the PR body: a count in prose drifts from the
+        # list, and the Wait step below enforces the live list from the
+        # ruleset anyway. `--body-file` (not --body)
         # avoids shell-escape hazards on multi-line release notes that may
         # contain backticks / dollar signs / nested code fences.
+        env:
+          TEMP_BRANCH: ${{ steps.temp_push.outputs.temp_branch }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
         run: |
-          TEMP_BRANCH="${{ steps.temp_push.outputs.temp_branch }}"
-          NEW_VERSION="${{ steps.version.outputs.new_version }}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
           # Guard release_notes.md absence so PR body is never malformed silently.
           if [ ! -s release_notes.md ]; then
             echo "::warning::release_notes.md missing or empty; using placeholder."
             echo "Release notes unavailable." > release_notes.md
           fi
+          # release_review.md holds the "Review before approving" section: the
+          # checklist, why the minimum bump is what it is, the covered-surface
+          # changes and the notes. If it is missing, show the notes alone.
+          if [ ! -s release_review.md ]; then
+            echo "::warning::release_review.md missing or empty; showing the release notes only."
+            { echo "## Review before approving"; echo; cat release_notes.md; } > release_review.md
+          fi
+          # GitHub refuses a pull request body over 65,536 characters.
+          # tools/changes.js keeps release_review.md within REVIEW_BUDGET, which
+          # leaves room for the lines added around it below; a review over it
+          # (the notes above can run to 120,000) gives way to a pointer. wc -m
+          # never counts fewer characters than GitHub does (in a C locale it
+          # counts bytes).
+          REVIEW_BUDGET=60000
+          if [ "$(wc -m < release_review.md)" -gt "$REVIEW_BUDGET" ]; then
+            echo "::warning::release_review.md is over $REVIEW_BUDGET characters, too long for the bot PR body; the body points to npm run changes:preview instead."
+            { echo "## Review before approving"; echo; echo "The review is too long for a pull request body: \`npm run changes:preview\` prints its reasons, surface changes and notes. Read them, and the \`CHANGELOG.md\` diff, before approving."; } > release_review.md
+          fi
 
           {
-            echo "Automated release PR opened by \`release.yaml\` run \`${{ github.run_id }}\`. Auto-merges once the required status checks pass and a maintainer approves."
+            echo "Automated release PR opened by \`release.yaml\` run \`$GITHUB_RUN_ID\`. Auto-merges once the required status checks pass and a maintainer approves."
             echo
-            echo "## Release notes"
-            echo
-            cat release_notes.md
+            cat release_review.md
             echo
             echo "## Workflow run"
             echo
@@ -306,17 +518,23 @@ jobs:
           echo "::notice::Opened bot PR #$PR_NUMBER at $PR_URL"
 
       - name: Force-trigger required status checks on bot PR
-        if: github.ref == 'refs/heads/main'
-        # PR events authored by GITHUB_TOKEN do NOT fire `pull_request`-triggered
-        # workflows (GitHub docs: "events triggered by the GITHUB_TOKEN ... will
-        # not create a new workflow run", excepting workflow_dispatch and
-        # repository_dispatch). Without this step, the required contexts would
-        # stay in "expected" state forever and branch protection would block
-        # merge indefinitely. Workaround: `workflow_dispatch` is an allowed
-        # exception — dispatch quality.yaml against the temp branch so it runs
-        # there and posts its check-runs on the PR's head commit.
+        if: github.ref == 'refs/heads/main' && github.event.inputs.version_bump != 'resume'
+        # PR events authored by GITHUB_TOKEN do NOT fire
+        # `pull_request`-triggered workflows (GitHub docs: "events triggered
+        # by the GITHUB_TOKEN ... will not create a new workflow run",
+        # excepting workflow_dispatch and repository_dispatch). Without this
+        # step, the required contexts would stay in "expected" state forever
+        # and branch protection would block merge indefinitely.
+        #
+        # Workaround: `workflow_dispatch` is an allowed exception: dispatch
+        # quality.yaml against the temp branch so it runs there and posts its
+        # check-runs on the PR's head commit. If the posted check-run names do
+        # NOT match the ruleset's required contexts (e.g., namespaced to
+        # `Quality & Validation / prettier`), the fallbacks are closing and
+        # reopening the PR, or a personal access token.
+        env:
+          TEMP_BRANCH: ${{ steps.temp_push.outputs.temp_branch }}
         run: |
-          TEMP_BRANCH="${{ steps.temp_push.outputs.temp_branch }}"
           # Surface gh workflow run failures explicitly. Without the guard,
           # the next step (wait-for-checks) silently waits for check-runs that
           # will never register.
@@ -327,24 +545,63 @@ jobs:
           echo "::notice::Dispatched quality.yaml against $TEMP_BRANCH via workflow_dispatch"
 
       - name: Cancel action_required pull_request runs on bot PR head
-        if: github.ref == 'refs/heads/main'
-        # GitHub's fork-PR-approval rule applies even to GITHUB_TOKEN-authored
-        # PRs in user-owned repos; the pull_request event on the bot PR fires
-        # quality.yaml which lands in `conclusion: action_required` and cannot
-        # be approved via POST /actions/runs/:id/approve. These orphan runs DO
-        # appear in PullRequest.status CheckRollup and permanently block branch
-        # protection even when the workflow_dispatch-sourced runs conclude
-        # success. Cancelling them transitions conclusion action_required →
-        # cancelled (a terminal state); branch protection's most-recent-wins
-        # eval then picks the workflow_dispatch success runs as authoritative.
+        if: github.ref == 'refs/heads/main' && github.event.inputs.version_bump != 'resume'
+        # GitHub's fork-PR-approval rule applies even to
+        # GITHUB_TOKEN-authored PRs in user-owned repos; the pull_request event
+        # on the bot PR fires quality.yaml, whose runs
+        # land in `conclusion: action_required` and cannot be approved via
+        # POST /actions/runs/:id/approve (returns "This run is not from a fork
+        # pull request."). These orphan runs DO appear in PullRequest.status
+        # CheckRollup and permanently block branch protection even when the
+        # workflow_dispatch-sourced runs conclude success. Cancelling them
+        # transitions conclusion action_required → cancelled (a terminal
+        # state); branch protection's most-recent-wins eval then picks the
+        # workflow_dispatch success runs as authoritative on the SHA.
+        env:
+          PR_NUMBER: ${{ steps.open_pr.outputs.pr_number }}
         run: |
-          PR_NUMBER="${{ steps.open_pr.outputs.pr_number }}"
-          HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)
+          # A failed gh call is retried: one API error would otherwise end
+          # the release here.
+          HEAD_SHA=""
+          for TRY in 1 2 3 4 5 6; do
+            HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid 2>/dev/null || true)
+            if [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then break; fi
+            HEAD_SHA=""
+            if [ "$TRY" -lt 6 ]; then
+              echo "Reading the head commit of PR #$PR_NUMBER failed (try $TRY of 6); retrying"
+              sleep 10
+            fi
+          done
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::Could not read the head commit of PR #$PR_NUMBER in 6 tries. The last step of this run closes the bot PR and deletes its branch. To retry, use Re-run failed jobs on this run or dispatch release.yaml again."
+            exit 1
+          fi
           # Give GitHub a moment to attach the pull_request runs (they may
           # still be firing after PR-open / force-trigger dispatch).
           sleep 10
-          STUCK=$(gh api "/repos/${{ github.repository }}/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
-            --paginate --jq '[.workflow_runs[] | select(.conclusion == "action_required") | .id]')
+          # One list over every page: `gh api --paginate --jq` runs the filter
+          # once per page and prints one array per page, which `jq 'length'`
+          # below would read as several counts. --slurp gathers the pages
+          # into one array first (gh does not take --jq with --slurp). A
+          # failed call still prints an array, `[]` when no page arrived or
+          # the pages read before the failure, so gh's exit status decides,
+          # and a failed call is retried. An error body, which has no
+          # workflow_runs, prints nothing.
+          STUCK=""
+          for TRY in 1 2 3 4 5 6; do
+            if RUNS=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$HEAD_SHA&per_page=100" --paginate --slurp 2>/dev/null); then
+              STUCK=$(echo "$RUNS" | jq -c 'if type=="array" and all(.[]; type=="object" and has("workflow_runs")) then [.[].workflow_runs[] | select(.conclusion == "action_required") | .id] else empty end' 2>/dev/null || true)
+            fi
+            if [ -n "$STUCK" ]; then break; fi
+            if [ "$TRY" -lt 6 ]; then
+              echo "Listing the workflow runs on $HEAD_SHA failed (try $TRY of 6); retrying"
+              sleep 10
+            fi
+          done
+          if [ -z "$STUCK" ]; then
+            echo "::error::Could not list the workflow runs on $HEAD_SHA in 6 tries. The last step of this run closes the bot PR and deletes its branch. To retry, use Re-run failed jobs on this run or dispatch release.yaml again."
+            exit 1
+          fi
           COUNT=$(echo "$STUCK" | jq 'length')
           if [ "$COUNT" -eq 0 ]; then
             echo "::notice::No action_required runs on $HEAD_SHA; nothing to cancel."
@@ -352,7 +609,7 @@ jobs:
           fi
           echo "::notice::Cancelling $COUNT action_required run(s) on $HEAD_SHA"
           for RUN_ID in $(echo "$STUCK" | jq -r '.[]'); do
-            if gh api --method POST "/repos/${{ github.repository }}/actions/runs/$RUN_ID/cancel"; then
+            if gh api --method POST "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/cancel"; then
               echo "  Cancelled run $RUN_ID"
             else
               echo "::warning::Failed to cancel run $RUN_ID (may already be in a terminal state)"
@@ -360,46 +617,120 @@ jobs:
           done
 
       - name: Wait for required status checks
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.version_bump != 'resume'
         id: wait_checks
-        timeout-minutes: 20
-        # gh pr checks reads GraphQL's PullRequest.statusCheckRollup which only
-        # surfaces check-runs in a check suite that belongs to the PR
-        # (pull_request / push / merge_group events). The Force-trigger step
-        # above uses workflow_dispatch, whose check-runs land in a SEPARATE
-        # suite attached to the SHA by the ref-level dispatch — invisible to
-        # the rollup. Poll the commit's check-runs API directly to see all
-        # check-runs on the SHA regardless of which check suite created them.
-        # Required-context list is fetched from the ruleset (repo variable
-        # RELEASE_RULESET_ID — see docs/_internal/RELEASING.md) so the Wait
-        # step has a single source of truth with branch protection.
+        # A backstop above the wait loop's own 45 minutes (TIMEOUT below),
+        # which count only its sleeps: its gh and jq calls and the
+        # registration poll come on top. The loop must end first, so that
+        # its error, which reads the bot PR's state, is the one the run shows.
+        timeout-minutes: 60
+        # gh pr checks reads GraphQL's
+        # PullRequest.statusCheckRollup which only surfaces check-runs in a
+        # check suite that belongs to the PR (pull_request / push / merge_group
+        # events). The Force-trigger step above uses workflow_dispatch, whose
+        # check-runs land in a SEPARATE suite attached to the SHA by the ref-
+        # level dispatch, invisible to the rollup. Poll the commit's check-
+        # runs API directly to see all check-runs on the SHA regardless of
+        # which check suite created them. Required-context list is fetched
+        # from the main-protection ruleset so the Wait step has a single source of truth
+        # with branch protection.
+        #
+        # A maintainer can admin-merge the bot PR before its checks finish.
+        # When one then fails or the wait times out, main already carries
+        # the new version, which no later step of this run tags or publishes,
+        # so the error reads the PR's state and, once it has merged, names
+        # version_bump=resume instead of a retry.
+        env:
+          PR_NUMBER: ${{ steps.open_pr.outputs.pr_number }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
         run: |
-          PR_NUMBER="${{ steps.open_pr.outputs.pr_number }}"
-          HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)
-          echo "Polling check-runs on $HEAD_SHA (PR #$PR_NUMBER)"
-
-          # Required contexts fetched from the ruleset (not hard-coded)
-          # so the Wait step can never drift from branch protection.
-          RULESET_ID='${{ vars.RELEASE_RULESET_ID }}'
-          if [ -z "$RULESET_ID" ]; then
-            echo "::error::Repo variable RELEASE_RULESET_ID is not set. Create the main-branch ruleset, then: gh variable set RELEASE_RULESET_ID --body <id>  (see docs/_internal/RELEASING.md)"
+          # A failed gh call is retried, here and in the wait loop below, as
+          # the approval and merge waits do: the default `bash -e` shell ends
+          # the step when a command substitution in an assignment fails.
+          HEAD_SHA=""
+          for TRY in 1 2 3 4 5 6; do
+            HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid 2>/dev/null || true)
+            if [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then break; fi
+            HEAD_SHA=""
+            if [ "$TRY" -lt 6 ]; then
+              echo "Reading the head commit of PR #$PR_NUMBER failed (try $TRY of 6); retrying"
+              sleep 10
+            fi
+          done
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::Could not read the head commit of PR #$PR_NUMBER in 6 tries. The last step of this run closes the bot PR and deletes its branch. To retry, use Re-run failed jobs on this run or dispatch release.yaml again."
             exit 1
           fi
-          REQUIRED_JSON=$(gh api "/repos/${{ github.repository }}/rulesets/$RULESET_ID" \
-            --jq '[.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context]' 2>/dev/null || echo "")
+          echo "Polling check-runs on $HEAD_SHA (PR #$PR_NUMBER)"
+
+          # Every check-run on the commit, as one list. `gh api --paginate
+          # --jq` runs the filter once per page and prints one result per
+          # page, so past the first page a context resolved to one line per
+          # page and never read as completed. --slurp gathers the
+          # pages into one array first; gh does not take --jq with --slurp,
+          # hence the jq pipe. A failed call still prints an array, `[]` when
+          # no page arrived or the pages read before the failure, so gh's
+          # exit status decides: prints nothing when the call fails or
+          # returns an error body, which has no check_runs.
+          check_runs() {
+            local PAGES
+            PAGES=$(gh api "/repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/check-runs?per_page=100" --paginate --slurp 2>/dev/null) || return 0
+            echo "$PAGES" | jq -c 'if type=="array" and all(.[]; type=="object" and has("check_runs")) then [.[].check_runs[] | {name, status, conclusion, started_at, html_url}] else empty end' 2>/dev/null || true
+          }
+
+          # The bot PR's state, read when the wait fails: OPEN, CLOSED or
+          # MERGED, or nothing when three reads fail. Once the PR has merged,
+          # Re-run failed jobs would cut the version again from the dispatch
+          # commit, so the errors below name the resume path instead.
+          pr_state() {
+            local STATE="" TRY
+            for TRY in 1 2 3; do
+              STATE=$(gh pr view "$PR_NUMBER" --json state --jq .state 2>/dev/null || true)
+              if [ -n "$STATE" ]; then break; fi
+              if [ "$TRY" -lt 3 ]; then sleep 10; fi
+            done
+            echo "$STATE"
+          }
+          MERGED_NOTE="Bot PR #$PR_NUMBER was merged before its checks finished, so main now carries v$NEW_VERSION, which this run does not tag or publish."
+          RESUME="dispatch release.yaml on main with version_bump=resume, which tags, publishes and creates the GitHub Release of v$NEW_VERSION, each only if missing (docs/_internal/RELEASING.md, \"Bot PR merged, but the version was not published\")"
+          IF_MERGED="If bot PR #$PR_NUMBER has merged meanwhile, main carries v$NEW_VERSION: once every required check on $HEAD_SHA is green, $RESUME."
+
+          # Required contexts are fetched from the ruleset (not hard-coded) so
+          # the Wait step can never drift from branch protection. The ruleset
+          # is resolved BY NAME, never by id: an id is not stable across a
+          # delete and recreate, and that recreate is exactly the moment a
+          # pinned id would 404 and hard-exit the release, while recovering
+          # from some earlier incident.
+          # `gh api --jq` SKIPS the filter on a non-2xx and copies the error body to
+          # stdout, so `--jq ... || echo ""` yields `{"message":"Not Found",...}`, not
+          # "", which would sail straight past the -z guard below. Pipe to jq instead
+          # and require the shape we expect, so any error body becomes empty.
+          RULESET_ID=$(gh api "/repos/$GITHUB_REPOSITORY/rulesets" 2>/dev/null \
+            | jq -r 'if type=="array" then (map(select(.name=="main-protection")) | .[0].id // empty) else empty end')
+          if [ -z "$RULESET_ID" ]; then
+            echo "::error::No ruleset named \"main-protection\" on $GITHUB_REPOSITORY. Verify: gh api /repos/$GITHUB_REPOSITORY/rulesets --jq '.[].name'"
+            exit 1
+          fi
+          echo "Resolved ruleset \"main-protection\" to id $RULESET_ID"
+          # Same guard: an error body is an object WITHOUT `rules`, which is neither
+          # empty nor `[]`, so it would pass the check below and the wait loop would
+          # poll for contexts named after the error's own keys until it timed out.
+          REQUIRED_JSON=$(gh api "/repos/$GITHUB_REPOSITORY/rulesets/$RULESET_ID" 2>/dev/null \
+            | jq -c 'if type=="object" and has("rules") then [.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context] else empty end')
           if [ -z "$REQUIRED_JSON" ] || [ "$REQUIRED_JSON" = "[]" ]; then
-            echo "::error::Failed to fetch required-context list from ruleset $RULESET_ID. Retry the workflow, or verify: gh api /repos/${{ github.repository }}/rulesets/$RULESET_ID"
+            echo "::error::Ruleset \"main-protection\" (id $RULESET_ID) returned no required_status_checks contexts. Retry the workflow, or verify: gh api /repos/$GITHUB_REPOSITORY/rulesets/$RULESET_ID"
             exit 1
           fi
           REQUIRED_COUNT=$(echo "$REQUIRED_JSON" | jq 'length')
           echo "Required contexts ($REQUIRED_COUNT): $REQUIRED_JSON"
 
-          # Registration poll — wait up to 2m for check-runs to register
-          # on the SHA (register-before-watch guard).
+          # Registration poll: wait up to 2m for check-runs to register on the
+          # SHA before the main wait loop watches them.
           POLL=0
           REGISTERED=0
           while [ $POLL -lt 24 ]; do
-            REGISTERED=$(gh api "/repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" --paginate --jq '.check_runs | length' 2>/dev/null || echo 0)
+            CHECKS=$(check_runs)
+            REGISTERED=$(echo "${CHECKS:-[]}" | jq 'length')
             if [ "${REGISTERED:-0}" -ge 1 ]; then
               echo "::notice::$REGISTERED check-run(s) registered on $HEAD_SHA; entering main wait loop"
               break
@@ -408,24 +739,36 @@ jobs:
             POLL=$((POLL + 1))
           done
           if [ "${REGISTERED:-0}" -lt 1 ]; then
-            echo "::error::No check-runs registered on $HEAD_SHA within 2m. Likely causes: (a) workflow_dispatch of quality.yaml failed silently at the Force-trigger step (see prior step logs); (b) ruleset required-context list is empty (verify: gh api /repos/.../rulesets/$RULESET_ID)."
+            echo "::error::No check-runs registered on $HEAD_SHA within 2m. Likely causes: (a) workflow_dispatch of quality.yaml failed silently at the Force-trigger step (see prior step logs); (b) ruleset required-context list is empty (verify: gh api /repos/$GITHUB_REPOSITORY/rulesets --jq '.[] | select(.name==\"main-protection\") | .id')."
             exit 1
           fi
 
-          # Main wait loop — most-recent-wins per context, fail-fast on
-          # any concluded failure state, 20m hard cap via step-level timeout.
+          # Main wait loop: most-recent-wins per context, fail-fast on
+          # any conclusion that is not green, and 45 minutes of waits
+          # (TIMEOUT) before it gives up, under the step's own timeout. A read
+          # that fails is a pending tick, so only the timeout ends the wait.
+          # The Windows jobs are the slowest, the pull_request run the wait
+          # counts can start minutes after the dispatched one, and a runner
+          # queue can delay both, so the wait leaves a wide margin: a timeout
+          # closes the bot PR and loses the cut.
           ELAPSED=0
-          TIMEOUT=1200
+          TIMEOUT=2700
+          PENDING=()
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            CHECKS=$(gh api "/repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" \
-              --paginate --jq '[.check_runs[] | {name, status, conclusion, started_at, html_url}]')
+            CHECKS=$(check_runs)
+            if [ -z "$CHECKS" ]; then
+              echo "Reading the check-runs on $HEAD_SHA failed (elapsed ${ELAPSED}s of ${TIMEOUT}s); retrying"
+              sleep 20
+              ELAPSED=$((ELAPSED + 20))
+              continue
+            fi
             ALL_GREEN=true
             PENDING=()
             FAILED=()
             # Iterate with `while IFS= read -r` to preserve spaces in context
             # names. Unquoted `$(jq -r '.[]')` in a `for` loop word-splits on
             # whitespace, so contexts like "validate (ubuntu-latest)" get
-            # split into "validate" + "(ubuntu-latest)" — neither of which
+            # split into "validate" + "(ubuntu-latest)", neither of which
             # matches any check-run name.
             while IFS= read -r CTX; do
               CTX_RUN=$(echo "$CHECKS" | jq -c --arg n "$CTX" '[.[] | select(.name==$n)] | sort_by(.started_at) | last')
@@ -441,22 +784,31 @@ jobs:
                 ALL_GREEN=false
                 continue
               fi
+              # Only these three are green. Any other conclusion fails the
+              # wait: failure, cancelled, timed_out, action_required, stale,
+              # and one this step does not know. tools/release-state.js
+              # (GREEN_CONCLUSIONS) reads the checks of a resumed cut the same
+              # way; keep the two in step.
               case "$CONCL" in
                 success|skipped|neutral)
                   : # green
                   ;;
-                failure|cancelled|timed_out|action_required)
+                *)
                   RUN_URL=$(echo "$CTX_RUN" | jq -r .html_url)
                   FAILED+=("$CTX(conclusion=$CONCL, run=$RUN_URL)")
                   ALL_GREEN=false
                   ;;
-                *)
-                  echo "::warning::Unexpected conclusion '$CONCL' on $CTX; treating as green"
-                  ;;
               esac
             done < <(echo "$REQUIRED_JSON" | jq -r '.[]')
             if [ ${#FAILED[@]} -gt 0 ]; then
-              echo "::error::Required context(s) failed: ${FAILED[*]}. PR left open for manual inspection. Re-run release.yaml after the underlying defect is fixed on main."
+              STATE=$(pr_state)
+              if [ "$STATE" = "MERGED" ]; then
+                echo "::error::Required context(s) failed: ${FAILED[*]}. $MERGED_NOTE Re-run a flaky check from its run page; once every required check on $HEAD_SHA is green, $RESUME. For a defect, fix it on main by pull request and dispatch version_bump=patch instead."
+                exit 1
+              fi
+              UNKNOWN=""
+              if [ -z "$STATE" ]; then UNKNOWN=" $IF_MERGED"; fi
+              echo "::error::Required context(s) failed: ${FAILED[*]}. The last step of this run closes the bot PR, unless it has merged, and deletes its branch. For a flaky check, use Re-run failed jobs on this run; for a defect, fix it on main by pull request, then dispatch release.yaml again.$UNKNOWN"
               exit 1
             fi
             if [ "$ALL_GREEN" = "true" ]; then
@@ -467,39 +819,51 @@ jobs:
             sleep 20
             ELAPSED=$((ELAPSED + 20))
           done
-          echo "::error::Required status checks did not all succeed within ${TIMEOUT}s on $HEAD_SHA. Pending: ${PENDING[*]}. PR left open for manual inspection."
+          WAITED="Required status checks did not all succeed within ${TIMEOUT}s on $HEAD_SHA. Pending: ${PENDING[*]:-unknown, the check-runs could not be read}."
+          STATE=$(pr_state)
+          if [ "$STATE" = "MERGED" ]; then
+            echo "::error::$WAITED $MERGED_NOTE Once every required check on $HEAD_SHA is green, $RESUME."
+            exit 1
+          fi
+          UNKNOWN=""
+          if [ -z "$STATE" ]; then UNKNOWN=" $IF_MERGED"; fi
+          echo "::error::$WAITED The last step of this run closes the bot PR, unless it has merged, and deletes its branch. To retry, use Re-run failed jobs on this run or dispatch release.yaml again.$UNKNOWN"
           exit 1
 
       - name: Wait for PR approval or admin-bypass merge
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.version_bump != 'resume'
         id: wait_approval
-        # Poll until EITHER reviewDecision == APPROVED (the bot PR was approved,
-        # auto-merge will fire next) OR merged == true (the maintainer
-        # bypass-merged via admin). github-actions[bot] cannot self-approve
-        # (universal GitHub rule); `armelhbobdad` is the required approver per
-        # the `release` env's required_reviewers list.
+        # Poll until EITHER reviewDecision == APPROVED (the bot
+        # PR was approved, auto-merge will fire next) OR merged == true (the
+        # maintainer bypass-merged via admin). github-actions[bot] cannot
+        # self-approve (universal GitHub rule); `armelhbobdad` is the required
+        # approver per the `release` env's required_reviewers list.
         #
         # The merged-true branch handles the scenario where the maintainer
         # chooses to bypass-merge via admin instead of approving via UI (the
-        # ruleset's bypass_mode: pull_request admits admin merges without a
-        # formal review). In that case, `reviewDecision` stays REVIEW_REQUIRED
+        # main-protection ruleset's bypass_mode: pull_request admits admin
+        # merges without a formal review). In that case, `reviewDecision` stays REVIEW_REQUIRED
         # forever and a pure APPROVED-only poll would hang for 30m.
         #
         # Manual timer (not step-level timeout-minutes) so we can emit a
         # specific ::error:: message on timeout. Exports already_merged so the
         # next two steps skip their work when the maintainer pre-merged.
+        env:
+          PR_NUMBER: ${{ steps.open_pr.outputs.pr_number }}
         run: |
-          PR_NUMBER="${{ steps.open_pr.outputs.pr_number }}"
           TIMEOUT_SECONDS=1800  # 30 min
           POLL_INTERVAL=60
           ELAPSED=0
           while [ $ELAPSED -lt $TIMEOUT_SECONDS ]; do
-            # Guard against transient gh / API failures — empty or error VIEW
-            # would yield empty DECISION / MERGED and wedge the loop in "none"
-            # state while the 30m budget still burns.
-            # NOTE: `merged` is NOT a valid `gh pr view --json` field (the valid
-            # name for merge status is `state`, which returns "OPEN" / "CLOSED"
-            # / "MERGED").
+            # Guard against transient gh / API failures: empty or error VIEW
+            # would yield empty DECISION / MERGED and wedge the loop in "none" state
+            # while the 30m budget still burns.
+            # `merged` is NOT a valid `gh pr view --json` field (the valid
+            # name for merge status is `state`, which returns "OPEN" /
+            # "CLOSED" / "MERGED"). Querying `merged` made this whole call
+            # fail with "Unknown JSON field" and the guard below treated
+            # every tick as a transient error: the admin-bypass path was
+            # never detected.
             if ! VIEW=$(gh pr view "$PR_NUMBER" --json reviewDecision,state,mergeCommit,mergedAt,latestReviews 2>&1); then
               echo "gh pr view failed (elapsed ${ELAPSED}s); retrying: $VIEW"
               sleep $POLL_INTERVAL
@@ -530,10 +894,10 @@ jobs:
               } >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            # Reviewer actively rejected — fail fast, don't burn the 30m budget
+            # Reviewer actively rejected: fail fast, don't burn the 30m budget
             # polling for an APPROVED that won't arrive until the comments are addressed.
             if [ "$DECISION" = "CHANGES_REQUESTED" ]; then
-              echo "::error::PR #$PR_NUMBER has CHANGES_REQUESTED; a reviewer actively rejected the PR. Address the review comments and re-dispatch release.yaml."
+              echo "::error::PR #$PR_NUMBER has CHANGES_REQUESTED; a reviewer actively rejected the PR. The last step of this run closes it, where the review stays readable, and deletes its branch. Address the review comments on main by pull request, then dispatch release.yaml again."
               exit 1
             fi
             if [ "$DECISION" = "APPROVED" ]; then
@@ -553,41 +917,48 @@ jobs:
             sleep $POLL_INTERVAL
             ELAPSED=$((ELAPSED + POLL_INTERVAL))
           done
-          echo "::error::PR #$PR_NUMBER was neither approved nor admin-bypass-merged within 30m. PR left open. Re-run release.yaml after approving or merging."
+          echo "::error::PR #$PR_NUMBER was neither approved nor admin-bypass-merged within 30m. The last step of this run closes it, unless it merges first, and deletes its branch. To retry, use Re-run failed jobs on this run or dispatch release.yaml again, then approve or merge the new bot PR within 30m."
           exit 1
 
       - name: Auto-merge bot PR
-        if: github.ref == 'refs/heads/main' && steps.wait_approval.outputs.already_merged != 'true'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.version_bump != 'resume' && steps.wait_approval.outputs.already_merged != 'true'
         # --merge (merge-commit), NOT --squash / --rebase. Merge-commit
         # preserves the bot's release commit SHA underneath main's new tip so
-        # the tag anchor on `origin/main` resolves to a reachable commit
-        # (the merge commit itself — see the tag step below). --auto blocks
+        # the tag anchor on `origin/main` resolves to a reachable commit (the
+        # merge commit itself; see the tag step below). --auto blocks
         # nothing because checks + approval are already green.
         # Skipped if the maintainer bypass-merged at the approval step.
+        env:
+          PR_NUMBER: ${{ steps.open_pr.outputs.pr_number }}
         run: |
-          PR_NUMBER="${{ steps.open_pr.outputs.pr_number }}"
-          # --delete-branch cleans up release/bot/vX.Y.Z-<run_id> after merge
-          # so the ref namespace doesn't accumulate one branch per release forever.
+          # --delete-branch deletes release/bot/vX.Y.Z-<run_id>-<run_attempt>
+          # when gh merges the PR at once. A queued auto-merge skips the delete
+          # (delete_branch_on_merge is off) and leaves the branch, as an
+          # admin-bypass merge does; RELEASING.md's ls-remote check finds it.
           if ! gh pr merge "$PR_NUMBER" --auto --merge --delete-branch; then
-            echo "::error::Auto-merge failed for PR #$PR_NUMBER. If the error was 'auto merge is not allowed for this repository', run: gh api --method PATCH /repos/${{ github.repository }} -f allow_auto_merge=true"
+            echo "::error::Auto-merge failed for PR #$PR_NUMBER. If the error was 'auto merge is not allowed for this repository', run: gh api --method PATCH /repos/$GITHUB_REPOSITORY -f allow_auto_merge=true  (see docs/_internal/RELEASING.md, Repo settings)."
             exit 1
           fi
           echo "::notice::Auto-merge enabled on PR #$PR_NUMBER"
 
       - name: Wait for merge completion
-        if: github.ref == 'refs/heads/main' && steps.wait_approval.outputs.already_merged != 'true'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.version_bump != 'resume' && steps.wait_approval.outputs.already_merged != 'true'
         id: wait_merge
         timeout-minutes: 5
         # `gh pr merge --auto` schedules the merge; GitHub may take seconds to
-        # actually perform it. Poll `state` until MERGED so the downstream tag
+        # actually perform it. Poll `merged` until true so the downstream tag
         # step sees the new main tip. Skipped if the maintainer bypass-merged
         # (merged is already true; wait_approval emitted merge_sha + merged_at
         # for the Summary step).
+        env:
+          PR_NUMBER: ${{ steps.open_pr.outputs.pr_number }}
         run: |
-          PR_NUMBER="${{ steps.open_pr.outputs.pr_number }}"
           while true; do
             # Guard transient gh / API failures (empty VIEW would hang until
             # the 5m step-level timeout with no diagnostic signal).
+            # `merged` is NOT a valid `gh pr view --json` field. `state`
+            # returns "OPEN" / "CLOSED" / "MERGED" and covers both the
+            # merged and closed-without-merge branches below.
             if ! VIEW=$(gh pr view "$PR_NUMBER" --json state,mergeCommit,mergedAt 2>&1); then
               echo "gh pr view failed; retrying: $VIEW"
               sleep 10
@@ -603,7 +974,7 @@ jobs:
             # closed it, GitHub blocked it, mergeable state went bad). Fail fast
             # instead of hanging until the 5m timeout with no actionable diagnostic.
             if [ "$STATE" = "CLOSED" ]; then
-              echo "::error::PR #$PR_NUMBER was closed without being merged. Investigate: operator close, mergeable state regression, ruleset reject. PR left in closed state."
+              echo "::error::PR #$PR_NUMBER was closed without being merged. Investigate: operator close, mergeable state regression, ruleset reject. The last step of this run deletes its branch if it is still there. Dispatch release.yaml again once the cause is fixed."
               exit 1
             fi
             if [ "$STATE" = "MERGED" ]; then
@@ -622,111 +993,345 @@ jobs:
           done
 
       - name: Skip PR flow (non-main dispatch ref)
-        if: github.ref != 'refs/heads/main'
-        # Feature-branch prereleases preserve the legacy tag-only pattern.
-        # The tag anchors on the CI-ephemeral commit below (orphan pattern).
+        if: github.ref != 'refs/heads/main' && github.event.inputs.version_bump != 'resume'
+        # Feature-branch prereleases keep the tag-only pattern: the tag will
+        # anchor on the CI-ephemeral commit below, and main does not move.
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
         run: |
-          echo "::notice::Dispatched from ${{ github.ref }} (not main); skipping PR auto-merge flow."
-          echo "Tag v${{ steps.version.outputs.new_version }} will anchor on the CI-ephemeral commit; main was NOT advanced."
+          echo "::notice::Dispatched from $GITHUB_REF (not main); skipping PR auto-merge flow."
+          echo "Tag v$NEW_VERSION will anchor on the CI-ephemeral commit; main was NOT advanced."
           echo "This is the expected path for prerelease cuts from feature branches."
 
       - name: Create and push tag
-        # Tag creation happens AFTER the PR auto-merges (main-dispatch path).
+        if: github.event.inputs.version_bump != 'resume'
+        id: tag
+        # The tag is created AFTER the PR auto-merges (main-dispatch path).
         # The anchor is `origin/main`'s new tip (the merge commit), so
-        # `git describe --tags` from main resolves cleanly. For non-main
-        # dispatch, anchor on HEAD (the CI-ephemeral release commit).
+        # `git describe --tags` from main resolves cleanly. For a non-main
+        # dispatch, the anchor is HEAD (the CI-ephemeral release commit).
+        #
+        # The tag must mark the tree npm publishes, which is this runner's
+        # release commit (HEAD), because the next release selects its change
+        # fragments and diffs the covered surfaces from this tag. When main
+        # did not move while the release waited for checks and approval, the
+        # merge commit's first parent is the dispatch commit and its tree is
+        # HEAD's, so the tag goes on the merge commit. When another pull
+        # request merged into main meanwhile (strict status checks are off),
+        # the merge commit's tree holds that change and the package does not:
+        # the tag then goes on HEAD, which main reaches through the merge
+        # commit's second parent, so the next release still renders that pull
+        # request's fragment and checks its surfaces. A squash or rebase merge
+        # leaves HEAD off main, so in that case the run stops before publishing.
+        # tools/release-state.js (decideResume) applies the same rule for
+        # version_bump=resume, from the bot PR's commits; keep the two in step.
+        #
+        # On main this step runs only once the bot PR has merged, so main
+        # carries the new version and its errors name version_bump=resume:
+        # Re-run failed jobs would cut the version again from the dispatch
+        # commit.
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+          # Empty on a non-main dispatch, which skips the PR flow; only the
+          # main branch of the script below reads it.
+          PR_NUMBER: ${{ steps.open_pr.outputs.pr_number }}
         run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            RESUME="Nothing was tagged or published, and main carries v$NEW_VERSION: once origin can be fetched again (check the network and the token), dispatch release.yaml on main with version_bump=resume (docs/_internal/RELEASING.md, \"Bot PR merged, but the version was not published\"). Do not use Re-run failed jobs, which cuts the version again from the dispatch commit."
             # Fail fast on fetch failure; cross-check the anchor SHA against the
-            # PR's merge commit. git-backend replication can lag the API briefly,
-            # so `origin/main` post-fetch may still be the pre-merge tip — in
-            # which case the tag would anchor on the orphaned temp-branch commit
-            # instead of the merge commit now on main. Using the PR's reported
-            # mergeCommit as the authoritative anchor eliminates the race.
+            # PR's merge commit. git-backend replication can lag the API briefly, so
+            # `origin/main` post-fetch may still be the pre-merge tip, in which case
+            # the tag would anchor on the orphaned temp-branch commit instead of the
+            # merge commit now on main. Using the PR's reported mergeCommit as the
+            # authoritative anchor eliminates the race.
             if ! git fetch origin main; then
-              echo "::error::git fetch origin main failed. Cannot safely anchor release tag. Check network/auth and re-run."
+              echo "::error::git fetch origin main failed, so the tag cannot be anchored. $RESUME"
               exit 1
             fi
             TAG_ANCHOR=$(git rev-parse origin/main)
-            PR_NUMBER="${{ steps.open_pr.outputs.pr_number }}"
             EXPECTED_SHA=$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid // empty')
             if [ -n "$EXPECTED_SHA" ] && [ "$TAG_ANCHOR" != "$EXPECTED_SHA" ]; then
-              echo "::warning::origin/main tip ($TAG_ANCHOR) differs from PR #$PR_NUMBER merge commit ($EXPECTED_SHA) — possible git/API replication lag. Using PR merge commit as tag anchor."
+              echo "::warning::origin/main tip ($TAG_ANCHOR) differs from PR #$PR_NUMBER merge commit ($EXPECTED_SHA): possible git/API replication lag. Using PR merge commit as tag anchor."
               TAG_ANCHOR="$EXPECTED_SHA"
             fi
-            echo "Main-dispatch: anchoring tag on $TAG_ANCHOR"
+            if ! git cat-file -e "$TAG_ANCHOR^{commit}" 2>/dev/null && ! git fetch origin "$TAG_ANCHOR"; then
+              echo "::error::Cannot fetch the merge commit $TAG_ANCHOR, so the tag cannot be anchored. $RESUME"
+              exit 1
+            fi
+            ANCHOR_KIND="merge commit"
+            if [ "$(git rev-parse "$TAG_ANCHOR^1")" != "$GITHUB_SHA" ]; then
+              if git merge-base --is-ancestor HEAD "$TAG_ANCHOR"; then
+                echo "::warning::main moved while the release waited (merge commit $TAG_ANCHOR does not follow the dispatch commit $GITHUB_SHA): its tree holds changes the package does not. Tagging the release commit $(git rev-parse HEAD) instead, which main reaches through the merge."
+                TAG_ANCHOR=$(git rev-parse HEAD)
+                ANCHOR_KIND="release commit"
+              else
+                echo "::error::main moved while the release waited and the bot PR was not merged with a merge commit, so the release commit this run would publish ($(git rev-parse HEAD)) is not on main. Nothing was tagged or published, and version_bump=resume cannot finish the cut either: ship v$NEW_VERSION forward with version_bump=patch as in docs/_internal/RELEASING.md, \"Bot PR merged, but the version was not published\" (there is no tag to delete)."
+                exit 1
+              fi
+            fi
+            echo "Main-dispatch: anchoring tag on the $ANCHOR_KIND $TAG_ANCHOR"
           else
-            TAG_ANCHOR=HEAD
+            TAG_ANCHOR=$(git rev-parse HEAD)
+            ANCHOR_KIND="CI-ephemeral commit (orphan pattern)"
             echo "Non-main-dispatch: anchoring tag on CI HEAD (orphan pattern)"
           fi
-          if git rev-parse "v${{ steps.version.outputs.new_version }}" >/dev/null 2>&1; then
-            echo "Tag v${{ steps.version.outputs.new_version }} already exists, skipping tag creation"
+          {
+            echo "anchor=$TAG_ANCHOR"
+            echo "anchor_kind=$ANCHOR_KIND"
+          } >> "$GITHUB_OUTPUT"
+          if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
+            echo "Tag v$NEW_VERSION already exists, skipping tag creation"
           else
-            git tag -a "v${{ steps.version.outputs.new_version }}" -m "Release v${{ steps.version.outputs.new_version }}" "$TAG_ANCHOR"
-            git push origin "v${{ steps.version.outputs.new_version }}"
+            git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION" "$TAG_ANCHOR"
+            git push origin "v$NEW_VERSION"
           fi
+
+      # A resumed cut's tag goes where the step above would have put it (the
+      # resume step works that out, and refuses a tag already elsewhere),
+      # before the publish, as in a normal run.
+      - name: Create and push the tag (resume)
+        if: github.event.inputs.version_bump == 'resume' && steps.resume.outputs.create_tag == 'true'
+        env:
+          VERSION: ${{ steps.resume.outputs.version }}
+          ANCHOR: ${{ steps.resume.outputs.anchor }}
+          ANCHOR_KIND: ${{ steps.resume.outputs.anchor_kind }}
+        run: |
+          git tag -a "v$VERSION" -m "Release v$VERSION" "$ANCHOR"
+          git push origin "v$VERSION"
+          echo "::notice::Tagged v$VERSION on the $ANCHOR_KIND $ANCHOR"
 
       - name: Publish to npm via OIDC trusted publishing
+        if: github.event.inputs.version_bump != 'resume' || steps.resume.outputs.publish == 'true'
         env:
-          # DO NOT REMOVE — defense-in-depth against stale runner-env token auto-pickup;
-          # see docs/_internal/RELEASING.md § npm Trusted Publisher. Paired with the
-          # identical override on the pre-publish dry-run step above.
+          # DO NOT REMOVE: defense-in-depth against stale runner-env token auto-pickup;
+          # see docs/_internal/RELEASING.md § npm Trusted Publisher. Paired with the identical override
+          # on the pre-publish dry-run step above.
           NPM_TOKEN: ""
+          DIST_TAG: ${{ steps.version.outputs.dist_tag }}
         run: |
-          VERSION="${{ steps.version.outputs.new_version }}"
-          if   [[ "$VERSION" == *"alpha"* ]]; then npm publish --tag alpha
-          elif [[ "$VERSION" == *"beta"*  ]]; then npm publish --tag beta
-          elif [[ "$VERSION" == *"rc"*    ]]; then npm publish --tag rc
-          else                                     npm publish --tag latest
+          if [ -z "$DIST_TAG" ]; then
+            echo "::error::The version step set no dist_tag, so nothing was published. The tag is pushed: from main, finish the cut with version_bump=resume once the version step is fixed; from another branch, recover as in docs/_internal/RELEASING.md, \"Tag exists but npm publish failed\"."
+            exit 1
           fi
+          npm publish --tag "$DIST_TAG"
 
       - name: Create GitHub Release
+        if: github.event.inputs.version_bump != 'resume' || steps.resume.outputs.create_release == 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: v${{ steps.version.outputs.new_version }}
           name: "UltraCode Goal (UCG) v${{ steps.version.outputs.new_version }}"
-          body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
+          # Written from the change fragments by "Write release notes and CHANGELOG.md" (or, on
+          # resume, "Write the release notes (resume)"), under GitHub's 125,000-character limit
+          # for a release body.
+          body_path: release_notes.md
           draft: false
-          prerelease: ${{ contains(steps.version.outputs.new_version, 'alpha') || contains(steps.version.outputs.new_version, 'beta') || contains(steps.version.outputs.new_version, 'rc') }}
+          # Every dist-tag but latest is a prerelease line.
+          prerelease: ${{ steps.version.outputs.dist_tag != 'latest' }}
+
+      # The docs site shows the latest stable release, so a stable release
+      # deploys it at the new tag and a prerelease leaves it alone. The GitHub
+      # Release above is published with GITHUB_TOKEN, and events that token
+      # makes start no other workflow; workflow_dispatch is an exception, so
+      # the deploy is dispatched here (actions: write above covers it). The run
+      # goes on main, whose docs.yaml checks out and builds the tag given in
+      # `ref`: by default the github-pages environment admits deployments from
+      # the default branch only, and would refuse a run on the tag itself. npm
+      # and the GitHub Release are already out, so a failed dispatch only warns
+      # and names the command that deploys by hand.
+      - name: Deploy the docs site at the new tag
+        id: docs
+        if: github.ref == 'refs/heads/main' && steps.version.outputs.dist_tag == 'latest'
+        continue-on-error: true
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+        run: |
+          if gh workflow run docs.yaml --ref main -f ref="v$NEW_VERSION"; then
+            echo "::notice::Dispatched docs.yaml to deploy the docs site at v$NEW_VERSION."
+            echo "status=dispatched" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Could not dispatch docs.yaml, so the docs site still shows the previous release. The release itself is complete. Deploy the site by hand: gh workflow run docs.yaml -f ref=v$NEW_VERSION"
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Summary
-        # Step summary with a "Release Flow" subsection so the operator sees at
-        # a glance whether the main-dispatch PR-auto-merge path or the
-        # non-main-dispatch tag-only path ran.
+        # Extend the step summary with a "Release Flow" subsection so the
+        # operator sees at a glance whether the main-dispatch PR-auto-merge path
+        # or the non-main-dispatch tag-only path ran. A resumed cut points to
+        # the resume step's own section above it, which lists what the run did
+        # and what was already there; with nothing missing, that section is
+        # the whole record.
+        if: github.event.inputs.version_bump != 'resume' || steps.resume.outputs.done == 'false'
+        env:
+          VERSION_BUMP: ${{ github.event.inputs.version_bump }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+          DIST_TAG: ${{ steps.version.outputs.dist_tag }}
+          TEMP_BRANCH: ${{ steps.temp_push.outputs.temp_branch }}
+          PR_URL: ${{ steps.open_pr.outputs.pr_url }}
+          AUTH_PATH: ${{ steps.wait_approval.outputs.authorization_path }}
+          APPROVER: ${{ steps.wait_approval.outputs.approver }}
+          APPROVED_AT: ${{ steps.wait_approval.outputs.approved_at }}
+          APPROVAL_MERGE_SHA: ${{ steps.wait_approval.outputs.merge_sha }}
+          APPROVAL_MERGED_AT: ${{ steps.wait_approval.outputs.merged_at }}
+          WAIT_MERGE_SHA: ${{ steps.wait_merge.outputs.merge_sha }}
+          WAIT_MERGED_AT: ${{ steps.wait_merge.outputs.merged_at }}
+          ANCHOR_KIND: ${{ steps.tag.outputs.anchor_kind }}
+          TAG_ANCHOR: ${{ steps.tag.outputs.anchor }}
+          DOCS_DEPLOY: ${{ steps.docs.outputs.status }}
         run: |
           {
-            echo "## 🎉 Released v${{ steps.version.outputs.new_version }}"
+            echo "## 🎉 Released v$NEW_VERSION"
             echo
-            echo "**npm**: https://www.npmjs.com/package/bmad-module-ultracode-goal/v/${{ steps.version.outputs.new_version }}"
-            echo "**GitHub**: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.new_version }}"
+            echo "**npm**: https://www.npmjs.com/package/bmad-module-ultracode-goal/v/$NEW_VERSION (dist-tag \`$DIST_TAG\`)"
+            echo "**GitHub**: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/v$NEW_VERSION"
             echo "**Provenance**: auto-attached via OIDC trusted publishing"
+            if [ "$DOCS_DEPLOY" = "dispatched" ]; then
+              echo "**Docs site**: deploy at v$NEW_VERSION dispatched (docs.yaml)"
+            elif [ "$DIST_TAG" != "latest" ]; then
+              echo "**Docs site**: unchanged (a prerelease does not deploy it)"
+            else
+              echo "**Docs site**: not deployed; deploy it by hand with \`gh workflow run docs.yaml -f ref=v$NEW_VERSION\`"
+            fi
             echo
             echo "### Release Flow"
             echo
-            if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-              # Richer summary — include authorization path, approver identity +
-              # timestamp, merge commit SHA + timestamp. Data source:
-              # wait_approval emits merge_sha + merged_at on the admin-bypass
-              # path (where wait_merge is skipped); wait_merge emits on the
-              # formal-approval path. Read from whichever populated.
-              AUTH_PATH="${{ steps.wait_approval.outputs.authorization_path }}"
-              APPROVER="${{ steps.wait_approval.outputs.approver }}"
-              APPROVED_AT="${{ steps.wait_approval.outputs.approved_at }}"
-              MERGE_SHA="${{ steps.wait_approval.outputs.merge_sha }}"
-              MERGED_AT="${{ steps.wait_approval.outputs.merged_at }}"
+            if [ "$VERSION_BUMP" = "resume" ]; then
+              echo "- Dispatch: \`version_bump=resume\` on \`main\`, nothing bumped or committed; what it did and what was already there is listed under **Resume v$NEW_VERSION** above"
+            elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
+              # Richer summary: include authorization path,
+              # approver identity + timestamp, merge commit SHA + timestamp. Data
+              # source: wait_approval emits merge_sha + merged_at on the admin-bypass
+              # path (where wait_merge is skipped); wait_merge emits on the formal-
+              # approval path. Read from whichever populated.
+              MERGE_SHA="$APPROVAL_MERGE_SHA"
+              MERGED_AT="$APPROVAL_MERGED_AT"
               if [ -z "$MERGE_SHA" ]; then
-                MERGE_SHA="${{ steps.wait_merge.outputs.merge_sha }}"
-                MERGED_AT="${{ steps.wait_merge.outputs.merged_at }}"
+                MERGE_SHA="$WAIT_MERGE_SHA"
+                MERGED_AT="$WAIT_MERGED_AT"
               fi
               echo "- Dispatch ref: \`main\` (PR-auto-merge path)"
-              echo "- Temp branch: \`${{ steps.temp_push.outputs.temp_branch }}\`"
-              echo "- Bot PR: ${{ steps.open_pr.outputs.pr_url }}"
+              echo "- Temp branch: \`$TEMP_BRANCH\`"
+              echo "- Bot PR: $PR_URL"
               echo "- Required checks: passed"
               echo "- Authorization: $AUTH_PATH (approver: \`$APPROVER\` at $APPROVED_AT)"
               echo "- Merged: $MERGED_AT (merge commit \`$MERGE_SHA\`)"
-              echo "- Tag anchored on merge commit"
+              echo "- Tag anchored on the $ANCHOR_KIND \`$TAG_ANCHOR\`"
             else
-              echo "- Dispatch ref: \`${{ github.ref }}\` (non-main; tag-only path)"
-              echo "- Tag anchored on CI-ephemeral commit (orphan pattern)"
+              echo "- Dispatch ref: \`$GITHUB_REF\` (non-main; tag-only path)"
+              echo "- Tag anchored on the $ANCHOR_KIND \`$TAG_ANCHOR\`"
             fi
-          } >> $GITHUB_STEP_SUMMARY
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A main dispatch that fails or is cancelled before its bot PR merges
+      # left the PR open and its temp branch on origin, and the next dispatch
+      # opened a second `release: bump to vX.Y.Z` PR next to it.
+      # This last step runs once the temp branch was pushed (a run that
+      # stopped earlier pushed nothing). It closes an open bot PR, which also
+      # deletes the branch, then comments on it with a link to the run, and
+      # deletes the branch of a PR that is already closed or was never
+      # opened. A merged PR and its branch are left alone: main then carries
+      # the release commit, and the step names version_bump=resume, which
+      # finishes the tag, the publish and the GitHub Release.
+      # Re-run failed jobs would cut the version again from the dispatch
+      # commit and open a second bot PR. A closed PR keeps the commit reachable
+      # (refs/pull/<n>/head), so closing it loses nothing to inspect. The PR
+      # is found by its head branch, whose name is unique to this run
+      # attempt, so a failure inside Open bot PR after the PR was created is
+      # covered too.
+      - name: Close the bot PR and delete its branch after a failed run
+        if: (failure() || cancelled()) && github.ref == 'refs/heads/main' && steps.temp_push.outputs.temp_branch != ''
+        timeout-minutes: 5
+        env:
+          TEMP_BRANCH: ${{ steps.temp_push.outputs.temp_branch }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          RETRY="To retry, use Re-run failed jobs on the run or dispatch release.yaml again: either opens a new bot PR."
+          COMMENT="Closed by the release run $RUN_URL (attempt $GITHUB_RUN_ATTEMPT), which stopped before this PR merged (job status: $JOB_STATUS). The run also deletes its branch \`$TEMP_BRANCH\`; the release commit stays reachable from this PR. $RETRY"
+          PR_NUMBER=""
+          STATE=""
+          CLOSE_TRIED=""
+          # A failed gh call is retried, and a failed close reads the state
+          # again first: the PR may have merged in between, or gh may have
+          # closed it and failed after that, so a PR this run tried to close
+          # that now reads as closed counts as closed by the run.
+          for TRY in 1 2 3 4 5 6; do
+            PRS=$(gh pr list --head "$TEMP_BRANCH" --state all --json number,state,isCrossRepository 2>/dev/null || true)
+            if echo "$PRS" | jq -e 'type=="array"' >/dev/null 2>&1; then
+              PR_NUMBER=$(echo "$PRS" | jq -r '[.[] | select(.isCrossRepository | not)] | .[0].number // empty')
+              STATE=$(echo "$PRS" | jq -r '[.[] | select(.isCrossRepository | not)] | .[0].state // "NONE"')
+              if [ "$STATE" = "CLOSED" ] && [ -n "$CLOSE_TRIED" ]; then
+                STATE="CLOSED_BY_RUN"
+              fi
+              if [ "$STATE" != "OPEN" ]; then
+                break
+              fi
+              # No --comment: gh posts it before it closes, so each retry
+              # would post it again, and a PR that merged in between would
+              # keep it. The comment goes on below, once the PR is closed.
+              CLOSE_TRIED=true
+              if gh pr close "$PR_NUMBER" --delete-branch; then
+                STATE="CLOSED_BY_RUN"
+                break
+              fi
+              WHAT_FAILED="Closing bot PR #$PR_NUMBER failed"
+            else
+              WHAT_FAILED="Reading the bot PR of $TEMP_BRANCH failed"
+            fi
+            if [ "$TRY" -lt 6 ]; then
+              echo "$WHAT_FAILED (try $TRY of 6); retrying"
+              sleep 10
+            fi
+          done
+          case "$STATE" in
+            MERGED)
+              RESUME="Bot PR #$PR_NUMBER merged before this run stopped, so main now carries v$NEW_VERSION, whose tag, npm publish and GitHub Release this run did not finish. Finish them: dispatch release.yaml on main with version_bump=resume, which does each one only if it is missing and never bumps (docs/_internal/RELEASING.md, \"Bot PR merged, but the version was not published\"). Do not use Re-run failed jobs: it cuts the version again from the dispatch commit and opens a second bot PR. The PR and $TEMP_BRANCH are left alone."
+              echo "::warning::$RESUME"
+              {
+                echo "## Release stopped after the bot PR merged"
+                echo
+                echo "$RESUME"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+              ;;
+            OPEN)
+              echo "::error::Could not close bot PR #$PR_NUMBER in 6 tries. Close it by hand: gh pr close $PR_NUMBER --delete-branch"
+              exit 1
+              ;;
+            "")
+              echo "::error::Could not read the bot PR of $TEMP_BRANCH in 6 tries, so nothing was closed or deleted. Check by hand: gh pr list --head $TEMP_BRANCH --state all"
+              exit 1
+              ;;
+          esac
+          COMMENTED=""
+          if [ "$STATE" = "CLOSED_BY_RUN" ]; then
+            if gh pr comment "$PR_NUMBER" --body "$COMMENT"; then
+              COMMENTED=" with a comment linking this run"
+            else
+              echo "::warning::Bot PR #$PR_NUMBER is closed, but the comment linking this run could not be posted."
+            fi
+          fi
+
+          # Closing with --delete-branch deleted the branch already; this
+          # covers a PR that was closed before, a run that stopped before the
+          # PR was opened and a branch delete that failed.
+          if ! REMOTE=$(git ls-remote --heads origin "refs/heads/$TEMP_BRANCH"); then
+            echo "::error::Could not look up $TEMP_BRANCH on origin. Check by hand: git ls-remote --heads origin 'release/bot/*'"
+            exit 1
+          fi
+          if [ -n "$REMOTE" ] && ! git push origin --delete "$TEMP_BRANCH"; then
+            echo "::error::Could not delete $TEMP_BRANCH. Delete it by hand: git push origin --delete $TEMP_BRANCH"
+            exit 1
+          fi
+          case "$STATE" in
+            CLOSED_BY_RUN) DONE="Closed bot PR #$PR_NUMBER$COMMENTED and deleted $TEMP_BRANCH." ;;
+            CLOSED) DONE="Bot PR #$PR_NUMBER is closed and $TEMP_BRANCH is deleted." ;;
+            *) DONE="No bot PR was open for $TEMP_BRANCH; the branch is deleted." ;;
+          esac
+          echo "::notice::$DONE"
+          {
+            echo "## Release stopped before the bot PR merged"
+            echo
+            echo "$DONE $RETRY"
+          } >> "$GITHUB_STEP_SUMMARY"

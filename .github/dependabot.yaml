@@ -28,6 +28,8 @@ updates:
           - actions/deploy-pages
           - actions/github-script
           - softprops/action-gh-release
+          - actions/upload-artifact
+          - actions/download-artifact
         update-types:
           - minor
           - patch
