@@ -72,7 +72,7 @@
 }
 
 /* ============================================
-   HERO (splash template) — tagline-forward
+   HERO (splash template): tagline-forward
    ============================================ */
 .hero .tagline {
   font-size: clamp(1.25rem, 2.4vw, 1.875rem);
@@ -88,7 +88,7 @@
 }
 
 /* ============================================
-   VERDICT CHIP — "what a gate verdict looks like"
+   VERDICT CHIP: "what a gate verdict looks like"
    ============================================ */
 .verdict-sample {
   display: flex;
@@ -134,7 +134,7 @@
 }
 
 /* ============================================
-   CTA PILL — prominent inline call-to-action
+   CTA PILL: prominent inline call-to-action
    ============================================ */
 .cta-pill {
   margin: 1.75rem 0;
@@ -174,7 +174,7 @@
 }
 
 /* ============================================
-   COMPARISON TABLE — highlight UCG (last) row
+   COMPARISON TABLE: highlight UCG (last) row
    (scoped to .comparison-table wrapper to avoid
    affecting other tables across the site)
    ============================================ */
@@ -225,7 +225,7 @@
   border-radius: 4px;
 }
 
-/* Group headers (Why / Try / Reference) — classic docs-site treatment */
+/* Group headers (Why / Try / Reference): classic docs-site treatment */
 .sidebar-content summary {
   padding: 0.5rem 0.75rem;
   margin-top: 1.25rem;
@@ -535,7 +535,7 @@ blockquote {
 /* ============================================
    FOOTER
    ============================================ */
-/* Footer inherits the page background — no slab. A hairline is enough
+/* Footer inherits the page background, with no slab. A hairline is enough
    to separate the meta row (last-updated, pagination) from the content. */
 footer {
   background-color: transparent;
@@ -562,8 +562,8 @@ pre.mermaid:hover {
   box-shadow: 0 0 0 2px var(--sl-color-accent);
 }
 
-/* Dark mode: lift the sequence-diagram message text out of the murk —
-   mermaid's stock dark theme renders it too dim against our indigo page */
+/* Dark mode: lift the sequence-diagram message text out of the murk.
+   Mermaid's stock dark theme renders it too dim against our indigo page */
 :root[data-theme='dark'] pre.mermaid svg .messageText {
   fill: #cbd5e1 !important;
 }
@@ -572,7 +572,7 @@ pre.mermaid:hover {
   fill: #cbd5e1 !important;
 }
 
-/* Fullscreen overlay — light by default, dark via toggle */
+/* Fullscreen overlay: light by default, dark via toggle */
 .mermaid-lightbox {
   position: fixed;
   inset: 0;

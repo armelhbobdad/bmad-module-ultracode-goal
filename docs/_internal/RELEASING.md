@@ -51,13 +51,14 @@ These must exist before the first `main`-dispatch release. Order matters.
 
 ### 1. Required-check contexts must exist
 
-Branch-protection rulesets can only require status checks that have reported at least once. Open any PR (or dispatch `quality.yaml` manually) so these nine contexts exist:
+Branch-protection rulesets can only require status checks that have reported at least once. Open any PR (or dispatch `quality.yaml` manually) so these contexts exist:
 
 ```text
 prettier
 eslint
 markdownlint
 lintlang
+em-dash
 validate (ubuntu-latest)
 validate (windows-latest)
 python (ubuntu-latest)

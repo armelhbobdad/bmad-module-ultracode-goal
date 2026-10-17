@@ -47,7 +47,7 @@
     content.innerHTML = '';
   }
 
-  // Event delegation — works regardless of when mermaid renders
+  // Event delegation: works regardless of when mermaid renders
   document.addEventListener('click', function (e) {
     var target = e.target.closest('pre.mermaid');
     if (target) {

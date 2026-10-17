@@ -38,6 +38,8 @@ uv run --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest skills/ultracode-g
 
 When a failure needs localizing, re-run just that file serially and verbosely: `uv run --with pytest==9.1.1 pytest skills/ultracode-goal/scripts/tests/test_<name>.py -v`.
 
+Write no em dashes (U+2014) in anything you add, including commit messages: use a colon, a comma, parentheses or a new sentence. `validate:em-dash` fails on any em dash in the published docs (`README.md`, `docs/` outside `docs/_internal/`, `website/`) and on any em dash in the lines or commit messages your branch adds. It skips `CHANGELOG.md`, any `package-lock.json` and the generated reference skills under `skf-skills/`.
+
 ### Reference skills
 
 `skf-skills/` tracks version-pinned reference skills for the tools UCG conducts: BMAD Method 6.12.0 (`bmad-method-bmm`, `bmad-method-installer`), TEA 1.27.2 (`tea-testarch`), Claude Code 2.1.283 (`cc-primitives`), BMad Builder 2.2.2 (`bmad-builder`), and a stack skill that ties them together (`bmad-module-ultracode-goal-stack`). Load the relevant one before changing code that drives or reads one of these tools.
