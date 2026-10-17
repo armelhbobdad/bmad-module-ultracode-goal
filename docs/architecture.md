@@ -62,6 +62,7 @@ skills/ultracode-goal/
 │   ├── status_render.py           #   read-side render behind /ucg-status
 │   ├── red_ids.py                 #   preflight-RED identity (the resolve join key)
 │   ├── story_sizing.py            #   decomposition sizing + parent-AC claim reconciliation
+│   ├── claim_check.py             #   pre-commit: paths a message names that the staged diff skips
 │   ├── drive_epic.py              #   one `claude -p` per story (--max-stories work bound)
 │   ├── headless_envelope.py       #   the one five-key headless-envelope adapter
 │   ├── health_check_fp.py         #   health-check fingerprint + seen-cache plumbing
