@@ -97,7 +97,7 @@ export default defineConfig({
       // Custom CSS
       customCss: ['./src/styles/custom.css'],
 
-      // Sidebar configuration — Why / Try / Reference buckets
+      // Sidebar configuration: Why / Try / Reference buckets
       sidebar: [
         { label: 'Welcome', slug: 'index' },
         {

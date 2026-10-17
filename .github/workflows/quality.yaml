@@ -5,6 +5,7 @@ name: Quality & Validation
 # - ESLint (linting)
 # - markdownlint (markdown quality)
 # - LintLang (agent instructions under skills/)
+# - No em dashes (published docs, and the lines and commit messages a PR adds)
 # - Installation component tests (module.yaml, SKILL.md, scripts)
 # - CLI integration tests (install/update/uninstall flows)
 # - Skill structure validation
@@ -108,10 +109,44 @@ jobs:
       - name: LintLang
         run: npm run lint:instructions
 
+  # Enforces the project's writing rule: no em dash (U+2014). The published
+  # docs (README.md, docs/ except docs/_internal/, website/) must hold none,
+  # and a pull request may add none, in its changed lines or its commit
+  # messages, outside the generated files the tool skips (CHANGELOG.md,
+  # package-lock.json, skf-skills/). fetch-depth: 0 fetches the base branch
+  # the tool diffs against; without it the tool fails in CI rather than skip
+  # the check. It uses only Node built-ins, so the job skips npm ci. Linux
+  # only: it reads text, so a Windows run would only repeat it.
+  em-dash:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+
+      - name: Test the em dash check
+        run: npm run test:em-dash-tool
+
+      # A pull request diffs against its base branch and a dispatch against
+      # origin/main. A push to main diffs against the commit main held before
+      # the push, so a commit pushed straight to main is checked too (against
+      # origin/main it would diff with itself). A push that creates the
+      # branch has no such commit and falls back to origin/main.
+      - name: No em dashes
+        env:
+          EM_DASH_BASE: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '' }}
+        run: npm run validate:em-dash
+
   validate:
     # Matrix Linux + Windows to catch platform-divergence bugs (path handling,
     # line endings, shell scripts). macOS skipped: POSIX-equivalent to Linux
-    # for UCG's Node + Python surface area — add only if a Mac-only bug surfaces.
+    # for UCG's Node + Python surface area. Add it only if a Mac-only bug surfaces.
     strategy:
       fail-fast: false
       matrix:
@@ -132,7 +167,7 @@ jobs:
 
       # test:cli drives the real installer (Step 6b runs merge_customization.py
       # via `uv run`) and round-trips TOML through `uv`/`python3` helpers, so the
-      # validate job needs both on PATH — same uv setup the python job uses.
+      # validate job needs both on PATH, with the same uv setup the python job uses.
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
