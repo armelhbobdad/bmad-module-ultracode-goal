@@ -1,0 +1,6 @@
+type: breaking
+scope: ultracode-goal
+summary: |
+  The preflight semantic scan now hunts for a user-facing surface the Epic ships that no story composes: a page, screen or other entry point whose component a story creates while no story's acceptance criterion names the route or parent that renders it. Stories each scoped to one component leave this gap only in their union, where no per-story review sees it. Such a surface is recorded as a red of kind `undecided-architecture`, at the line of the story that creates it, so an Epic that launched before can now stop at preflight. A child component its parent renders in the same story, an Epic that ships components for others to compose, and a mount assigned to a named story of another Epic are not this gap.
+migration: |
+  If preflight now stops on an uncomposed surface, add an acceptance criterion to the story that should mount it, naming the route or parent that renders it, or answer the red through `/ucg-resolve` when the mount is deliberately left out.
