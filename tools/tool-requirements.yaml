@@ -1,0 +1,122 @@
+# The external tools UltraCode Goal uses, with the oldest version it
+# supports (minimum) and the versions it has run on (tested). This is the
+# one list: the prerequisites table in docs/getting-started.md is generated
+# from it, and tools/tool-requirements.js checks every other copy of these
+# versions in the repository against it.
+#
+# How the numbers are set:
+# - `tested` lists versions UCG has actually run on, and `basis` names the
+#   run: a CI pin, the CI runner, the install smoke test or a named Epic run.
+#   An empty list means no run is recorded yet.
+# - `minimum` starts at a tested version, the only version UCG has evidence
+#   for. It starts lower only where the repository already sets a floor for
+#   a stated reason (Claude Code 2.1.154, BMAD Method 6.2), and `basis` says
+#   which.
+# - A minimum comes down only after a run on an older version passes. It is
+#   never guessed lower.
+# - `minimum: null` means UCG has no floor it can check yet. Node, Python and
+#   Claude Code always have one, since --check compares their copies with it.
+#
+# To change a version, edit this file and run
+# `node tools/tool-requirements.js --write`, which regenerates the
+# prerequisites table. `node tools/tool-requirements.js --check` (run in CI)
+# also compares the copies elsewhere in the repository: the minimums in the
+# README, docs/ and CONTRIBUTING.md, the README Python badge, `engines.node`
+# in package.json, .nvmrc, the workflows' node-version and python-version,
+# the Claude Code minimums preflight_check.py refuses to launch below, the
+# requires-python headers of the skill's scripts, and the versions in the
+# README "Tested with" table.
+#
+# Keys of each tool:
+#   name             the name the docs use
+#   summary          what the tool is, in a few words (optional)
+#   kind             runtime (every run needs it), gate (the completion
+#                    gate needs it) or optional (a feature uses it when
+#                    present)
+#   used_for         what UCG uses it for, as the prerequisites table says it
+#   minimum          the oldest supported version as a string, or null
+#   tested           the versions UCG has run on, as strings
+#   basis            where minimum and tested come from
+#   install_url      where to install it from
+#   tested_with_row  its row in the README "Tested with" table (optional):
+#                    that row's version must be one of `tested`
+
+schema_version: 1
+tools:
+  claude_code:
+    name: Claude Code
+    kind: runtime
+    used_for: "**The runtime: non-negotiable.** UCG composes Auto Mode, Auto Memory, and runtime hooks, which only exist in Claude Code, and writes each story's Definition-of-Done as a `/goal`-style condition; the autonomous run cannot execute anywhere else. Preflight refuses to launch below the minimum"
+    minimum: "2.1.154"
+    tested: ["2.1.301"]
+    basis: The minimum is the highest of the versions preflight_check.py refuses to launch below (its MIN_GOAL, MIN_WORKFLOWS and MIN_AUTOMEMORY, one per Claude Code primitive the run needs). Tested is the README "Tested with" run of 2026-10-16, under --light.
+    install_url: https://claude.com/product/claude-code
+    tested_with_row: Claude Code
+
+  node:
+    name: Node.js
+    kind: runtime
+    used_for: Installation, `npx` commands
+    minimum: "22"
+    tested: ["22", "24"]
+    basis: The minimum is package.json engines.node; the install smoke test runs `npx bmad-module-ultracode-goal --version` on it on Linux, Windows and macOS. CI runs the version in .nvmrc.
+    install_url: https://nodejs.org
+
+  python:
+    name: Python
+    kind: runtime
+    used_for: The deterministic gate, preflight, and hook scripts (run via `uv`)
+    minimum: "3.11"
+    tested: ["3.11", "3.12"]
+    basis: The minimum is the requires-python header every script under skills/ declares. The quality workflow's python job runs the Python tests on 3.11 (Linux and Windows), and the release workflow runs them on 3.12 (Linux); its lintlang and validate jobs use 3.12.
+    install_url: https://www.python.org
+
+  uv:
+    name: uv
+    summary: Python package runner
+    kind: runtime
+    used_for: Running the module's Python scripts with automatic dependency management
+    minimum: null
+    tested: ["0.13.1"]
+    basis: No minimum yet. Tested is the uv setup-uv installed on the CI runners on 2026-10-17 (it installs the latest release).
+    install_url: https://docs.astral.sh/uv/getting-started/installation/
+
+  git:
+    name: git
+    kind: runtime
+    used_for: Epic-branch isolation and per-story commits (the real rollback)
+    minimum: null
+    tested: ["2.55.0", "2.56.0"]
+    basis: No minimum yet. Tested is the git on the GitHub-hosted runners on 2026-10-17, 2.55.0 on Ubuntu and 2.56.0 on Windows.
+    install_url: https://git-scm.com/downloads
+
+  gh:
+    name: gh
+    summary: GitHub CLI
+    kind: optional
+    used_for: Submitting or queuing [health-check](./health-check.md) findings
+    minimum: null
+    tested: []
+    basis: No minimum, and no run of the health-check submission is recorded yet.
+    install_url: https://cli.github.com
+
+  bmad_method:
+    name: BMAD Method
+    kind: runtime
+    used_for: The Epic toolbox UCG conducts, `bmad-sprint-planning`, `bmad-create-story`, `bmad-dev-story`, `bmad-code-review` and the rest. On 6.12 or later, install with `--shims` (see below)
+    minimum: "6.2"
+    tested: ["6.12.0"]
+    basis: The minimum is the first release that installs `bmad-create-story` and `bmad-dev-story` under those names (earlier releases named them differently; see the --shims paragraph below the table). Preflight checks the two skills by name, not the version. Tested is the README "Tested with" run of 2026-10-16.
+    install_url: https://docs.bmad-method.org
+    tested_with_row: BMAD Method
+
+  tea:
+    name: TEA
+    summary: Test Architect
+    kind: gate
+    used_for: "**The gate: non-negotiable.** UCG invokes the `bmad-testarch-*` skills to produce the `gate-decision.json` that `gate_eval.py` reads. Required in both profiles: `--light` still runs test-design and trace"
+    minimum: null
+    tested: ["1.27.2"]
+    basis: No minimum yet. Tested is the README "Tested with" run of 2026-10-16, under --light.
+    install_url: https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise
+    tested_with_row: TEA (Test Architect)

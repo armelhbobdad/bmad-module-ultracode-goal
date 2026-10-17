@@ -19,7 +19,7 @@ If you're not sure where a change belongs, open an issue and ask before writing 
 **Prerequisites:**
 
 - [Node.js](https://nodejs.org/) >= 22, the supported floor (`engines.node`); development and CI run Node 24 (see `.nvmrc`)
-- [Python](https://www.python.org/) >= 3.10
+- [Python](https://www.python.org/) >= 3.11
 - [uv](https://docs.astral.sh/uv/): runs the Python test suite
 - `git`, `gh`: used by the run itself and by the health-check loop
 
@@ -37,6 +37,8 @@ uv run --with pytest==9.1.1 --with pytest-xdist==3.8.0 --with pyyaml==6.0.3 pyte
 ```
 
 When a failure needs localizing, re-run just that file serially and verbosely: `uv run --with pytest==9.1.1 pytest skills/ultracode-goal/scripts/tests/test_<name>.py -v` (for a workflow test, `uv run --with pytest==9.1.1 --with pyyaml==6.0.3 pytest test/test-<name>.py -v`).
+
+The tool versions live in one list, `tools/tool-requirements.yaml`: each tool's minimum and the versions UCG has run on. The prerequisites table in `docs/getting-started.md` is generated from it, so to change a version, edit the list and run `node tools/tool-requirements.js --write`. `validate:tool-requirements` fails when a copy elsewhere disagrees with it: the minimums in `README.md`, `CONTRIBUTING.md` and `docs/`, the README Python badge, `engines.node`, `.nvmrc`, the workflows' Node and Python versions, the highest of the Claude Code versions `preflight_check.py` refuses to launch below, the `requires-python` headers of the skill's scripts, and the README "Tested with" rows.
 
 Write no em dashes (U+2014) in anything you add, including commit messages: use a colon, a comma, parentheses or a new sentence. `validate:em-dash` fails on any em dash in the published docs (`README.md`, `docs/` outside `docs/_internal/`, `website/`) and on any em dash in the lines or commit messages your branch adds. It skips `CHANGELOG.md`, any `package-lock.json` and the generated reference skills under `skf-skills/`.
 

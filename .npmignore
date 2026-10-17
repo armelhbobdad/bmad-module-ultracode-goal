@@ -39,6 +39,8 @@ prettier.config.mjs
 tools/validate-skills.js
 tools/validate-file-refs.js
 tools/validate-no-em-dash.js
+tools/tool-requirements.js
+tools/tool-requirements.yaml
 tools/link-reference-skills.js
 
 # Skill dev/test artifacts (not needed at runtime)
