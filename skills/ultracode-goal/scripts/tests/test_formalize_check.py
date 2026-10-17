@@ -46,6 +46,8 @@ FR5_TOP_KEYS = frozenset(
         "judgment_required",
         "mechanical_gaps",
         "judgment_candidates",
+        "judged_candidates",
+        "scan",
         "checks",
         "timing",
     }
@@ -282,11 +284,13 @@ _STDLIB_ALLOW = frozenset(
     {
         "__future__",
         "argparse",
+        "hashlib",
         "json",
         "re",
         "sys",
         "time",
         "tomllib",
+        "unicodedata",
         "pathlib",
         "os",
         "io",
@@ -1139,6 +1143,19 @@ def test_a_tab_indented_wrapped_line_stays_in_its_ac():
     blocks = fc._split_ac_blocks(body)
     assert len(blocks) == 2
     assert "continues here" in blocks[0][1]
+
+
+def test_a_line_before_the_first_item_joins_no_earlier_ac():
+    # Prose under a later AC heading, before its first item, used to be appended
+    # to the previous section's last AC: that block then held lines it does not
+    # span, and a candidate's line number counted from its start went wrong.
+    body = (
+        "## Acceptance Criteria\n\n1. First.\n\n## Notes\n\nA note.\n\n"
+        "## Acceptance Criteria\n\nIntro prose before the list.\n\n1. Second.\n"
+    )
+    blocks = fc._split_ac_blocks(body)
+    assert [line for line, _ in blocks] == [3, 13]
+    assert "Intro prose" not in blocks[0][1]
 
 
 def test_a_new_acceptance_criteria_heading_resets_the_indent():

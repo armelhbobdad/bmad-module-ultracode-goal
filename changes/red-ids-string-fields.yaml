@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `red_ids.py` refuses a scan whose red carries a `kind` or `source` that is not a non-blank string, or any field UTF-8 cannot encode (a lone surrogate), with exit 2 and the reason, instead of failing with a traceback.

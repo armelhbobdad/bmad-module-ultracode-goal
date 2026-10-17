@@ -30,10 +30,15 @@ are REPORTING values only. `mechanical_budget` is a per-item COUNT
 threshold constant exists anywhere in this file.
 
 Verdict mapping:
-    mechanical_budget == 0 and no judgment candidates        -> ready
-    gaps all remediable and no judgment candidates            -> remediable
-    any judgment candidate / any non-remediable mechanical
-    gap / any unreadable artifact                             -> blocked
+    mechanical_budget == 0 and no judgment candidate owed     -> ready
+    gaps all remediable and no judgment candidate owed        -> remediable
+    any judgment candidate owed / any non-remediable
+    mechanical gap / any unreadable artifact                  -> blocked
+
+A judgment candidate is owed until the step-3 scan answers it: with
+`--scan`, a candidate a red or a concern names by its id and source moves to
+`judged_candidates` and stops counting. Without `--scan` every candidate is
+owed.
 
 Output: a single JSON object to stdout, serialized with sort_keys for
 byte-stable output and carrying NO timestamp/uuid (so a re-run over the same
@@ -48,16 +53,19 @@ classes are seeded as fixtures elsewhere; this script builds the kernel they
 run over.
 
     uv run formalize_check.py --epic <id> --project-root <p> \
-        --planning-artifacts <p> --impl-artifacts <p> --tea-config <p>
+        --planning-artifacts <p> --impl-artifacts <p> --tea-config <p> \
+        [--scan <the step-3 scan object, or - for stdin>]
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 # The story-status vocabulary BMad's sprint-planning writes into
@@ -495,9 +503,13 @@ def _split_ac_blocks(text: str) -> list[tuple[int, str]]:
     # Where the first AC item's text starts: an item left of it opens a new AC.
     text_column: int | None = None
     blocks: list[tuple[int, list[str]]] = []
+    current: list[str] | None = None
     for idx, raw in enumerate(lines):
         stripped = raw.strip()
         if re.match(r"^#+\s", raw):
+            # Any heading closes the open block: a block's lines are contiguous,
+            # since each candidate's line number is counted from its start.
+            current = None
             if re.search(r"acceptance criteria", stripped, re.IGNORECASE):
                 in_ac = True
                 text_column = None
@@ -513,9 +525,10 @@ def _split_ac_blocks(text: str) -> list[tuple[int, str]]:
         if item and (text_column is None or indent < text_column):
             if text_column is None:
                 text_column = indent + len(item.group(2))
-            blocks.append((idx + 1, [raw]))
-        elif blocks:
-            blocks[-1][1].append(raw)
+            current = [raw]
+            blocks.append((idx + 1, current))
+        elif current is not None:
+            current.append(raw)
     return [(line_no, "\n".join(body)) for line_no, body in blocks]
 
 
@@ -841,15 +854,133 @@ def _mechanical_hook() -> None:
 # --- verdict assembly --------------------------------------------------------
 
 
+# --- judgment candidate identity and the step-3 answers ----------------------
+
+# The digest length red_ids.py uses for a RED's id.
+_CANDIDATE_DIGEST_LEN = 12
+
+
+def _normalize_text(text: str) -> str:
+    """NFC, whitespace collapsed: re-spacing one line keeps its text (a reflow
+    that moves words across lines does not)."""
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text or "")).strip()
+
+
+def _candidate_id(candidate: dict, texts_by_rel: dict[str, str]) -> str:
+    """A judgment candidate's line-free id: `<kind>:<bare path>:<digest>`.
+
+    The digest is the first 12 hex characters of the SHA-256 of the flagged
+    line's normalized text and the candidate's normalized
+    `why_machine_cannot_decide`, the recipe red_ids.py uses for a RED (which
+    digests the decision instead). The line text is what makes the id confirm
+    that the line at the candidate's source still reads as it did when the
+    candidate was seeded. The reason tells apart two candidates of one kind on
+    one line, such as an AC row citing two ids nobody declares: each names its
+    own token. The line NUMBER is left out, so the id alone cannot tell apart
+    two candidates of one kind on the same text in one file, and an answer
+    must carry the candidate's `source` too (`_answers`).
+    """
+    kind, source = candidate["kind"], candidate["source"]
+    path, _, line = source.rpartition(":")
+    text = ""
+    if line.isdigit() and path:
+        lines = (texts_by_rel.get(path) or "").splitlines()
+        number = int(line)
+        if 1 <= number <= len(lines):
+            text = lines[number - 1]
+    else:
+        path = source
+    reason = _normalize_text(str(candidate.get("why_machine_cannot_decide") or ""))
+    digest = hashlib.sha256(("%s\n%s" % (_normalize_text(text), reason)).encode("utf-8")).hexdigest()
+    return "%s:%s:%s" % (kind, path, digest[:_CANDIDATE_DIGEST_LEN])
+
+
+def _read_scan(scan: str | None) -> tuple[dict | None, dict | None]:
+    """(the step-3 scan object, the `scan` report) for `--scan`, or (None, None).
+
+    `-` reads stdin. An unreadable or unparseable scan, or one not in the
+    shape red_ids.py accepts (`_well_formed_scan`), answers nothing: every candidate stays unjudged and the verdict
+    stays `blocked`, and the report says the scan was not read. A scan that
+    cannot be read is not an answer.
+    """
+    if scan is None:
+        return None, None
+    try:
+        text = sys.stdin.read() if scan == "-" else Path(scan).read_text(encoding="utf-8")
+        data = json.loads(text)
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None, {"path": scan, "read": False, "answered": 0}
+    if not _well_formed_scan(data):
+        return None, {"path": scan, "read": False, "answered": 0}
+    return data, {"path": scan, "read": True, "answered": 0}
+
+
+def _well_formed_scan(data: object) -> bool:
+    """Whether the scan is one red_ids.py accepts, with concerns that can be read.
+
+    An object carrying a `reds` list whose every red is an object with a
+    non-blank string `kind`, `source` and `decision_needed`, all of it text
+    UTF-8 can encode: red_ids.py refuses
+    anything else, and then the reds stream the hard gate reads is not
+    computed, so a scan it refuses must not judge a candidate here either, or
+    the kernel would say `ready` over reds no one minted. `concerns`, when
+    present, must be a list of objects; red_ids.py never reads it, and a
+    refusal here only keeps the verdict `blocked`.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("reds"), list):
+        return False
+    for red in data["reds"]:
+        if not isinstance(red, dict):
+            return False
+        for field in ("kind", "source", "decision_needed"):
+            value = red.get(field)
+            if not isinstance(value, str) or not _normalize_text(value):
+                return False
+        # red_ids.py writes each red as UTF-8; a lone surrogate it cannot encode.
+        try:
+            json.dumps(red, ensure_ascii=False).encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+    concerns = data.get("concerns", [])
+    return isinstance(concerns, list) and all(isinstance(entry, dict) for entry in concerns)
+
+
+def _answers(scan: dict | None) -> dict[tuple[str, str], str]:
+    """`{(candidate id, source): "red" | "concern"}` from the scan's entries.
+
+    A seeded candidate is answered by the entry that carries its id in
+    `candidate` and its `source` as given. Both, because each covers a way the
+    other alone would judge the wrong line: the source tells apart two
+    candidates whose flagged lines and reasons read the same (they share an id), and the
+    id makes sure the line at that source still holds the text the subagent
+    judged (an edit between the seeding and this run moves lines, and a source
+    alone would then name another line). A pair both lists name reads as
+    `red`: a confirmation is never outweighed by a clearing.
+    """
+    answers: dict[tuple[str, str], str] = {}
+    if not scan:
+        return answers
+    for field, verdict in (("concerns", "concern"), ("reds", "red")):
+        for entry in scan.get(field) or []:
+            candidate, source = entry.get("candidate"), entry.get("source")
+            if isinstance(candidate, str) and isinstance(source, str) and candidate.strip() and source.strip():
+                answers[(candidate.strip(), source.strip())] = verdict
+    return answers
+
+
 def build_verdict(
     epic: str,
     project_root: Path,
     planning_artifacts: Path,
     impl_artifacts: Path,
     tea_config: Path,
+    scan: str | None = None,
 ) -> dict:
     mechanical_gaps: list[dict] = []
     judgment_candidates: list[dict] = []
+    # The text of every file a candidate can point into, by the relative path
+    # its `source` names: the line its id digests.
+    texts_by_rel: dict[str, str] = {}
 
     # timing: monotonic samples at entry and at the mechanical-half start.
     _entry_ns = time.monotonic_ns()
@@ -1036,6 +1167,8 @@ def build_verdict(
     for story_path in story_paths:
         body = story_reads[story_path]
         rel = _rel(story_path, project_root)
+        if body is not None:
+            texts_by_rel[rel] = body
         if body is None:
             mechanical_gaps.append(
                 {
@@ -1271,6 +1404,7 @@ def build_verdict(
                 "source": td_rel,
             })
         else:
+            texts_by_rel[td_rel] = td_text
             td_gaps, td_candidates = _scan_test_design(td_text, td_rel)
             mechanical_gaps.extend(td_gaps)
             judgment_candidates.extend(td_candidates)
@@ -1293,6 +1427,7 @@ def build_verdict(
                 "source": nfr_rel,
             })
         else:
+            texts_by_rel[_rel(nfr_path, project_root)] = nfr_text
             judgment_candidates.extend(_scan_nfr_assessment(nfr_text, _rel(nfr_path, project_root)))
 
     # --- reporting ratios (NEVER compared to a cutoff) ---
@@ -1321,6 +1456,27 @@ def build_verdict(
     _mech_end_ns = time.monotonic_ns()
 
     mechanical_budget = len(mechanical_gaps)
+
+    # Every candidate carries its line-free id, and a candidate the step-3 scan
+    # answered (`--scan`: a red or a concern carrying its id and source) is judged: it no
+    # longer sets judgment_required. A confirmed one is a RED the hard gate's
+    # reds stream reads, and a cleared one is a concern, so neither is a
+    # judgment still owed. With no scan, or one that cannot be read, nothing is
+    # judged, and the verdict stays `blocked` while any candidate stands.
+    for candidate in judgment_candidates:
+        candidate["id"] = _candidate_id(candidate, texts_by_rel)
+    scan_object, scan_report = _read_scan(scan)
+    answers = _answers(scan_object)
+    judged_candidates = [
+        {**candidate, "judged_as": answers[(candidate["id"], candidate["source"])]}
+        for candidate in judgment_candidates
+        if (candidate["id"], candidate["source"]) in answers
+    ]
+    judgment_candidates = [
+        candidate for candidate in judgment_candidates if (candidate["id"], candidate["source"]) not in answers
+    ]
+    if scan_report is not None:
+        scan_report["answered"] = len(judged_candidates)
     judgment_required = bool(judgment_candidates)
 
     non_remediable = any(not g["remediable"] for g in mechanical_gaps)
@@ -1359,6 +1515,8 @@ def build_verdict(
         "judgment_required": judgment_required,
         "mechanical_gaps": mechanical_gaps,
         "judgment_candidates": judgment_candidates,
+        "judged_candidates": judged_candidates,
+        "scan": scan_report,
         "checks": checks,
         "timing": timing,
     }
@@ -1374,6 +1532,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--planning-artifacts")
     parser.add_argument("--impl-artifacts")
     parser.add_argument("--tea-config")
+    parser.add_argument(
+        "--scan",
+        help="The step-3 scan object (a file, or - for stdin; a relative path "
+        "resolves against --project-root). A judgment candidate a red or a concern "
+        "answers by its id in `candidate` and its `source` is judged and stops "
+        "setting judgment_required; an unreadable scan, or one red_ids.py refuses, "
+        "judges nothing.",
+    )
     args = parser.parse_args(argv)
 
     # Invocation-error lane (exit 2): any required flag missing OR empty. argparse
@@ -1413,6 +1579,7 @@ def main(argv: list[str] | None = None) -> int:
         planning_artifacts=planning_artifacts,
         impl_artifacts=impl_artifacts,
         tea_config=tea_config,
+        scan=args.scan if args.scan in (None, "-") else str(_resolve(args.scan, project_root)),
     )
     print(json.dumps(verdict, sort_keys=True, indent=2))
     return 0
