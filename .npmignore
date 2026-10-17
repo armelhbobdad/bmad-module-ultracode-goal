@@ -110,6 +110,7 @@ build/
 data/
 graphify-out/
 /.cocoindex_code/
+.boost/
 
 # IWE workspace and project memory for AI sessions: repository knowledge, not
 # part of the module. Root MEMORY.md is already covered by the /*.md rule above.
