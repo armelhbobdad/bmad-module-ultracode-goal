@@ -52,49 +52,43 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: npm
           registry-url: https://registry.npmjs.org
 
-      - name: Ensure npm CLI supports trusted publishing
-        run: |
-          echo "Node: $(node --version); bundled npm: $(npm --version)"
-          # Side-prefix install — avoids the arborist rebuild race that bites
-          # `npm install -g npm@latest` when the bundled npm partially
-          # overwrites its own global tree mid-install.
-          INSTALL_DIR="$RUNNER_TEMP/npm-tp"
-          mkdir -p "$INSTALL_DIR"
-          npm install --prefix "$INSTALL_DIR" --no-save npm@latest
-          echo "$INSTALL_DIR/node_modules/.bin" >> "$GITHUB_PATH"
-          echo "Upgraded npm: $("$INSTALL_DIR/node_modules/.bin/npm" --version)"
-
+      # OIDC trusted publishing needs npm 11.5.1 or later. The run publishes
+      # with the npm that ships with the Node version .nvmrc selects, and no
+      # step installs another, so the npm major moves only when a pull
+      # request moves .nvmrc. This step prints both versions and stops the
+      # dispatch before anything is committed, tagged or published when that
+      # npm is below the floor. Should a Node line ever ship an npm below it,
+      # install one exact npm version before this step, never @latest.
       - name: Verify npm version floor for OIDC trusted publishing
-        # Runs in a fresh step so $GITHUB_PATH from the previous step takes effect.
-        # Bare `npm` here asserts BOTH (a) PATH propagation worked (the side-prefix
-        # install is actually first on PATH, not masked by the Node-bundled npm)
-        # AND (b) the resolved version meets the OIDC trusted-publishing floor
-        # (>=11.5.1). Fails fast before tag-push if either guarantee is absent.
         run: |
+          NODE_VERSION=$(node --version)
           NPM_VERSION=$(npm --version)
-          echo "Resolved npm (via PATH): $NPM_VERSION"
+          echo "Node: $NODE_VERSION; bundled npm: $NPM_VERSION"
           MIN_VERSION="11.5.1"
           if [[ "$(printf '%s\n%s\n' "$MIN_VERSION" "$NPM_VERSION" | sort -V | head -n1)" != "$MIN_VERSION" ]]; then
-            echo "::error::npm $NPM_VERSION is below the OIDC trusted-publishing floor ($MIN_VERSION). Either \$GITHUB_PATH propagation failed (bare \`npm\` resolved to the Node-bundled version) or npm@latest regressed below the floor."
+            echo "::error::npm $NPM_VERSION, the one bundled with Node $NODE_VERSION, is below the OIDC trusted-publishing floor ($MIN_VERSION), so the run stopped before anything was committed, tagged or published. Fix .nvmrc: in a pull request, move it to a Node version whose bundled npm is $MIN_VERSION or later, then dispatch again."
             exit 1
           fi
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "3.12"
+          # Keyed on package.json, as in quality.yaml's lintlang job.
+          cache-dependency-glob: package.json
 
       - name: Install dependencies
         run: npm ci
@@ -687,7 +681,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: v${{ steps.version.outputs.new_version }}
           name: "UltraCode Goal (UCG) v${{ steps.version.outputs.new_version }}"

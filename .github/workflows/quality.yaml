@@ -11,7 +11,8 @@ name: Quality & Validation
 # - Skill structure validation
 # - File reference validation
 # - Fixture tracking (no test fixture may be matched by a .gitignore rule)
-# - Python script tests (pytest via uv)
+# - Action pins (every `uses:` in .github/workflows/ names a commit SHA)
+# - Python script tests (pytest via uv), and the workflow tests under test/
 
 "on":
   pull_request:
@@ -30,10 +31,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
@@ -48,10 +50,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
@@ -66,10 +69,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
@@ -92,15 +96,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "3.12"
+          # The uv cache key hashes the files this glob matches. The default
+          # globs (requirements*.txt, pyproject.toml, uv.lock and the like)
+          # match no file here, so setup-uv would warn "No file matched to"
+          # on every run. package.json pins the uv tools, in its scripts'
+          # uvx lintlang@<version> and --with pytest==<version>.
+          cache-dependency-glob: package.json
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
 
@@ -121,12 +132,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
 
@@ -154,10 +166,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
@@ -169,12 +182,14 @@ jobs:
       # via `uv run`) and round-trips TOML through `uv`/`python3` helpers, so the
       # validate job needs both on PATH, with the same uv setup the python job uses.
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "3.12"
+          # Keyed on package.json, as in the lintlang job.
+          cache-dependency-glob: package.json
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -218,6 +233,48 @@ jobs:
       - name: Check the reference skill links
         run: node tools/link-reference-skills.js --check
 
+      # The owner of an action can move its tag to other code, and the next
+      # run executes that code with this repository's tokens; a commit SHA
+      # cannot move. So each `uses:` names a 40-character commit SHA followed
+      # by its exact version as a comment, `owner/repo@<sha> # vX.Y.Z`, the
+      # form Dependabot (.github/dependabot.yaml) proposes its updates in. A
+      # local action (`./path`) has no ref to pin. Every workflow file is
+      # read, install-smoke.yaml included. A `uses:` key opens its line,
+      # after the indent and an optional list dash, so a comment or a script
+      # line that mentions one is not read; test/test-release-workflow.py
+      # compares the lines it reads with the uses: YAML parses, so a flow
+      # mapping or a quoted key that this scan misses fails there. Linux
+      # only: it reads text, so a Windows run would only repeat it.
+      - name: Check that every action is pinned to a commit SHA
+        if: runner.os == 'Linux'
+        run: |
+          USES='^[[:space:]]*(-[[:space:]]+)?uses:'
+          PINNED="${USES}[[:space:]]+(\./[^[:space:]]*|[^[:space:]@]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$"
+          TOTAL=0
+          BAD=0
+          for FILE in .github/workflows/*.yaml .github/workflows/*.yml; do
+            [ -f "$FILE" ] || continue
+            COUNT=0
+            while IFS=: read -r LINE TEXT; do
+              COUNT=$((COUNT + 1))
+              if ! grep -qE "$PINNED" <<< "$TEXT"; then
+                echo "::error file=$FILE,line=$LINE::Not pinned to a commit SHA with its version: ${TEXT#"${TEXT%%[![:space:]]*}"}"
+                BAD=$((BAD + 1))
+              fi
+            done < <(grep -nE "$USES" "$FILE" || true)
+            echo "Checked $COUNT uses: in $FILE"
+            TOTAL=$((TOTAL + COUNT))
+          done
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "::error::No uses: found in .github/workflows/, so nothing was checked."
+            exit 1
+          fi
+          if [ "$BAD" -gt 0 ]; then
+            echo "::error::$BAD of the $TOTAL uses: in .github/workflows/ are not pinned. Write each as uses: owner/repo@<40-character commit SHA> # vX.Y.Z (gh api repos/<owner>/<repo>/commits/<tag> --jq .sha prints the commit of a tag)."
+            exit 1
+          fi
+          echo "All $TOTAL uses: in .github/workflows/ name a commit SHA and its version."
+
   # Builds the real site and resolves every emitted href against the file tree.
   # Separate from `validate` on purpose: it needs a full Astro build, which the
   # Windows half of that matrix would only duplicate at twice the cost, and the
@@ -235,12 +292,13 @@ jobs:
       # reads git history, so a shallow clone builds a different site than the
       # one that ships, and validating a different artifact defeats the point.
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
@@ -269,15 +327,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "3.12"
+          # Keyed on package.json, as in the lintlang job.
+          cache-dependency-glob: package.json
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"

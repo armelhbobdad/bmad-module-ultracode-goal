@@ -18,7 +18,7 @@ If you're not sure where a change belongs, open an issue and ask before writing 
 
 **Prerequisites:**
 
-- [Node.js](https://nodejs.org/) >= 22 (see `.nvmrc`)
+- [Node.js](https://nodejs.org/) >= 22, the supported floor (`engines.node`); development and CI run Node 24 (see `.nvmrc`)
 - [Python](https://www.python.org/) >= 3.10
 - [uv](https://docs.astral.sh/uv/): runs the Python test suite
 - `git`, `gh`: used by the run itself and by the health-check loop
@@ -30,13 +30,13 @@ npm install           # also wires husky hooks and links the reference skills
 npm run quality       # run the full local pre-flight
 ```
 
-The `npm run quality` script is your contract with CI. If it passes locally, CI should too. The same steps run in [`.github/workflows/quality.yaml`](.github/workflows/quality.yaml) on every pull request (as parallel jobs there; locally the stages run concurrently via `run-p`, and a failure kills the other stages). Every output line carries its stage label. A stage's stdout is additionally buffered and printed as one block when the stage finishes; stderr is not buffered, so a failing tool that reports on stderr (prettier does) prints its labeled lines live, possibly interleaved with other stages. `npm test` is an alias for the same gate. The Python gate runs the suite under `uv`, parallelized with `pytest-xdist`:
+The `npm run quality` script is your contract with CI. If it passes locally, CI should too. The same steps run in [`.github/workflows/quality.yaml`](.github/workflows/quality.yaml) on every pull request (as parallel jobs there; locally the stages run concurrently via `run-p`, and a failure kills the other stages). Every output line carries its stage label. A stage's stdout is additionally buffered and printed as one block when the stage finishes; stderr is not buffered, so a failing tool that reports on stderr (prettier does) prints its labeled lines live, possibly interleaved with other stages. `npm test` is an alias for the same gate. The Python gate runs the suite under `uv`, parallelized with `pytest-xdist`: the skill's script tests, and the workflow tests under `test/` (`test-*.py`):
 
 ```bash
-uv run --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest skills/ultracode-goal/scripts/tests/ -n auto
+uv run --with pytest==9.1.1 --with pytest-xdist==3.8.0 --with pyyaml==6.0.3 pytest skills/ultracode-goal/scripts/tests/ test/ -o "python_files=test-*.py test_*.py *_test.py" -n auto
 ```
 
-When a failure needs localizing, re-run just that file serially and verbosely: `uv run --with pytest==9.1.1 pytest skills/ultracode-goal/scripts/tests/test_<name>.py -v`.
+When a failure needs localizing, re-run just that file serially and verbosely: `uv run --with pytest==9.1.1 pytest skills/ultracode-goal/scripts/tests/test_<name>.py -v` (for a workflow test, `uv run --with pytest==9.1.1 --with pyyaml==6.0.3 pytest test/test-<name>.py -v`).
 
 Write no em dashes (U+2014) in anything you add, including commit messages: use a colon, a comma, parentheses or a new sentence. `validate:em-dash` fails on any em dash in the published docs (`README.md`, `docs/` outside `docs/_internal/`, `website/`) and on any em dash in the lines or commit messages your branch adds. It skips `CHANGELOG.md`, any `package-lock.json` and the generated reference skills under `skf-skills/`.
 

@@ -50,7 +50,7 @@
     "test:docs-links-tool": "node test/test-validate-docs-links.js",
     "test:em-dash-tool": "node test/test-validate-no-em-dash.js",
     "test:install": "node test/test-installation-components.js",
-    "test:python": "uv run --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest skills/ultracode-goal/scripts/tests/ -n auto",
+    "test:python": "uv run --with pytest==9.1.1 --with pytest-xdist==3.8.0 --with pyyaml==6.0.3 pytest skills/ultracode-goal/scripts/tests/ test/ -o \"python_files=test-*.py test_*.py *_test.py\" -n auto",
     "test:rehype": "node test/test-rehype-markdown-links.js",
     "test:skill-links": "node test/test-link-reference-skills.js",
     "ucg:install": "node tools/cli/ucg-cli.js install",

@@ -91,7 +91,7 @@ On [npmjs.com](https://www.npmjs.com/) → package settings → Trusted Publishe
 - Workflow filename: `release.yaml` (character-for-character: renaming the file breaks publishing)
 - Environment: `release`
 
-The workflow upgrades npm to ≥ 11.5.1 (the OIDC trusted-publishing floor) and pins `NPM_TOKEN: ""` on both publish steps so a stale runner-env token can never be picked up silently. Note: the very first publish of a brand-new package may need to be performed manually (`npm publish` with a granular token) before Trusted Publisher can be attached to the package. Check current npm rules when cutting `0.1.0`.
+The workflow publishes with the npm bundled with the Node version `.nvmrc` selects, installs no other npm, and stops before anything is committed or published when that npm is below 11.5.1 (the OIDC trusted-publishing floor). It also pins `NPM_TOKEN: ""` on both publish steps so a stale runner-env token can never be picked up silently. Note: the very first publish of a brand-new package may need to be performed manually (`npm publish` with a granular token) before Trusted Publisher can be attached to the package. Check current npm rules when cutting `0.1.0`.
 
 ### 5. Repo settings: auto-merge + Actions PR creation
 
