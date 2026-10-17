@@ -124,7 +124,8 @@ def test_the_fixture_is_blocked_on_one_candidate_alone(tmp_path):
 def test_a_candidate_id_is_line_free_and_survives_an_edit_above_it(tmp_path):
     root = _project(tmp_path)
     before = _run(root)["judgment_candidates"][0]
-    assert re.fullmatch(r"unclassified_signal:impl-artifacts/4-1-signal\.md:[0-9a-f]{12}", before["id"])
+    # The kernel reports paths with the platform separator, in the id as in `source`.
+    assert re.fullmatch(r"unclassified_signal:%s:[0-9a-f]{12}" % re.escape(str(STORY)), before["id"])
     story = root / STORY
     story.write_text("A line added above everything.\n" + story.read_text(encoding="utf-8"), encoding="utf-8")
     after = _run(root)["judgment_candidates"][0]
@@ -280,9 +281,10 @@ def test_a_tea_candidate_carries_an_id_and_can_be_answered(tmp_path):
     _tea_files(root, "Latency must stay under 200 ms at p95.", "Performance")
     candidates = {c["kind"]: c for c in _run(root)["judgment_candidates"]}
     nfr, design = candidates["nfr_pass_on_unknown"], candidates["invented_nfr_threshold"]
-    assert nfr["source"] == "tea/traceability/nfr-assessment.md:5"
-    assert design["source"] == "tea/traceability/test-design-epic-4.md:3"
-    assert re.fullmatch(r"nfr_pass_on_unknown:tea/traceability/nfr-assessment\.md:[0-9a-f]{12}", nfr["id"])
+    nfr_rel = str(Path("tea") / "traceability" / "nfr-assessment.md")
+    assert nfr["source"] == nfr_rel + ":5"
+    assert design["source"] == str(Path("tea") / "traceability" / "test-design-epic-4.md") + ":3"
+    assert re.fullmatch(r"nfr_pass_on_unknown:%s:[0-9a-f]{12}" % re.escape(nfr_rel), nfr["id"])
     scan = {"reds": [], "concerns": [_concern(c["id"], source=c["source"]) for c in candidates.values()]}
     out = _run(root, "--scan", str(_write_scan(tmp_path, scan)))
     assert out["judgment_candidates"] == []
