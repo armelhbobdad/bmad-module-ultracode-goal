@@ -864,17 +864,70 @@ def test_tea_scalar_drops_an_inline_comment(tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
         "test_artifacts: _bmad-output/test-artifacts  # where TEA writes\n"
-        "tea_execution_mode: create  # forced for unattended runs\n",
+        "tea_execution_mode: sequential  # TEA's parallelism mode\n",
         encoding="utf-8",
     )
 
     flags = pf._read_toml_or_yaml_flags(cfg)
 
     assert flags["test_artifacts"] == "_bmad-output/test-artifacts"
-    assert flags["tea_execution_mode"] == "create"
+    assert flags["tea_execution_mode"] == "sequential"
     assert pf._tea_artifacts_root(tmp_path, flags) == (
         tmp_path / "_bmad-output" / "test-artifacts"
     )
+
+
+# --- impl_artifacts_tracked: a reported fact, never a blocker -----------------
+
+
+@pytest.fixture
+def _no_host_ignores(monkeypatch):
+    """Keep the host's global and system ignore rules out of these cases."""
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+def _commit_gitignore(project: Path, rules: str) -> None:
+    (project / ".gitignore").write_text(rules, encoding="utf-8")
+    _git(project, "add", ".gitignore")
+    _git(project, "commit", "-q", "-m", "ignore rules")
+
+
+def test_impl_artifacts_are_tracked_when_no_rule_ignores_them(project, monkeypatch, _no_host_ignores):
+    report = _report(project, monkeypatch)
+    assert report["checks"]["impl_artifacts_tracked"] is True
+
+
+def test_a_negated_rule_keeps_the_artifact_tree_tracked(project, monkeypatch, _no_host_ignores):
+    _commit_gitignore(project, "_bmad-output/*\n!_bmad-output/implementation-artifacts/\n")
+    assert _report(project, monkeypatch)["checks"]["impl_artifacts_tracked"] is True
+
+
+def test_an_artifact_tree_outside_git_reads_as_untracked(project, tmp_path, _no_host_ignores):
+    # git refuses both paths (exit 128), and neither tree is in git: the same
+    # hazard as an ignored one, so not the unknown `null`.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    link = project / "_bmad-output" / "linked-artifacts"
+    link.symlink_to(elsewhere, target_is_directory=True)
+    assert pf._impl_artifacts_tracked(project.resolve(), link) is False
+    assert pf._impl_artifacts_tracked(project.resolve(), elsewhere) is False
+
+
+def test_a_gitignored_artifact_tree_is_reported_and_never_blocks(project, monkeypatch, _no_host_ignores):
+    # A project that keeps its BMAD output out of git on purpose: the branch
+    # then undoes the code only, which the briefing says, but the run is ready.
+    _commit_gitignore(project, "_bmad-output/\n")
+    report = _report(project, monkeypatch)
+    assert report["checks"]["impl_artifacts_tracked"] is False
+    assert report["green"] is True
+    assert report["budget"] == 0
+
+
+def test_impl_artifacts_tracked_is_null_only_with_no_repository(tmp_path, _no_host_ignores):
+    outside = tmp_path / "no-repo"
+    outside.mkdir()
+    assert pf._impl_artifacts_tracked(outside, outside / "impl") is None
 
 
 def test_tea_scalar_without_a_comment_is_unchanged(tmp_path):

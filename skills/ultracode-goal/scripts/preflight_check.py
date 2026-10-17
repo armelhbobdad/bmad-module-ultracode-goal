@@ -28,6 +28,12 @@ What counts as a mechanical blocker (each adds 1 to `budget`):
   - the current branch is a protected branch (the epic must run on its own
     branch; an unborn HEAD's branch is read from its symbolic ref).
 
+Reported, never a blocker: `impl_artifacts_tracked`, whether git would track a
+file the run newly writes under the impl-artifacts dir (`false` on a project
+that gitignores its BMAD output, or keeps that dir outside the repository or
+behind a symlink; `null` only when there is no repository). The run's
+undo and its acceptance criteria depend on it; its readiness does not.
+
 `green` is true iff `budget == 0`. A green preflight means there is nothing
 MECHANICAL left to clear; the LLM still owns the true-RED hard gate
 (undecided architecture/product, unresolvable secrets), which this script
@@ -226,6 +232,26 @@ def _git_clean(project_root: Path) -> bool | None:
     return out == ""
 
 
+def _impl_artifacts_tracked(project_root: Path, impl_artifacts: Path) -> bool | None:
+    """Whether git would track a file the run newly writes under impl_artifacts.
+
+    `git check-ignore` on a probe name that does not exist: exit 0 means an
+    ignore rule covers it (False), exit 1 means none does (True). git refuses a
+    path outside the work tree or beyond a symlink, and such a tree is not in
+    git at all, the same hazard as an ignored one (False). Only with no
+    repository to ask is the answer unknown (None). The probe is a plain
+    story-like name, since story files are what the run writes there most.
+    """
+    probe = impl_artifacts / "ucg-tracked-probe.md"
+    code, _ = _git(["check-ignore", "-q", "--", str(probe)], project_root)
+    if code == 0:
+        return False
+    if code == 1:
+        return True
+    inside, out = _git(["rev-parse", "--is-inside-work-tree"], project_root)
+    return False if inside == 0 and out == "true" else None
+
+
 def _read_toml_or_yaml_flags(tea_config: Path) -> dict:
     """Read flat key: value scalars from the TEA config.
 
@@ -273,8 +299,8 @@ def _strip_inline_comment(value: str) -> str:
     then pointed nowhere, the guard's un-skip proof found no
     `atdd-checklist-<story>.md` to read, and it enforced nothing — while
     preflight still reported green. An inert control, not a cosmetic parse bug.
-    `tea_execution_mode` was corrupted the same way, so the forced-Create check
-    compared against `create  # forced`.
+    Every other annotated key, `tea_execution_mode` among them, carried its
+    comment into the value reported in `tea_flags` the same way.
 
     Whitespace-preceded rather than a bare `split("#")`, which is what YAML
     actually specifies, so a `#` inside a value survives.
@@ -654,6 +680,7 @@ def build_report(
     project_context_count = _project_context_count(project_root)
     bmad_skills = _bmad_skills_installed(project_root)
     bmad_install = _bmad_install(project_root)
+    impl_artifacts_tracked = _impl_artifacts_tracked(project_root, impl_artifacts)
 
     checks = {
         "cc_version": cc_raw,
@@ -671,6 +698,7 @@ def build_report(
         "tea_flags": tea_flags,
         "bmad_skills": bmad_skills,
         "bmad_install": bmad_install,
+        "impl_artifacts_tracked": impl_artifacts_tracked,
     }
 
     blockers: list[dict] = []

@@ -24,6 +24,8 @@ For every **in-scope** story, in sprint order:
 
 1. **`bmad-create-story`** — produce the dedicated story file with full implementation context and *clear, testable* acceptance criteria. If preflight already generated this story, treat the change request as a refinement, not a re-create. Vague ACs are the single most common cause of the next step halting — sharpen them here.
 
+   On a project whose artifact tree git does not track (preflight's `impl_artifacts_tracked: false`), no acceptance criterion may have a test read a file under that tree at run time: it does not exist in CI. Preflight step 2 states the rule ("A gitignored artifact tree").
+
 2. **`bmad-testarch-atdd`** — generate the red-phase acceptance test scaffolds for that story. This writes:
    - `atdd-checklist-{story_key}.md` under the TEA test-artifacts directory — the per-story checklist mapping each AC to its planned test(s).
    - The acceptance test files themselves, **every test marked `test.skip()`** (TDD red phase). ATDD verifies this and errors if any generated test is not skipped — that is correct and expected; the tests are *supposed* to fail/skip until Stage 4 implements the feature and un-skips them.
