@@ -60,7 +60,13 @@ def _hermetic_git(monkeypatch, tmp_path):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # Only the excludes file: turning the system config off would also drop a
+    # Windows host's core.autocrlf (see test_preflight_check's _no_host_ignores).
+    empty = tmp_path / "no-excludes"
+    empty.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.excludesFile")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(empty))
 
 
 def _git(repo: Path, *args: str) -> None:
