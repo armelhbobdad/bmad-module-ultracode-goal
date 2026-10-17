@@ -881,10 +881,20 @@ def test_tea_scalar_drops_an_inline_comment(tmp_path):
 
 
 @pytest.fixture
-def _no_host_ignores(monkeypatch):
-    """Keep the host's global and system ignore rules out of these cases."""
+def _no_host_ignores(monkeypatch, tmp_path):
+    """Keep the host's global and system ignore rules out of these cases.
+
+    Only `core.excludesFile` is overridden, pointed at an empty file. Turning
+    the system config off instead also drops a Windows host's `core.autocrlf`,
+    and the CRLF files Python writes there then read as modified whenever git
+    re-checks content, which made the clean-tree assertion flaky.
+    """
+    empty = tmp_path / "no-excludes"
+    empty.write_text("", encoding="utf-8")
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.excludesFile")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(empty))
 
 
 def _commit_gitignore(project: Path, rules: str) -> None:
@@ -920,7 +930,7 @@ def test_a_gitignored_artifact_tree_is_reported_and_never_blocks(project, monkey
     _commit_gitignore(project, "_bmad-output/\n")
     report = _report(project, monkeypatch)
     assert report["checks"]["impl_artifacts_tracked"] is False
-    assert report["green"] is True
+    assert report["green"] is True, report["blockers"]
     assert report["budget"] == 0
 
 
