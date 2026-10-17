@@ -7,10 +7,20 @@
 
 A commit message that says a path changed, when the commit leaves that path
 alone, is a claim about the tree that needs no judgment to refute. The field
-case: a message recorded a file's edit as landed after the script making the
-edit had died on its first assertion, so nothing in it ran and the diff for
-that path was empty. This reads the message, collects the paths it names, and
-compares them with `git diff --cached --name-only --no-renames -z` (a rename
+case: a story record and a commit message both said a file's edit had landed
+after the script making the edit had died on its first assertion, so the diff
+for that file was empty. Only the story record named the file; the message
+described the edit by its content. So `--message` repeats: pass the commit
+message and the story-record notes this cycle added, and every path either
+names is checked. An edit described only by its content names no path, and
+no script finds it; execute.md's judgment pass looks for its hunk instead.
+A named path git ignores (a ledger the record cites, a file under a gitignored
+artifact tree) is reported apart, in `ignored`: no commit can carry it, so it
+is no claim the commit can make good. Only a relative path inside the tree
+that holds a `/` or exists there is asked about: a bare name that exists
+nowhere could be any file of that name, and stays in `not_in_diff`.
+
+This reads the texts, collects the paths they name, and compares them with `git diff --cached --name-only --no-renames -z` (a rename
 lists both names, so a message naming either one matches; `-z` keeps a
 non-ASCII name unquoted).
 
@@ -20,10 +30,12 @@ a staged `docs/README.md` when a root `README.md` exists. A named path that
 exists nowhere matches by its trailing segments or as a directory anywhere in
 a staged path, so `guard.py` or `hooks/` still match `src/hooks/guard.py`.
 
-The output is a list to resolve before the commit, not a verdict: stage the
-path if this commit should change it, or reword the message so it does not
-claim this commit changed it. A message may name an unchanged file on purpose
-("the guard in X already does this"); the list makes sure that is a choice.
+The output is a list to resolve before the commit, not a verdict. For each
+path: stage it if this commit changed it; if the work tree shows no change
+there, the edit did not happen, so make it or remove the claim; or reword the
+text when it says this commit changed a file it did not. A text may name an
+unchanged file on purpose ("the guard in X already does this"); the list
+makes sure that is a choice, and such a path stays listed.
 Extraction is a heuristic and can miss a path or read one that is not meant.
 
 What counts as a named path, after a `:line`, `:L12`, `#L12` or `::test`
@@ -39,12 +51,14 @@ So `and/or`, `pass/fail`, `Node.js`, a URL, an e-mail address, a version
 string, an issue reference or a token holding a glob or a `$` is not a path.
 
 Usage:
-    uv run claim_check.py --message <file, or - for stdin> [--project-root <dir>]
+    uv run claim_check.py --message <file, or - for stdin> [--message <file> ...] [--project-root <dir>]
 
 Output: JSON on stdout, `{"named": [...], "staged": [...], "not_in_diff":
-[...], "clean": bool}`. Exit 0 whenever it ran (a non-empty `not_in_diff` is
-a result, not an error); exit 2 when the message cannot be read or the
-project root is not a git work tree.
+[...], "ignored": [...], "clean": bool}`, where `clean` means `not_in_diff`
+is empty. Several `--message` files are read as one text, in order. Exit 0
+whenever it ran (a non-empty `not_in_diff` is a result, not an error); exit 2
+when a message file cannot be read, when `-` (stdin) is given more than
+once, or when the project root is not a git work tree.
 """
 
 from __future__ import annotations
@@ -111,9 +125,13 @@ def _is_path(token: str, project_root: Path, staged: set[str]) -> bool:
         return _known(token.strip("/"), project_root, staged)
     if "/" not in token:
         return False
-    if token.endswith("/") and len(token.strip("/")) > 1:
+    bare = token.strip("/")
+    if not bare:
+        # A lone `/` (or `//`) would resolve to the project root itself.
+        return False
+    if token.endswith("/") and len(bare) > 1:
         return True
-    return _known(token.strip("/"), project_root, staged)
+    return _known(bare, project_root, staged)
 
 
 def named_paths(message: str, project_root: Path, staged: list[str]) -> list[str]:
@@ -170,27 +188,93 @@ def staged_paths(project_root: Path) -> list[str] | None:
     return [name for name in proc.stdout.decode("utf-8", errors="surrogateescape").split("\0") if name]
 
 
+def _askable(path: str, project_root: Path) -> bool:
+    """Whether `git check-ignore` can say something true about the path."""
+    bare = path.rstrip("/")
+    if not bare or bare.startswith("/") or re.match(r"^[A-Za-z]:/", bare):
+        return False
+    if bare == ".." or bare.startswith("../") or "/../" in bare:
+        return False
+    return "/" in bare or (project_root / bare).exists()
+
+
+def _check_ignore(paths: list[str], project_root: Path) -> tuple[int, set[str]]:
+    try:
+        proc = subprocess.run(
+            ["git", "check-ignore", "-z", "--stdin"],
+            cwd=project_root,
+            input=("\0".join(p.rstrip("/") for p in paths) + "\0").encode("utf-8", errors="surrogateescape"),
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return 128, set()
+    out = set(proc.stdout.decode("utf-8", errors="surrogateescape").split("\0"))
+    return proc.returncode, {p for p in paths if p.rstrip("/") in out}
+
+
+def ignored_paths(paths: list[str], project_root: Path) -> set[str]:
+    """The paths an ignore rule covers. A tracked file is never reported as
+    ignored, since git commits its edits whatever the rules say.
+
+    git stops at the first path it cannot evaluate (beyond a symlink, say)
+    with exit 128, so on that exit each path is asked about on its own, and
+    one it cannot evaluate counts as not ignored.
+    """
+    askable = [p for p in paths if _askable(p, project_root)]
+    if not askable:
+        return set()
+    code, ignored = _check_ignore(askable, project_root)
+    if code in (0, 1):
+        return ignored
+    found: set[str] = set()
+    for path in askable:
+        code, one = _check_ignore([path], project_root)
+        if code == 0:
+            found |= one
+    return found
+
+
 def check(message: str, project_root: Path) -> dict | None:
     staged = staged_paths(project_root)
     if staged is None:
         return None
     named = named_paths(message, project_root, staged)
-    missing = [path for path in named if not _matches(path, staged, project_root)]
-    return {"named": named, "staged": staged, "not_in_diff": missing, "clean": not missing}
+    unmatched = [path for path in named if not _matches(path, staged, project_root)]
+    ignored = ignored_paths(unmatched, project_root)
+    missing = [path for path in unmatched if path not in ignored]
+    return {
+        "named": named,
+        "staged": staged,
+        "not_in_diff": missing,
+        "ignored": [path for path in unmatched if path in ignored],
+        "clean": not missing,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="List the paths a commit message names that the staged diff does not touch."
     )
-    parser.add_argument("--message", required=True, help="the commit message file, or - for stdin")
+    parser.add_argument(
+        "--message",
+        action="append",
+        required=True,
+        help="a text whose path claims to check (the commit message, the story-record notes this "
+        "cycle added); repeat for several, - for stdin once",
+    )
     parser.add_argument("--project-root", default=".", help="the git work tree (default: the cwd)")
     args = parser.parse_args(argv)
+    if args.message.count("-") > 1:
+        parser.error("stdin (-) can be read only once")
+    texts = []
     try:
-        message = sys.stdin.read() if args.message == "-" else Path(args.message).read_text(encoding="utf-8")
+        for source in args.message:
+            texts.append(sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError) as exc:
-        print(json.dumps({"error": "cannot read the message: %s" % exc}), file=sys.stderr)
+        print(json.dumps({"error": "cannot read the message %s: %s" % (source, exc)}), file=sys.stderr)
         return 2
+    message = "\n\n".join(texts)
     result = check(message, Path(args.project_root))
     if result is None:
         print(json.dumps({"error": "not a git work tree: %s" % args.project_root}), file=sys.stderr)

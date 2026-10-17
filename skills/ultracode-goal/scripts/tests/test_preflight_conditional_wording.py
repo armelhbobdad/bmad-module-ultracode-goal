@@ -85,6 +85,10 @@ def test_step2_forbids_a_test_reading_an_ignored_path():
     assert "**A gitignored artifact tree** (`impl_artifacts_tracked: false`)." in step2
     assert "`git_clean: true` says nothing about the story files this pass writes there" in step2
     assert "as a file a test reads at run time: the test would pass here and fail in CI" in step2
+    # The blocked account a step-2 branch leads to carries the caveat inline.
+    branch = _bullet(step2, "- **On a protected branch**")
+    assert "say that it is the undo for the code only, and name what survives it" in branch
+    assert "or the run folder or the test-artifacts tree is ignored" in branch
     # The rule binds the whole run, and Define-Done, where most ACs are written, points to it.
     assert "No acceptance criterion or test this run writes (this pass, Define-Done's story creation and ATDD, or Execute)" in step2
     define_done = (SCRIPTS.parent / "references" / "define-done.md").read_text(encoding="utf-8")
@@ -95,11 +99,16 @@ def test_step5_and_the_briefing_say_what_the_branch_does_not_undo():
     step5 = _section("## 5. Arm the environment", "\n### Launch briefing")
     arm = _bullet(step5, "- **What the branch does not undo.**")
     assert "When step 1 reported `impl_artifacts_tracked: false`" in arm
-    assert "deleting this branch undoes the code only" in arm
+    assert "so it undoes the code only" in arm
+    # What survives is more than the files the run creates there, and the run
+    # folder and test-artifacts check holds whatever the impl tree's value.
+    assert "every edit to a file there that git does not track" in arm
+    assert "Whatever that value, the run folder (`.decision-log.md`, a ruling file) and the test-artifacts tree survive too" in arm
+    assert "check a file path inside each with `git check-ignore`" in arm
     briefing = _section("### Launch briefing", "\n## ")
     line = _bullet(briefing, "- **What the branch does not undo**")
-    assert "(only when step 1 reported `impl_artifacts_tracked: false`)" in line
-    assert "omit this line when the tree is tracked" in line
+    assert "(only when step 5's bullet of that name found something git ignores)" in line
+    assert "omit this line when git tracks all of it" in line
     # It sits right after the kill switch, the line the operator reads for the undo.
     bullets = [b for b in briefing.splitlines() if b.startswith("- ")]
     kill = next(i for i, b in enumerate(bullets) if b.startswith("- **Kill switch:**"))
