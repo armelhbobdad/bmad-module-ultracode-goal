@@ -359,51 +359,114 @@ def _story_files(impl_artifacts: Path, epic: str, story_keys: list[str]) -> list
     return files
 
 
-_STORY_NUMBER = re.compile(r"^(\d+-\d+)")
+# The id part of a story key or a story file's name: the Epic number, the
+# story number (which may carry letters, `2a`), then any child segments a
+# decomposition added: a single letter or a roman numeral up to x, and, after
+# one of those, a number (`94-7-b-1`).
+_EPIC_SEGMENT = re.compile(r"^\d+$")
+_STORY_SEGMENT = re.compile(r"^\d+[a-z]*$")
+_CHILD_SEGMENT = re.compile(r"^(?:[a-z]|i{1,3}|iv|vi{0,3}|ix|x)$")
+_NUMBERED_CHILD_SEGMENT = re.compile(r"^\d+$")
 
 
-def _uncovered_story_keys(story_paths: list[Path], story_keys: list[str]) -> list[str]:
+def _story_stem(name: str) -> str | None:
+    """The id stem of a story key or file name, or None for an alpha-keyed one.
+
+    `95-0-a-i-the-scanner-spine` gives `95-0-a-i`, `94-2a-the-thing` gives
+    `94-2a`, `2-4-kebab-title.md` and `2-4.md` both give `2-4`. A file name is
+    cut at its first `.` or `_` first, so `1-1_draft.md` gives `1-1`. A title
+    word that is itself a single letter or a roman numeral reads as a child
+    segment (`2-4-a-new-thing` gives `2-4-a`). A story file named after its
+    full key gives the same stem, so only a file named otherwise for such a
+    key (a bare number, or a retitled slug) reads as a different story, which
+    fails closed; and a parent whose title starts that way (`5-1-i-o-layer`
+    gives `5-1-i-o`) never covers its decomposed children, which fails closed
+    too.
+    """
+    base = re.split(r"[._]", name.lower(), maxsplit=1)[0]
+    parts = base.split("-")
+    if len(parts) < 2 or not (_EPIC_SEGMENT.match(parts[0]) and _STORY_SEGMENT.match(parts[1])):
+        return None
+    stem = parts[:2]
+    for part in parts[2:]:
+        lettered_parent = len(stem) > 2 and _CHILD_SEGMENT.match(stem[-1])
+        if not (_CHILD_SEGMENT.match(part) or (lettered_parent and _NUMBERED_CHILD_SEGMENT.match(part))):
+            break
+        stem.append(part)
+    return "-".join(stem)
+
+
+def _parent_stem(stem: str) -> str | None:
+    """The stem one level up: `95-0-a-i` to `95-0-a`, `92-7f` to `92-7`, `7-1` to None."""
+    parts = stem.split("-")
+    if len(parts) > 2:
+        return "-".join(parts[:-1])
+    lettered = re.match(r"^(\d+)[a-z]+$", parts[1])
+    return "%s-%s" % (parts[0], lettered.group(1)) if lettered else None
+
+
+def _uncovered_story_keys(
+    story_paths: list[Path], story_keys: list[str], rows: dict[str, str] | None = None
+) -> list[str]:
     """In-scope keys with no story file of their own, in `story_keys` order.
 
-    Matches on the key's STORY NUMBER (`5-8`), not its whole slug, and requires
-    a boundary after it. Both halves of that are load-bearing.
+    A file covers a key when the two share the same id stem (`_story_stem`):
+    the Epic number, the story number with any letters (`94-2a`), and every
+    child segment a decomposition added (`95-0-a-i`). The stem, not the whole
+    slug, because the slug is not a contract: `bmad-create-story` writes
+    `{story_key}.md` from whatever the operator supplied, so an operator who
+    asked for story `2-4` gets `2-4.md` while sprint-planning's generated key
+    is `2-4-<kebab-title>`; both have the stem `2-4`. The full stem, not its
+    first two numbers, because a shorter match lets a sibling cover a key: a
+    child `95-0-a-i` with no file of its own would read covered by
+    `95-0-a-audit.md`, and `95-0-b` by the same file. Comparing whole stems
+    also keeps a HIGHER-numbered story from covering a lower one (`1-10` is
+    not `1-1`).
 
-    The number, not the slug, because the number is the only naming rule this
-    module actually documents: "Stories for an Epic share its number prefix"
-    (ingest-and-scope.md). The slug is not a contract - `bmad-create-story`
-    writes `{story_key}.md` from whatever the operator supplied, so an operator
-    who asked for story `2-4` gets `2-4.md` while sprint-planning's generated
-    key is `2-4-<kebab-title>`. Requiring the full slug would report a file that
-    the kernel had already resolved, read and AC-graded as "no story file", and
-    refuse to launch an Epic that is genuinely seeded. Matching the number keeps
-    this check no stricter than the convention the module publishes.
+    One more way a key is covered: by a decomposed parent. execute.md's
+    decomposition conventions give a child row no story file ("the child has
+    no story file and must never get one"), set the parent row to `done` once
+    its children exist, and keep the parent's file as the text the children
+    cite. So walking up from the key's stem (`95-0-a-i` to `95-0-a`,
+    `92-7f` to `92-7`), a parent with a file covers the key when its row is
+    `done` or when it has no row at all: a split that removed the parent's
+    row instead of setting it `done` still leaves the parent's file as the
+    text its children cite. A parent row that is not `done` stops the walk:
+    a story still being worked is not a container. A level with no row and
+    no file is passed over. `rows` is the sprint-status map (`key: status`);
+    without it no parent covers anything.
 
-    The boundary, because a bare prefix test lets a HIGHER-numbered story cover a
-    lower one: `1-10-foo.md` starts with `1-1`, so key `1-1` would read covered
-    and reach an unattended launch with no file and no acceptance criteria -
-    reintroducing, for bare-numeric keys, the exact fail-open this check exists
-    to close.
-
-    A key whose slug carries no leading story number (an alpha-keyed track) has
-    no number to match on, so it falls back to the whole-key prefix rather than
-    being silently treated as covered.
+    A key whose slug carries no story number (an alpha-keyed track) has no
+    stem, so it falls back to the whole-key prefix rather than being silently
+    treated as covered.
     """
     names = [p.name.lower() for p in story_paths]
+    file_stems = {stem for stem in (_story_stem(name) for name in names) if stem}
+    row_status: dict[str, str] = {}
+    for key, status in (rows or {}).items():
+        stem = _story_stem(key)
+        # Several rows can share a stem (`92-7e-i`, `92-7e-i-scan`): done only
+        # when every one of them is.
+        if stem:
+            row_status[stem] = status if row_status.get(stem, "done") == "done" else row_status[stem]
 
     def _covered(key: str) -> bool:
-        low = key.lower()
-        match = _STORY_NUMBER.match(low)
-        if match is None:
+        stem = _story_stem(key)
+        if stem is None:
+            low = key.lower()
             return any(name.startswith(low) for name in names)
-        number = match.group(1)
-        for name in names:
-            if not name.startswith(number):
-                continue
-            rest = name[len(number) :]
-            # End of name, or a separator. Anything else means a different,
-            # longer story number (`1-10` vs `1-1`).
-            if rest == "" or rest[0] in "-._":
+        if stem in file_stems:
+            return True
+        if rows is None:
+            return False
+        parent = _parent_stem(stem)
+        while parent is not None:
+            status = row_status.get(parent)
+            if status is not None and status != "done":
+                return False
+            if parent in file_stems:
                 return True
+            parent = _parent_stem(parent)
         return False
 
     return [key for key in story_keys if not _covered(key)]
@@ -413,17 +476,31 @@ def _split_ac_blocks(text: str) -> list[tuple[int, str]]:
     """Split a story body into (start_line, block_text) per acceptance criterion.
 
     An AC starts at a numbered list item under an "Acceptance Criteria" heading
-    (``1. ...``) and runs until the next numbered item or a new heading. Returns
-    1-based start line numbers for the `<path:line>` source.
+    (``1. ...``) and runs until the next numbered item at the SAME indent or a
+    new heading. Returns 1-based start line numbers for the `<path:line>`
+    source.
+
+    An item opens a new AC when it starts left of the first AC item's text,
+    the CommonMark rule for a list item at the same level: its indent is less
+    than the first item's indent plus its marker width (`1. ` is three). So a
+    right-aligned ` 9.` before `10.` and an item that slipped one space still
+    open their own AC. A wrapped line that happens to begin with a number
+    (`   1. All four...` under an item's text) and a nested numbered sub-list
+    start at or right of that text, so they stay part of the AC above them:
+    reading either as a new AC splits one criterion in two, and the first half
+    then reports a missing verification and a missing twin it does have.
     """
     lines = text.splitlines()
     in_ac = False
+    # Where the first AC item's text starts: an item left of it opens a new AC.
+    text_column: int | None = None
     blocks: list[tuple[int, list[str]]] = []
     for idx, raw in enumerate(lines):
         stripped = raw.strip()
         if re.match(r"^#+\s", raw):
             if re.search(r"acceptance criteria", stripped, re.IGNORECASE):
                 in_ac = True
+                text_column = None
                 continue
             # A different heading ends the AC section.
             if in_ac:
@@ -431,7 +508,11 @@ def _split_ac_blocks(text: str) -> list[tuple[int, str]]:
             continue
         if not in_ac:
             continue
-        if re.match(r"^\d+\.\s", stripped):
+        item = re.match(r"^(\s*)(\d+\.\s)", raw.expandtabs(4))
+        indent = len(item.group(1)) if item else None
+        if item and (text_column is None or indent < text_column):
+            if text_column is None:
+                text_column = indent + len(item.group(2))
             blocks.append((idx + 1, [raw]))
         elif blocks:
             blocks[-1][1].append(raw)
@@ -812,6 +893,9 @@ def build_verdict(
     # --- sprint-status + in-scope stories (fail-closed) ---
     sprint_status = _locate_sprint_status(impl_artifacts)
     sprint_text = _safe_read_text(sprint_status) if sprint_status else None
+    # The sprint-status rows (`key: status`): the uncovered-key check reads
+    # them for decomposed parents, which are `done` and keep the story file.
+    rows: dict[str, str] = {}
     if sprint_status is None or sprint_text is None:
         story_keys: list[str] = []
         mechanical_gaps.append(
@@ -855,6 +939,11 @@ def build_verdict(
                 }
             )
         story_keys = _not_done_story_keys(sprint_text, epic)
+        rows = {
+            key: status
+            for key, status in _parse_development_status(sprint_text).items()
+            if _epic_id_of(key) == str(epic)
+        }
 
     # --- per-story / per-AC scan ---
     story_paths = _story_files(impl_artifacts, epic, story_keys)
@@ -892,7 +981,7 @@ def build_verdict(
     # zero case is already the gap above) and only when the rollup actually named
     # keys (with no keys there is nothing to compare against, and inventing a gap
     # from an unknown denominator would block legitimate runs).
-    uncovered = _uncovered_story_keys(story_paths, story_keys)
+    uncovered = _uncovered_story_keys(story_paths, story_keys, rows)
     if story_paths and uncovered:
         mechanical_gaps.append(
             {
@@ -909,7 +998,8 @@ def build_verdict(
                     ", ".join(uncovered),
                 ),
                 # The create-story scaffold generates the missing story files,
-                # exactly as it does for the empty set.
+                # exactly as it does for the empty set. A decomposed child
+                # never reaches this list: its parent's file covers it.
                 "remediable": True,
                 "source": _rel(impl_artifacts, project_root),
             }

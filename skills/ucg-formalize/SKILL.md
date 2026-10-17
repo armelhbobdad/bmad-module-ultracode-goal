@@ -106,7 +106,17 @@ each entry where `remediable: true`. The remediation per kind:
   from the AC shape.
 - **`story_keys_uncovered` / `story_without_ac`** — run the `bmad-create-story` scaffold
   for the story keys the gap's `detail` names: `story_keys_uncovered` lists the unresolved
-  subset, and `story_without_ac` names the one story whose AC section is missing.
+  subset, and `story_without_ac` names the one story whose AC section is missing. A
+  decomposed child is never scaffolded: it has no story file by design, and the kernel
+  already counts it covered by its parent's file when the parent row is `done` or was
+  removed by the split. So a listed key whose id extends a parent's (`95-0-a-i` of
+  `95-0-a`) is a child the kernel found under a parent row that is not `done`. Look for
+  the split in `.decision-log.md` (the parent, its children in order, and the ACs each
+  claims, which `{ucg-root}/references/execute.md`'s decomposition conventions require).
+  When it is recorded, the parent is a container left open by mistake: set its row to
+  `done` as those conventions say, and scaffold nothing. When no split is recorded, the key
+  shape alone proves nothing (an inserted `3-2a` beside an in-progress `3-2` is its own
+  story): scaffold it like any other key, and never set a row `done` to clear the gap.
 - **`no_in_scope_stories`** — same scaffold, but this gap's `detail` names only the Epic
   and the artifacts directory, never a key list, so take the keys from the **sprint
   rollup's rows for this Epic** instead of trying to read them out of `detail`. First
