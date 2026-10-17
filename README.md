@@ -62,7 +62,7 @@ The `gate_status` comes straight from TEA's artifact: `gate_eval.py` never re-de
 
 ## Install
 
-Requires [Claude Code](https://claude.com/product/claude-code) (the runtime UCG conducts), [Node.js](https://nodejs.org/) >= 22, [Python](https://www.python.org/) >= 3.11, [uv](https://docs.astral.sh/uv/), plus `git` and `gh` on PATH.
+Requires [Claude Code](https://claude.com/product/claude-code) >= 2.1.154 (the runtime UCG conducts), [Node.js](https://nodejs.org/) >= 22, [Python](https://www.python.org/) >= 3.11, [uv](https://docs.astral.sh/uv/), plus `git` and `gh` on PATH.
 
 **Tested with:** on 2026-10-16 a two-story Epic reached its Definition-of-Done with the versions below, under the `--light` profile (TEA test-design and the trace gate; the production gate set was not exercised). They are the versions that run used, not minimums.
 

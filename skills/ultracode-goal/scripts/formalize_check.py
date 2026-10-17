@@ -30,10 +30,15 @@ are REPORTING values only. `mechanical_budget` is a per-item COUNT
 threshold constant exists anywhere in this file.
 
 Verdict mapping:
-    mechanical_budget == 0 and no judgment candidates        -> ready
-    gaps all remediable and no judgment candidates            -> remediable
-    any judgment candidate / any non-remediable mechanical
-    gap / any unreadable artifact                             -> blocked
+    mechanical_budget == 0 and no judgment candidate owed     -> ready
+    gaps all remediable and no judgment candidate owed        -> remediable
+    any judgment candidate owed / any non-remediable
+    mechanical gap / any unreadable artifact                  -> blocked
+
+A judgment candidate is owed until the step-3 scan answers it: with
+`--scan`, a candidate a red or a concern names by its id and source moves to
+`judged_candidates` and stops counting. Without `--scan` every candidate is
+owed.
 
 Output: a single JSON object to stdout, serialized with sort_keys for
 byte-stable output and carrying NO timestamp/uuid (so a re-run over the same
@@ -48,16 +53,19 @@ classes are seeded as fixtures elsewhere; this script builds the kernel they
 run over.
 
     uv run formalize_check.py --epic <id> --project-root <p> \
-        --planning-artifacts <p> --impl-artifacts <p> --tea-config <p>
+        --planning-artifacts <p> --impl-artifacts <p> --tea-config <p> \
+        [--scan <the step-3 scan object, or - for stdin>]
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 # The story-status vocabulary BMad's sprint-planning writes into
@@ -359,51 +367,114 @@ def _story_files(impl_artifacts: Path, epic: str, story_keys: list[str]) -> list
     return files
 
 
-_STORY_NUMBER = re.compile(r"^(\d+-\d+)")
+# The id part of a story key or a story file's name: the Epic number, the
+# story number (which may carry letters, `2a`), then any child segments a
+# decomposition added: a single letter or a roman numeral up to x, and, after
+# one of those, a number (`94-7-b-1`).
+_EPIC_SEGMENT = re.compile(r"^\d+$")
+_STORY_SEGMENT = re.compile(r"^\d+[a-z]*$")
+_CHILD_SEGMENT = re.compile(r"^(?:[a-z]|i{1,3}|iv|vi{0,3}|ix|x)$")
+_NUMBERED_CHILD_SEGMENT = re.compile(r"^\d+$")
 
 
-def _uncovered_story_keys(story_paths: list[Path], story_keys: list[str]) -> list[str]:
+def _story_stem(name: str) -> str | None:
+    """The id stem of a story key or file name, or None for an alpha-keyed one.
+
+    `95-0-a-i-the-scanner-spine` gives `95-0-a-i`, `94-2a-the-thing` gives
+    `94-2a`, `2-4-kebab-title.md` and `2-4.md` both give `2-4`. A file name is
+    cut at its first `.` or `_` first, so `1-1_draft.md` gives `1-1`. A title
+    word that is itself a single letter or a roman numeral reads as a child
+    segment (`2-4-a-new-thing` gives `2-4-a`). A story file named after its
+    full key gives the same stem, so only a file named otherwise for such a
+    key (a bare number, or a retitled slug) reads as a different story, which
+    fails closed; and a parent whose title starts that way (`5-1-i-o-layer`
+    gives `5-1-i-o`) never covers its decomposed children, which fails closed
+    too.
+    """
+    base = re.split(r"[._]", name.lower(), maxsplit=1)[0]
+    parts = base.split("-")
+    if len(parts) < 2 or not (_EPIC_SEGMENT.match(parts[0]) and _STORY_SEGMENT.match(parts[1])):
+        return None
+    stem = parts[:2]
+    for part in parts[2:]:
+        lettered_parent = len(stem) > 2 and _CHILD_SEGMENT.match(stem[-1])
+        if not (_CHILD_SEGMENT.match(part) or (lettered_parent and _NUMBERED_CHILD_SEGMENT.match(part))):
+            break
+        stem.append(part)
+    return "-".join(stem)
+
+
+def _parent_stem(stem: str) -> str | None:
+    """The stem one level up: `95-0-a-i` to `95-0-a`, `92-7f` to `92-7`, `7-1` to None."""
+    parts = stem.split("-")
+    if len(parts) > 2:
+        return "-".join(parts[:-1])
+    lettered = re.match(r"^(\d+)[a-z]+$", parts[1])
+    return "%s-%s" % (parts[0], lettered.group(1)) if lettered else None
+
+
+def _uncovered_story_keys(
+    story_paths: list[Path], story_keys: list[str], rows: dict[str, str] | None = None
+) -> list[str]:
     """In-scope keys with no story file of their own, in `story_keys` order.
 
-    Matches on the key's STORY NUMBER (`5-8`), not its whole slug, and requires
-    a boundary after it. Both halves of that are load-bearing.
+    A file covers a key when the two share the same id stem (`_story_stem`):
+    the Epic number, the story number with any letters (`94-2a`), and every
+    child segment a decomposition added (`95-0-a-i`). The stem, not the whole
+    slug, because the slug is not a contract: `bmad-create-story` writes
+    `{story_key}.md` from whatever the operator supplied, so an operator who
+    asked for story `2-4` gets `2-4.md` while sprint-planning's generated key
+    is `2-4-<kebab-title>`; both have the stem `2-4`. The full stem, not its
+    first two numbers, because a shorter match lets a sibling cover a key: a
+    child `95-0-a-i` with no file of its own would read covered by
+    `95-0-a-audit.md`, and `95-0-b` by the same file. Comparing whole stems
+    also keeps a HIGHER-numbered story from covering a lower one (`1-10` is
+    not `1-1`).
 
-    The number, not the slug, because the number is the only naming rule this
-    module actually documents: "Stories for an Epic share its number prefix"
-    (ingest-and-scope.md). The slug is not a contract - `bmad-create-story`
-    writes `{story_key}.md` from whatever the operator supplied, so an operator
-    who asked for story `2-4` gets `2-4.md` while sprint-planning's generated
-    key is `2-4-<kebab-title>`. Requiring the full slug would report a file that
-    the kernel had already resolved, read and AC-graded as "no story file", and
-    refuse to launch an Epic that is genuinely seeded. Matching the number keeps
-    this check no stricter than the convention the module publishes.
+    One more way a key is covered: by a decomposed parent. execute.md's
+    decomposition conventions give a child row no story file ("the child has
+    no story file and must never get one"), set the parent row to `done` once
+    its children exist, and keep the parent's file as the text the children
+    cite. So walking up from the key's stem (`95-0-a-i` to `95-0-a`,
+    `92-7f` to `92-7`), a parent with a file covers the key when its row is
+    `done` or when it has no row at all: a split that removed the parent's
+    row instead of setting it `done` still leaves the parent's file as the
+    text its children cite. A parent row that is not `done` stops the walk:
+    a story still being worked is not a container. A level with no row and
+    no file is passed over. `rows` is the sprint-status map (`key: status`);
+    without it no parent covers anything.
 
-    The boundary, because a bare prefix test lets a HIGHER-numbered story cover a
-    lower one: `1-10-foo.md` starts with `1-1`, so key `1-1` would read covered
-    and reach an unattended launch with no file and no acceptance criteria -
-    reintroducing, for bare-numeric keys, the exact fail-open this check exists
-    to close.
-
-    A key whose slug carries no leading story number (an alpha-keyed track) has
-    no number to match on, so it falls back to the whole-key prefix rather than
-    being silently treated as covered.
+    A key whose slug carries no story number (an alpha-keyed track) has no
+    stem, so it falls back to the whole-key prefix rather than being silently
+    treated as covered.
     """
     names = [p.name.lower() for p in story_paths]
+    file_stems = {stem for stem in (_story_stem(name) for name in names) if stem}
+    row_status: dict[str, str] = {}
+    for key, status in (rows or {}).items():
+        stem = _story_stem(key)
+        # Several rows can share a stem (`92-7e-i`, `92-7e-i-scan`): done only
+        # when every one of them is.
+        if stem:
+            row_status[stem] = status if row_status.get(stem, "done") == "done" else row_status[stem]
 
     def _covered(key: str) -> bool:
-        low = key.lower()
-        match = _STORY_NUMBER.match(low)
-        if match is None:
+        stem = _story_stem(key)
+        if stem is None:
+            low = key.lower()
             return any(name.startswith(low) for name in names)
-        number = match.group(1)
-        for name in names:
-            if not name.startswith(number):
-                continue
-            rest = name[len(number) :]
-            # End of name, or a separator. Anything else means a different,
-            # longer story number (`1-10` vs `1-1`).
-            if rest == "" or rest[0] in "-._":
+        if stem in file_stems:
+            return True
+        if rows is None:
+            return False
+        parent = _parent_stem(stem)
+        while parent is not None:
+            status = row_status.get(parent)
+            if status is not None and status != "done":
+                return False
+            if parent in file_stems:
                 return True
+            parent = _parent_stem(parent)
         return False
 
     return [key for key in story_keys if not _covered(key)]
@@ -413,17 +484,35 @@ def _split_ac_blocks(text: str) -> list[tuple[int, str]]:
     """Split a story body into (start_line, block_text) per acceptance criterion.
 
     An AC starts at a numbered list item under an "Acceptance Criteria" heading
-    (``1. ...``) and runs until the next numbered item or a new heading. Returns
-    1-based start line numbers for the `<path:line>` source.
+    (``1. ...``) and runs until the next numbered item at the SAME indent or a
+    new heading. Returns 1-based start line numbers for the `<path:line>`
+    source.
+
+    An item opens a new AC when it starts left of the first AC item's text,
+    the CommonMark rule for a list item at the same level: its indent is less
+    than the first item's indent plus its marker width (`1. ` is three). So a
+    right-aligned ` 9.` before `10.` and an item that slipped one space still
+    open their own AC. A wrapped line that happens to begin with a number
+    (`   1. All four...` under an item's text) and a nested numbered sub-list
+    start at or right of that text, so they stay part of the AC above them:
+    reading either as a new AC splits one criterion in two, and the first half
+    then reports a missing verification and a missing twin it does have.
     """
     lines = text.splitlines()
     in_ac = False
+    # Where the first AC item's text starts: an item left of it opens a new AC.
+    text_column: int | None = None
     blocks: list[tuple[int, list[str]]] = []
+    current: list[str] | None = None
     for idx, raw in enumerate(lines):
         stripped = raw.strip()
         if re.match(r"^#+\s", raw):
+            # Any heading closes the open block: a block's lines are contiguous,
+            # since each candidate's line number is counted from its start.
+            current = None
             if re.search(r"acceptance criteria", stripped, re.IGNORECASE):
                 in_ac = True
+                text_column = None
                 continue
             # A different heading ends the AC section.
             if in_ac:
@@ -431,10 +520,15 @@ def _split_ac_blocks(text: str) -> list[tuple[int, str]]:
             continue
         if not in_ac:
             continue
-        if re.match(r"^\d+\.\s", stripped):
-            blocks.append((idx + 1, [raw]))
-        elif blocks:
-            blocks[-1][1].append(raw)
+        item = re.match(r"^(\s*)(\d+\.\s)", raw.expandtabs(4))
+        indent = len(item.group(1)) if item else None
+        if item and (text_column is None or indent < text_column):
+            if text_column is None:
+                text_column = indent + len(item.group(2))
+            current = [raw]
+            blocks.append((idx + 1, current))
+        elif current is not None:
+            current.append(raw)
     return [(line_no, "\n".join(body)) for line_no, body in blocks]
 
 
@@ -760,15 +854,133 @@ def _mechanical_hook() -> None:
 # --- verdict assembly --------------------------------------------------------
 
 
+# --- judgment candidate identity and the step-3 answers ----------------------
+
+# The digest length red_ids.py uses for a RED's id.
+_CANDIDATE_DIGEST_LEN = 12
+
+
+def _normalize_text(text: str) -> str:
+    """NFC, whitespace collapsed: re-spacing one line keeps its text (a reflow
+    that moves words across lines does not)."""
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text or "")).strip()
+
+
+def _candidate_id(candidate: dict, texts_by_rel: dict[str, str]) -> str:
+    """A judgment candidate's line-free id: `<kind>:<bare path>:<digest>`.
+
+    The digest is the first 12 hex characters of the SHA-256 of the flagged
+    line's normalized text and the candidate's normalized
+    `why_machine_cannot_decide`, the recipe red_ids.py uses for a RED (which
+    digests the decision instead). The line text is what makes the id confirm
+    that the line at the candidate's source still reads as it did when the
+    candidate was seeded. The reason tells apart two candidates of one kind on
+    one line, such as an AC row citing two ids nobody declares: each names its
+    own token. The line NUMBER is left out, so the id alone cannot tell apart
+    two candidates of one kind on the same text in one file, and an answer
+    must carry the candidate's `source` too (`_answers`).
+    """
+    kind, source = candidate["kind"], candidate["source"]
+    path, _, line = source.rpartition(":")
+    text = ""
+    if line.isdigit() and path:
+        lines = (texts_by_rel.get(path) or "").splitlines()
+        number = int(line)
+        if 1 <= number <= len(lines):
+            text = lines[number - 1]
+    else:
+        path = source
+    reason = _normalize_text(str(candidate.get("why_machine_cannot_decide") or ""))
+    digest = hashlib.sha256(("%s\n%s" % (_normalize_text(text), reason)).encode("utf-8")).hexdigest()
+    return "%s:%s:%s" % (kind, path, digest[:_CANDIDATE_DIGEST_LEN])
+
+
+def _read_scan(scan: str | None) -> tuple[dict | None, dict | None]:
+    """(the step-3 scan object, the `scan` report) for `--scan`, or (None, None).
+
+    `-` reads stdin. An unreadable or unparseable scan, or one not in the
+    shape red_ids.py accepts (`_well_formed_scan`), answers nothing: every candidate stays unjudged and the verdict
+    stays `blocked`, and the report says the scan was not read. A scan that
+    cannot be read is not an answer.
+    """
+    if scan is None:
+        return None, None
+    try:
+        text = sys.stdin.read() if scan == "-" else Path(scan).read_text(encoding="utf-8")
+        data = json.loads(text)
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None, {"path": scan, "read": False, "answered": 0}
+    if not _well_formed_scan(data):
+        return None, {"path": scan, "read": False, "answered": 0}
+    return data, {"path": scan, "read": True, "answered": 0}
+
+
+def _well_formed_scan(data: object) -> bool:
+    """Whether the scan is one red_ids.py accepts, with concerns that can be read.
+
+    An object carrying a `reds` list whose every red is an object with a
+    non-blank string `kind`, `source` and `decision_needed`, all of it text
+    UTF-8 can encode: red_ids.py refuses
+    anything else, and then the reds stream the hard gate reads is not
+    computed, so a scan it refuses must not judge a candidate here either, or
+    the kernel would say `ready` over reds no one minted. `concerns`, when
+    present, must be a list of objects; red_ids.py never reads it, and a
+    refusal here only keeps the verdict `blocked`.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("reds"), list):
+        return False
+    for red in data["reds"]:
+        if not isinstance(red, dict):
+            return False
+        for field in ("kind", "source", "decision_needed"):
+            value = red.get(field)
+            if not isinstance(value, str) or not _normalize_text(value):
+                return False
+        # red_ids.py writes each red as UTF-8; a lone surrogate it cannot encode.
+        try:
+            json.dumps(red, ensure_ascii=False).encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+    concerns = data.get("concerns", [])
+    return isinstance(concerns, list) and all(isinstance(entry, dict) for entry in concerns)
+
+
+def _answers(scan: dict | None) -> dict[tuple[str, str], str]:
+    """`{(candidate id, source): "red" | "concern"}` from the scan's entries.
+
+    A seeded candidate is answered by the entry that carries its id in
+    `candidate` and its `source` as given. Both, because each covers a way the
+    other alone would judge the wrong line: the source tells apart two
+    candidates whose flagged lines and reasons read the same (they share an id), and the
+    id makes sure the line at that source still holds the text the subagent
+    judged (an edit between the seeding and this run moves lines, and a source
+    alone would then name another line). A pair both lists name reads as
+    `red`: a confirmation is never outweighed by a clearing.
+    """
+    answers: dict[tuple[str, str], str] = {}
+    if not scan:
+        return answers
+    for field, verdict in (("concerns", "concern"), ("reds", "red")):
+        for entry in scan.get(field) or []:
+            candidate, source = entry.get("candidate"), entry.get("source")
+            if isinstance(candidate, str) and isinstance(source, str) and candidate.strip() and source.strip():
+                answers[(candidate.strip(), source.strip())] = verdict
+    return answers
+
+
 def build_verdict(
     epic: str,
     project_root: Path,
     planning_artifacts: Path,
     impl_artifacts: Path,
     tea_config: Path,
+    scan: str | None = None,
 ) -> dict:
     mechanical_gaps: list[dict] = []
     judgment_candidates: list[dict] = []
+    # The text of every file a candidate can point into, by the relative path
+    # its `source` names: the line its id digests.
+    texts_by_rel: dict[str, str] = {}
 
     # timing: monotonic samples at entry and at the mechanical-half start.
     _entry_ns = time.monotonic_ns()
@@ -812,6 +1024,9 @@ def build_verdict(
     # --- sprint-status + in-scope stories (fail-closed) ---
     sprint_status = _locate_sprint_status(impl_artifacts)
     sprint_text = _safe_read_text(sprint_status) if sprint_status else None
+    # The sprint-status rows (`key: status`): the uncovered-key check reads
+    # them for decomposed parents, which are `done` and keep the story file.
+    rows: dict[str, str] = {}
     if sprint_status is None or sprint_text is None:
         story_keys: list[str] = []
         mechanical_gaps.append(
@@ -855,6 +1070,11 @@ def build_verdict(
                 }
             )
         story_keys = _not_done_story_keys(sprint_text, epic)
+        rows = {
+            key: status
+            for key, status in _parse_development_status(sprint_text).items()
+            if _epic_id_of(key) == str(epic)
+        }
 
     # --- per-story / per-AC scan ---
     story_paths = _story_files(impl_artifacts, epic, story_keys)
@@ -892,7 +1112,7 @@ def build_verdict(
     # zero case is already the gap above) and only when the rollup actually named
     # keys (with no keys there is nothing to compare against, and inventing a gap
     # from an unknown denominator would block legitimate runs).
-    uncovered = _uncovered_story_keys(story_paths, story_keys)
+    uncovered = _uncovered_story_keys(story_paths, story_keys, rows)
     if story_paths and uncovered:
         mechanical_gaps.append(
             {
@@ -909,7 +1129,8 @@ def build_verdict(
                     ", ".join(uncovered),
                 ),
                 # The create-story scaffold generates the missing story files,
-                # exactly as it does for the empty set.
+                # exactly as it does for the empty set. A decomposed child
+                # never reaches this list: its parent's file covers it.
                 "remediable": True,
                 "source": _rel(impl_artifacts, project_root),
             }
@@ -946,6 +1167,8 @@ def build_verdict(
     for story_path in story_paths:
         body = story_reads[story_path]
         rel = _rel(story_path, project_root)
+        if body is not None:
+            texts_by_rel[rel] = body
         if body is None:
             mechanical_gaps.append(
                 {
@@ -1181,6 +1404,7 @@ def build_verdict(
                 "source": td_rel,
             })
         else:
+            texts_by_rel[td_rel] = td_text
             td_gaps, td_candidates = _scan_test_design(td_text, td_rel)
             mechanical_gaps.extend(td_gaps)
             judgment_candidates.extend(td_candidates)
@@ -1203,6 +1427,7 @@ def build_verdict(
                 "source": nfr_rel,
             })
         else:
+            texts_by_rel[_rel(nfr_path, project_root)] = nfr_text
             judgment_candidates.extend(_scan_nfr_assessment(nfr_text, _rel(nfr_path, project_root)))
 
     # --- reporting ratios (NEVER compared to a cutoff) ---
@@ -1231,6 +1456,27 @@ def build_verdict(
     _mech_end_ns = time.monotonic_ns()
 
     mechanical_budget = len(mechanical_gaps)
+
+    # Every candidate carries its line-free id, and a candidate the step-3 scan
+    # answered (`--scan`: a red or a concern carrying its id and source) is judged: it no
+    # longer sets judgment_required. A confirmed one is a RED the hard gate's
+    # reds stream reads, and a cleared one is a concern, so neither is a
+    # judgment still owed. With no scan, or one that cannot be read, nothing is
+    # judged, and the verdict stays `blocked` while any candidate stands.
+    for candidate in judgment_candidates:
+        candidate["id"] = _candidate_id(candidate, texts_by_rel)
+    scan_object, scan_report = _read_scan(scan)
+    answers = _answers(scan_object)
+    judged_candidates = [
+        {**candidate, "judged_as": answers[(candidate["id"], candidate["source"])]}
+        for candidate in judgment_candidates
+        if (candidate["id"], candidate["source"]) in answers
+    ]
+    judgment_candidates = [
+        candidate for candidate in judgment_candidates if (candidate["id"], candidate["source"]) not in answers
+    ]
+    if scan_report is not None:
+        scan_report["answered"] = len(judged_candidates)
     judgment_required = bool(judgment_candidates)
 
     non_remediable = any(not g["remediable"] for g in mechanical_gaps)
@@ -1269,6 +1515,8 @@ def build_verdict(
         "judgment_required": judgment_required,
         "mechanical_gaps": mechanical_gaps,
         "judgment_candidates": judgment_candidates,
+        "judged_candidates": judged_candidates,
+        "scan": scan_report,
         "checks": checks,
         "timing": timing,
     }
@@ -1284,6 +1532,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--planning-artifacts")
     parser.add_argument("--impl-artifacts")
     parser.add_argument("--tea-config")
+    parser.add_argument(
+        "--scan",
+        help="The step-3 scan object (a file, or - for stdin; a relative path "
+        "resolves against --project-root). A judgment candidate a red or a concern "
+        "answers by its id in `candidate` and its `source` is judged and stops "
+        "setting judgment_required; an unreadable scan, or one red_ids.py refuses, "
+        "judges nothing.",
+    )
     args = parser.parse_args(argv)
 
     # Invocation-error lane (exit 2): any required flag missing OR empty. argparse
@@ -1323,6 +1579,7 @@ def main(argv: list[str] | None = None) -> int:
         planning_artifacts=planning_artifacts,
         impl_artifacts=impl_artifacts,
         tea_config=tea_config,
+        scan=args.scan if args.scan in (None, "-") else str(_resolve(args.scan, project_root)),
     )
     print(json.dumps(verdict, sort_keys=True, indent=2))
     return 0

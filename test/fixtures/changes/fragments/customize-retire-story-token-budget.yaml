@@ -1,0 +1,8 @@
+type: breaking
+scope: ultracode-goal
+prs: [909]
+issues: [902]
+summary: |
+  The deprecated `story_token_budget` key is gone from `customize.toml`. No layer read it: the per-story bound has always been `max_turns_per_story`. An override that still sets it is now reported as an unknown key, and the run stops at preflight with `status: "blocked"`.
+migration: |
+  Delete `story_token_budget` from `_bmad/custom/ultracode-goal.toml` and `.user.toml`, and set `max_turns_per_story` if you relied on a per-story bound. Every other key resolves as before.

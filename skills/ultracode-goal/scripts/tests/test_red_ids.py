@@ -102,6 +102,22 @@ def test_a_blank_decision_is_refused_rather_than_digested_to_a_constant(tmp_path
             red_ids.apply([red], tmp_path)
 
 
+def test_a_kind_or_source_that_is_not_a_string_is_refused(tmp_path):
+    # A truthy non-string passed the old check and then crashed `mint_id` on
+    # `.strip()`, an exit 1 with a traceback instead of the clean refusal.
+    for field, bad in (("kind", 1), ("kind", True), ("source", ["prd.md:5"]), ("source", {"p": 5}), ("kind", "  ")):
+        red = {**_red("undecided-product", "prd.md:5", "Undecided"), field: bad}
+        with pytest.raises(red_ids.RedIdError):
+            red_ids.apply([red], tmp_path)
+
+
+def test_a_red_utf8_cannot_encode_is_refused(tmp_path):
+    for field in ("decision_needed", "evidence", "source"):
+        red = {**_red("undecided-product", "prd.md:5", "Undecided"), field: "pick \ud800 one"}
+        with pytest.raises(red_ids.RedIdError):
+            red_ids.apply([red], tmp_path)
+
+
 def test_the_blank_decision_guard_covers_the_from_sidecar_path(tmp_path):
     # ANTI-VACUOUS TWIN: --from-sidecar never passes through the scan reader, so
     # validating only there would leave this path open.

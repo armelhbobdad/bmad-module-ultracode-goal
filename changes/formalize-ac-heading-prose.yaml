@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal, ucg-formalize
+summary: |
+  The readiness check no longer adds the prose under a second "Acceptance Criteria" heading, before that heading's first item, to the last acceptance criterion of the section above it. That criterion could be credited with a verification or a twin written outside it.

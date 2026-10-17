@@ -77,7 +77,8 @@ uv run {ucg-root}/scripts/formalize_check.py --epic <id> --project-root {project
 ```
 
 Read the kernel's readiness verdict JSON from stdout. Its shape is
-`{ready, verdict, mechanical_budget, judgment_required, mechanical_gaps[], judgment_candidates[], checks{}}`.
+`{ready, verdict, mechanical_budget, judgment_required, mechanical_gaps[], judgment_candidates[], judged_candidates[], scan, checks{}}`;
+`judged_candidates[]` is empty and `scan` is `null` until step 3's re-run passes `--scan`.
 Do not recompute it: read `mechanical_budget` and the verdict off the JSON, never re-derive
 them here. There is one kernel — a second readiness evaluator would let the two callers
 drift.
@@ -106,7 +107,17 @@ each entry where `remediable: true`. The remediation per kind:
   from the AC shape.
 - **`story_keys_uncovered` / `story_without_ac`** — run the `bmad-create-story` scaffold
   for the story keys the gap's `detail` names: `story_keys_uncovered` lists the unresolved
-  subset, and `story_without_ac` names the one story whose AC section is missing.
+  subset, and `story_without_ac` names the one story whose AC section is missing. A
+  decomposed child is never scaffolded: it has no story file by design, and the kernel
+  already counts it covered by its parent's file when the parent row is `done` or was
+  removed by the split. So a listed key whose id extends a parent's (`95-0-a-i` of
+  `95-0-a`) is a child the kernel found under a parent row that is not `done`. Look for
+  the split in `.decision-log.md` (the parent, its children in order, and the ACs each
+  claims, which `{ucg-root}/references/execute.md`'s decomposition conventions require).
+  When it is recorded, the parent is a container left open by mistake: set its row to
+  `done` as those conventions say, and scaffold nothing. When no split is recorded, the key
+  shape alone proves nothing (an inserted `3-2a` beside an in-progress `3-2` is its own
+  story): scaffold it like any other key, and never set a row `done` to clear the gap.
 - **`no_in_scope_stories`** — same scaffold, but this gap's `detail` names only the Epic
   and the artifacts directory, never a key list, so take the keys from the **sprint
   rollup's rows for this Epic** instead of trying to read them out of `detail`. First
@@ -131,8 +142,9 @@ auto-remediate a `judgment_candidate`, and never auto-remediate a
 own unreadable content).
 
 **Re-run the kernel** (step 1) after the remediation pass so `mechanical_budget`
-reflects the fixes — the remediate-then-re-run loop. The verdict mapping in step 4
-reads the post-remediation kernel verdict.
+reflects the fixes: the remediate-then-re-run loop. Step 3 is seeded from this
+re-run's `judgment_candidates[]`, whose lines are the lines as remediation left them, and
+step 4 maps the verdict of step 3's own re-run on the answered scan.
 
 **Remediation halt catch-all.** If a remediation sub-skill itself fails, is not installed
 (the Skill tool does not know its name), or blocks on interactive input, do not re-invoke
@@ -152,13 +164,19 @@ step 2, so the remediate-then-re-run loop always converges instead of spinning s
 ## 3. Judgment subagent (exactly one)
 
 Spawn **exactly one throwaway subagent** to read the judgment candidates; a second pass
-would double-judge the same candidates, so never two. Seed the subagent with the kernel's
-`judgment_candidates[].source` list as targeted hypotheses to confirm (it confirms the
-flagged sources, it does not scan blind), plus the artifact paths. The corpus stays in the
+would double-judge the same candidates, so never two. Seed the subagent with the
+post-remediation kernel's `judgment_candidates[]` list (step 2's re-run), each candidate's
+`id`, `source` and `why_machine_cannot_decide` (the reason tells apart two candidates the
+kernel flags on one line), as targeted hypotheses
+to confirm (it confirms the flagged sources, it does not scan blind), plus the artifact
+paths. The corpus stays in the
 subagent's discarded context (zero-net-context) — this layer holds only the returned findings.
 
 The kernel only *flags*; the subagent *decides*. It must **confirm-or-clear** each seeded
-`judgment_candidate` into `reds` or `concerns`, never recording one as a RED unprompted.
+`judgment_candidate` into `reds` or `concerns`, never recording one as a RED unprompted,
+and the entry that answers a seeded candidate carries that candidate's `id`, copied as
+given, in its `candidate` field, and its `source`, copied as given, in `source`: that pair
+is how step 3's kernel re-run knows it was judged.
 Fail-closed: a `judgment_candidate` the subagent can neither confirm nor clear **defaults
 to RED** (JUDGMENT), mirroring `gate_eval.py`'s `nfr_status is None → failing` and the
 identical rule the spine's scan carries (`{ucg-root}/references/preflight.md`, second hypothesis
@@ -176,8 +194,10 @@ one-line evidence fields:
 {"reds": [{"source": "<artifact path:line>",
            "kind": "undecided-product|undecided-architecture|contradiction|undefinable-done",
            "decision_needed": "<the exact decision a human must make>",
-           "evidence": "<one quoted line>"}],
- "concerns": [{"source": "<artifact path:line>", "note": "<cosmetic / non-blocking gap, one line>"}],
+           "evidence": "<one quoted line>",
+           "candidate": "<only when this answers a seeded judgment candidate: its id, copied as given>"}],
+ "concerns": [{"source": "<artifact path:line>", "note": "<cosmetic / non-blocking gap, one line>",
+               "candidate": "<only when this answers a seeded judgment candidate: its id, copied as given>"}],
  "advisories_checked": [{"sig": "<advisory id>", "status": "recurred|not-observed|unknown"}]}
 ```
 
@@ -199,50 +219,80 @@ found only here is not answerable through `/ucg-resolve` until an autonomous pre
 records it.
 
 Any surviving `reds` entry maps to `status=blocked`. Record each red with its minted id,
-its source, and the exact decision needed in `.decision-log.md`. A purely cosmetic gap
-belongs in `concerns`, never red.
+its source, and the exact decision needed in `.decision-log.md`, and each seeded candidate
+the subagent cleared with its source and the concern's note: a clearing is what lets the
+re-run below read `ready`. A purely cosmetic gap belongs in `concerns`, never red.
 
-**If subagent spawning is unavailable** — wrong runtime, quota exhausted, or the spawn
-errors — do not dead-end the verdict: read the kernel's flagged
-`judgment_candidates[].source` inline in the current context (accepting the context cost;
-only the zero-net-context property is lost) and proceed to verdict mapping.
+**Then re-run the kernel on the answered scan.** Step 1's verdict counts every judgment
+candidate as still owed, so it reads `blocked` whenever the kernel flagged one. Pass the
+same scan object to the kernel with the step-1 arguments plus `--scan -` (the object on
+stdin), as the spine does (`{ucg-root}/references/preflight.md`, step 3):
+
+```
+uv run {ucg-root}/scripts/formalize_check.py <the step-1 arguments> --scan -
+```
+
+A candidate is judged (`judged_candidates`) when an entry carries its `id` in
+`candidate` and its `source` as seeded, and then it no longer sets `judgment_required`;
+one no entry answers keeps the verdict `blocked`, the fail-closed default above. An
+entry whose pair names no candidate judges nothing, and a scan the kernel cannot read, or
+one `red_ids.py` refuses, judges nothing. This re-run's verdict is the one step 4 maps.
+
+**If subagent spawning is unavailable** (wrong runtime, quota exhausted, or the spawn
+errors), do not dead-end the verdict: read the kernel's flagged candidates inline in the
+current context (accepting the context cost; only the zero-net-context property is lost)
+and build the same scan object, each answer carrying its candidate's `id` and `source`.
+Then run the id layer and the kernel re-run above on it, as for a subagent's object,
+before the verdict mapping: losing the subagent skips neither.
 
 ## 4. Verdict mapping
 
-Map the post-remediation kernel verdict plus the subagent reds to the headless status by
+Map the kernel verdict of step 3's re-run on the answered scan, plus the subagent reds,
+to the headless status by
 this deterministic decision-list; `remediable` is an internal loop state, never a headless
 emit value.
 
 | Condition | Route | Headless status |
 |-----------|-------|-----------------|
-| post-remediation kernel `verdict == ready` AND no reds | accept | `status=complete` |
-| `mechanical_budget > 0`, all gaps remediable, no reds (verdict remediable) | remediate-then-re-run (step 2), then re-map | (loops; never emits `remediable`) |
+| re-run kernel `verdict == ready` (`mechanical_budget == 0`, every judgment candidate answered) AND no reds | accept | `status=complete` |
+| `mechanical_budget > 0`, all gaps remediable, no reds (verdict remediable) | remediate-then-re-run (step 2), re-run the kernel with the same scan object (`--scan -`; the judgment pass is not spawned again), then re-map | (loops; never emits `remediable`) |
 | any red OR any non-remediable mechanical gap OR any artifact the kernel could not read | reject | `status=blocked` |
-| kernel `verdict == blocked` on judgment alone — `mechanical_budget == 0`, no non-remediable gap, no red, because the subagent cleared every flagged candidate into `concerns` | reject | `status=blocked` |
+| re-run kernel `verdict == blocked` with a judgment candidate no scan entry answered, whatever the budget | reject | `status=blocked` |
+| re-run kernel verdict unreadable, absent, or none of `ready`, `remediable`, `blocked` | reject | `status=blocked` |
 
-**The last row is why this list is total.** Without it the common case falls through
-every row: the kernel flags a judgment candidate on most Epics, the subagent clears it,
-and the result satisfies neither the accept row (the kernel never said `ready`) nor the
-first reject row (there is no red and no non-remediable gap). Its blocker list is the
-cleared candidates themselves, each by `source`, with `decision_needed` naming that the
-kernel flagged it and the judgment pass cleared it.
+**The loop row keeps the scan.** A second remediation can move a seeded candidate's line,
+and its answer then no longer matches: that candidate reads as unanswered and the
+unanswered-candidate row rejects, fail-closed. Invoking `/ucg-formalize` again seeds a
+fresh scan from the new lines.
+
+**The unanswered-candidate row is why this list is total.** A candidate the subagent did not answer is
+the fail-closed default of step 3, a RED nobody judged, but it reaches this mapping only
+as the kernel's `judgment_candidates`, not as a red, so without this row it would satisfy
+neither the accept row (the kernel did not say `ready`) nor the first reject row. Its
+blocker list is those candidates, each by `source`, with `decision_needed` naming that the
+kernel flagged it and the judgment pass left it unanswered. A candidate the subagent
+cleared into `concerns` is judged, and the re-run no longer counts it, so clearing every
+flagged candidate reaches the accept row.
 
 **Row 1 is keyed on the kernel's own verdict word, never on the budget alone.** The two
 are not equivalent: `formalize_check.py` sets `verdict = "blocked"` whenever
 `judgment_required` is true, *independent of* `mechanical_budget`, and step 2 never
 removes a judgment candidate (it is forbidden to remediate one). So budget `0` with zero
-reds is reachable while the kernel still reads `blocked` — whenever the subagent classified
-every flagged candidate into `concerns`. Keying the accept row on the budget would route
-that state to `complete` and hand back a ready verdict the kernel never gave. The budget
-and reds clause is the *explanation* of a ready verdict, not the test for one.
+reds is reachable while the kernel still reads `blocked`, whenever a flagged candidate
+went unanswered or the kernel could not read the scan. Keying the accept row on the
+budget would route that state to `complete` and hand back a ready verdict the kernel
+never gave. The budget and reds clause is the *explanation* of a ready verdict, not the
+test for one.
 
 An artifact the kernel could not read is fail-closed to `status=blocked` (mirroring
 `gate_eval.py`'s `nfr_status is None -> failing` read), never treated as neutral —
 formalize's `blocked` is a deliberate strengthening over gate_eval's reloop.
 
-For a blocked envelope, assemble the **ordered blocker list** — confirmed reds before
-non-remediable mechanical gaps, each in `source` (`path:line`) order — and hand it to the
-blocked adapter (see Headless), which renders `reason` positionally from it.
+For a blocked envelope, assemble the **ordered blocker list**: confirmed reds, then
+non-remediable mechanical gaps, then judgment candidates no scan entry answered, each
+group in `source` (`path:line`) order, or the unreadable verdict itself when that is the
+row that applied. Hand it to the blocked adapter (see Headless), which renders `reason`
+positionally from it.
 
 ## Headless
 
@@ -275,7 +325,7 @@ check is not a run, and writing that file here would overwrite an autonomous run
 verdict with the result of a standalone question. Stdout is the sole output of
 `/ucg-formalize`.
 
-On the accept path (`status=complete`, post-remediation verdict ready) emit all five
+On the accept path (`status=complete`, re-run verdict ready) emit all five
 keys:
 
 ```json

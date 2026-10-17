@@ -46,6 +46,8 @@ FR5_TOP_KEYS = frozenset(
         "judgment_required",
         "mechanical_gaps",
         "judgment_candidates",
+        "judged_candidates",
+        "scan",
         "checks",
         "timing",
     }
@@ -282,11 +284,13 @@ _STDLIB_ALLOW = frozenset(
     {
         "__future__",
         "argparse",
+        "hashlib",
         "json",
         "re",
         "sys",
         "time",
         "tomllib",
+        "unicodedata",
         "pathlib",
         "os",
         "io",
@@ -1074,3 +1078,222 @@ def test_a_dangling_story_key_still_takes_the_mechanical_arm(tmp_path):
 
     assert result["verdict"] == "remediable", result
     assert any(g["id"].startswith("orphaned_index") for g in result["mechanical_gaps"])
+
+
+# --- Acceptance criteria split at their own indent ----------------------------
+
+
+def test_a_wrapped_line_starting_with_a_number_stays_in_its_ac():
+    # The live sighting: the AC's prose wrapped so that "Recorded decision 1."
+    # fell across a line break, and the continuation line began "1. ". Read as
+    # a new AC, it cut the real AC in two, and the first half reported no
+    # verification and no twin that it carried a few lines further down.
+    body = (
+        "# Story 7-1\n\n## Acceptance Criteria\n\n"
+        "1. **The schema lands in one diff.** `packages/db/schema/x.surql` per Recorded decision\n"
+        "   1. All four mechanisms land together: the file appended to the schema.\n"
+        "   **Verification:** `pytest tests/test_schema.py::test_lands` exits 0.\n"
+        "   **Anti-vacuous twin:** `test_schema_missing_reds` fails when the file is removed.\n"
+        "2. Running `pytest tests/test_two.py::test_it` exits 0, and the twin `test_two_reds` fails.\n"
+    )
+    blocks = fc._split_ac_blocks(body)
+    assert [line for line, _ in blocks] == [5, 9]
+    first = blocks[0][1]
+    assert "All four mechanisms" in first
+    assert "**Verification:**" in first
+    assert "**Anti-vacuous twin:**" in first
+
+
+def test_a_nested_numbered_sub_list_belongs_to_its_ac():
+    body = (
+        "## Acceptance Criteria\n\n"
+        "1. The CLI accepts three flags:\n"
+        "   1. `--light`\n"
+        "   2. `-H`\n"
+        "2. The second criterion.\n"
+    )
+    blocks = fc._split_ac_blocks(body)
+    assert len(blocks) == 2
+    assert "`-H`" in blocks[0][1]
+    assert blocks[1][1].startswith("2. The second criterion.")
+
+
+def test_acs_written_at_an_indent_split_at_that_indent():
+    # The first item sets the indent, so a list indented as a whole still splits.
+    body = "## Acceptance Criteria\n\n  1. First.\n     1. wrapped, not an AC\n  2. Second.\n"
+    blocks = fc._split_ac_blocks(body)
+    assert [text.strip().split("\n")[0] for _, text in blocks] == ["1. First.", "2. Second."]
+
+
+def test_an_item_left_of_the_first_items_text_opens_a_new_ac():
+    # The CommonMark rule for a list item at the same level: right-aligned
+    # numbering and an item that slipped one space each still open an AC.
+    right_aligned = "## Acceptance Criteria\n\n" + "".join(f" {n}. AC {n}.\n" for n in range(1, 10)) + "10. AC 10.\n"
+    assert len(fc._split_ac_blocks(right_aligned)) == 10
+    slipped = "## Acceptance Criteria\n\n1. One.\n2. Two.\n 3. Three.\n"
+    assert len(fc._split_ac_blocks(slipped)) == 3
+    # A numbered list indented at the top of the section does not swallow the
+    # column-0 ACs after it.
+    indented_first = "## Acceptance Criteria\n\n  1. Indented.\n  2. Indented.\n1. Column 0.\n2. Column 0.\n"
+    assert len(fc._split_ac_blocks(indented_first)) == 4
+
+
+def test_a_tab_indented_wrapped_line_stays_in_its_ac():
+    body = "## Acceptance Criteria\n\n1. The text wraps on a tab and\n\t1. continues here.\n2. Next.\n"
+    blocks = fc._split_ac_blocks(body)
+    assert len(blocks) == 2
+    assert "continues here" in blocks[0][1]
+
+
+def test_a_line_before_the_first_item_joins_no_earlier_ac():
+    # Prose under a later AC heading, before its first item, used to be appended
+    # to the previous section's last AC: that block then held lines it does not
+    # span, and a candidate's line number counted from its start went wrong.
+    body = (
+        "## Acceptance Criteria\n\n1. First.\n\n## Notes\n\nA note.\n\n"
+        "## Acceptance Criteria\n\nIntro prose before the list.\n\n1. Second.\n"
+    )
+    blocks = fc._split_ac_blocks(body)
+    assert [line for line, _ in blocks] == [3, 13]
+    assert "Intro prose" not in blocks[0][1]
+
+
+def test_a_new_acceptance_criteria_heading_resets_the_indent():
+    body = "## Acceptance Criteria\n\n  1. Indented.\n\n## Acceptance Criteria\n\n1. At column 0.\n2. Also.\n"
+    assert len(fc._split_ac_blocks(body)) == 3
+
+
+# --- Story-key coverage by id stem ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "stem"),
+    [
+        ("95-0-a-i-the-scanner-spine", "95-0-a-i"),
+        ("95-0-a-audit-the-guard-substrate.md", "95-0-a"),
+        ("94-2a-the-thing.md", "94-2a"),
+        ("92-7e-i-scan", "92-7e-i"),
+        ("2-4-kebab-title", "2-4"),
+        ("2-4.md", "2-4"),
+        ("1-1_draft.md", "1-1"),
+        ("1-10-foo.md", "1-10"),
+        ("94-7-b-1-the-season-door", "94-7-b-1"),
+        ("2-4-3-foo", "2-4"),
+        ("lp-6-foo", None),
+        ("epic-7", None),
+    ],
+)
+def test_story_stem(name, stem):
+    assert fc._story_stem(name) == stem
+
+
+def test_a_child_key_is_not_covered_by_a_file_of_another_id():
+    # Arm A of the filing: three children with no file of their own read
+    # covered by their parent's file when only the first two numbers counted.
+    # With no sprint rows nothing says the parent is a container, so its file
+    # covers nothing but itself.
+    keys = ["95-0-a-i-the-scanner-spine", "95-0-a-ii-the-turbo-inputs", "95-0-a-iii-the-cli-gate"]
+    assert fc._uncovered_story_keys([Path("95-0-a-audit-the-guard-substrate.md")], keys) == keys
+    # A true sibling's file covers nothing either, at any depth.
+    assert fc._uncovered_story_keys([Path("95-0-a-ii-the-turbo-inputs.md")], ["95-0-a-i-the-scanner-spine"]) == [
+        "95-0-a-i-the-scanner-spine"
+    ]
+    assert fc._uncovered_story_keys([Path("95-0-a-audit.md")], ["95-0-b-red-phase"]) == ["95-0-b-red-phase"]
+    rows = {"94-7-b-1-the-season-door": "backlog", "94-7-b-2-the-other": "backlog"}
+    assert fc._uncovered_story_keys([Path("94-7-b-2-the-other.md")], ["94-7-b-1-the-season-door"], rows) == [
+        "94-7-b-1-the-season-door"
+    ]
+
+
+def test_a_letter_suffixed_key_is_covered_by_its_own_file():
+    # Arm B of the filing: `94-2a` read uncovered against its own file.
+    assert fc._uncovered_story_keys([Path("94-2a-the-thing.md")], ["94-2a-the-thing"]) == []
+
+
+def test_a_higher_numbered_file_still_does_not_cover_a_lower_key():
+    assert fc._uncovered_story_keys([Path("1-10-foo.md")], ["1-1-bar"]) == ["1-1-bar"]
+
+
+def test_a_bare_number_file_still_covers_its_kebab_key():
+    assert fc._uncovered_story_keys([Path("2-4.md")], ["2-4-kebab-title"]) == []
+
+
+def test_a_decomposed_child_is_covered_by_its_done_parent_file():
+    # execute.md: a decomposed child has no story file and must never get one;
+    # the parent row is set to done and keeps the file the children cite.
+    rows = {"95-0-a-i-the-scanner-spine": "backlog", "95-0-a-audit-the-guard-substrate": "done"}
+    assert fc._uncovered_story_keys([Path("95-0-a-audit-the-guard-substrate.md")], ["95-0-a-i-the-scanner-spine"], rows) == []
+    # A lettered child of a story number (92-7f of 92-7), through a level with no row (92-7e).
+    rows = {"92-7-per-profile": "done", "92-7f-the-departure": "backlog", "92-7e-i-the-scan": "backlog"}
+    files = [Path("92-7-per-profile.md")]
+    assert fc._uncovered_story_keys(files, ["92-7f-the-departure", "92-7e-i-the-scan"], rows) == []
+
+
+def test_a_parent_that_is_not_done_covers_no_child():
+    # Not a container yet: its file is its own story, not the children's text.
+    rows = {"92-7-per-profile": "in-progress", "92-7f-the-departure": "backlog"}
+    assert fc._uncovered_story_keys([Path("92-7-per-profile.md")], ["92-7f-the-departure"], rows) == ["92-7f-the-departure"]
+    # Nor does a done parent with no file of its own.
+    rows = {"92-7-per-profile": "done", "92-7f-the-departure": "backlog"}
+    assert fc._uncovered_story_keys([Path("92-6-other.md")], ["92-7f-the-departure"], rows) == ["92-7f-the-departure"]
+
+
+def test_a_parent_whose_row_the_split_removed_still_covers_with_its_file():
+    # A split that dropped the parent row instead of setting it done: the
+    # parent's file is still the text its children cite.
+    rows = {"94-8-a-the-first": "backlog", "94-8-b-the-second": "backlog"}
+    files = [Path("94-8-season-learner.md")]
+    assert fc._uncovered_story_keys(files, ["94-8-a-the-first", "94-8-b-the-second"], rows) == []
+
+
+def test_a_parent_still_being_worked_stops_the_walk_even_under_a_done_grandparent():
+    rows = {"92-7-per-profile": "done", "92-7e-the-umbrella": "in-progress", "92-7e-i-the-scan": "backlog"}
+    files = [Path("92-7-per-profile.md")]
+    assert fc._uncovered_story_keys(files, ["92-7e-i-the-scan"], rows) == ["92-7e-i-the-scan"]
+    # The same tree with 92-7e set done is a container chain, and 92-7's file covers.
+    rows["92-7e-the-umbrella"] = "done"
+    assert fc._uncovered_story_keys(files, ["92-7e-i-the-scan"], rows) == []
+
+
+def test_a_stem_shared_by_several_rows_is_done_only_when_every_row_is():
+    # 92-7e-i and 92-7e-i-scan share the stem 92-7e-i; as a parent it is a
+    # container only once both rows are done, whichever comes first in the file.
+    files = [Path("92-7e-i-the-scan.md")]
+    for rows in (
+        {"92-7e-i-the-scan": "done", "92-7e-i-scan": "in-progress", "92-7e-i-a-child": "backlog"},
+        {"92-7e-i-scan": "in-progress", "92-7e-i-the-scan": "done", "92-7e-i-a-child": "backlog"},
+    ):
+        assert fc._uncovered_story_keys(files, ["92-7e-i-a-child"], rows) == ["92-7e-i-a-child"]
+
+
+def test_an_alpha_keyed_story_falls_back_to_the_whole_key():
+    assert fc._uncovered_story_keys([Path("lp-6-foo.md")], ["lp-6-foo", "lp-7-bar"]) == ["lp-7-bar"]
+
+
+def test_kernel_reads_a_done_parent_as_the_container_of_its_children(tmp_path):
+    # End to end: the parent row is done and keeps its file, the child row is
+    # in scope with no file of its own, and the readiness gate reports no gap.
+    root = tmp_path / "decomposed"
+    planning = root / "planning-artifacts"
+    impl = root / "impl-artifacts"
+    planning.mkdir(parents=True)
+    impl.mkdir(parents=True)
+    (planning / "prd-fixture.md").write_text("# PRD\n", encoding="utf-8")
+    (planning / "architecture-fixture.md").write_text("# Architecture\n", encoding="utf-8")
+    (impl / "sprint-status.yaml").write_text(
+        "generated: fixture\ndevelopment_status:\n  epic-7: in-progress\n"
+        "  7-1-a-i-the-first-child: backlog\n  7-1-a-umbrella: done\n",
+        encoding="utf-8",
+    )
+    (impl / "7-1-a-umbrella.md").write_text(_story_body("7-1-a-umbrella"), encoding="utf-8")
+    out = _run_project(root)
+    assert all(g["kind"] != "story_keys_uncovered" for g in out["mechanical_gaps"]), out["mechanical_gaps"]
+    # The twin: the same project with the parent not yet done reports the child.
+    (impl / "sprint-status.yaml").write_text(
+        "generated: fixture\ndevelopment_status:\n  epic-7: in-progress\n"
+        "  7-1-a-i-the-first-child: backlog\n  7-1-a-umbrella: in-progress\n",
+        encoding="utf-8",
+    )
+    out = _run_project(root)
+    gaps = [g for g in out["mechanical_gaps"] if g["kind"] == "story_keys_uncovered"]
+    assert len(gaps) == 1 and "7-1-a-i-the-first-child" in gaps[0]["detail"]

@@ -16,8 +16,9 @@
  * An em dash is the character itself or an HTML entity that renders it (the
  * named entity mdash, or the decimal 8212 and hex 2014 numeric references).
  *
- * Not checked: CHANGELOG.md, whose blocks come from commit subjects and
- * release narratives older than this rule; any package-lock.json, which npm
+ * Not checked: CHANGELOG.md, whose older blocks come from commit subjects
+ * and release narratives older than this rule (new blocks are rendered from
+ * change fragments, which tools/changes.js checks); any package-lock.json, which npm
  * generates; and the reference skills under skf-skills/, which a generator
  * writes (CONTRIBUTING.md, Reference skills).
  *

@@ -1,0 +1,6 @@
+type: fixed
+scope: ultracode-goal
+prs: [899]
+issues: [894]
+summary: |
+  Under `-H`, the envelope is now the only line a headless run prints on stdout, blocks included, as the docs promised. A refused settings write no longer ends the run before Execute: it records `settings-write-refused` in `.decision-log.md` and stops at the next story boundary.

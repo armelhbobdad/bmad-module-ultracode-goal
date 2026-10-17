@@ -1,0 +1,53 @@
+{
+  "id": 17255028,
+  "name": "main-protection",
+  "target": "branch",
+  "source_type": "Repository",
+  "source": "armelhbobdad/bmad-module-ultracode-goal",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "exclude": [], "include": ["~DEFAULT_BRANCH"] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": false,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": ["merge", "squash", "rebase"]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          { "context": "prettier" },
+          { "context": "eslint" },
+          { "context": "markdownlint" },
+          { "context": "lintlang" },
+          { "context": "validate (ubuntu-latest)" },
+          { "context": "validate (windows-latest)" },
+          { "context": "python (ubuntu-latest)" },
+          { "context": "python (windows-latest)" },
+          { "context": "docs-links" }
+        ]
+      }
+    }
+  ],
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5LAhyrzgEHSnQ",
+  "created_at": "2026-06-04T10:46:51.397+04:00",
+  "updated_at": "2026-09-28T12:08:26.637+04:00",
+  "bypass_actors": [{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "pull_request" }],
+  "current_user_can_bypass": "pull_requests_only",
+  "_links": {
+    "self": { "href": "https://api.github.com/repos/armelhbobdad/bmad-module-ultracode-goal/rulesets/17255028" },
+    "html": { "href": "https://github.com/armelhbobdad/bmad-module-ultracode-goal/rules/17255028" }
+  }
+}

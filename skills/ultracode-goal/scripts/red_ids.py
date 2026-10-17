@@ -192,7 +192,11 @@ def validate_reds(reds: list[dict]) -> None:
     through the scan reader.
     """
     for red in reds:
-        if not isinstance(red, dict) or not (red.get("kind") and red.get("source")):
+        # Strings, not just truthy values: `mint_id` normalizes both, and a number
+        # or a list there crashed it rather than being refused.
+        if not isinstance(red, dict) or not all(
+            isinstance(red.get(field), str) and normalize(red[field]) for field in ("kind", "source")
+        ):
             raise RedIdError("every red must be an object carrying `kind` and `source`")
         decision = red.get("decision_needed")
         if not isinstance(decision, str) or not normalize(decision):
@@ -201,6 +205,12 @@ def validate_reds(reds: list[dict]) -> None:
                 "is minted from it, and without it two distinct decisions collapse onto one "
                 "id and a single answer suppresses both"
             )
+        # The digest and the sidecar are UTF-8: a lone surrogate (a JSON `\ud800`
+        # escape) crashed both rather than being refused.
+        try:
+            json.dumps(red, ensure_ascii=False).encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise RedIdError("every red must be text UTF-8 can encode") from exc
 
 
 def apply(scan_reds: list[dict], impl: Path) -> dict[str, Any]:

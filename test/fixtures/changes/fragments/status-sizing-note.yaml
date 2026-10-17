@@ -1,0 +1,5 @@
+type: added
+scope: ucg-status
+prs: [923]
+summary: |
+  `/ucg-status` now shows a story that advanced over its turn ceiling as a sizing note, matching the line the run report already printed. It still reads the run without writing to it.

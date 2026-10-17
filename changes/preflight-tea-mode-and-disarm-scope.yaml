@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  Preflight's TEA-mode step no longer reads as a config write. Create mode is chosen at each TEA invocation; `tea_execution_mode` is TEA's parallelism setting (`auto`, `subagent`, `agent-team` or `sequential`), so the step never writes `create` into it, and a stray value a prior run wrote is logged and left alone, since TEA reads it as `auto`. The stale-hook disarm is now owed only before the first commit the run makes ahead of re-arming its hooks, so a pass that commits nothing no longer stops on a refused write to `.claude/settings.local.json`; when the hooks are re-armed, a prior run's entries are replaced rather than left beside the new ones.

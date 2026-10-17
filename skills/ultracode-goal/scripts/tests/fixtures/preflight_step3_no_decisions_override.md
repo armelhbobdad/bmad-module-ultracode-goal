@@ -17,8 +17,10 @@ The subagent must return **ONLY this object — no prose, no document quotes bey
 {"reds": [{"source": "<artifact path:line>",
            "kind": "undecided-product|undecided-architecture|contradiction|undefinable-done",
            "decision_needed": "<the exact decision a human must make>",
-           "evidence": "<one quoted line>"}],
- "concerns": [{"source": "<artifact path:line>", "note": "<cosmetic / non-blocking gap, one line>"}],
+           "evidence": "<one quoted line>",
+           "candidate": "<only when this answers a seeded judgment candidate: its id, copied as given>"}],
+ "concerns": [{"source": "<artifact path:line>", "note": "<cosmetic / non-blocking gap, one line>",
+               "candidate": "<only when this answers a seeded judgment candidate: its id, copied as given>"}],
  "advisories_checked": [{"sig": "<advisory id>", "status": "recurred|not-observed|unknown"}]}
 ```
 

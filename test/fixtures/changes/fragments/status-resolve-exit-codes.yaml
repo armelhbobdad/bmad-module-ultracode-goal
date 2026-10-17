@@ -1,0 +1,6 @@
+type: added
+scope: ucg-status, ucg-resolve
+prs: [909]
+issues: [900, 901]
+summary: |
+  New exit codes for pipelines: `ucg_status.py` exits `3` and `ucg_resolve.py` exits `5` (state-conflict) when the run folder belongs to another Epic (`foreign-run`) or predates the run-id layout (`legacy-layout`). Nothing is written into the refused folder.

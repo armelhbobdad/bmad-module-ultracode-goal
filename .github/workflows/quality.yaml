@@ -3,15 +3,21 @@ name: Quality & Validation
 # Runs comprehensive quality checks on all PRs:
 # - Prettier (formatting)
 # - ESLint (linting)
-# - markdownlint (markdown quality)
+# - markdownlint (markdown quality, and the CHANGELOG.md a release would write
+#   from the change fragments)
 # - LintLang (agent instructions under skills/)
 # - No em dashes (published docs, and the lines and commit messages a PR adds)
+# - Change fragments (changes/*.yaml), the fragments a PR needs (pull
+#   requests only), and the release-notes tools
 # - Installation component tests (module.yaml, SKILL.md, scripts)
 # - CLI integration tests (install/update/uninstall flows)
 # - Skill structure validation
 # - File reference validation
 # - Fixture tracking (no test fixture may be matched by a .gitignore rule)
-# - Python script tests (pytest via uv)
+# - Tool versions (tools/tool-requirements.yaml against the prerequisites
+#   table and every copy of those versions)
+# - Action pins (every `uses:` in .github/workflows/ names a commit SHA)
+# - Python script tests (pytest via uv), and the workflow tests under test/
 
 "on":
   pull_request:
@@ -30,10 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
@@ -48,10 +55,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
@@ -62,14 +70,21 @@ jobs:
       - name: ESLint
         run: npm run lint
 
+  # lint:md lints every Markdown file, then the CHANGELOG.md a stable release
+  # would write, its block rendered from every change fragment in changes/
+  # (`node tools/changes.js lint`), so a fragment's Markdown fails its own pull
+  # request rather than the release commit. The render reads no git history,
+  # so the shallow checkout is enough. The job keeps its name: it is a
+  # required check.
   markdownlint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
@@ -92,15 +107,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "3.12"
+          # The uv cache key hashes the files this glob matches. The default
+          # globs (requirements*.txt, pyproject.toml, uv.lock and the like)
+          # match no file here, so setup-uv would warn "No file matched to"
+          # on every run. package.json pins the uv tools, in its scripts'
+          # uvx lintlang@<version> and --with pytest==<version>.
+          cache-dependency-glob: package.json
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
 
@@ -115,20 +137,30 @@ jobs:
   # messages, outside the generated files the tool skips (CHANGELOG.md,
   # package-lock.json, skf-skills/). fetch-depth: 0 fetches the base branch
   # the tool diffs against; without it the tool fails in CI rather than skip
-  # the check. It uses only Node built-ins, so the job skips npm ci. Linux
-  # only: it reads text, so a Windows run would only repeat it.
+  # the check. Linux only: it reads text, so a Windows run would only repeat
+  # it.
+  #
+  # The change-fragment steps run here too, for the same reason: they read
+  # history. tools/changes.js and tools/covered-surfaces.js compare the tree
+  # with the last stable release tag, and their tests backtest the surface
+  # diff against real tags, which only a full clone has. Those two tools
+  # need the yaml and semver devDependencies, hence npm ci; the em dash tool
+  # itself uses only Node built-ins. The last step checks the change
+  # fragments the pull request itself needs, against its base branch.
   em-dash:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
+          cache: "npm"
 
       - name: Test the em dash check
         run: npm run test:em-dash-tool
@@ -143,6 +175,43 @@ jobs:
           EM_DASH_BASE: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '' }}
         run: npm run validate:em-dash
 
+      # Also after a failed em dash step, so the pull request check below can
+      # still run and report its own problems in the same run.
+      - name: Install dependencies
+        id: deps
+        if: ${{ !cancelled() }}
+        run: npm ci
+
+      - name: Test the change-fragment tools
+        run: npm run test:changes-tool
+
+      - name: Validate change fragments
+        run: npm run validate:changes
+
+      # A pull request that changes the code the package ships (skills/
+      # outside the dev artifacts .npmignore keeps out, tools/cli/,
+      # tools/ucg-npx-wrapper.js) or .npmignore adds a change fragment, or
+      # says why no user notices it in a "Changelog: none (<reason>)" line of
+      # one of its commit messages. A covered item it removes or adds always
+      # needs a fragment (tools/covered-surfaces.js, merge base to HEAD). It
+      # diffs the branch against origin/$GITHUB_BASE_REF, the base the pull
+      # request targets, so it runs on pull requests only and a
+      # workflow_dispatch or push run never checks a branch against a base it
+      # did not target. A dispatch run's em-dash result (release.yaml
+      # dispatches one on its bot branch) does not include this check. It
+      # runs even when an earlier step of this job failed, as long as the
+      # dependencies installed, so one run reports every problem. On a
+      # failure the log and the step summary give a fragment to fill in.
+      # PR_HEAD_REPO lets the tool exempt the release branch (release/bot/*)
+      # only when it is this repository's; a fork's, or one whose head
+      # repository is unknown, is checked. It goes through env so the value
+      # is never run as shell.
+      - name: Change fragments this pull request needs
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.deps.outcome == 'success' }}
+        env:
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: npm run changes:pr
+
   validate:
     # Matrix Linux + Windows to catch platform-divergence bugs (path handling,
     # line endings, shell scripts). macOS skipped: POSIX-equivalent to Linux
@@ -154,10 +223,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
@@ -169,18 +239,16 @@ jobs:
       # via `uv run`) and round-trips TOML through `uv`/`python3` helpers, so the
       # validate job needs both on PATH, with the same uv setup the python job uses.
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "3.12"
+          # Keyed on package.json, as in the lintlang job.
+          cache-dependency-glob: package.json
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-
-      - name: Smoke test conventional-changelog-cli bin resolution on Windows
-        if: runner.os == 'Windows'
-        run: npx --no-install conventional-changelog-cli --help
 
       - name: Test installation components
         run: npm run test:install
@@ -204,7 +272,13 @@ jobs:
 
       # The link guard is a required check, so it gets its own tests. Runs in
       # `validate` rather than `docs-links` on purpose: it drives fixture trees
-      # and needs no site build, so it should not wait on one.
+      # and needs no site build, so it should not wait on one. The same script
+      # (test:docs-links-tool in package.json) also runs
+      # test/test-check-required-checks.js and
+      # `tools/check-required-checks.js --releasing`, which compares the check
+      # names the jobs of this workflow report with the required-checks list
+      # in docs/_internal/RELEASING.md. The step keeps its name: a required
+      # check is a job name, not a step name.
       - name: Test the docs link guard
         run: npm run test:docs-links-tool
 
@@ -217,6 +291,59 @@ jobs:
 
       - name: Check the reference skill links
         run: node tools/link-reference-skills.js --check
+
+      # tools/tool-requirements.yaml is the one list of tool versions: the
+      # check compares the prerequisites table it generates and every copy
+      # (docs, engines.node, .nvmrc, the workflows' Node and Python versions,
+      # preflight's Claude Code minimums, the README "Tested with" rows) with
+      # it. No network, so it runs here.
+      - name: Test the tool versions check
+        run: npm run test:tool-requirements-tool
+
+      - name: Check tool versions against tools/tool-requirements.yaml
+        run: npm run validate:tool-requirements
+
+      # The owner of an action can move its tag to other code, and the next
+      # run executes that code with this repository's tokens; a commit SHA
+      # cannot move. So each `uses:` names a 40-character commit SHA followed
+      # by its exact version as a comment, `owner/repo@<sha> # vX.Y.Z`, the
+      # form Dependabot (.github/dependabot.yaml) proposes its updates in. A
+      # local action (`./path`) has no ref to pin. Every workflow file is
+      # read, install-smoke.yaml included. A `uses:` key opens its line,
+      # after the indent and an optional list dash, so a comment or a script
+      # line that mentions one is not read; test/test-release-workflow.py
+      # compares the lines it reads with the uses: YAML parses, so a flow
+      # mapping or a quoted key that this scan misses fails there. Linux
+      # only: it reads text, so a Windows run would only repeat it.
+      - name: Check that every action is pinned to a commit SHA
+        if: runner.os == 'Linux'
+        run: |
+          USES='^[[:space:]]*(-[[:space:]]+)?uses:'
+          PINNED="${USES}[[:space:]]+(\./[^[:space:]]*|[^[:space:]@]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$"
+          TOTAL=0
+          BAD=0
+          for FILE in .github/workflows/*.yaml .github/workflows/*.yml; do
+            [ -f "$FILE" ] || continue
+            COUNT=0
+            while IFS=: read -r LINE TEXT; do
+              COUNT=$((COUNT + 1))
+              if ! grep -qE "$PINNED" <<< "$TEXT"; then
+                echo "::error file=$FILE,line=$LINE::Not pinned to a commit SHA with its version: ${TEXT#"${TEXT%%[![:space:]]*}"}"
+                BAD=$((BAD + 1))
+              fi
+            done < <(grep -nE "$USES" "$FILE" || true)
+            echo "Checked $COUNT uses: in $FILE"
+            TOTAL=$((TOTAL + COUNT))
+          done
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "::error::No uses: found in .github/workflows/, so nothing was checked."
+            exit 1
+          fi
+          if [ "$BAD" -gt 0 ]; then
+            echo "::error::$BAD of the $TOTAL uses: in .github/workflows/ are not pinned. Write each as uses: owner/repo@<40-character commit SHA> # vX.Y.Z (gh api repos/<owner>/<repo>/commits/<tag> --jq .sha prints the commit of a tag)."
+            exit 1
+          fi
+          echo "All $TOTAL uses: in .github/workflows/ name a commit SHA and its version."
 
   # Builds the real site and resolves every emitted href against the file tree.
   # Separate from `validate` on purpose: it needs a full Astro build, which the
@@ -235,12 +362,13 @@ jobs:
       # reads git history, so a shallow clone builds a different site than the
       # one that ships, and validating a different artifact defeats the point.
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
@@ -261,6 +389,10 @@ jobs:
           SITE_URL: ${{ vars.SITE_URL }}
         run: node tools/validate-docs-links.js --strict --require-build
 
+  # Runs the Python tests on UCG's minimum Python (tools/tool-requirements.yaml),
+  # so the minimum has a run behind it; the release workflow runs them on a
+  # newer one. tools/tool-requirements.js fails when no workflow runs the
+  # minimum or a python-version is not one of Python's tested versions.
   python:
     strategy:
       fail-fast: false
@@ -269,15 +401,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Held on v5: v6 changes how it stores the git credentials, and release.yaml pushes with them.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          python-version: "3.12"
+          python-version: "3.11"
+          # Keyed on package.json, as in the lintlang job.
+          cache-dependency-glob: package.json
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: ".nvmrc"
           cache: "npm"

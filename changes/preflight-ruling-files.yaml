@@ -1,0 +1,4 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  A file the preflight remediation pass writes for many later agents to apply, such as a cross-story arbitration, may now only apply a decision an artifact already makes, each entry citing the line that makes it; one that would settle an open question is recorded as a red instead. The file lives in the run folder, numbers its entries, keeps a `Status:` line and a supersession block that strikes an overtaken entry by number and names the artifacts already edited under it, and every prompt that hands it out says to read that block first. The semantic scan now reads it too.

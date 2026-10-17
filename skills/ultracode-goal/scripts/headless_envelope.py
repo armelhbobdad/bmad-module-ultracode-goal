@@ -71,27 +71,43 @@ def fr5_blockers(verdict: object) -> list[dict]:
 
     A missing / non-dict / unparseable verdict, or one whose ``verdict`` is not the
     terminal ``ready``, is a BLOCKING signal: blocked when ``verdict == 'blocked'``
-    (its judgment_candidates are the reds) or on an unreadable verdict. ``ready`` and
-    ``remediable`` (with no reds) yield no blockers.
+    (its judgment_candidates are the blockers: on a ``--scan`` re-run's verdict, the
+    candidates the scan left unanswered, since an answered one moves to
+    judged_candidates) or on an unreadable verdict.
+
+    A candidate the scan CONFIRMED (``judged_candidates`` with ``judged_as ==
+    'red'``) is a red at any readable verdict, ``ready`` included: the kernel no
+    longer owes a judgment on it, but it blocks through the reds stream. It is
+    named first, since confirmed reds lead the blocker list. ``ready`` and
+    ``remediable`` with no confirmed red yield no blockers. The verdict cannot
+    see a red an operator closed (red_ids.py drops those), so a caller that ran
+    red_ids.py hands the adapter an ordered list instead.
     """
     if not isinstance(verdict, dict):
         return [{"source": "formalize", "decision_needed": "formalize verdict unreadable or absent", "kind": "unreadable"}]
     v = verdict.get("verdict")
+    if v not in ("ready", "remediable", "blocked"):
+        return [{"source": "formalize", "decision_needed": "formalize verdict is unreadable or missing", "kind": "unreadable"}]
+    judged = verdict.get("judged_candidates")
+    confirmed = [
+        _candidate_blocker(c)
+        for c in (judged if isinstance(judged, list) else [])
+        if isinstance(c, dict) and c.get("judged_as") == "red"
+    ]
     if v == "blocked":
         cands = verdict.get("judgment_candidates") or []
-        blockers = [
-            {
-                "source": c.get("source", ""),
-                "decision_needed": c.get("why_machine_cannot_decide") or c.get("decision_needed", ""),
-                "kind": c.get("kind", ""),
-            }
-            for c in cands
-        ]
+        blockers = confirmed + [_candidate_blocker(c) for c in cands if isinstance(c, dict)]
         # A blocked verdict with no candidates is still a block (fail-closed).
         return blockers or [{"source": "formalize", "decision_needed": "formalize verdict is blocked", "kind": "blocked"}]
-    if v not in ("ready", "remediable"):
-        return [{"source": "formalize", "decision_needed": "formalize verdict is unreadable or missing", "kind": "unreadable"}]
-    return []
+    return confirmed
+
+
+def _candidate_blocker(c: dict) -> dict:
+    return {
+        "source": c.get("source", ""),
+        "decision_needed": c.get("why_machine_cannot_decide") or c.get("decision_needed", ""),
+        "kind": c.get("kind", ""),
+    }
 
 
 def _append_to_log(decision_log: str, lines: list[str]) -> None:
