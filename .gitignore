@@ -105,6 +105,9 @@ _skf-learn
 # CocoIndex Code (ccc)
 /.cocoindex_code/
 
+# Boost (shell-output compaction): per-machine hook state, wherever it runs
+.boost/
+
 # Per-run records written beside generated skills; the skills themselves are tracked
 skf-skills/_batch/
 skf-skills/**/*-result-*.json
