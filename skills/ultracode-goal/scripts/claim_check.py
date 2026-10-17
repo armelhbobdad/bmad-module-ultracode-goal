@@ -124,7 +124,8 @@ def named_paths(message: str, project_root: Path, staged: list[str]) -> list[str
     """
     seen: dict[str, None] = {}
     staged_set = set(staged)
-    root = str(project_root.resolve())
+    # POSIX form: a message's backslash is read as `/` before the prefix is compared.
+    root = project_root.resolve().as_posix()
 
     def spaced_span(match: re.Match) -> str:
         span = match.group(1).strip()
