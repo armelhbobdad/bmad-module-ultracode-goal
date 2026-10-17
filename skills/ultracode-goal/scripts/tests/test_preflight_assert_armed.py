@@ -191,6 +191,20 @@ def test_fully_armed_environment_exits_zero(tmp_path: Path) -> None:
     assert out["checks"]["hooks"]["matcher_all_tools"] is True
 
 
+def test_the_manifest_reports_whether_git_tracks_the_artifact_tree(tmp_path: Path) -> None:
+    # A resumed session has no step-1 report, and execute.md's ignored-tree rule
+    # keys on this fact; it never moves the exit code.
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root)
+    assert out["checks"]["impl_artifacts_tracked"] is True
+    assert code == 0
+    (root / ".gitignore").write_text("impl/\n", encoding="utf-8")
+    code, out = _run(root)
+    assert out["checks"]["impl_artifacts_tracked"] is False
+    assert out["reasons"] == [] and code == 0, out
+
+
 def test_an_omitted_matcher_key_counts_as_all_tools(tmp_path: Path) -> None:
     """preflight step 5: omitting the matcher selects every tool, like `*`."""
     root = _repo(tmp_path)
