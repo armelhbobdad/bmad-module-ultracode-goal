@@ -5,9 +5,10 @@
 # ///
 """claim_check.py: the paths a commit message names that the staged diff skips.
 
-The field case: a commit message recorded a file's edit as landed when the
-script making the edit had died on its first assertion, so the diff for that
-path was empty. A reviewer found it by diffing the file. This pins:
+The field case: a story record and a commit message both said a file's edit
+had landed when the script making the edit had died on its first assertion,
+so the diff for that file was empty. Only the record named the file, which is
+why `--message` repeats. This pins:
 
 - what counts as a named path (a file name with a common extension, a
   well-known extensionless name, a known dotfile, a token with a `/` that ends
@@ -20,7 +21,7 @@ path was empty. A reviewer found it by diffing the file. This pins:
   staged path (a root `README.md` is not `docs/README.md`); one that exists
   nowhere matches by trailing segments or as a directory anywhere; both sides
   of a rename; a staged deletion; a non-ASCII name;
-- the exit codes, and `-` for stdin;
+- the exit codes, `-` for stdin, and several `--message` texts read as one;
 - execute.md step 4 runs it between staging and the commit, and the
   documented command is not a git write the PreToolUse guard would gate.
 
@@ -95,10 +96,10 @@ def _stage(repo: Path, rel: str, text: str = "x = 2\n") -> None:
 def test_a_message_naming_only_staged_paths_is_clean(repo):
     _stage(repo, "src/guard.py")
     out = cc.check("fix(guard): tighten `src/guard.py`", repo)
-    assert out == {"named": ["src/guard.py"], "staged": ["src/guard.py"], "not_in_diff": [], "clean": True}
+    assert out == {"named": ["src/guard.py"], "staged": ["src/guard.py"], "not_in_diff": [], "ignored": [], "clean": True}
 
 
-def test_the_field_case_a_named_edit_that_never_landed(repo):
+def test_a_named_edit_that_never_landed(repo):
     # The message says the narrowing landed in fixture.ts; the diff touches
     # only the guard.
     _stage(repo, "src/guard.py")
@@ -198,6 +199,11 @@ def test_a_slash_token_counts_only_when_it_is_a_path(repo):
     assert out["not_in_diff"] == ["skills/ucg-formalize", "new/dir/"]
 
 
+def test_a_lone_slash_is_not_the_project_root(repo):
+    # Prose such as "a token that holds a `/`" must not name the root itself.
+    assert cc.check("a token that holds a `/` or a // pair", repo)["named"] == []
+
+
 def test_a_rename_and_a_deletion_match_by_either_name(repo):
     _git(repo, "mv", "old.py", "src/new.py")
     _git(repo, "rm", "-q", "src/fixture.ts")
@@ -216,6 +222,111 @@ def test_the_cli_reports_json_and_reads_stdin(repo):
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["not_in_diff"] == ["src/fixture.ts"]
+
+
+def test_the_story_notes_name_what_the_message_only_describes(repo, tmp_path):
+    # The field shape: the message describes the edit by its content and names
+    # no file; the record notes name the file. Read together, the missing hunk
+    # shows up as a path the diff does not touch.
+    _stage(repo, "src/guard.py")
+    message = tmp_path / "message.txt"
+    message.write_text("fix(guard): src/guard.py, and the override union now says it closes the raw path\n", encoding="utf-8")
+    notes = tmp_path / "record-notes.md"
+    notes.write_text("- narrowed the override paragraph in `src/fixture.ts`\n", encoding="utf-8")
+    # The message alone reads clean: it names only the file the diff touches.
+    assert cc.check(message.read_text(encoding="utf-8"), repo)["clean"] is True
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--message", str(message), "--message", str(notes), "--project-root", str(repo)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    # Both texts are read, the message first.
+    assert out["named"] == ["src/guard.py", "src/fixture.ts"]
+    assert out["not_in_diff"] == ["src/fixture.ts"]
+
+
+def test_a_path_git_ignores_is_listed_apart(repo):
+    # A ledger the record must cite lives under an ignored tree: no commit can
+    # carry it, so it is not a claim the commit fails to make good.
+    (repo / ".gitignore").write_text("_bmad-output/\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _stage(repo, "src/guard.py")
+    out = cc.check("see _bmad-output/implementation-artifacts/mutation-ledger-4-1.md and src/fixture.ts", repo)
+    assert out["ignored"] == ["_bmad-output/implementation-artifacts/mutation-ledger-4-1.md"]
+    assert out["not_in_diff"] == ["src/fixture.ts"]
+    assert out["clean"] is False
+
+
+def test_only_ignored_paths_left_read_clean(repo):
+    (repo / ".gitignore").write_text("_bmad-output/\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    out = cc.check("cites _bmad-output/implementation-artifacts/mutation-ledger-4-1.md", repo)
+    assert out["not_in_diff"] == []
+    assert out["ignored"] == ["_bmad-output/implementation-artifacts/mutation-ledger-4-1.md"]
+    assert out["clean"] is True
+
+
+def test_a_tracked_file_under_an_ignored_folder_is_not_ignored(repo):
+    # git commits a tracked file's edits whatever the rules say.
+    (repo / "out").mkdir()
+    (repo / "out" / "kept.md").write_text("k\n", encoding="utf-8")
+    _git(repo, "add", "out/kept.md")
+    _git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "kept")
+    (repo / ".gitignore").write_text("out/\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    out = cc.check("edit out/kept.md", repo)
+    assert out["ignored"] == []
+    assert out["not_in_diff"] == ["out/kept.md"]
+
+
+def test_a_path_git_cannot_evaluate_does_not_hide_an_ignored_one(repo, tmp_path):
+    # git stops at the first path beyond a symlink (exit 128); the ledger after
+    # it must still be found ignored.
+    (repo / ".gitignore").write_text("_bmad-output/\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    try:
+        (repo / "link").symlink_to(elsewhere, target_is_directory=True)
+    except OSError:
+        pytest.skip("this platform cannot create a directory symlink here")
+    message = "see link/file.md, ../other/x.md, /tmp/x.md, then _bmad-output/ledger.md"
+    out = cc.check(message, repo)
+    assert out["ignored"] == ["_bmad-output/ledger.md"]
+    assert "link/file.md" in out["not_in_diff"]
+
+
+def test_a_bare_name_that_exists_nowhere_is_not_asked_about(repo):
+    # With `*.txt` ignored, readme.txt could be any file of that name: it stays a claim.
+    (repo / ".gitignore").write_text("*.txt\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    out = cc.check("update readme.txt", repo)
+    assert out["ignored"] == []
+    assert out["not_in_diff"] == ["readme.txt"]
+
+
+def test_an_unreadable_second_message_names_the_file(repo, tmp_path):
+    message = tmp_path / "message.txt"
+    message.write_text("edit src/guard.py", encoding="utf-8")
+    # Not UTF-8: the decode error names no file by itself, unlike a missing one.
+    notes = tmp_path / "record-notes.md"
+    notes.write_bytes(b"\xff\xfe not utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--message", str(message), "--message", str(notes), "--project-root", str(repo)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 2
+    assert str(notes) in json.loads(proc.stderr)["error"]
+
+
+def test_stdin_can_be_read_only_once(repo):
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--message", "-", "--message", "-", "--project-root", str(repo)],
+        input="x", capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 2
+    assert "only once" in proc.stderr
 
 
 def test_the_cli_exits_2_when_it_cannot_run(repo, tmp_path):
@@ -251,8 +362,20 @@ def _claim_paragraph() -> tuple[str, str]:
 def test_step4_runs_the_check_between_staging_and_the_commit():
     paragraph, _ = _claim_paragraph()
     assert "between the staging call and the commit call" in paragraph
-    assert "uv run {skill-root}/scripts/claim_check.py --message {workflow.implementation_artifacts}/.scratch-<story_id>/message.txt --project-root {project-root}" in paragraph
-    assert "stage the path if this commit should change it, or reword the message" in paragraph
+    assert (
+        "uv run {skill-root}/scripts/claim_check.py --message {workflow.implementation_artifacts}/.scratch-<story_id>/message.txt"
+        " --message {workflow.implementation_artifacts}/.scratch-<story_id>/record-notes.md --project-root {project-root}"
+    ) in paragraph
+    assert "and the story-record notes this cycle added" in paragraph
+    assert "an empty file when it added none" in paragraph
+    assert "Reading either first if an earlier session left it" in paragraph
+    # The three remedies, and the ignored list apart.
+    assert "if the work tree shows no change there, the edit did not happen, so make it or remove the claim" in paragraph
+    assert "are listed apart, in `ignored`" in paragraph
+    # The loop ends: a deliberate mention stays listed and does not block it.
+    assert "Run the check again until every path left in `not_in_diff` is one a text names on purpose and says so." in paragraph
+    assert "correct the story record itself (not only its scratch copy)" in paragraph
+    assert "stage it if this commit changed it" in paragraph
     # The judgment half: the diff's own new claims.
     assert "the usual fix is to weaken the sentence, not to strengthen the code" in paragraph
     # Bounded: one pass, evidence already produced, no new run.
@@ -261,6 +384,25 @@ def test_step4_runs_the_check_between_staging_and_the_commit():
     # A sentence softened in a staged file must reach the commit.
     assert "Re-stage every file this pass edited, in its own `git add` call" in paragraph
     assert "Run the same check before any re-commit or amend step 5 makes." in paragraph
+    # An edit described by its content still needs its hunk, and a forward
+    # reference the commit makes false is found and corrected.
+    assert "read `git diff --cached` once and find the hunk for each edit the message or the notes say this commit makes" in paragraph
+    assert "a forward reference to what it lands" in paragraph
+    # The search names the story id, so a comment that cites the story is found.
+    assert 'Search the project\'s own files with the Grep tool, case-insensitive, for this story\'s id, "does not exist yet" and "owed by"' in paragraph
+    assert "leaving out the installed skill, the run folder and this story's own record and tests" in paragraph
+    assert "correct a hit only when it refers to what this commit lands" in paragraph
+    assert "log it to `.decision-log.md` for that story instead" in paragraph
+
+
+def test_execute_carries_the_ignored_tree_rule_for_a_resume():
+    text = EXECUTE.read_text(encoding="utf-8")
+    start = text.index("\n1. `bmad-create-story`")
+    end = text.index("\n2. Run the tests, lint, and build", start)
+    between = text[start:end]
+    assert "**On a gitignored artifact tree** (`impl_artifacts_tracked: false`, which preflight step 1 reports" in between
+    assert "a resumed session reads in its `--assert-armed` manifest's `checks`" in between
+    assert "or any other path `git check-ignore` reports, at run time" in between
 
 
 def test_the_documented_command_is_not_a_git_write():

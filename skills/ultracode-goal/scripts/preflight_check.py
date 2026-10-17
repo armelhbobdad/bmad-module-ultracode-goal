@@ -71,11 +71,12 @@ hook env vars (accepted from the hook command strings OR the inherited process
 env, both of which preflight step 5 permits), and the BMAD story skills (a
 BMAD update between spawns can remove them), reports the recall latch WITHOUT
 certifying it (re-latching stays a model-owned Stage 1 step on every resume),
-and, given --story, derives the story's resume route from artifacts alone:
+reports `impl_artifacts_tracked` as step 1 does (a resumed session has no
+step-1 report to read it from), and, given --story, derives the story's resume route from artifacts alone:
 story-boundary (no baseline), gate-owed (committed, green, un-gated - requires
 --trace-output evidence; without it that route never fires), or mid-story.
-Exit 0 iff branch+hooks+env+skills are armed; the latch and story blocks
-never move the exit code, because they inform model-owned actions rather than certify
+Exit 0 iff branch+hooks+env+skills are armed; the latch, the tracked fact and
+the story block never move the exit code, because they inform model-owned actions rather than certify
 them.
 
   uv run preflight_check.py --assert-armed --project-root <path> \
@@ -1134,6 +1135,9 @@ def build_assert_armed(
         "hook_env": hook_env,
         "skills": skills,
         "latch": _read_latch(impl_artifacts, run_id),
+        # Reported, never a reason to fail: a resumed session has no step-1
+        # report, and execute.md's ignored-tree rule keys on this fact.
+        "impl_artifacts_tracked": _impl_artifacts_tracked(project_root, impl_artifacts),
     }
     if story:
         checks["story"] = _assert_story(project_root, impl_artifacts, story, trace_output)
