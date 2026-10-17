@@ -78,12 +78,12 @@ flowchart TD
 
 **Active rules (4):**
 
-| Rule                     | Effect                                                                                                                                                     |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deletion`               | Branch cannot be deleted.                                                                                                                                  |
-| `non_fast_forward`       | Force-push blocked.                                                                                                                                        |
+| Rule                     | Effect                                                                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deletion`               | Branch cannot be deleted.                                                                                                                                   |
+| `non_fast_forward`       | Force-push blocked.                                                                                                                                         |
 | `pull_request`           | Requires 1 approving review; `require_code_owner_review: false`; `require_extra_approval_for_unattributed_changes: true`; merge, squash and rebase allowed. |
-| `required_status_checks` | Merge blocked until every required check passes (names below).                                                                                            |
+| `required_status_checks` | Merge blocked until every required check passes (names below).                                                                                              |
 
 ### Required-check contexts must exist
 
@@ -169,14 +169,14 @@ The publish job is gated by a **GitHub [deployment environment](https://docs.git
 
 **Environment:** `release`, created 2026-06-04. Its id was `16220469047` at the time of writing (2026-10-17); every command below uses the name, which an environment created again keeps.
 
-| Setting                    | Value                                                                                                                                                           |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wait_timer`               | `0` (no artificial delay; approval is the only gate)                                                                                                            |
-| `prevent_self_review`      | `false`: see rationale below                                                                                                                                    |
-| `reviewers`                | `armelhbobdad` (user id `132626034`), 1 approver                                                                                                                |
-| `deployment_branch_policy` | `null`: no branch policy, so a dispatch from any branch may reach the environment (see [§ Restricting deployments to `main`](#restricting-deployments-to-main)) |
-| `can_admins_bypass`        | `true`: an admin can deploy without the approval. It is set on the environment's settings page; the `PUT` below does not take it                                |
-| Environment-scoped secrets | `0` (invariant: see "No secret is scoped to this environment" below)                                                                                            |
+| Setting                    | Value                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wait_timer`               | `0` (no artificial delay; approval is the only gate)                                                                                              |
+| `prevent_self_review`      | `false`: see rationale below                                                                                                                      |
+| `reviewers`                | `armelhbobdad` (user id `132626034`), 1 approver                                                                                                  |
+| `deployment_branch_policy` | `custom_branch_policies: true`, list: `main` only (since 2026-10-17; see [§ Restricting deployments to `main`](#restricting-deployments-to-main)) |
+| `can_admins_bypass`        | `true`: an admin can deploy without the approval. It is set on the environment's settings page; the `PUT` below does not take it                  |
+| Environment-scoped secrets | `0` (invariant: see "No secret is scoped to this environment" below)                                                                              |
 
 **`prevent_self_review: false` is a correctness constraint, not a loosened control.** Solo-maintainer setups cannot self-approve when this is `true`, so the gate would deadlock on any maintainer-triggered publish. The value flips to `true` the moment a second reviewer joins: do not leave it loose by inertia.
 
@@ -200,9 +200,7 @@ gh api repos/armelhbobdad/bmad-module-ultracode-goal/environments/release/secret
 # Environment itself (reviewers, branch-policy shape, prevent_self_review)
 gh api repos/armelhbobdad/bmad-module-ultracode-goal/environments/release
 
-# Allowed deployment branches. While deployment_branch_policy is null this
-# returns 404 (no policy, every branch allowed); once restricted, expect one
-# entry, name "main".
+# Allowed deployment branches (expect: one entry, name "main")
 gh api repos/armelhbobdad/bmad-module-ultracode-goal/environments/release/deployment-branch-policies
 
 # Environment-scoped secrets (expect: zero)
@@ -211,25 +209,10 @@ gh api repos/armelhbobdad/bmad-module-ultracode-goal/environments/release/secret
 
 ### Restore / re-apply
 
-Re-applies the environment as `release-audits/baselines/baseline-env-release.json` records it: the required-reviewer gate and no branch policy.
+Re-applies the environment as `release-audits/baselines/baseline-env-release.json` and `baseline-env-release-branch-policies.json` record it. It is a two-call pattern, because the environment and its branch-policy list are separate resources: creating the environment with `custom_branch_policies: true` alone leaves the allow-list empty, which rejects every dispatch, so the second call is mandatory.
 
 ```bash
-gh api --method PUT repos/armelhbobdad/bmad-module-ultracode-goal/environments/release --input - <<'JSON'
-{
-  "wait_timer": 0,
-  "prevent_self_review": false,
-  "reviewers": [{ "type": "User", "id": 132626034 }],
-  "deployment_branch_policy": null
-}
-JSON
-```
-
-### Restricting deployments to `main`
-
-**Recommended, not applied yet.** With no branch policy, a `workflow_dispatch` of `release.yaml` from any branch reaches the `release` environment, and its approval is the only thing between that branch and a prerelease publish. Restricting the environment to `main` closes that: a dispatch from another branch is then rejected at the job, before any step runs. It is a two-call pattern, because the environment and its branch-policy list are separate resources: creating the environment with `custom_branch_policies: true` alone leaves the allow-list empty, which rejects every dispatch, so the second call is mandatory.
-
-```bash
-# (1) Update the environment: keep the reviewer gate, turn on a custom branch list.
+# (1) Create or update the environment with the required-reviewer gate and a custom branch list.
 gh api --method PUT repos/armelhbobdad/bmad-module-ultracode-goal/environments/release --input - <<'JSON'
 {
   "wait_timer": 0,
@@ -251,11 +234,32 @@ gh api --method POST repos/armelhbobdad/bmad-module-ultracode-goal/environments/
 JSON
 ```
 
-Once applied, capture the baselines again ([§ Baseline snapshots](#baseline-snapshots)), which then gain `baseline-env-release-branch-policies.json`, and make § Restore / re-apply above the two calls of this section.
+### Restricting deployments to `main`
+
+**Applied on 2026-10-17.** Before it, the environment had no branch policy, so a `workflow_dispatch` of `release.yaml` from any branch reached the `release` environment, and its approval was the only thing between that branch and a prerelease publish. With the environment restricted to `main`, a dispatch from another branch is rejected at the job, before any step runs. These are the two calls that applied it, the same as [§ Restore / re-apply](#restore--re-apply):
+
+```bash
+gh api --method PUT repos/armelhbobdad/bmad-module-ultracode-goal/environments/release --input - <<'JSON'
+{
+  "wait_timer": 0,
+  "prevent_self_review": false,
+  "reviewers": [{ "type": "User", "id": 132626034 }],
+  "deployment_branch_policy": {
+    "protected_branches": false,
+    "custom_branch_policies": true
+  }
+}
+JSON
+gh api --method POST repos/armelhbobdad/bmad-module-ultracode-goal/environments/release/deployment-branch-policies --input - <<'JSON'
+{ "name": "main" }
+JSON
+```
+
+The baselines were captured again right after, and gained `baseline-env-release-branch-policies.json` ([§ Baseline snapshots](#baseline-snapshots)).
 
 ### Temporarily allowing a feature branch
 
-Once the environment is restricted to `main`, a release workflow that declares `environment: release` is rejected from any branch not on the allow-list. For a legitimate validation cut from a feature branch, widen the allow-list for the duration of the test and tighten it back immediately:
+The environment is restricted to `main`, so a release workflow that declares `environment: release` is rejected from any branch not on the allow-list. For a legitimate validation cut from a feature branch, widen the allow-list for the duration of the test and tighten it back immediately:
 
 ```bash
 # Allow the feature branch and capture the returned policy id into a shell var.
@@ -410,7 +414,7 @@ After the tests, the `Write release notes and CHANGELOG.md` step renders the sam
 A change to `release.yaml`, to the tools it runs or to the ruleset is first exercised by the next real cut, so make that cut a low-stakes one. Two ways, in order of preference:
 
 - **A prerelease from `main`.** `npm version prerelease` moves only the patch number of a stable version, so from `2.3.0` an `alpha` gives `2.3.1-alpha.0`, which the gate refuses when the minimum bump is `minor` (it names the hand bump). Set the version by hand in a pull request, as the next section describes (for example `2.4.0-alpha.0` in `package.json`, `package-lock.json` and `.claude-plugin/marketplace.json`), merge it, then dispatch `alpha` from `main`: the first alpha published is `2.4.0-alpha.1`, through the whole bot-PR path, and `alpha` points at it until the stable release closes the line ([§ Dist-tag policy](#dist-tag-policy)).
-- **A prerelease from a feature branch.** It skips the bot PR, the required-checks comparison and the merge, so it exercises less of the path. The `release` environment takes deployments from any branch today; once it is restricted to `main`, a feature-branch cut needs that branch allowed for the run ([§ Release Environment](#release-environment)).
+- **A prerelease from a feature branch.** It skips the bot PR, the required-checks comparison and the merge, so it exercises less of the path, and the `release` environment takes deployments from `main` only, so the branch must be allowed for the run ([§ Temporarily allowing a feature branch](#temporarily-allowing-a-feature-branch)).
 
 Then dispatch the stable bump from `main` as usual.
 
@@ -732,6 +736,7 @@ Placeholder substitutions used throughout:
   - Web: the package page on npmjs.com, **Settings** tab, **Trusted Publisher** section, **Delete** the registration.
   - Either blocks _all_ OIDC publishes until re-registered, stopping any further unauthorized use of the OIDC path mid-incident.
   - **No maintainer can sign in to npm** (account locked, 2FA lost): neither route works. Contact npm support at once, as under **Coordination CLI** below, and ask them to remove the trusted publisher. Meanwhile `gh workflow disable release.yaml` stops this repository from reaching the publish step ([§ Scenario G](#scenario-g-releaseyaml-disabled-reverted-or-missing-from-main) re-enables it).
+
 - **Audit CLI.**
 
   ```bash
@@ -899,9 +904,8 @@ The `main-protection` ruleset and the `release` environment are saved as JSON in
 
 - `baseline-ruleset-main-protection.json`: the ruleset, as `GET .../rulesets/<id>` returns it.
 - `baseline-env-release.json`: the environment, as `GET .../environments/release` returns it.
+- `baseline-env-release-branch-policies.json`: its allowed deployment branches, as `GET .../environments/release/deployment-branch-policies` returns them.
 - `ruleset-put.jq`: the filter that turns a ruleset, as a `GET` returns it, into the body of a ruleset `PUT` or `POST`. A capture leaves it alone.
-
-There is no branch-policies baseline while the environment has no branch policy: `GET .../environments/release/deployment-branch-policies` returns 404 then. Once the environment is restricted to `main` ([§ Restricting deployments to `main`](#restricting-deployments-to-main)), the capture below writes `baseline-env-release-branch-policies.json` as well.
 
 The restore in [§ Restore from a saved baseline](#restore-from-a-saved-baseline) reads the ruleset file through that filter. The files hold no secret or token: besides ids, they name the bypass actor (the Admin role) and the reviewer's public GitHub account.
 
@@ -923,7 +927,6 @@ if [ -z "$RULESET_ID" ]; then
 else
   save "rulesets/$RULESET_ID" baseline-ruleset-main-protection.json
   save environments/release baseline-env-release.json
-  # 404, and no file, while the environment has no branch policy.
   save environments/release/deployment-branch-policies baseline-env-release-branch-policies.json
   npx prettier --write "$DIR"   # the JSON layout the format check expects
   git diff --stat -- "$DIR"
@@ -941,7 +944,7 @@ gh api --method POST repos/armelhbobdad/bmad-module-ultracode-goal/rulesets \
 
 The ruleset gets a new id; no command in this document names one, and `release.yaml` looks the ruleset up by name. Capture again afterwards.
 
-**The `release` environment** is restored with the call in [§ Restore / re-apply](#restore--re-apply). Its baseline is the `GET` shape, which that call does not take. `test/test-releasing-runbook.py` checks on every pull request that the call's JSON matches the committed baseline, so a capture that changes the environment fails its pull request until that call is updated.
+**The `release` environment** is restored with the two calls in [§ Restore / re-apply](#restore--re-apply). Its baselines are the `GET` shape, which those calls do not take. `test/test-releasing-runbook.py` checks on every pull request that their JSON matches the committed baselines, so a capture that changes the environment fails its pull request until that call is updated.
 
 **Restore drill.** A restore is trusted only once it has run. Right after a capture, run the snippet of [§ Restore from a saved baseline](#restore-from-a-saved-baseline) and answer `y` only when its `diff` printed nothing: the `PUT` then writes the ruleset's own state back, so a `200` that changes nothing shows that the API accepts the filtered baseline. Capture again afterwards: `git diff` on the ruleset file should show at most `updated_at`. If the API rejects a field, change `release-audits/baselines/ruleset-put.jq`, which every restore snippet reads, and record that here. The filter drops the two keys of the `required_status_checks` rule that a ruleset `PUT` is expected to refuse (`do_not_enforce_on_create`, a null `integration_id`; the first drill confirms it here) and keeps every other rule parameter as the `GET` returns it, including two of the `pull_request` rule that this document does not otherwise rely on: `required_reviewers` and `require_extra_approval_for_unattributed_changes`. Run the drill again after any change to the filter, and add a row.
 

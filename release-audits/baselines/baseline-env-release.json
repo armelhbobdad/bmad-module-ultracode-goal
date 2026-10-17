@@ -39,7 +39,8 @@
           }
         }
       ]
-    }
+    },
+    { "id": 69127689, "node_id": "GA_kwDOSwIcq84EHs4J", "type": "branch_policy" }
   ],
-  "deployment_branch_policy": null
+  "deployment_branch_policy": { "protected_branches": false, "custom_branch_policies": true }
 }
