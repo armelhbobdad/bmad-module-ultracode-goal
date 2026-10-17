@@ -67,6 +67,7 @@ import sys
 import time
 import unicodedata
 from pathlib import Path
+from typing import NamedTuple
 
 # The story-status vocabulary BMad's sprint-planning writes into
 # sprint-status.yaml; "done" stories are out of scope (in-scope = not-yet-done,
@@ -418,6 +419,32 @@ def _uncovered_story_keys(
 ) -> list[str]:
     """In-scope keys with no story file of their own, in `story_keys` order.
 
+    `_story_coverage` decides it; this keeps only the uncovered keys.
+    """
+    return _story_coverage(story_paths, story_keys, rows).uncovered
+
+
+class _Coverage(NamedTuple):
+    """What `_story_coverage` found for the in-scope keys.
+
+    `uncovered`: the keys with no file of their own and no parent that covers
+    them, in `story_keys` order. `children`: the keys a parent's file covers,
+    each as (key, the parent's file, the parent's row key or None when the
+    split removed it). `below_parent`: the uncovered keys that a done parent's
+    file would cover but whose row sits below that parent's row, each mapped to
+    the parent's row key.
+    """
+
+    uncovered: list[str]
+    children: list[tuple[str, Path, str | None]]
+    below_parent: dict[str, str]
+
+
+def _story_coverage(
+    story_paths: list[Path], story_keys: list[str], rows: dict[str, str] | None = None
+) -> _Coverage:
+    """Which in-scope keys have a story file, and which a parent's file covers.
+
     A file covers a key when the two share the same id stem (`_story_stem`):
     the Epic number, the story number with any letters (`94-2a`), and every
     child segment a decomposition added (`95-0-a-i`). The stem, not the whole
@@ -433,51 +460,82 @@ def _uncovered_story_keys(
 
     One more way a key is covered: by a decomposed parent. execute.md's
     decomposition conventions give a child row no story file ("the child has
-    no story file and must never get one"), set the parent row to `done` once
-    its children exist, and keep the parent's file as the text the children
-    cite. So walking up from the key's stem (`95-0-a-i` to `95-0-a`,
-    `92-7f` to `92-7`), a parent with a file covers the key when its row is
-    `done` or when it has no row at all: a split that removed the parent's
-    row instead of setting it `done` still leaves the parent's file as the
-    text its children cite. A parent row that is not `done` stops the walk:
-    a story still being worked is not a container. A level with no row and
-    no file is passed over. `rows` is the sprint-status map (`key: status`);
-    without it no parent covers anything.
+    no story file and must never get one"), insert the child rows above the
+    parent row, set the parent row to `done` once its children exist, and
+    keep the parent's file as the text the children cite. So walking up from
+    the key's stem (`95-0-a-i` to `95-0-a`, `92-7f` to `92-7`), a parent with
+    a file covers the key when its row is `done` and the key's row sits above
+    it, or when it has no row at all: a split that removed the parent's row
+    instead of setting it `done` still leaves the parent's file as the text
+    its children cite. The order is what tells a child from a story inserted
+    later with a lettered key: sprint-planning writes rows in the order of the
+    epics' story headings, so a `3-2a` added after `3-2` shipped lands below
+    `3-2`'s row and stays uncovered, while every child sits above its parent.
+    When several rows share the parent's stem, the key must sit above the
+    first of them. A parent row that is not `done` stops the walk: a story
+    still being worked is not a container. A level with no row and no file is
+    passed over. `rows` is the sprint-status map (`key: status`) in file
+    order; without it no parent covers anything, and neither does a parent of
+    a key that has no row there.
+
+    What the order cannot tell apart is a story inserted ABOVE a done parent's
+    row, or a child whose parent row was removed: both read as children. So
+    every key a parent covers is returned in `children`, for the report to
+    show rather than to gate on.
 
     A key whose slug carries no story number (an alpha-keyed track) has no
     stem, so it falls back to the whole-key prefix rather than being silently
     treated as covered.
     """
     names = [p.name.lower() for p in story_paths]
-    file_stems = {stem for stem in (_story_stem(name) for name in names) if stem}
+    file_of_stem: dict[str, Path] = {}
+    for path, name in zip(story_paths, names):
+        stem = _story_stem(name)
+        if stem and stem not in file_of_stem:
+            file_of_stem[stem] = path
     row_status: dict[str, str] = {}
-    for key, status in (rows or {}).items():
+    # The first row of each stem, by position and key: a child sits above it.
+    first_row: dict[str, tuple[int, str]] = {}
+    position = {key: index for index, key in enumerate(rows or {})}
+    for index, (key, status) in enumerate((rows or {}).items()):
         stem = _story_stem(key)
         # Several rows can share a stem (`92-7e-i`, `92-7e-i-scan`): done only
         # when every one of them is.
         if stem:
             row_status[stem] = status if row_status.get(stem, "done") == "done" else row_status[stem]
+            first_row.setdefault(stem, (index, key))
 
-    def _covered(key: str) -> bool:
+    uncovered: list[str] = []
+    children: list[tuple[str, Path, str | None]] = []
+    below_parent: dict[str, str] = {}
+    for key in story_keys:
         stem = _story_stem(key)
         if stem is None:
             low = key.lower()
-            return any(name.startswith(low) for name in names)
-        if stem in file_stems:
-            return True
-        if rows is None:
-            return False
-        parent = _parent_stem(stem)
+            if not any(name.startswith(low) for name in names):
+                uncovered.append(key)
+            continue
+        if stem in file_of_stem:
+            continue
+        parent = _parent_stem(stem) if rows is not None and key in position else None
         while parent is not None:
             status = row_status.get(parent)
             if status is not None and status != "done":
-                return False
-            if parent in file_stems:
-                return True
+                parent = None
+                break
+            if parent in file_of_stem:
+                break
             parent = _parent_stem(parent)
-        return False
-
-    return [key for key in story_keys if not _covered(key)]
+        if parent is None:
+            uncovered.append(key)
+        elif parent not in first_row:
+            children.append((key, file_of_stem[parent], None))
+        elif position[key] < first_row[parent][0]:
+            children.append((key, file_of_stem[parent], first_row[parent][1]))
+        else:
+            uncovered.append(key)
+            below_parent[key] = first_row[parent][1]
+    return _Coverage(uncovered, children, below_parent)
 
 
 def _split_ac_blocks(text: str) -> list[tuple[int, str]]:
@@ -1102,35 +1160,43 @@ def build_verdict(
     # PARTIALLY seeded Epic - a create-story pass that died halfway, or story
     # files authored for most of the sprint but not all - resolves a non-empty
     # story set, iterates the per-story checks over only the stories that exist,
-    # and scores a clean zero-gap `ready`. The uncovered story then reaches the
-    # launch gate with no file and therefore no acceptance criteria, and an
-    # unattended run implements it by guessing, which is the single failure the
-    # readiness gate exists to prevent.
+    # and scores a clean zero-gap `ready`. The uncovered story then passes the
+    # launch gate with no file: Stage 3 writes its acceptance criteria, but no
+    # per-AC check below ever reads them, because a resumed session does not
+    # re-run this kernel, so they reach Execute unchecked.
     #
     # Scoped deliberately so the two guards stay disjoint and neither
     # double-reports: this one fires only when SOME story files resolved (the
     # zero case is already the gap above) and only when the rollup actually named
     # keys (with no keys there is nothing to compare against, and inventing a gap
     # from an unknown denominator would block legitimate runs).
-    uncovered = _uncovered_story_keys(story_paths, story_keys, rows)
+    coverage = _story_coverage(story_paths, story_keys, rows)
+    uncovered = coverage.uncovered
     if story_paths and uncovered:
+        detail = "Epic %s is partially seeded: %d of %d in-scope stories resolve no story file under impl-artifacts: %s. Unresolved: %s" % (
+            epic,
+            len(uncovered),
+            len(story_keys),
+            _rel(impl_artifacts, project_root),
+            ", ".join(uncovered),
+        )
+        if coverage.below_parent:
+            # A done parent's file would cover these but for their place: a
+            # decomposed child sits above its parent's row, so each is a story
+            # inserted later, or a child whose row is out of place.
+            detail += ". Below a done parent's row, where the decomposition conventions never put a child: %s" % ", ".join(
+                "%s (parent row %s)" % (key, parent) for key, parent in coverage.below_parent.items()
+            )
         mechanical_gaps.append(
             {
                 "id": "story_keys_uncovered",
                 "kind": "story_keys_uncovered",
                 "severity": "high",
-                "detail": "Epic %s is partially seeded: %d of %d in-scope stories resolve no story "
-                "file under impl-artifacts: %s. Unresolved: %s"
-                % (
-                    epic,
-                    len(uncovered),
-                    len(story_keys),
-                    _rel(impl_artifacts, project_root),
-                    ", ".join(uncovered),
-                ),
+                "detail": detail,
                 # The create-story scaffold generates the missing story files,
                 # exactly as it does for the empty set. A decomposed child
-                # never reaches this list: its parent's file covers it.
+                # above its done parent's row never reaches this list: its
+                # parent's file covers it.
                 "remediable": True,
                 "source": _rel(impl_artifacts, project_root),
             }
@@ -1449,6 +1515,14 @@ def build_verdict(
         "tea_artifacts_in_source": tea_artifacts_in_source,
         "nfr_thresholds_unsourced": nfr_thresholds_unsourced,
         "gate_ability_tag_coverage": gate_ability_tag_coverage,
+        # The keys a parent's story file covers, read as decomposed children:
+        # reported, never gated on, since a story inserted above a done
+        # parent's row reads the same way.
+        "decomposed_children": [
+            # POSIX on every platform: Define-Done opens it, and a test compares it.
+            {"key": key, "parent_file": Path(_rel(parent_file, project_root)).as_posix(), "parent_row": parent_row}
+            for key, parent_file, parent_row in coverage.children
+        ],
     }
 
     # timing: close the mechanical-half window BEFORE the verdict is derived,
