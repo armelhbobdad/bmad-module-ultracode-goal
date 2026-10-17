@@ -79,6 +79,11 @@ uv run {ucg-root}/scripts/formalize_check.py --epic <id> --project-root {project
 Read the kernel's readiness verdict JSON from stdout. Its shape is
 `{ready, verdict, mechanical_budget, judgment_required, mechanical_gaps[], judgment_candidates[], judged_candidates[], scan, checks{}}`;
 `judged_candidates[]` is empty and `scan` is `null` until step 3's re-run passes `--scan`.
+`checks.decomposed_children` lists each story key the kernel read as a decomposed child,
+with the parent story file its criteria come from and the parent's row (`null` when the
+split removed it). It gates nothing: a story inserted above a `done` parent's row reads
+the same way, so record it in `.decision-log.md` with the verdict, one line per key and
+its parent file, and outside `-H` name it to the operator with the verdict.
 Do not recompute it: read `mechanical_budget` and the verdict off the JSON, never re-derive
 them here. There is one kernel — a second readiness evaluator would let the two callers
 drift.
@@ -109,15 +114,21 @@ each entry where `remediable: true`. The remediation per kind:
   for the story keys the gap's `detail` names: `story_keys_uncovered` lists the unresolved
   subset, and `story_without_ac` names the one story whose AC section is missing. A
   decomposed child is never scaffolded: it has no story file by design, and the kernel
-  already counts it covered by its parent's file when the parent row is `done` or was
-  removed by the split. So a listed key whose id extends a parent's (`95-0-a-i` of
-  `95-0-a`) is a child the kernel found under a parent row that is not `done`. Look for
-  the split in `.decision-log.md` (the parent, its children in order, and the ACs each
-  claims, which `{ucg-root}/references/execute.md`'s decomposition conventions require).
-  When it is recorded, the parent is a container left open by mistake: set its row to
-  `done` as those conventions say, and scaffold nothing. When no split is recorded, the key
-  shape alone proves nothing (an inserted `3-2a` beside an in-progress `3-2` is its own
-  story): scaffold it like any other key, and never set a row `done` to clear the gap.
+  already counts it covered by its parent's file when its row sits above the parent's
+  row and the parent row is `done`, or when the split removed the parent's row. So a
+  listed key whose id extends a parent's (`95-0-a-i` of `95-0-a`) is a story of its own,
+  or a child the kernel found under a parent row that is not `done` or below a `done`
+  parent's row (the `detail` names each key below a `done` parent's row, with that row;
+  for a parent row that is not `done`, find the parent from the key's id). The split is
+  recorded when the child's row cites the parent ACs it claims, or `.decision-log.md`
+  names the parent and the ACs each child claims (`{ucg-root}/references/execute.md`'s
+  decomposition conventions write both). When it is recorded, the parent's status, the
+  child's place or both break those conventions: in this same pass, set the parent's row
+  to `done` and move each child's row above the first row of the parent's stem, and
+  scaffold nothing. When no split is recorded, the key shape alone proves nothing (a
+  `3-2a` added after `3-2` shipped sits below its row, and an inserted `3-2a` beside an
+  in-progress `3-2` is its own story too): scaffold it like any other key, and never set a
+  row `done` or move one to clear the gap.
 - **`no_in_scope_stories`** — same scaffold, but this gap's `detail` names only the Epic
   and the artifacts directory, never a key list, so take the keys from the **sprint
   rollup's rows for this Epic** instead of trying to read them out of `detail`. First

@@ -65,6 +65,7 @@ FR5_CHECK_KEYS = frozenset(
         "tea_artifacts_in_source",
         "nfr_thresholds_unsourced",
         "gate_ability_tag_coverage",
+        "decomposed_children",
     }
 )
 
@@ -758,6 +759,8 @@ def test_partially_seeded_story_set_is_remediable_not_ready(tmp_path):
     # rather than merely true.
     assert "7-3-renderer" in gap["detail"]
     assert "7-1-kernel" not in gap["detail"]
+    # No parent is involved, so the detail names none.
+    assert "Below a done parent" not in gap["detail"]
     assert "7-2-adapter" not in gap["detail"]
     assert "1 of 3" in gap["detail"]
 
@@ -1224,17 +1227,25 @@ def test_a_decomposed_child_is_covered_by_its_done_parent_file():
     rows = {"95-0-a-i-the-scanner-spine": "backlog", "95-0-a-audit-the-guard-substrate": "done"}
     assert fc._uncovered_story_keys([Path("95-0-a-audit-the-guard-substrate.md")], ["95-0-a-i-the-scanner-spine"], rows) == []
     # A lettered child of a story number (92-7f of 92-7), through a level with no row (92-7e).
-    rows = {"92-7-per-profile": "done", "92-7f-the-departure": "backlog", "92-7e-i-the-scan": "backlog"}
+    rows = {"92-7f-the-departure": "backlog", "92-7e-i-the-scan": "backlog", "92-7-per-profile": "done"}
     files = [Path("92-7-per-profile.md")]
     assert fc._uncovered_story_keys(files, ["92-7f-the-departure", "92-7e-i-the-scan"], rows) == []
+    # Every child is listed, each with the parent's file and row.
+    assert fc._story_coverage(files, ["92-7f-the-departure", "92-7e-i-the-scan"], rows).children == [
+        ("92-7f-the-departure", Path("92-7-per-profile.md"), "92-7-per-profile"),
+        ("92-7e-i-the-scan", Path("92-7-per-profile.md"), "92-7-per-profile"),
+    ]
 
 
 def test_a_parent_that_is_not_done_covers_no_child():
     # Not a container yet: its file is its own story, not the children's text.
-    rows = {"92-7-per-profile": "in-progress", "92-7f-the-departure": "backlog"}
+    # Each child sits above its parent's row, so the status alone decides.
+    rows = {"92-7f-the-departure": "backlog", "92-7-per-profile": "in-progress"}
     assert fc._uncovered_story_keys([Path("92-7-per-profile.md")], ["92-7f-the-departure"], rows) == ["92-7f-the-departure"]
+    # Stopped by an open parent, not placed below a done one.
+    assert fc._story_coverage([Path("92-7-per-profile.md")], ["92-7f-the-departure"], rows).below_parent == {}
     # Nor does a done parent with no file of its own.
-    rows = {"92-7-per-profile": "done", "92-7f-the-departure": "backlog"}
+    rows = {"92-7f-the-departure": "backlog", "92-7-per-profile": "done"}
     assert fc._uncovered_story_keys([Path("92-6-other.md")], ["92-7f-the-departure"], rows) == ["92-7f-the-departure"]
 
 
@@ -1247,9 +1258,10 @@ def test_a_parent_whose_row_the_split_removed_still_covers_with_its_file():
 
 
 def test_a_parent_still_being_worked_stops_the_walk_even_under_a_done_grandparent():
-    rows = {"92-7-per-profile": "done", "92-7e-the-umbrella": "in-progress", "92-7e-i-the-scan": "backlog"}
+    rows = {"92-7e-i-the-scan": "backlog", "92-7e-the-umbrella": "in-progress", "92-7-per-profile": "done"}
     files = [Path("92-7-per-profile.md")]
     assert fc._uncovered_story_keys(files, ["92-7e-i-the-scan"], rows) == ["92-7e-i-the-scan"]
+    assert fc._story_coverage(files, ["92-7e-i-the-scan"], rows).below_parent == {}
     # The same tree with 92-7e set done is a container chain, and 92-7's file covers.
     rows["92-7e-the-umbrella"] = "done"
     assert fc._uncovered_story_keys(files, ["92-7e-i-the-scan"], rows) == []
@@ -1260,10 +1272,85 @@ def test_a_stem_shared_by_several_rows_is_done_only_when_every_row_is():
     # container only once both rows are done, whichever comes first in the file.
     files = [Path("92-7e-i-the-scan.md")]
     for rows in (
-        {"92-7e-i-the-scan": "done", "92-7e-i-scan": "in-progress", "92-7e-i-a-child": "backlog"},
-        {"92-7e-i-scan": "in-progress", "92-7e-i-the-scan": "done", "92-7e-i-a-child": "backlog"},
+        {"92-7e-i-a-child": "backlog", "92-7e-i-the-scan": "done", "92-7e-i-scan": "in-progress"},
+        {"92-7e-i-a-child": "backlog", "92-7e-i-scan": "in-progress", "92-7e-i-the-scan": "done"},
     ):
         assert fc._uncovered_story_keys(files, ["92-7e-i-a-child"], rows) == ["92-7e-i-a-child"]
+
+
+def test_a_story_inserted_below_a_done_parent_row_is_reported():
+    # sprint-planning writes rows in the order of the epics' story headings, so
+    # a `Story 3.2a` added after 3.2 shipped lands below 3.2's row. A decomposed
+    # child sits above its parent's row (execute.md), so the lettered key below
+    # it is a story of its own, with no file yet.
+    files = [Path("3-1-login.md"), Path("3-2-user-login.md"), Path("3-3-profile.md")]
+    rows = {"3-1-login": "done", "3-2-user-login": "done", "3-2a-reset-password": "backlog", "3-3-profile": "backlog"}
+    keys = ["3-2a-reset-password", "3-3-profile"]
+    assert fc._uncovered_story_keys(files, keys, rows) == ["3-2a-reset-password"]
+    coverage = fc._story_coverage(files, keys, rows)
+    assert coverage.below_parent == {"3-2a-reset-password": "3-2-user-login"}
+    assert coverage.children == []
+    # The twin: the same row above its parent's is where a child sits, and it
+    # reads as one.
+    rows = {"3-1-login": "done", "3-2a-reset-password": "backlog", "3-2-user-login": "done", "3-3-profile": "backlog"}
+    assert fc._uncovered_story_keys(files, keys, rows) == []
+    coverage = fc._story_coverage(files, keys, rows)
+    assert coverage.children == [("3-2a-reset-password", Path("3-2-user-login.md"), "3-2-user-login")]
+    assert coverage.below_parent == {}
+
+
+def test_the_order_is_read_against_the_parent_that_holds_the_file():
+    # 3-2a-a walks past 3-2a, which has no row and no file, to 3-2's file: its
+    # place is read against 3-2's row, not against the level it passed over.
+    files = [Path("3-2-login.md")]
+    rows = {"3-2-login": "done", "3-2a-a-reset-flow": "backlog"}
+    coverage = fc._story_coverage(files, ["3-2a-a-reset-flow"], rows)
+    assert coverage.uncovered == ["3-2a-a-reset-flow"]
+    assert coverage.below_parent == {"3-2a-a-reset-flow": "3-2-login"}
+    rows = {"3-2a-a-reset-flow": "backlog", "3-2-login": "done"}
+    assert fc._story_coverage(files, ["3-2a-a-reset-flow"], rows).children == [
+        ("3-2a-a-reset-flow", Path("3-2-login.md"), "3-2-login")
+    ]
+
+
+def test_a_child_must_sit_above_the_first_row_of_its_parents_stem():
+    # 92-7e-i-the-scan and 92-7e-i-scan share the stem 92-7e-i: a child between
+    # the two sits below the first, so it does not read as one.
+    files = [Path("92-7e-i-the-scan.md")]
+    rows = {"92-7e-i-the-scan": "done", "92-7e-i-a-child": "backlog", "92-7e-i-scan": "done"}
+    assert fc._uncovered_story_keys(files, ["92-7e-i-a-child"], rows) == ["92-7e-i-a-child"]
+    assert fc._story_coverage(files, ["92-7e-i-a-child"], rows).below_parent == {"92-7e-i-a-child": "92-7e-i-the-scan"}
+    rows = {"92-7e-i-a-child": "backlog", "92-7e-i-the-scan": "done", "92-7e-i-scan": "done"}
+    assert fc._story_coverage(files, ["92-7e-i-a-child"], rows).children == [
+        ("92-7e-i-a-child", Path("92-7e-i-the-scan.md"), "92-7e-i-the-scan")
+    ]
+
+
+def test_a_parent_with_two_files_is_named_by_the_first():
+    # Both files have the stem 3-2; the kernel passes them sorted, and the
+    # first is the one the children's criteria are read from.
+    files = [Path("3-2-user-login.md"), Path("3-2_draft.md")]
+    rows = {"3-2a-reset-password": "backlog", "3-2-user-login": "done"}
+    assert fc._story_coverage(files, ["3-2a-reset-password"], rows).children == [
+        ("3-2a-reset-password", Path("3-2-user-login.md"), "3-2-user-login")
+    ]
+
+
+def test_a_key_with_no_row_is_covered_by_no_parent():
+    # Without its row there is no place to compare, so only its own file covers it.
+    files = [Path("92-7-per-profile.md")]
+    for rows in ({"92-7-per-profile": "done"}, {"92-6-other": "done"}):
+        coverage = fc._story_coverage(files, ["92-7f-the-departure"], rows)
+        assert coverage.uncovered == ["92-7f-the-departure"]
+        assert coverage.children == [] and coverage.below_parent == {}
+
+
+def test_a_parent_whose_row_was_removed_is_listed_with_no_row():
+    rows = {"94-8-a-the-first": "backlog"}
+    files = [Path("94-7-other.md"), Path("94-8-season-learner.md")]
+    coverage = fc._story_coverage(files, ["94-8-a-the-first"], rows)
+    assert coverage.uncovered == []
+    assert coverage.children == [("94-8-a-the-first", Path("94-8-season-learner.md"), None)]
 
 
 def test_an_alpha_keyed_story_falls_back_to_the_whole_key():
@@ -1288,6 +1375,10 @@ def test_kernel_reads_a_done_parent_as_the_container_of_its_children(tmp_path):
     (impl / "7-1-a-umbrella.md").write_text(_story_body("7-1-a-umbrella"), encoding="utf-8")
     out = _run_project(root)
     assert all(g["kind"] != "story_keys_uncovered" for g in out["mechanical_gaps"]), out["mechanical_gaps"]
+    # Reported, not gated on: the briefing names the keys read as children.
+    assert out["checks"]["decomposed_children"] == [
+        {"key": "7-1-a-i-the-first-child", "parent_file": "impl-artifacts/7-1-a-umbrella.md", "parent_row": "7-1-a-umbrella"}
+    ]
     # The twin: the same project with the parent not yet done reports the child.
     (impl / "sprint-status.yaml").write_text(
         "generated: fixture\ndevelopment_status:\n  epic-7: in-progress\n"
@@ -1297,3 +1388,40 @@ def test_kernel_reads_a_done_parent_as_the_container_of_its_children(tmp_path):
     out = _run_project(root)
     gaps = [g for g in out["mechanical_gaps"] if g["kind"] == "story_keys_uncovered"]
     assert len(gaps) == 1 and "7-1-a-i-the-first-child" in gaps[0]["detail"]
+    # Stopped by an open parent: the detail names no done parent's row.
+    assert "Below a done parent" not in gaps[0]["detail"]
+    # A split that removed the parent's row: the file still covers, with no row.
+    (impl / "sprint-status.yaml").write_text(
+        "generated: fixture\ndevelopment_status:\n  epic-7: in-progress\n  7-1-a-i-the-first-child: backlog\n",
+        encoding="utf-8",
+    )
+    out = _run_project(root)
+    assert out["checks"]["decomposed_children"] == [
+        {"key": "7-1-a-i-the-first-child", "parent_file": "impl-artifacts/7-1-a-umbrella.md", "parent_row": None}
+    ]
+
+
+def test_kernel_reports_a_story_inserted_below_a_done_parent(tmp_path):
+    # End to end: `Story 7.1a`, added after 7.1 shipped, sits below 7.1's done
+    # row with no file. The gap names it, and says why no parent covered it.
+    root = tmp_path / "inserted"
+    planning = root / "planning-artifacts"
+    impl = root / "impl-artifacts"
+    planning.mkdir(parents=True)
+    impl.mkdir(parents=True)
+    (planning / "prd-fixture.md").write_text("# PRD\n", encoding="utf-8")
+    (planning / "architecture-fixture.md").write_text("# Architecture\n", encoding="utf-8")
+    (impl / "sprint-status.yaml").write_text(
+        "generated: fixture\ndevelopment_status:\n  epic-7: in-progress\n"
+        "  7-1-the-login: done\n  7-1a-reset-password: backlog\n  7-1b-audit: backlog\n",
+        encoding="utf-8",
+    )
+    (impl / "7-1-the-login.md").write_text(_story_body("7-1-the-login"), encoding="utf-8")
+    out = _run_project(root)
+    gaps = [g for g in out["mechanical_gaps"] if g["kind"] == "story_keys_uncovered"]
+    assert len(gaps) == 1, out["mechanical_gaps"]
+    assert "Unresolved: 7-1a-reset-password, 7-1b-audit" in gaps[0]["detail"]
+    # Each key below the done parent's row is named with that row.
+    assert "7-1a-reset-password (parent row 7-1-the-login), 7-1b-audit (parent row 7-1-the-login)" in gaps[0]["detail"]
+    assert gaps[0]["remediable"] is True
+    assert out["checks"]["decomposed_children"] == []
