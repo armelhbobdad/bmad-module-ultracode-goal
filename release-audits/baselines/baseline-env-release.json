@@ -1,0 +1,45 @@
+{
+  "id": 16220469047,
+  "node_id": "EN_kwDOSwIcq88AAAADxtC3Nw",
+  "name": "release",
+  "url": "https://api.github.com/repos/armelhbobdad/bmad-module-ultracode-goal/environments/release",
+  "html_url": "https://github.com/armelhbobdad/bmad-module-ultracode-goal/deployments/activity_log?environments_filter=release",
+  "created_at": "2026-06-04T06:47:06Z",
+  "updated_at": "2026-06-04T06:47:06Z",
+  "can_admins_bypass": true,
+  "protection_rules": [
+    {
+      "id": 56430611,
+      "node_id": "GA_kwDOSwIcq84DXRAT",
+      "type": "required_reviewers",
+      "prevent_self_review": false,
+      "reviewers": [
+        {
+          "type": "User",
+          "reviewer": {
+            "login": "armelhbobdad",
+            "id": 132626034,
+            "node_id": "U_kgDOB-e2cg",
+            "avatar_url": "https://avatars.githubusercontent.com/u/132626034?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/armelhbobdad",
+            "html_url": "https://github.com/armelhbobdad",
+            "followers_url": "https://api.github.com/users/armelhbobdad/followers",
+            "following_url": "https://api.github.com/users/armelhbobdad/following{/other_user}",
+            "gists_url": "https://api.github.com/users/armelhbobdad/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/armelhbobdad/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/armelhbobdad/subscriptions",
+            "organizations_url": "https://api.github.com/users/armelhbobdad/orgs",
+            "repos_url": "https://api.github.com/users/armelhbobdad/repos",
+            "events_url": "https://api.github.com/users/armelhbobdad/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/armelhbobdad/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          }
+        }
+      ]
+    }
+  ],
+  "deployment_branch_policy": null
+}
