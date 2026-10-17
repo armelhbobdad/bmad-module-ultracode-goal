@@ -26,9 +26,10 @@ Covers:
     branch-policies baseline while the environment has no branch policy
   - Every restore snippet reads the one filter file,
     release-audits/baselines/ruleset-put.jq, and the drill record names it;
-    run on the baseline, it keeps every field a PUT takes and every rule,
-    minus the keys of the required_status_checks rule a PUT has refused
-    (do_not_enforce_on_create, a null integration_id)
+    run on the baseline, it keeps every field a PUT takes, every rule and
+    every rule parameter, do_not_enforce_on_create among them (a PUT takes
+    it); run on a ruleset with a null integration_id, it drops a required
+    check's null keys, which a PUT has refused, and keeps its other keys
   - The restore shows its diff and sends the PUT only on an answer of y
     (run with a stub gh)
   - The environment's restore JSON agrees with its baseline, which the
@@ -327,11 +328,47 @@ def test_the_filter_keeps_every_field_a_put_takes_minus_what_a_put_refused():
         if saved["type"] != "required_status_checks":
             assert kept == saved
             continue
-        assert "do_not_enforce_on_create" not in kept["parameters"]
+        # Every parameter but the checks is kept: a PUT takes
+        # do_not_enforce_on_create, so a restore sends its saved value.
+        assert {key: value for key, value in kept["parameters"].items() if key != "required_status_checks"} == {
+            key: value for key, value in saved["parameters"].items() if key != "required_status_checks"
+        }
         checks = kept["parameters"]["required_status_checks"]
         assert [c["context"] for c in checks] == [c["context"] for c in saved["parameters"]["required_status_checks"]]
         assert all(value is not None for check in checks for value in check.values())
     assert body["bypass_actors"] == ruleset["bypass_actors"]
+
+
+@needs_jq
+def test_the_filter_drops_only_a_checks_null_keys():
+    # The baseline has no null key, so a ruleset that has one shows the drop.
+    ruleset = {
+        "name": RULESET,
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": {},
+        "rules": [
+            {
+                "type": "required_status_checks",
+                "parameters": {
+                    "strict_required_status_checks_policy": False,
+                    "do_not_enforce_on_create": True,
+                    "required_status_checks": [
+                        {"context": "a", "integration_id": None},
+                        {"context": "b", "integration_id": 15368},
+                    ],
+                },
+            }
+        ],
+        "bypass_actors": [],
+    }
+    proc = subprocess.run(
+        ["jq", "-f", str(PUT_FILTER)], input=json.dumps(ruleset), capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, proc.stderr
+    parameters = json.loads(proc.stdout)["rules"][0]["parameters"]
+    assert parameters["do_not_enforce_on_create"] is True
+    assert parameters["required_status_checks"] == [{"context": "a"}, {"context": "b", "integration_id": 15368}]
 
 
 def test_the_restore_drill_has_a_record_that_names_its_filter():
