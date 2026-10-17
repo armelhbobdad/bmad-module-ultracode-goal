@@ -1,0 +1,4 @@
+type: docs
+prs: [922]
+summary: |
+  The published docs were checked claim by claim against the code. Corrections include: Python 3.11 is the minimum, not 3.10; `gh` is needed only to submit health-check findings, not to run an Epic; `/ucg-status` reads a run without writing to it; and `--light` still runs TEA test-design and trace.

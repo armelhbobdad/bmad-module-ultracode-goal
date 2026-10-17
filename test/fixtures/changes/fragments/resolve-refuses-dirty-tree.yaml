@@ -1,0 +1,8 @@
+type: breaking
+scope: ucg-resolve
+prs: [899]
+issues: [897]
+summary: |
+  `/ucg-resolve` now stops when the working tree has uncommitted changes outside the run folder. Before, it reset the story's turn counter and left the changes in place, so the resumed story started on code it never wrote. The resolve ends `blocked` with the reason `dirty-tree`, and nothing is reset.
+migration: |
+  Commit or stash the changes (`git status` lists them), then run `/ucg-resolve` again. A clean tree is not affected.

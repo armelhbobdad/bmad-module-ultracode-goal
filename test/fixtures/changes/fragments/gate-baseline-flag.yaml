@@ -1,0 +1,6 @@
+type: added
+scope: ultracode-goal
+prs: [917]
+issues: [911]
+summary: |
+  New `--baseline <ref>` flag for `gate_eval.py`: compare the story's trace against a tag, branch or full commit instead of the Epic branch's base, for example the release an audit checked out. The verdict JSON keeps its key set, and the run report names the ref the gate compared against.

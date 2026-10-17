@@ -1,0 +1,3 @@
+type: lead
+summary: |
+  UltraCode Goal 3.0.0 holds every story to the full gate, reads TEA's gate file where TEA writes it, and records every turn the Stop hook counts. Three behaviours a pipeline can depend on changed: read Breaking changes before you upgrade one.

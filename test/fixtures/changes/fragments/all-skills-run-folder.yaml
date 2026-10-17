@@ -1,0 +1,6 @@
+type: changed
+scope: all skills
+prs: [899, 909]
+issues: [895, 897, 900, 901]
+summary: |
+  UCG now writes every run artifact under `_bmad-output/ultracode-goal/runs/<run-id>/`, for both `implementation_artifacts` and `deferred_work_path`. A run folder from an older release is still read: `/ucg-status` and `/ucg-resolve` find it, and a resume moves it once and says so in the decision log. `drive_epic.py` now stages its spawn logs in `_bmad-output/.ucg-stage/<story>/`.

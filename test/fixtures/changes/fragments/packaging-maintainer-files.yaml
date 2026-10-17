@@ -1,0 +1,6 @@
+type: fixed
+scope: packaging
+prs: [889]
+issues: [887]
+summary: |
+  The npm package no longer ships maintainer-only files (the docs build script and two docs validators), about 60 KB less.

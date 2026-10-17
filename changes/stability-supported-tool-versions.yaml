@@ -1,0 +1,4 @@
+type: added
+scope: stability
+summary: |
+  The public contract in `STABILITY.md` now covers the supported tool versions: the minimum Claude Code, Node.js, Python and BMAD Method versions the prerequisites table lists. From now on a release that raises one of them is a major release, and one that lowers or removes one is at least a minor.

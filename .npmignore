@@ -1,6 +1,7 @@
 # Git
 .git
 .gitignore
+.gitattributes
 .github
 
 # Documentation (root-level .md files except README)
@@ -34,14 +35,30 @@ prettier.config.mjs
 .prettierrc.*
 .husky/
 .npmrc
+.nvmrc
 
-# Dev-only validation tools (not needed at runtime)
-tools/validate-skills.js
-tools/validate-file-refs.js
-tools/validate-no-em-dash.js
-tools/tool-requirements.js
-tools/tool-requirements.yaml
-tools/link-reference-skills.js
+# Maintainer tools. Every file directly under tools/ is one (validators,
+# docs build, release notes, the tool-versions list), except the npx wrapper
+# that package.json's bin points at. The pattern matches only that level: the
+# installer CLI in tools/cli/ still ships.
+tools/*
+!tools/cli/
+!tools/ucg-npx-wrapper.js
+
+# Change fragments: rendered into CHANGELOG.md and the GitHub Release at
+# release time, not read at runtime.
+changes/
+
+# Maintainer-only release material: the runbook and the ruleset and
+# environment baselines. STABILITY.md ships on purpose: it is the
+# public contract, which a consumer pinning a major may want to read from the
+# installed package.
+docs/_internal/RELEASING.md
+release-audits/
+
+# The docs website: its source and build, published as the docs site, not
+# part of the module.
+website/
 
 # Skill dev/test artifacts (not needed at runtime)
 skills/**/.analysis/

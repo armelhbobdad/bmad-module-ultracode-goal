@@ -75,12 +75,75 @@ done
    - `ci(quality): ...`
    - `chore: ...` (no scope needed)
 
-   `git log --oneline -20` is the authoritative style guide. Match what you see.
+   `git log --oneline -20` is the authoritative style guide. Match what you see. The prefix is for the history only: release notes and the version bump come from change fragments (step 7), so the commit type and the merge style do not change what a release says.
 
 3. **Reference issues with `Fixes #NNN`** in the PR body. Use **same-repo GitHub issue numbers only**; internal author notes are not public contracts.
 4. **Pre-commit hooks run automatically** via husky + lint-staged on staged files only.
 5. **PR description:** explain _why_. What was broken, what does this change, and how did you verify it? Keep it honest and short.
 6. **If you used Claude (or any AI assistant)** to write a non-trivial chunk of the change, add a `Co-Authored-By:` trailer to the commit. Not mandatory, but we prefer accurate attribution over silent ghostwriting.
+7. **Add a change fragment** in the same pull request for each change a user or a pipeline can notice, and run `npm run changes:pr` before you push: see [Change fragments](#change-fragments).
+
+## Change fragments
+
+Release notes are written from change fragments, not from commit subjects. A pull request that changes something a user or a pipeline can notice adds one short YAML file per change to [`changes/`](changes/README.md), named after the change: `changes/<topic>.yaml`. At release, the workflow renders every fragment added since the last stable release into the new `CHANGELOG.md` block and the GitHub Release, and refuses a `version_bump` smaller than the fragments call for. Fragments are never deleted: a release takes only the ones added since the last stable tag. A released fragment is never read again, so a new change always goes in a new file: the release refuses a released fragment that was edited, renamed or copied.
+
+**When.** Add a fragment when a stage behaves differently, when a flag, verdict, status, blocker or `customize.toml` key appears or goes, when the install changes, or when the user docs gain something worth announcing. Refactors, tests, CI and maintainer-only docs need none; a refactor of the code the package ships says so in a commit message instead (see [The pull request check](#the-pull-request-check)).
+
+**Which type.** Type the change by what a user sees, not by the commit prefix, and pick the higher type when unsure:
+
+- `breaking`: the change removes or renames a covered item (one of the public surfaces [STABILITY.md](docs/_internal/STABILITY.md) lists: a CLI subcommand or option, a `[workflow]` key of `customize.toml`, a key of the headless emit shape, the skill name or an invocation phrase, a `gate_eval.py` flag, choice, `gate_status`, verdict or printed key), changes the verdict a documented invocation returns, raises a requirement, or makes an input that used to succeed now halt or exit non-zero. A `breaking` fragment needs a `migration`: the exact action a user takes.
+- `added`: a new flag, option, `customize.toml` key, preflight blocker or capability.
+- `changed`: the output or a default is different, and nothing was removed.
+- `fixed`: the behaviour now matches the docs.
+- `docs`: a change to the user docs worth announcing.
+
+`lead` is a sixth type for the paragraph that opens a release's notes, usually added when the release is prepared.
+
+```yaml
+type: added
+scope: ultracode-goal
+summary: |
+  New `--cycle-profile delta` for `gate_eval.py`: a mid-loop gate that re-ran only the failed assessor dimensions is capped at `reloop`, so it can never advance a story.
+```
+
+Write flags, statuses, verdicts and file names in backticks: a release that removes a covered item needs a `breaking` fragment that names it, and only a name in backticks counts. Add `prs:` once the pull request has a number. Before pushing, run `npm run changes:preview`: it lists the fragments added since the last stable tag, the covered-surface changes against it (`tools/covered-surfaces.js`), the minimum bump and why, and the rendered block. It also prints the release gate's verdict for the whole next release, not for your pull request alone: a refusal about an item or a fragment your pull request touches is yours to fix; any other refusal is for the maintainer who cuts the release, and your pull request only needs its own fragments to pass `npm run validate:changes` and `npm run changes:pr`. `npm run validate:changes` checks the format, which [`changes/README.md`](changes/README.md) describes in full.
+
+### The pull request check
+
+The required `em-dash` check runs `npm run changes:pr` on every pull request. It compares your branch, from its merge base with the base branch to `HEAD`, and fails when:
+
+- the branch changes the code the npm package ships (anything under `skills/` outside the dev artifacts `.npmignore` keeps out, such as each skill's `scripts/tests/`; anything under `tools/cli/`; and `tools/ucg-npx-wrapper.js`) or `.npmignore`, which decides what ships, and has no change fragment of its own;
+- a covered item the branch removes, or a tool minimum it raises or gives a tool for the first time, is not named in backticks by a `breaking` fragment on the branch (a tool by its `name`);
+- a covered item the branch adds, or a tool minimum it lowers or removes, has no `added` or `breaking` fragment on the branch;
+- a fragment the branch adds or edits is not valid, or the branch edits, renames or copies a fragment an earlier release shipped.
+
+A fragment on the branch is one it adds. A fragment it edits that no release has shipped yet, such as another pull request's pending one, counts only for the covered items it names in backticks: a follow-up that removes a flag can name it in the pending `breaking` fragment it extends, and then needs no other fragment, but an edit that names none of the branch's covered items never stands in for a fragment of its own.
+
+The check reads only the code the package ships. The package also ships `package.json`, `README.md` and part of `docs/`, and the check asks nothing of a branch that changes only those or other files (the `tools/*.js` scripts, `test/`, `.github/`). A change a user notices there still takes a fragment, as **When** says above: a user docs change worth announcing takes a `docs` fragment, and a raised `engines.node` floor or a new runtime requirement in `package.json` is `breaking`.
+
+When no user or pipeline can notice any change the branch makes to the code the package ships, such as a refactor with the same output or a reworded comment, give the reason in one of the branch's commit messages instead of a fragment, on a line of its own (with the other trailers is best). A merge commit on the branch counts too. To add the line to a branch you already pushed, push an empty commit that carries it (`git commit --allow-empty`):
+
+```text
+Changelog: none (refactor, the output is unchanged)
+```
+
+The reason inside the parentheses is required: `Changelog: none` alone covers nothing, and neither does `Changelog: none (<reason>)` pasted as it is. One such line covers the whole branch, so use it only when nothing the branch changes in the code the package ships is noticeable: a branch that mixes a refactor and a fix still needs a fragment for the fix. The line only stands in for a fragment the first rule asks for. It never covers a covered item the branch removes or adds: those always need their fragment, because the release notes and the version bump come from it.
+
+Run the check before you push. It reads commits, not the working tree, so commit first, and fetch the base branch so the merge base is current:
+
+```bash
+git fetch origin
+npm run changes:pr
+```
+
+It compares with `origin/main` by default (on a pull request, with `origin/<base branch>`); pass `-- --base <ref>` for another base. In a fork, `origin` is your fork, so compare with the upstream repository instead:
+
+```bash
+git fetch upstream
+npm run changes:pr -- --base upstream/main
+```
+
+The released-fragment rule takes the last stable tag reachable from the base, as CI does, so a branch forked before the latest release is still checked against it. On a failure the check prints what is missing and a fragment to fill in, with the type and scope worked out from what the branch changes, and exits `1`; in CI the same text is in the job summary. The fragment it prints fails `npm run validate:changes` until you rewrite each sentence that starts with "Rewrite this paragraph". It exits `2` when it cannot run, for example when the base branch has not been fetched, or when a shallow clone does not hold the merge base (`git fetch --unshallow origin`). The release workflow's own pull request, from a `release/bot/*` branch of this repository, is exempt: its one commit bumps the version and renders the notes from fragments already merged. A `release/bot/*` branch from a fork, or from a repository the check cannot confirm, is checked like any other.
 
 ## The Quality Gate
 
@@ -89,7 +152,7 @@ done
 - **Fix the root cause.** Do not `git commit --no-verify`. Do not disable a rule to make the linter shut up. If a hook is wrong, fix the hook in a separate PR.
 - **If a Python test fails on your machine but not in CI,** check your `uv` version and re-run the suite from a clean shell.
 
-CI re-runs everything on the PR. A green local run and a red CI run usually means uncommitted files or a Node/uv version that drifts from `.nvmrc`. Check both before filing a CI bug.
+CI re-runs everything on the PR. A green local run and a red CI run usually means (a) uncommitted files, (b) a Node, uv or Python version that drifts from `.nvmrc` or the Python minimum, or (c) the pull request check failed: `npm run changes:pr` is not part of `npm run quality`, so run it after committing. Check all three before filing a CI bug.
 
 ## Workflow Health Check
 
@@ -115,7 +178,10 @@ Every UCG run that reaches Finalize ends with a health-check reflection step tha
 
 Maintainers only. If you're not cutting a release, skip this section.
 
-Releases go through the OIDC-backed GitHub Actions release pipeline: the only supported route, with a required-reviewer gate on the `release` environment and auto-provenance on the npm tarball. The canonical, step-by-step procedure (branch-protection rules, the `release` environment, npm Trusted Publisher registration, and the rollback playbook) lives in `docs/_internal/RELEASING.md`.
+- **Canonical path:** `.github/workflows/release.yaml`, triggered via GitHub Actions, Run workflow, then a `version_bump` (`alpha`, `beta`, `rc`, `patch`, `minor` or `major`, or `resume` on `main` to finish a cut whose bot PR merged but whose tag, npm publish or GitHub Release is missing). That is the only supported route: OIDC-backed publish, required-reviewer gate on the `release` environment, auto-provenance on the npm tarball.
+- **Before dispatch:** run `npm run changes:preview -- --bump <type>` on an up-to-date `main`. The workflow's release gate refuses a `version_bump` below the minimum the preview prints, before anything is committed.
+
+The canonical, step-by-step procedure (branch-protection rules, the `release` environment, npm Trusted Publisher registration, and the rollback playbook) lives in `docs/_internal/RELEASING.md`.
 
 ## What We Don't Accept
 

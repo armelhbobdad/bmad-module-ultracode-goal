@@ -76,15 +76,18 @@ SITE_URL=https://armelhbobdad.github.io/bmad-module-ultracode-goal npm run docs:
 
 ## Deployment
 
-Deployment is automated by the `Deploy Documentation` GitHub Actions workflow at
-`.github/workflows/docs.yaml`. On a push to `main` that touches `docs/**`,
-`website/**`, `tools/build-docs.js`, `package.json`, or the workflow file, the
-pipeline installs dependencies, runs `npm run docs:build`, and publishes
-`build/site` to GitHub Pages.
+The `Deploy Documentation` GitHub Actions workflow at
+`.github/workflows/docs.yaml` builds the site from a release tag and publishes
+`build/site` to GitHub Pages, so the site shows the latest stable release, not
+`main`. A merge to `main` does not deploy it: the release workflow dispatches
+`docs.yaml` at the end of every stable release, with `ref` set to the new tag.
+To deploy by hand, run `gh workflow run docs.yaml` (the latest stable tag) or
+`gh workflow run docs.yaml -f ref=vX.Y.Z` (a given tag); see
+`docs/_internal/RELEASING.md`, The docs site.
 
 The workflow reads `SITE_URL` from a repository variable, so the production URL
-can be configured without changing code. The workflow can also be triggered
-manually from the Actions tab.
+can be configured without changing code. The `docs-links` job of
+`quality.yaml` builds the same site on every pull request and checks its links.
 
 ## Links
 
