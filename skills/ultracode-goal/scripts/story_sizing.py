@@ -27,14 +27,24 @@ reconciliation. It never decides the split.
 Exit codes: 0 the claim map reconciles, 1 it does not (unclaimed, double-claimed
 or unknown ids), 2 usage error. The JSON is written on 0 and 1 alike, because a
 failing reconciliation is a result to read, not a crash.
+
+With `--parent <key> --record <dir>`, a run that reconciles also writes the
+split record `<dir>/.split-<key>.json`: the parent, its children in the order
+given, and the claim map. `gate_eval.py --rollup` reads a decomposed parent
+through its children only on that record, so it is written only once the map
+reconciles, a failing run leaves any earlier record untouched, and a record it
+cannot write is exit 2 with no JSON, never a traceback read as exit 1.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import re
 import sys
+from pathlib import Path
 
 # An id is a whole token: a `<word>-<number>` form (`AC-1`, `REQ-1`, `FR-2.1`) or
 # a bare number (`1`). Anchored at both ends, so a token either IS an id or is
@@ -131,6 +141,67 @@ def _parse_child(spec: str) -> tuple[str, list[str]]:
     return row, parse_ids(claimed, field="--child %s" % row)
 
 
+def _write_record(
+    record: Path, parent: str, parent_acs: list[str], children: dict[str, list[str]]
+) -> None:
+    """The split record: the parent, its children in the order given, and the claim map.
+
+    Written to a temporary file beside it and moved into place, so a write that
+    fails leaves an earlier record whole rather than truncated.
+    """
+    staged = record.with_name(record.name + ".tmp")
+    try:
+        staged.write_text(
+            json.dumps(
+                {
+                    "parent": parent,
+                    "children": list(children),
+                    "parent_acs": parent_acs,
+                    "claims": children,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.replace(staged, record)
+    except OSError:
+        with contextlib.suppress(OSError):
+            staged.unlink()
+        raise
+
+
+def _record_parent(
+    args: argparse.Namespace, parent_acs: list[str], children: dict[str, list[str]]
+) -> str | None:
+    """The parent key a split record is written for, or None when none is asked for.
+
+    The flags come as a pair, and a record names a split, so it needs the
+    parent's ACs and children that each claim one, none of which may be the
+    parent itself, and a directory to land in. A map with no ACs reconciles
+    trivially, and the record would then assert a split nothing checked.
+    """
+    if args.parent is None and args.record is None:
+        return None
+    if args.parent is None or args.record is None:
+        raise ValueError("--parent and --record go together")
+    parent = args.parent.strip()
+    if not parent or "/" in parent or "\\" in parent:
+        raise ValueError("--parent expects the parent row's sprint-status key, got: %r" % args.parent)
+    if not children:
+        raise ValueError("--record writes a split, so it needs at least one --child")
+    if not parent_acs:
+        raise ValueError("--record writes a checked split, so it needs --parent-acs")
+    unclaiming = [row for row, claimed in children.items() if not claimed]
+    if unclaiming:
+        raise ValueError("--record: --child claims no AC: %s" % ", ".join(unclaiming))
+    if parent in children:
+        raise ValueError("--parent %s is also given as a --child" % parent)
+    if not Path(args.record).is_dir():
+        raise ValueError("--record expects an existing directory, got: %s" % args.record)
+    return parent
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -162,6 +233,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="{workflow.max_turns_per_story}; omit to skip the implausibility test",
     )
+    parser.add_argument(
+        "--parent",
+        default=None,
+        metavar="KEY",
+        help="the parent row's sprint-status key, which names the split record "
+        "(--record only)",
+    )
+    parser.add_argument(
+        "--record",
+        default=None,
+        metavar="DIR",
+        help="{workflow.implementation_artifacts}: when the claim map reconciles, "
+        "write the split record .split-<parent>.json there, which gate_eval.py "
+        "--rollup reads the parent through its children by; needs --parent, "
+        "--parent-acs, and --child rows that each claim an AC",
+    )
     return parser
 
 
@@ -171,7 +258,16 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         parent_acs = parse_ids(args.parent_acs, field="--parent-acs")
-        children = dict(_parse_child(spec) for spec in args.child)
+        parsed = [_parse_child(spec) for spec in args.child]
+        rows = [row for row, _ in parsed]
+        repeated = sorted({row for row in rows if rows.count(row) > 1})
+        if repeated:
+            # Merging them would keep the last claims and drop the rest, so a
+            # double claim or an unknown id in the dropped ones would vanish
+            # from the check, and from the split record written on it.
+            raise ValueError("--child given more than once for: %s" % ", ".join(repeated))
+        children = dict(parsed)
+        parent = _record_parent(args, parent_acs, children)
     except ValueError as exc:
         print("usage error: %s" % exc, file=sys.stderr)
         return 2
@@ -182,6 +278,16 @@ def main(argv: list[str] | None = None) -> int:
     # never checked.
     result["reconciled"] = bool(children)
     result.update(reconcile(parent_acs, children) if children else {})
+    if parent is not None:
+        result["record"] = None
+        if result["exactly_once"]:
+            record = Path(args.record) / (".split-%s.json" % parent)
+            try:
+                _write_record(record, parent, parent_acs, children)
+            except OSError as exc:
+                print("error: cannot write the split record %s: %s" % (record, exc), file=sys.stderr)
+                return 2
+            result["record"] = str(record)
 
     print(json.dumps(result, indent=2, sort_keys=True))
     if children and not result["exactly_once"]:

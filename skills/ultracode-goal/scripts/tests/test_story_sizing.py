@@ -191,3 +191,143 @@ def test_child_without_an_equals_is_a_usage_error() -> None:
     code, _ = _run("--parent-acs", "AC-1", "--child", "a AC-1")
 
     assert code == 2
+
+
+# ---------------------------------------------------------------------------
+# The split record gate_eval.py --rollup reads a decomposed parent through.
+
+
+def test_a_reconciled_split_writes_its_record(tmp_path: Path) -> None:
+    code, payload = _run(
+        "--parent", "7-1-the-login", "--record", str(tmp_path),
+        "--parent-acs", "1 2 3", "--child", "7-1b=3", "--child", "7-1a=1,2",
+    )
+
+    record = tmp_path / ".split-7-1-the-login.json"
+    assert code == 0
+    assert payload is not None and payload["record"] == str(record)
+    assert json.loads(record.read_text(encoding="utf-8")) == {
+        "parent": "7-1-the-login",
+        "children": ["7-1b", "7-1a"],
+        "parent_acs": ["1", "2", "3"],
+        "claims": {"7-1b": ["3"], "7-1a": ["1", "2"]},
+    }, "the children keep the order given, which is the order of their rows"
+
+
+def test_a_failing_split_writes_no_record_and_keeps_an_earlier_one(tmp_path: Path) -> None:
+    """A record is evidence the claim map reconciled, so a failing run never
+    writes one, and never overwrites the one a reconciling run left."""
+    record = tmp_path / ".split-7-1.json"
+    code, payload = _run("--parent", "7-1", "--record", str(tmp_path), "--parent-acs", "1 2", "--child", "7-1a=1")
+    assert code == 1
+    assert payload is not None and payload["record"] is None
+    assert not record.exists()
+
+    assert _run("--parent", "7-1", "--record", str(tmp_path), "--parent-acs", "1", "--child", "7-1a=1")[0] == 0
+    before = record.read_text(encoding="utf-8")
+    assert _run("--parent", "7-1", "--record", str(tmp_path), "--parent-acs", "1 2", "--child", "7-1a=1")[0] == 1
+    assert record.read_text(encoding="utf-8") == before
+
+
+def test_a_new_reconciled_split_replaces_the_record(tmp_path: Path) -> None:
+    assert _run("--parent", "7-1", "--record", str(tmp_path), "--parent-acs", "1 2", "--child", "7-1a=1,2")[0] == 0
+    assert _run(
+        "--parent", "7-1", "--record", str(tmp_path), "--parent-acs", "1 2",
+        "--child", "7-1a=1", "--child", "7-1b=2",
+    )[0] == 0
+    record = json.loads((tmp_path / ".split-7-1.json").read_text(encoding="utf-8"))
+    assert record["children"] == ["7-1a", "7-1b"]
+
+
+def test_without_the_record_flags_the_output_is_unchanged() -> None:
+    code, payload = _run("--parent-acs", "1", "--child", "7-1a=1")
+    assert code == 0
+    assert payload is not None and "record" not in payload
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("--parent", "7-1", "--parent-acs", "1", "--child", "7-1a=1"),
+        ("--record", "{dir}", "--parent-acs", "1", "--child", "7-1a=1"),
+        ("--parent", "7-1", "--record", "{dir}", "--parent-acs", "1"),
+        ("--parent", "7-1", "--record", "{dir}", "--parent-acs", "1", "--child", "7-1=1"),
+        ("--parent", "  ", "--record", "{dir}", "--parent-acs", "1", "--child", "7-1a=1"),
+        ("--parent", "../7-1", "--record", "{dir}", "--parent-acs", "1", "--child", "7-1a=1"),
+        ("--parent", "..\\7-1", "--record", "{dir}", "--parent-acs", "1", "--child", "7-1a=1"),
+        ("--parent", " 7-1a ", "--record", "{dir}", "--parent-acs", "1", "--child", "7-1a=1"),
+        ("--parent", "7-1", "--record", "{dir}/missing", "--parent-acs", "1", "--child", "7-1a=1"),
+        ("--parent", "7-1", "--record", "{dir}/a-file", "--parent-acs", "1", "--child", "7-1a=1"),
+        ("--parent", "7-1", "--record", "{dir}", "--parent-acs", "", "--child", "7-1a=AC-1"),
+        ("--parent", "7-1", "--record", "{dir}", "--parent-acs", "1", "--child", "7-1a=1", "--child", "7-1b="),
+    ],
+    ids=[
+        "parent-alone", "record-alone", "no-child", "parent-is-a-child", "blank-parent",
+        "parent-path", "parent-backslash-path", "padded-parent-is-a-child", "missing-dir",
+        "record-is-a-file", "no-parent-acs", "child-claims-nothing",
+    ],
+)
+def test_a_record_it_cannot_write_is_a_usage_error(tmp_path: Path, argv: tuple[str, ...]) -> None:
+    """Refused before anything is computed, with the cause named, rather than
+    left to fail at the write."""
+    (tmp_path / "a-file").write_text("x\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), *(a.replace("{dir}", str(tmp_path)) for a in argv)],
+        capture_output=True, text=True,
+    )
+
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    assert proc.stderr.startswith("usage error: "), proc.stderr
+    assert not list(tmp_path.glob(".split-*"))
+
+
+def test_a_padded_parent_names_the_record_by_its_key(tmp_path: Path) -> None:
+    code, payload = _run("--parent", " 7-1 ", "--record", str(tmp_path), "--parent-acs", "1", "--child", "7-1a=1")
+
+    assert code == 0
+    record = json.loads((tmp_path / ".split-7-1.json").read_text(encoding="utf-8"))
+    assert record["parent"] == "7-1"
+
+
+def test_a_child_given_twice_is_a_usage_error() -> None:
+    """Merging two --child flags for one row kept the last claims and dropped
+    the rest, so a double claim or an unknown id in the dropped ones left the
+    check, and the split record written on it."""
+    code, payload = _run(
+        "--parent-acs", "AC-1,AC-2", "--child", "7-1a=AC-1,AC-2,AC-9", "--child", "7-1b=AC-2", "--child", "7-1a=AC-1",
+    )
+
+    assert code == 2
+    assert payload is None
+
+
+def test_a_record_that_cannot_be_written_is_exit_2_not_a_traceback(tmp_path: Path) -> None:
+    (tmp_path / ".split-7-1.json").mkdir()
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--parent", "7-1", "--record", str(tmp_path), "--parent-acs", "1", "--child", "7-1a=1"],
+        capture_output=True, text=True,
+    )
+
+    assert proc.returncode == 2
+    assert proc.stdout == ""
+    assert "cannot write the split record" in proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert not (tmp_path / ".split-7-1.json.tmp").exists(), "the staged copy is cleaned up"
+
+
+def test_a_failed_rewrite_leaves_the_earlier_record_whole(tmp_path: Path) -> None:
+    """The record is written beside itself and moved into place, so a write
+    that fails cannot leave a truncated record the roll-up then refuses."""
+    record = tmp_path / ".split-7-1.json"
+    assert _run("--parent", "7-1", "--record", str(tmp_path), "--parent-acs", "1 2", "--child", "7-1a=1,2")[0] == 0
+    before = record.read_text(encoding="utf-8")
+    (tmp_path / ".split-7-1.json.tmp").mkdir()
+
+    code, payload = _run(
+        "--parent", "7-1", "--record", str(tmp_path), "--parent-acs", "1 2", "--child", "7-1a=1", "--child", "7-1b=2",
+    )
+
+    assert code == 2
+    assert payload is None
+    assert record.read_text(encoding="utf-8") == before
