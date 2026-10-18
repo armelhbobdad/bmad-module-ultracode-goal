@@ -397,7 +397,7 @@ def test_step4_runs_the_check_between_staging_and_the_commit():
 
 def test_execute_carries_the_ignored_tree_rule_for_a_resume():
     text = EXECUTE.read_text(encoding="utf-8")
-    start = text.index("\n1. `bmad-create-story`")
+    start = text.index("\n1. `ucg-create-story`")
     end = text.index("\n2. Run the tests, lint, and build", start)
     between = text[start:end]
     assert "**On a gitignored artifact tree** (`impl_artifacts_tracked: false`, which preflight step 1 reports" in between

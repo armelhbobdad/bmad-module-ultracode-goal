@@ -813,7 +813,7 @@ def test_epic_prefix_files_do_not_cover_unrelated_keys(tmp_path):
 def test_number_only_filename_covers_its_key(tmp_path):
     """The permissive direction, and the false positive it exists to prevent.
 
-    `bmad-create-story` writes `{story_key}.md` from whatever the operator
+    `ucg-create-story` writes `{story_key}.md` from whatever the operator
     supplied, so asking for story `7-2` yields `7-2.md` while sprint-planning's
     generated key is `7-2-adapter`. `_story_files` resolves that file via the
     Epic-prefix arm and the kernel reads and AC-grades it. A coverage rule keyed

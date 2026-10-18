@@ -10,10 +10,10 @@ resume rule costs on every `--max-stories` spawn. These tests pin the four
 properties that make it trustworthy rather than merely convenient:
 
 1. FAIL-CLOSED ARMING. Exit 0 requires the epic branch, both hooks with the
-   all-tools PreToolUse matcher, all five injected env vars, and the two BMAD
+   all-tools PreToolUse matcher, all five injected env vars, and the two UCG
    story skills the run delegates to. A missing or unreadable settings file, a
    `Bash`-only matcher (the observed inert-control state), an uninjected var,
-   or a story skill a BMAD update removed between spawns each fail the exit,
+   or a story skill removed between spawns each fail the exit,
    with a reason naming it.
 2. LEGITIMATE ARMINGS PASS. preflight step 5 permits the env vars either in the
    hook command strings or in the process env the hooks inherit; fail-closing
@@ -82,9 +82,9 @@ def _repo(tmp_path: Path, branch: str = "ultracode/epic-7") -> Path:
     _git(root, "add", "seed.txt")
     _git(root, "commit", "-q", "-m", "seed")
     _git(root, "checkout", "-q", "-b", branch)
-    # The BMAD story skills the run delegates to, where the BMAD installer
-    # copies them for Claude Code.
-    for skill_id in ("bmad-create-story", "bmad-dev-story"):
+    # The story skills the run delegates to, where UCG's installer copies
+    # them for Claude Code.
+    for skill_id in ("ucg-create-story", "ucg-dev-story"):
         skill_dir = root / ".claude" / "skills" / skill_id
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(f"---\nname: {skill_id}\n---\n", encoding="utf-8")
@@ -233,18 +233,19 @@ def test_missing_settings_file_is_not_armed(tmp_path: Path) -> None:
 
 
 def test_a_story_skill_removed_since_launch_fails_the_resume(tmp_path: Path) -> None:
-    """A BMAD update between spawns (answering the installer's recommended No to
-    keeping its deprecated shims) removes bmad-dev-story from an armed run."""
+    """ucg-dev-story goes missing from an armed run between spawns (a manual
+    deletion, or an install interrupted between removing and re-copying the
+    UCG skills)."""
     root = _repo(tmp_path)
     _arm(root)
-    shutil.rmtree(root / ".claude" / "skills" / "bmad-dev-story")
+    shutil.rmtree(root / ".claude" / "skills" / "ucg-dev-story")
     code, out = _run(root)
     assert code == 1 and out["armed"] is False
     skills = out["checks"]["skills"]
-    assert skills["installed"] == {"bmad-create-story": True, "bmad-dev-story": False}
-    assert skills["missing"] == ["bmad-dev-story"]
+    assert skills["installed"] == {"ucg-create-story": True, "ucg-dev-story": False}
+    assert skills["missing"] == ["ucg-dev-story"]
     assert skills["ok"] is False
-    assert any(r.startswith("BMAD skill(s) not installed: bmad-dev-story.") for r in out["reasons"])
+    assert any(r.startswith("UCG story skill(s) not installed: ucg-dev-story.") for r in out["reasons"])
 
 
 def test_an_unexpandable_config_dir_still_emits_the_manifest(tmp_path: Path) -> None:
@@ -272,7 +273,7 @@ def test_an_unborn_epic_branch_is_not_armed(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     root.mkdir()
     _git(root, "init", "-q", "-b", "ultracode/epic-7")
-    for skill_id in ("bmad-create-story", "bmad-dev-story"):
+    for skill_id in ("ucg-create-story", "ucg-dev-story"):
         skill_dir = root / ".claude" / "skills" / skill_id
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(f"---\nname: {skill_id}\n---\n", encoding="utf-8")

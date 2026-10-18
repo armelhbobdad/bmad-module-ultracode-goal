@@ -6,13 +6,14 @@ Future work planned for UltraCode Goal. Items here are **directional, not a prom
 
 ## Story creation and implementation on `bmad-build`
 
-UCG delegates story creation to `bmad-create-story` and implementation to `bmad-dev-story`. BMAD Method 6.11 deprecated both in favour of `bmad-build`, 6.12 made them opt-in shims (a fresh install leaves them out unless asked for with `--shims`), and BMAD's v7 removes them. Until then, preflight refuses to launch without them, which stops a run from quietly working around a missing skill; at v7 that check has no fix left to offer. Moving the delegation is a contract change, not a rename:
+UCG delegates story creation to `ucg-create-story` and implementation to `ucg-dev-story`, its own copies of BMAD Method's `bmad-create-story` and `bmad-dev-story`. BMAD 6.11 deprecated those two in favour of `bmad-build`, 6.12 made them opt-in shims and v7 removes them, so UCG ships the workflows itself and a run needs no shim. The cost is two workflows UCG now maintains while upstream has frozen them. Moving the delegation onto `bmad-build` remains the direction, and it is a contract change, not a rename:
 
 - `bmad-build` writes `spec-<slug>.md` with a frontmatter status. Its full route writes unnumbered Given/When/Then criteria, and its oneshot route for small changes writes no acceptance criteria at all. The formalize check, by contrast, finds story files by their story-key name and parses numbered acceptance criteria, which Execute also cites by number.
 - On its full route, `bmad-build` stops for plan approval unless it is handed a spec already at `ready-for-dev`, `in-progress` or `in-review` (a `done` spec is read as context and planning starts over). It takes the lighter oneshot route only when the change has no intent gaps, nothing irreversible and a small footprint; that route skips plan approval but can still stop for a human, when a review finding needs a fix that is not simple, when review subagents cannot be launched, or when implementation hits a replan trigger that sends it back to the plan checkpoint. Both routes commit inside the skill, where UCG commits at green behind its PreToolUse guard. `bmad-build-auto` is BMAD's unattended variant and carries the same commit question.
+- `bmad-build-auto` also requires a clean working tree when it finalizes (and when it starts on a fresh dispatch), while Define-Done leaves every in-scope story's red-phase tests uncommitted until that story goes green. A `done` spec gets only a review pass, so the gate's failing reasons have no way into implementation unless UCG rewrites the spec's status, and a decomposed child would need a spec file of its own, which the decomposition conventions forbid.
 - `bmad-build` first ships in BMAD Method 6.11, so the move sets a BMAD minimum and ends support for 6.10 and earlier.
 
-It ships as a major release, after a design pass and a validating run on a real Epic, and before BMAD's v7 cut.
+It ships as a major release, after a design pass and a validating run on a real Epic.
 
 ## Parallel execution: retired, not promoted
 

@@ -20,7 +20,7 @@ anti-zombie strip-then-reappend, mirroring ``merge_help_csv.py``:
 The landing channel is the NESTED ``workflow.persistent_facts`` path, because
 every real BMad customize target nests ``persistent_facts`` under a
 ``[workflow]`` table (verified: ``.claude/skills/{bmad-prd,bmad-architecture,
-bmad-create-epics-and-stories,bmad-create-story}/customize.toml``). The runtime
+bmad-create-epics-and-stories,ucg-create-story}/customize.toml``). The runtime
 ``deep_merge`` only lands an overlay's items in
 ``resolved['workflow']['persistent_facts']`` when the overlay nests them under
 ``[workflow]`` too; writing a TOP-LEVEL ``persistent_facts`` key would be a

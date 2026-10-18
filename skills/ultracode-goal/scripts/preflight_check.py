@@ -18,9 +18,9 @@ What counts as a mechanical blocker (each adds 1 to `budget`):
     minimum versions the run depends on (`/goal`, dynamic workflows, auto memory),
   - no test framework is detected (no playwright/cypress/jest/vitest config,
     no pytest config/conftest.py, and no real package.json `test` script),
-  - a BMAD skill the run delegates story creation or implementation to
-    (`bmad-create-story`, `bmad-dev-story`) is not installed where Claude Code
-    loads skills,
+  - a story skill the run delegates story creation or implementation to
+    (`ucg-create-story`, `ucg-dev-story`, which UCG ships) is not installed
+    where Claude Code loads skills,
   - HEAD has no commit yet (a fresh `git init`, or an orphan branch): the
     operator commits a baseline on the base branch first, because the run never
     makes the commit its Epic branch would start from,
@@ -142,16 +142,17 @@ DEFAULT_PROTECTED = ("main", "master")
 # in-scope decision (not-yet-done) reads off the leading count.
 STORY_STATUSES = ("done", "in-progress", "ready-for-dev", "review", "backlog")
 
-# The BMAD skills the run delegates story creation (Stage 2 remediation, Stage 3)
-# and implementation (Stage 4) to. BMAD Method 6.12 ships both as deprecated
-# shims: a fresh install leaves them out unless asked for (--shims, or Yes at the
-# installer's shim prompt), and an update removes them when told not to keep
-# them, which its prompt recommends. The rest of the BMAD toolbox the run uses
-# installs unconditionally, so only these two are probed.
+# The story skills the run delegates story creation (Stage 2 remediation, Stage 3)
+# and implementation (Stage 4) to. UCG ships both, adapted from BMAD Method's
+# bmad-create-story and bmad-dev-story, which 6.12 made deprecated shims (a fresh
+# install leaves them out unless asked for) and v7 removes. UCG's installer copies
+# them beside the ultracode-goal skill, so a missing one means a partial or older
+# UCG install. The BMAD toolbox the run uses installs without shims, so no BMAD
+# skill is probed.
 # (bmad-generate-project-context is a shim too: from 6.12 it forwards to
 # bmad-project-context, which writes a block into AGENTS.md rather than a
 # project-context.md. The project-context count is advisory and never blocks.)
-BMAD_STORY_SKILLS = ("bmad-create-story", "bmad-dev-story")
+STORY_SKILLS = ("ucg-create-story", "ucg-dev-story")
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
@@ -544,7 +545,7 @@ def _project_context_count(project_root: Path) -> int:
 
 def _skill_roots(project_root: Path) -> tuple[Path, ...]:
     """Where Claude Code loads a skill that a bare-name invocation reaches: the
-    project's .claude/skills (where the BMAD installer copies BMAD's skills)
+    project's .claude/skills (where the UCG and BMAD installers copy skills)
     and the personal skills dir, under $CLAUDE_CONFIG_DIR when that relocates
     Claude Code's home-directory files, else ~/.claude."""
     roots = [project_root / ".claude" / "skills"]
@@ -571,87 +572,35 @@ def _skill_file_present(path: Path) -> bool:
         return False
 
 
-def _bmad_skills_installed(project_root: Path) -> dict[str, bool]:
+def _story_skills_installed(project_root: Path) -> dict[str, bool]:
     """Per story skill, whether a SKILL.md exists under any skill root.
 
-    The skill directory is the evidence, not BMAD's skill-manifest.csv: the CSV
-    lists every installed skill whichever tools the install selected, so a row
-    does not prove Claude Code can load it, and a skill directory without its
-    SKILL.md is not a skill Claude Code loads.
+    The skill directory is the evidence, not an install manifest: a manifest
+    row does not prove Claude Code can load the skill, and a skill directory
+    without its SKILL.md is not a skill Claude Code loads.
     """
     roots = _skill_roots(project_root)
     return {
         skill_id: any(_skill_file_present(root / skill_id / "SKILL.md") for root in roots)
-        for skill_id in BMAD_STORY_SKILLS
+        for skill_id in STORY_SKILLS
     }
 
 
-def _bmad_install(project_root: Path) -> dict:
-    """installation.version and installation.installShims from BMAD's
-    _bmad/_config/manifest.yaml, read only to word the missing-skill fix.
-
-    installShims first appears in 6.12 and is written only when the selected
-    modules ship shims, so None means "not recorded", never "declined". A line
-    read is enough for the flat, two-space `installation:` block BMAD writes.
-    """
-    out: dict = {"version": None, "install_shims": None}
-    try:
-        text = (project_root / "_bmad" / "_config" / "manifest.yaml").read_text(
-            encoding="utf-8"
-        )
-    except (OSError, UnicodeDecodeError):
-        return out
-    in_installation = False
-    for raw in text.splitlines():
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        if not raw[0].isspace():
-            in_installation = _strip_inline_comment(raw) == "installation:"
-            continue
-        if not in_installation:
-            continue
-        key, sep, value = raw.strip().partition(":")
-        if not sep:
-            continue
-        value = _strip_inline_comment(value).strip('"').strip("'")
-        if key == "version" and value:
-            out["version"] = value
-        elif key == "installShims" and value.lower() in ("true", "false"):
-            out["install_shims"] = value.lower() == "true"
-    return out
-
-
-def _bmad_skills_detail(project_root: Path, missing: list[str], install: dict) -> str:
+def _story_skills_detail(project_root: Path, missing: list[str]) -> str:
     """One line (the headless `reason` flattens a blocker to one): what is
     missing, why the run cannot proceed without it, and the fix."""
-    detail = (
-        "BMAD skill(s) not installed: %s. The run delegates story creation to "
-        "bmad-create-story and implementation to bmad-dev-story, and has no "
-        "substitute for either (looked for <skill>/SKILL.md under %s)."
+    return (
+        "UCG story skill(s) not installed: %s. The run delegates story creation "
+        "to ucg-create-story and implementation to ucg-dev-story, which UCG's "
+        "installer copies beside the ultracode-goal skill, and has no substitute "
+        "for either (looked for <skill>/SKILL.md under %s). Operator fix (the run "
+        "never installs them itself), from the project root: "
+        "`npx bmad-module-ultracode-goal update`, or `install` where UCG was never "
+        "installed in the project (a plugin-marketplace install ships only the "
+        "ultracode-goal skill), so both land in .claude/skills. BMAD's deprecated "
+        "bmad-create-story and bmad-dev-story shims are not a stand-in."
         % (", ".join(missing), " and ".join(str(r) for r in _skill_roots(project_root)))
     )
-    if install["install_shims"] is False:
-        version = install["version"]
-        package = "bmad-method@%s" % version if version else "bmad-method"
-        # --directory is what makes the installer non-interactive here: --yes
-        # alone still prompts for the directory, and without a TTY that prompt
-        # exits 0 having installed nothing.
-        return detail + (
-            " BMAD Method %s was installed without its deprecated shim skills "
-            "(installShims: false in _bmad/_config/manifest.yaml), and from 6.12 "
-            "these two ship only as shims. Operator fix (the run never installs "
-            "them itself), from the project root: "
-            "`npx %s install --directory . --shims --yes`."
-            % (version or "(version not recorded)", package)
-        )
-    return detail + (
-        " Operator fix (the run never installs them itself): re-run the BMAD "
-        "Method installer from the project root with claude-code among its "
-        "tools, adding --shims on BMAD 6.12 or later, so both skills land in "
-        ".claude/skills (BMAD before 6.2 names them differently and needs an "
-        "upgrade)."
-    )
-
 
 def build_report(
     project_root: Path,
@@ -679,8 +628,7 @@ def build_report(
     test_artifacts_dirs = _test_artifacts_dirs(artifacts_root)
     sprint_status_present = _sprint_status_present(project_root, impl_artifacts)
     project_context_count = _project_context_count(project_root)
-    bmad_skills = _bmad_skills_installed(project_root)
-    bmad_install = _bmad_install(project_root)
+    story_skills = _story_skills_installed(project_root)
     impl_artifacts_tracked = _impl_artifacts_tracked(project_root, impl_artifacts)
 
     checks = {
@@ -697,8 +645,7 @@ def build_report(
         "sprint_status_present": sprint_status_present,
         "project_context_count": project_context_count,
         "tea_flags": tea_flags,
-        "bmad_skills": bmad_skills,
-        "bmad_install": bmad_install,
+        "story_skills": story_skills,
         "impl_artifacts_tracked": impl_artifacts_tracked,
     }
 
@@ -730,17 +677,17 @@ def build_report(
             }
         )
 
-    missing_skills = [s for s, present in bmad_skills.items() if not present]
+    missing_skills = [s for s, present in story_skills.items() if not present]
     if missing_skills:
         blockers.append(
             {
-                "id": "bmad_skills",
+                "id": "story_skills",
                 "kind": "dependency",
                 "severity": "high",
-                "detail": _bmad_skills_detail(project_root, missing_skills, bmad_install),
-                # Installing BMAD skills is the operator's call (BMAD itself
-                # recommends against keeping its shims); the remediation pass
-                # neither installs them nor works around their absence.
+                "detail": _story_skills_detail(project_root, missing_skills),
+                # Re-running UCG's installer is the operator's call; the
+                # remediation pass neither installs the skills nor works
+                # around their absence.
                 "remediable": False,
             }
         )
@@ -950,11 +897,12 @@ def _assert_hook_env(project_root: Path) -> dict:
     return {"sources": sources, "missing": missing, "ok": not missing}
 
 
-def _assert_bmad_skills(project_root: Path) -> dict:
+def _assert_story_skills(project_root: Path) -> dict:
     """The story skills a resumed spawn will delegate to, still installed. A
-    BMAD update between spawns (its prompt recommends dropping the shims) can
-    remove them from a run that passed preflight."""
-    installed = _bmad_skills_installed(project_root)
+    manual deletion between spawns, or a UCG install or update interrupted
+    between removing the UCG skills and copying them back, can leave a run
+    that passed preflight without them."""
+    installed = _story_skills_installed(project_root)
     missing = [s for s, present in installed.items() if not present]
     return {"installed": installed, "missing": missing, "ok": not missing}
 
@@ -1128,7 +1076,7 @@ def build_assert_armed(
     branch = _assert_branch(project_root, epic_branch_prefix, protected)
     hooks = _assert_hooks(project_root)
     hook_env = _assert_hook_env(project_root)
-    skills = _assert_bmad_skills(project_root)
+    skills = _assert_story_skills(project_root)
     checks: dict = {
         "branch": branch,
         "hooks": hooks,
@@ -1165,9 +1113,7 @@ def build_assert_armed(
             % ", ".join(hook_env["missing"])
         )
     if not skills["ok"]:
-        reasons.append(
-            _bmad_skills_detail(project_root, skills["missing"], _bmad_install(project_root))
-        )
+        reasons.append(_story_skills_detail(project_root, skills["missing"]))
     armed = branch["ok"] and hooks["ok"] and hook_env["ok"] and skills["ok"]
     return {"armed": armed, "checks": checks, "reasons": reasons}
 

@@ -34,11 +34,13 @@ function shippedCopyFilter(src) {
 }
 
 // The four planning-workflow fragments Step 6b enrolls. Each maps to a
-// real BMAD skill whose presence is probed before merging, and to a fragment
-// under skills/ultracode-goal/assets/ucg-awareness/{skill}.toml.
+// skill whose presence is probed before merging (three BMAD planning skills,
+// and ucg-create-story, the story skill UCG ships in place of BMAD's
+// deprecated bmad-create-story), and to a fragment under
+// skills/ultracode-goal/assets/ucg-awareness/{skill}.toml.
 // The TEA and dev/review-cycle fragments are
 // deliberately NOT enrolled here.
-const STEP6B_PLANNING_FRAGMENTS = ['bmad-prd', 'bmad-architecture', 'bmad-create-epics-and-stories', 'bmad-create-story'];
+const STEP6B_PLANNING_FRAGMENTS = ['bmad-prd', 'bmad-architecture', 'bmad-create-epics-and-stories', 'ucg-create-story'];
 
 class Installer {
   constructor() {

@@ -945,7 +945,7 @@ function spyClackSinks() {
   };
 }
 
-const PLANNING_SKILLS = ['bmad-prd', 'bmad-architecture', 'bmad-create-epics-and-stories', 'bmad-create-story'];
+const PLANNING_SKILLS = ['bmad-prd', 'bmad-architecture', 'bmad-create-epics-and-stories', 'ucg-create-story'];
 
 async function testStep6bUcgAwareness() {
   console.log(`${colors.yellow}Test Suite 8: Step 6b — UCG-awareness shaping${colors.reset}\n`);
@@ -1062,13 +1062,14 @@ async function testStep6bUcgAwareness() {
   // --- present-only enumeration -> stamped overlays --------------------
   // Anti-vacuous twin: a fifth non-planning skill (bmad-dev-story) present is
   // NOT enrolled (only the four planning targets), and an absent planning skill
-  // (bmad-create-story) is skipped.
+  // (bmad-create-epics-and-stories) is skipped. ucg-create-story is always
+  // present: UCG's own install copies it before this step.
   {
     const projectDir = await makeTempDir('s6b-present-only');
     try {
       await seedEngine(projectDir);
       // present: bmad-prd, bmad-architecture (+ a non-planning bmad-dev-story);
-      // absent: bmad-create-story, bmad-create-epics-and-stories.
+      // absent: bmad-create-epics-and-stories (ucg-create-story ships with UCG).
       await seedSkills(projectDir, ['bmad-prd', 'bmad-architecture', 'bmad-dev-story']);
       const installer = new Installer();
       const restore = suppressConsole();
@@ -1097,7 +1098,18 @@ async function testStep6bUcgAwareness() {
       assert(archText.includes('block = "ucg-awareness"'), 'bmad-architecture.toml carries block = "ucg-awareness"');
       assert(/persistent_facts/.test(archText), 'bmad-architecture.toml carries persistent_facts');
 
-      assert(!(await fs.pathExists(path.join(customDir, 'bmad-create-story.toml'))), 'absent bmad-create-story skipped (no overlay)');
+      assert(
+        !(await fs.pathExists(path.join(customDir, 'bmad-create-epics-and-stories.toml'))),
+        'absent bmad-create-epics-and-stories skipped (no overlay)',
+      );
+      assert(
+        await fs.pathExists(path.join(customDir, 'ucg-create-story.toml')),
+        'ucg-create-story.toml written (UCG installs the skill itself)',
+      );
+      assert(
+        !(await fs.pathExists(path.join(customDir, 'bmad-create-story.toml'))),
+        'Twin: no overlay for the deprecated bmad-create-story shim',
+      );
       assert(
         !(await fs.pathExists(path.join(customDir, 'bmad-dev-story.toml'))),
         'Twin: non-planning bmad-dev-story NOT enrolled (only the four planning targets)',

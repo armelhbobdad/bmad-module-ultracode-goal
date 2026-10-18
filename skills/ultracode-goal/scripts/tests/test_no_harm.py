@@ -53,12 +53,13 @@ WORKFLOW_KEY = "workflow"
 CHANNEL = "persistent_facts"
 
 # The four planning targets (live PRD surface, never the deprecated
-# bmad-create-prd / bmad-edit-prd shims).
+# bmad-create-prd / bmad-edit-prd shims; ucg-create-story is UCG's own story
+# skill, adapted from BMAD's deprecated bmad-create-story shim).
 PLANNING_SKILLS = (
     "bmad-prd",
     "bmad-architecture",
     "bmad-create-epics-and-stories",
-    "bmad-create-story",
+    "ucg-create-story",
 )
 REAL_FRAGMENTS = {skill: ASSETS_DIR / f"{skill}.toml" for skill in PLANNING_SKILLS}
 REAL_PRD_FRAGMENT = REAL_FRAGMENTS["bmad-prd"]
