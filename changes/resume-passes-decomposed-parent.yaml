@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  A resumed run no longer re-enters Execute at a decomposed parent. The resume cursor, the first story whose last logged gate verdict is not `advance`, could land on a parent the run had split at sizing, which is `done` and never gets a verdict of its own. It now passes over a `done` row whose split is recorded, and the story loop leaves it out, as it already did for a parent preflight set `done`.

@@ -1,0 +1,4 @@
+type: changed
+scope: ultracode-goal, ucg-formalize
+summary: |
+  Preflight, `/ucg-formalize` and Define-Done now count a split record (`.split-<parent key>.json` beside `sprint-status.yaml`, written by `scripts/story_sizing.py --record`) as a recorded split, beside the child row's AC citation and the decision log. Preflight's remediation pass also writes the record for every split of a parent with a row that it finds recorded only by a citation or the decision log, so the Epic-level roll-up reads that parent through its children instead of refusing it at the end of the run, and `/ucg-formalize` writes it for each such split its own remediation repairs. On an isolated track the record goes beside that track's `sprint-status.yaml`. A split whose `story_sizing.py` run does not exit 0 gets no record and is logged with what the script printed, and the Epic gate still refuses its parent. A key with none of the three records is still a story of its own.
