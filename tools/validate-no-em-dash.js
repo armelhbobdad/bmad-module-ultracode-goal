@@ -19,8 +19,10 @@
  * Not checked: CHANGELOG.md, whose older blocks come from commit subjects
  * and release narratives older than this rule (new blocks are rendered from
  * change fragments, which tools/changes.js checks); any package-lock.json, which npm
- * generates; and the reference skills under skf-skills/, which a generator
- * writes (CONTRIBUTING.md, Reference skills).
+ * generates; the reference skills under skf-skills/, which a generator
+ * writes (CONTRIBUTING.md, Reference skills); and the Python files of BMAD's
+ * customization engine vendored verbatim as test fixtures, which are refreshed
+ * with cp (the READMEs beside them are ours and stay checked).
  *
  * Base branch for the added-lines and commit checks: --base <ref>, else
  * $EM_DASH_BASE, else origin/$GITHUB_BASE_REF on a pull request, else
@@ -46,6 +48,7 @@ const CLEAN_SET = ['README.md', 'docs/', 'website/'];
 const CLEAN_SET_EXCLUDED = ['docs/_internal/'];
 const GENERATED = new Set(['CHANGELOG.md', 'package-lock.json']);
 const GENERATED_DIRS = ['skf-skills/'];
+const VENDORED_DIRS = ['skills/ultracode-goal/scripts/tests/fixtures/engine/', 'skills/ultracode-goal/scripts/tests/fixtures/engine-6.12/'];
 const HINT = 'rewrite it with a colon, a comma, parentheses or a new sentence';
 
 function argValue(argv, flag) {
@@ -58,8 +61,13 @@ function hasEmDash(line) {
   return EM_DASH.test(line);
 }
 
+/** True for a Python file directly inside a vendored engine folder. */
+function isVendored(file) {
+  return file.endsWith('.py') && VENDORED_DIRS.some((prefix) => file.startsWith(prefix) && !file.slice(prefix.length).includes('/'));
+}
+
 function isGenerated(file) {
-  return GENERATED.has(path.posix.basename(file)) || GENERATED_DIRS.some((prefix) => file.startsWith(prefix));
+  return GENERATED.has(path.posix.basename(file)) || GENERATED_DIRS.some((prefix) => file.startsWith(prefix)) || isVendored(file);
 }
 
 /** True for repository-relative POSIX paths in the published, fully clean set. */

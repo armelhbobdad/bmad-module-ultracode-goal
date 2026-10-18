@@ -172,9 +172,10 @@ class Installer {
         log.warn(msg);
       };
       try {
-        // The merge engine deep_merge is imported by
-        // merge_customization.py from {projectDir}/_bmad/scripts/resolve_customization.py.
-        // If it is absent/older, no-op Step 6b entirely (verify-only degrade):
+        // merge_customization.py imports BMAD's merge engine from
+        // {projectDir}/_bmad/scripts/: deep_merge from resolve_customization.py
+        // before BMAD 6.11, structural_merge from config_utils.py from 6.11.
+        // If resolve_customization.py is absent, no-op Step 6b entirely (verify-only degrade):
         // write nothing, warn once. The standalone /ucg-formalize gate +
         // formalize_check.py remain installed.
         const enginePath = path.join(projectDir, '_bmad', 'scripts', 'resolve_customization.py');
@@ -274,7 +275,8 @@ class Installer {
    * Run via `uv run --script` so its PEP-723 block auto-provisions tomli-w.
    *
    * Exit-code lanes (the merge family, NOT gate_eval): 0 = success/skip/
-   * conflict, 1 = validation, 2 = missing engine. A non-zero exit or an
+   * conflict, 1 = validation, 2 = missing engine (uv and Python also exit 2
+   * when they cannot start the tool, so its stderr is kept). A non-zero exit or an
    * unparseable payload throws — the Step-6b try-catch degrades it to a warning.
    *
    * @param {string} targetPath - Absolute path to _bmad/custom/{skill}.toml
@@ -294,7 +296,7 @@ class Installer {
     // failures the caller degrades. Exit 0 = success/skip/conflict (JSON on
     // stdout).
     if (result.status === 2) {
-      throw new Error('merge engine (resolve_customization.py) missing');
+      throw new Error(`merge engine missing or merge tool could not start (exit 2): ${(result.stderr || '').trim()}`);
     }
     if (result.status === 1) {
       throw new Error(`merge validation error: ${(result.stderr || '').trim()}`);

@@ -255,6 +255,29 @@ test('a reference-skill path outside skf-skills/ is checked', () => {
   assert.match(out, /skills\/skf-skills\/note\.md:1:/);
 });
 
+test('the vendored engine scripts are not checked, the README beside them is', () => {
+  const dir = 'skills/ultracode-goal/scripts/tests/fixtures/engine-6.12';
+  const root = makeRepo(BASE);
+  write(root, { [`${dir}/resolve_customization.py`]: `# upstream ${D} comment\n` });
+  commitAll(root, 'test: vendor the engine');
+  assert.strictEqual(run(root).status, 0);
+
+  write(root, { [`${dir}/README.md`]: `# Engine ${D} fixture\n` });
+  commitAll(root, 'test: describe the engine');
+  const { status, out } = run(root);
+  assert.strictEqual(status, 1, out);
+  assert.match(out, /engine-6\.12\/README\.md:1:/);
+});
+
+test('a Python file below a vendored engine folder is checked', () => {
+  const root = makeRepo(BASE);
+  write(root, { 'skills/ultracode-goal/scripts/tests/fixtures/engine/nested/x.py': `# ours ${D} line\n` });
+  commitAll(root, 'test: add a helper');
+  const { status, out } = run(root);
+  assert.strictEqual(status, 1, out);
+  assert.match(out, /engine\/nested\/x\.py:1:/);
+});
+
 test('CHANGELOG.md is not checked', () => {
   const root = makeRepo(BASE);
   write(root, { 'CHANGELOG.md': `# Changelog\n\n- fix ${D} generated entry\n` });

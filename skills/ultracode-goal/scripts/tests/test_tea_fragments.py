@@ -3,11 +3,13 @@
 Case 1 channel discipline (only persistent_facts + [ucg] stamp; no superseded channel),
 Case 2 idempotent + reversible merge into workflow.persistent_facts via the VENDORED engine
 (CI-portable — never the gitignored .claude target; mirrors test_merge_customization.py's
-hermetic fixture pattern), Case 5 non-UCG inertness (no auto-fire) + deep_merge validity.
+hermetic fixture pattern), Case 5 non-UCG inertness (no auto-fire) + live-merge validity.
+Every engine test runs on both vendored engines (BMAD before 6.11, and 6.12).
 
 Fragments author persistent_facts TOP-LEVEL; merge_customization.py re-homes them into the
-target's nested [workflow].persistent_facts (verified: merge_customization.py:255-257). The
-phrase "under the [workflow] namespace" describes the TARGET landing, not the fragment.
+target's nested [workflow].persistent_facts (verified: the fragment_facts re-homing in its
+main()). The phrase "under the [workflow] namespace" describes the TARGET landing, not the
+fragment.
 """
 
 from __future__ import annotations
@@ -20,12 +22,18 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
+
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _ASSETS = _SKILL_ROOT / "assets" / "ucg-awareness"
 TEST_DESIGN = _ASSETS / "bmad-testarch-test-design.toml"
 NFR = _ASSETS / "bmad-testarch-nfr.toml"
 MERGE = _SKILL_ROOT / "scripts" / "merge_customization.py"
-REAL_ENGINE = Path(__file__).resolve().parent / "fixtures" / "engine" / "resolve_customization.py"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+ENGINES = {
+    "bmad-before-6.11": FIXTURES / "engine",
+    "bmad-6.12": FIXTURES / "engine-6.12",
+}
 
 HUMAN_FACT = "file:{project-root}/**/project-context.md"
 WORKFLOW_KEY = "workflow"
@@ -85,12 +93,18 @@ def test_fragments_target_only_persistent_facts_and_stamp():
 
 
 # Case 2 (CI-portable: vendored engine, never the gitignored .claude target) ----
-def _engine_tree(tmp_path: Path) -> Path:
+@pytest.fixture(params=sorted(ENGINES))
+def engine(request) -> str:
+    return request.param
+
+
+def _engine_tree(tmp_path: Path, engine: str) -> Path:
     custom = tmp_path / "_bmad" / "custom"
     scripts = tmp_path / "_bmad" / "scripts"
     custom.mkdir(parents=True, exist_ok=True)
     scripts.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(REAL_ENGINE, scripts / "resolve_customization.py")
+    for source in sorted(ENGINES[engine].glob("*.py")):
+        shutil.copy2(source, scripts / source.name)
     return custom
 
 
@@ -120,8 +134,8 @@ def _sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def test_merge_idempotent_and_reversible_into_persistent_facts(tmp_path):
-    custom = _engine_tree(tmp_path)
+def test_merge_idempotent_and_reversible_into_persistent_facts(tmp_path, engine):
+    custom = _engine_tree(tmp_path, engine)
     target = _write_target(custom, [HUMAN_FACT])
     original = _sha(target)
 
@@ -136,7 +150,7 @@ def test_merge_idempotent_and_reversible_into_persistent_facts(tmp_path):
     assert _sha(target) == original, "--remove restores the byte-identical pre-install target"
 
     # anti-vacuous: a hand-edited stamped row is a CONFLICT, not silently re-stamped
-    tgt = _write_target(_engine_tree(tmp_path / "b"), [HUMAN_FACT])
+    tgt = _write_target(_engine_tree(tmp_path / "b", engine), [HUMAN_FACT])
     assert _run(tgt, TEST_DESIGN).returncode == 0
     data = tomllib.loads(tgt.read_text(encoding="utf-8"))
     facts = data[WORKFLOW_KEY][CHANNEL]
@@ -149,23 +163,32 @@ def test_merge_idempotent_and_reversible_into_persistent_facts(tmp_path):
 
 
 # Case 5 ---------------------------------------------------------------------
-def _deep_merge():
-    spec = importlib.util.spec_from_file_location("engine_rc", REAL_ENGINE)
+def _engine_module(engine: str, name: str):
+    path = ENGINES[engine] / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"engine_{engine}_{name}".replace(".", "_"), path)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    return mod.deep_merge
+    return mod
 
 
-def test_non_ucg_path_facts_are_additive_and_inert():
+def _live_merge(engine: str):
+    # The base-then-overlay merge the engine's resolver applies.
+    if engine == "bmad-before-6.11":
+        return _engine_module(engine, "resolve_customization").deep_merge
+    merge_layers = _engine_module(engine, "config_utils").merge_layers
+    return lambda base, overlay: merge_layers((base, overlay))
+
+
+def test_non_ucg_path_facts_are_additive_and_inert(engine):
     for frag in (TEST_DESIGN, NFR):
         for fact in _load(frag)["persistent_facts"]:
             low = fact.lower()
             assert "/ucg-formalize" not in low and "ucg-formalize" not in low and "preflight" not in low, fact
-    # deep_merge(base, overlay) yields a list-typed workflow.persistent_facts
-    deep_merge = _deep_merge()
+    # the live merge of (base, overlay) yields a list-typed workflow.persistent_facts
+    live_merge = _live_merge(engine)
     base = {"workflow": {"persistent_facts": [HUMAN_FACT]}}
     overlay = {"workflow": {"persistent_facts": list(_load(TEST_DESIGN)["persistent_facts"])}}
-    merged = deep_merge(base, overlay)
+    merged = live_merge(base, overlay)
     assert isinstance(merged["workflow"]["persistent_facts"], list)
     # anti-vacuous: a fact that auto-fires UCG would be caught by the inertness grep
     auto_fire = "run /ucg-formalize before finishing"
