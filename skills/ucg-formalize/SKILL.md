@@ -119,16 +119,26 @@ each entry where `remediable: true`. The remediation per kind:
   listed key whose id extends a parent's (`95-0-a-i` of `95-0-a`) is a story of its own,
   or a child the kernel found under a parent row that is not `done` or below a `done`
   parent's row (the `detail` names each key below a `done` parent's row, with that row;
-  for a parent row that is not `done`, find the parent from the key's id). The split is
-  recorded when the child's row cites the parent ACs it claims, or `.decision-log.md`
-  names the parent and the ACs each child claims (`{ucg-root}/references/execute.md`'s
-  decomposition conventions write both). When it is recorded, the parent's status, the
-  child's place or both break those conventions: in this same pass, set the parent's row
-  to `done` and move each child's row above the first row of the parent's stem, and
-  scaffold nothing. When no split is recorded, the key shape alone proves nothing (a
-  `3-2a` added after `3-2` shipped sits below its row, and an inserted `3-2a` beside an
-  in-progress `3-2` is its own story too): scaffold it like any other key, and never set a
-  row `done` or move one to clear the gap.
+  for a parent row that is not `done`, find the parent from the key's id). The split
+  is recorded when its split record (`.split-<parent key>.json` beside
+  `sprint-status.yaml`, which `{ucg-root}/scripts/story_sizing.py --record` writes)
+  names the child, the child's row cites the parent ACs it claims, or
+  `.decision-log.md` names the parent and the ACs each child claims
+  (`{ucg-root}/references/execute.md`'s decomposition conventions write all three).
+  When it is recorded, the parent's status, the child's place or both break those
+  conventions: in this same pass, set the parent's row to `done` and move each child's
+  row above the first row of the parent's stem, and scaffold nothing. A split recorded
+  only by the row citation or the decision log also gets its split record in this
+  pass, or the Epic-level roll-up refuses the parent: one `story_sizing.py` run with
+  `--parent` and `--record {workflow.implementation_artifacts}`, the parent's ACs and
+  one `--child` per child row with the ACs it claims. A run that does not exit 0
+  writes none: record that in `.decision-log.md` with what the script printed (its
+  `unclaimed`, `double_claimed` and `unknown_claims` on exit 1, the usage error on
+  exit 2), and name it to the operator outside `-H`.
+  When no split is recorded, the key shape alone proves nothing (a `3-2a` added after
+  `3-2` shipped sits below its row, and an inserted `3-2a` beside an in-progress `3-2`
+  is its own story too): scaffold it like any other key, and never set a row `done` or
+  move one to clear the gap.
 - **`no_in_scope_stories`** — same scaffold, but this gap's `detail` names only the Epic
   and the artifacts directory, never a key list, so take the keys from the **sprint
   rollup's rows for this Epic** instead of trying to read them out of `detail`. First
