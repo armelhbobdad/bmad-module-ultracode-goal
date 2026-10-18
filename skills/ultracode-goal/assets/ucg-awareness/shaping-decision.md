@@ -105,9 +105,9 @@ A block whose `Status:` is not `ACCEPTED`, that is missing, or whose
 - Date: 2026-06-26
 - Status: ACCEPTED
 
-## Fragment: [ucg:bmad-create-story]
+## Fragment: [ucg:ucg-create-story]
 
-- Fragment file: `skills/ultracode-goal/assets/ucg-awareness/bmad-create-story.toml`
+- Fragment file: `skills/ultracode-goal/assets/ucg-awareness/ucg-create-story.toml`
 - Shift-left shaping coverage: each story inherits the epic AC contract verbatim
   (machine-checkable, named verification, mandatory anti-vacuous twin,
   CI-deterministic-vs-operator split, gate-ability tag); every Task and Subtask
@@ -117,6 +117,9 @@ A block whose `Status:` is not `ACCEPTED`, that is missing, or whose
   its own ACs, verifications, and Tasks before ATDD handoff.
 - Permanent floor classes: vacuous AC; orphaned never-green index; invented NFR
   threshold; leaked TEA artifact.
+- Bound surface: `ucg-create-story`, the story skill UCG ships in place of BMAD
+  Method's deprecated `bmad-create-story` shim, never the shim itself. Retargeted
+  on 2026-10-18 from `bmad-create-story` with its entries unchanged.
 - Reviewer: Armel
 - Date: 2026-06-25
 - Status: ACCEPTED

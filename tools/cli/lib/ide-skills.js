@@ -25,7 +25,11 @@ const PLATFORM_CODES_PATH = path.join(__dirname, 'platform-codes.yaml');
 // moment an operator needs it. They remain thin: their scripts, `customize.toml`
 // and `references/` still live in the parent module, which each SKILL.md now
 // locates by an explicit path rather than by `{skill-root}`.
-const UCG_SKILLS = new Set(['ultracode-goal', 'ucg-formalize', 'ucg-resolve', 'ucg-status']);
+//
+// `ucg-create-story` and `ucg-dev-story` are the story skills a run delegates
+// story creation and implementation to, adapted from BMAD Method's deprecated
+// shims. They are self-contained: their files live in their own directory.
+const UCG_SKILLS = new Set(['ultracode-goal', 'ucg-formalize', 'ucg-resolve', 'ucg-status', 'ucg-create-story', 'ucg-dev-story']);
 
 // OS/editor artifacts to filter during copy
 const ARTIFACT_FILTER = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '._.DS_Store']);

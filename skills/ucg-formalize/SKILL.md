@@ -103,14 +103,14 @@ each entry where `remediable: true`. The remediation per kind:
   misfiles it) and never left in place (an uncleared remediable gap keeps the verdict
   off `ready`).
 - **`orphaned_index`** (regenerable story/AC) — regenerate the missing story or AC
-  stub via `bmad-create-story` so the cited id resolves.
+  stub via `ucg-create-story` so the cited id resolves.
 - **`missing_planning_artifact` / `missing_impl_artifact`** — backfill the
   regenerable scaffold (a PRD/ADR stub, the `sprint-status.yaml` rollup via
   `bmad-sprint-planning`).
 - **`ac_missing_named_verification` / `ac_missing_anti_vacuous_twin`** — backfill the
   canonical named-verification / anti-vacuous-twin / gate-ability scaffold derivable
   from the AC shape.
-- **`story_keys_uncovered` / `story_without_ac`** — run the `bmad-create-story` scaffold
+- **`story_keys_uncovered` / `story_without_ac`**: run the `ucg-create-story` scaffold
   for the story keys the gap's `detail` names: `story_keys_uncovered` lists the unresolved
   subset, and `story_without_ac` names the one story whose AC section is missing. A
   decomposed child is never scaffolded: it has no story file by design, and the kernel
@@ -170,14 +170,13 @@ step 4 maps the verdict of step 3's own re-run on the answered scan.
 **Remediation halt catch-all.** If a remediation sub-skill itself fails, is not installed
 (the Skill tool does not know its name), or blocks on interactive input, do not re-invoke
 it blind: record a non-remediable gap naming the sub-skill and the exact input it needed,
-and let the verdict mapping route the run to `status=blocked`. A `bmad-create-story` that
-is not installed is the likely case (BMAD Method 6.12 or later ships it as a deprecated
-shim a fresh install leaves out unless asked for): name the operator's fix, run from the
-project root and pinned to the installed version (`installation.version` in
-`_bmad/_config/manifest.yaml`) so it does not also upgrade BMAD:
-`npx bmad-method@<version> install --directory . --shims --yes`. Never substitute another
-skill (`bmad-build`, `bmad-build-auto`) or write the story file or its acceptance criteria
-by hand. Likewise cap the loop at one pass per gap: if a kernel re-run still
+and let the verdict mapping route the run to `status=blocked`. A `ucg-create-story` that
+is not installed means a partial or older UltraCode Goal install (its installer copies the
+skill beside the ultracode-goal skill): name the operator's fix, run from the project root:
+`npx bmad-module-ultracode-goal update`, or `install` where UCG was never installed. Never
+substitute another skill (`bmad-build`, `bmad-build-auto`, or BMAD's deprecated
+`bmad-create-story`) or write the story file or its acceptance criteria by hand.
+Likewise cap the loop at one pass per gap: if a kernel re-run still
 reports a gap whose `kind`+`source` a prior pass already remediated, the fix did not take —
 record it as a non-remediable blocker and route to `status=blocked` rather than re-entering
 step 2, so the remediate-then-re-run loop always converges instead of spinning silently.

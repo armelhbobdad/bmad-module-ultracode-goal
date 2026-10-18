@@ -1,0 +1,4 @@
+type: changed
+scope: installer
+summary: |
+  With UCG awareness enabled, the installer now merges the story-creation shaping fragment into `_bmad/custom/ucg-create-story.toml`, for UCG's own story skill, instead of `_bmad/custom/bmad-create-story.toml`, for BMAD's deprecated shim. Its eight guardrail facts are unchanged. An overlay an earlier install wrote to `_bmad/custom/bmad-create-story.toml` is left in place and no longer shapes a UCG run. `update` does not re-run the awareness merge, so on an existing install only a fresh install writes the new overlay: run `npx bmad-module-ultracode-goal install`, choose Fresh install, and answer Yes at the awareness prompt. A fresh install rewrites `_bmad/ucg/config.yaml` from defaults, so note any value you changed there first.

@@ -6,7 +6,7 @@
 """Structural tests for the six UCG-awareness planning shaping fragments.
 
 The six fragments at assets/ucg-awareness/{bmad-prd,bmad-architecture,
-bmad-create-epics-and-stories,bmad-create-story,bmad-testarch-test-design,
+bmad-create-epics-and-stories,ucg-create-story,bmad-testarch-test-design,
 bmad-testarch-nfr}.toml are static, additive
 guardrail-fact artifacts. They land in the ONE universal sanctioned append
 channel the installed customize.toml schema exposes — persistent_facts —
@@ -45,7 +45,7 @@ EXPECTED_FRAGMENTS = {
     "bmad-prd.toml",
     "bmad-architecture.toml",
     "bmad-create-epics-and-stories.toml",
-    "bmad-create-story.toml",
+    "ucg-create-story.toml",
     # The two TEA shaping fragments.
     "bmad-testarch-test-design.toml",
     "bmad-testarch-nfr.toml",
@@ -330,7 +330,7 @@ def test_twin_missing_rework_or_orphaned_block_fails():
 
     # (b) A missing block drops a fragment id from the set.
     missing = re.sub(
-        r"## Fragment: \[ucg:bmad-create-story\].*\Z",
+        r"## Fragment: \[ucg:ucg-create-story\].*\Z",
         "",
         base,
         flags=re.DOTALL,

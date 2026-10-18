@@ -448,7 +448,7 @@ def _story_coverage(
     A file covers a key when the two share the same id stem (`_story_stem`):
     the Epic number, the story number with any letters (`94-2a`), and every
     child segment a decomposition added (`95-0-a-i`). The stem, not the whole
-    slug, because the slug is not a contract: `bmad-create-story` writes
+    slug, because the slug is not a contract: `ucg-create-story` writes
     `{story_key}.md` from whatever the operator supplied, so an operator who
     asked for story `2-4` gets `2-4.md` while sprint-planning's generated key
     is `2-4-<kebab-title>`; both have the stem `2-4`. The full stem, not its
@@ -1357,7 +1357,7 @@ def build_verdict(
             # Orphaned never-green index (permanent floor class 3): an AC/trace row
             # CITES a verification/story/FR id that no story or test in the
             # resolved set DECLARES, so it can never go green. A regenerable
-            # story/AC is a MECHANICAL gap (remediable: True via bmad-create-story);
+            # story/AC is a MECHANICAL gap (remediable: True via ucg-create-story);
             # an un-regenerable reference defaults to JUDGMENT (fail-closed). The
             # dangling token is carried verbatim in the detail.
             for orph_line_no, orph_line in enumerate(block.splitlines(), start=line_no):
@@ -1379,7 +1379,7 @@ def build_verdict(
                                 "detail": "AC/trace row cites a story/AC id no "
                                 "story or test declares: %s" % token,
                                 # A missing-but-regenerable story/AC stub is
-                                # machine-derivable (bmad-create-story).
+                                # machine-derivable (ucg-create-story).
                                 "remediable": True,
                                 "source": osrc,
                             }

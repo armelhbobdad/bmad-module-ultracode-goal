@@ -238,6 +238,14 @@ async function testMarketplaceManifest() {
       Array.isArray(plugin.skills) && plugin.skills.includes('./skills/ultracode-goal'),
       'plugin skills reference ./skills/ultracode-goal',
     );
+    // The plugin lists ultracode-goal alone: BMAD's plugin resolver reads the
+    // module's own module.yaml and help catalog only for a single listed skill,
+    // and synthesizes a module under another code for more than one. The story
+    // skills reach a project through the npx installer instead.
+    assert(
+      Array.isArray(plugin.skills) && plugin.skills.length === 1,
+      'plugin lists one skill, so BMAD resolves the real module definition',
+    );
 
     // Version coupling: marketplace.json must match package.json until release automation syncs them
     const packageJson = JSON.parse(await fs.readFile(path.join(REPO_ROOT, 'package.json'), 'utf8'));
@@ -310,12 +318,12 @@ async function testClaudeCodeOnly() {
     try {
       const ucgDir = path.join(proj, '_bmad', 'ucg');
       await fs.ensureDir(ucgDir);
-      for (const d of ['ultracode-goal', 'ucg-formalize', 'ucg-resolve', 'ucg-status']) {
+      for (const d of ['ultracode-goal', 'ucg-formalize', 'ucg-resolve', 'ucg-status', 'ucg-create-story', 'ucg-dev-story']) {
         await fs.copy(path.join(SKILLS_DIR, d), path.join(ucgDir, d));
       }
       const result = await installSkillsToIdes(proj, ucgDir, ['claude-code']);
       const target = path.join(proj, result.directories[0]);
-      for (const name of ['ultracode-goal', 'ucg-formalize', 'ucg-resolve', 'ucg-status']) {
+      for (const name of ['ultracode-goal', 'ucg-formalize', 'ucg-resolve', 'ucg-status', 'ucg-create-story', 'ucg-dev-story']) {
         assert(
           await fs.pathExists(path.join(target, name, 'SKILL.md')),
           `${name} installs one level below the IDE target (loader-visible)`,
@@ -342,6 +350,9 @@ async function testClaudeCodeOnly() {
     path.join(SKILLS_DIR, 'ucg-formalize', 'SKILL.md'),
     path.join(SKILLS_DIR, 'ucg-status', 'SKILL.md'),
     path.join(SKILLS_DIR, 'ucg-resolve', 'SKILL.md'),
+    // The story skills a run delegates to: preflight blocks without them.
+    path.join(SKILLS_DIR, 'ucg-create-story', 'SKILL.md'),
+    path.join(SKILLS_DIR, 'ucg-dev-story', 'SKILL.md'),
     path.join(SKILL_SRC, 'scripts', 'formalize_check.py'),
     path.join(SKILL_SRC, 'scripts', 'merge_customization.py'),
   ];

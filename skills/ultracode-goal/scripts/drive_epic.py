@@ -25,7 +25,7 @@ one the sprint plan still owes, which is the same story the driver is watching.
 THE `done` ROW IS A CONTRACT THIS SCRIPT DEPENDS ON, and it is worth naming
 because nothing about it is incidental. The driver reads progress out of
 sprint-status.yaml, and only Stage 5's `advance` route writes it there: the
-orchestrated sub-skills leave a passing story at `review` (`bmad-dev-story`) or
+orchestrated sub-skills leave a passing story at `review` (`ucg-dev-story`) or
 at `in-progress` (`bmad-code-review`, whenever a non-critical finding was
 deferred - and it does not run under `--light` at all). `references/gate.md`
 therefore makes the `done` sync part of `advance` itself. If that instruction is

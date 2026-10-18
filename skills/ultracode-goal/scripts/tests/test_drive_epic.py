@@ -98,7 +98,7 @@ def write_sprint_status(impl: Path, statuses: dict[str, str]) -> None:
     """Write the flat `development_status:` map `build_rollup` reads.
 
     Rewritten in place by the fake session when a story advances, exactly as
-    Stage 5's `advance` route does - `bmad-dev-story` leaves a passing story at
+    Stage 5's `advance` route does - `ucg-dev-story` leaves a passing story at
     `review`, so `done` is the run's own write (`references/gate.md`), and it is
     the write this driver's progress check reads. The driver re-reads this file
     rather than trusting the envelope, so the file has to be the thing that moves.

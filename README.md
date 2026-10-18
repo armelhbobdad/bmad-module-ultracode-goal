@@ -69,7 +69,7 @@ Requires [Claude Code](https://claude.com/product/claude-code) >= 2.1.154 (the r
 | Component | Version | Note |
 | --- | --- | --- |
 | Claude Code | 2.1.301 | Attended, Auto Mode; the run resumed a preflight first started on 2.1.291 |
-| BMAD Method | 6.12.0 | Installed with `--shims`, so `bmad-create-story` and `bmad-dev-story` are present |
+| BMAD Method | 6.12.0 | Installed with `--shims`: that run predates UCG's own story skills, which need no BMAD shim |
 | TEA (Test Architect) | 1.27.2 | Epic test-design, then a per-story trace gate read by `gate_eval.py` |
 
 ```bash

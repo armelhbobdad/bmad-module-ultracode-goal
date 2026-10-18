@@ -103,10 +103,10 @@ tools:
   bmad_method:
     name: BMAD Method
     kind: runtime
-    used_for: The Epic toolbox UCG conducts, `bmad-sprint-planning`, `bmad-create-story`, `bmad-dev-story`, `bmad-code-review` and the rest. On 6.12 or later, install with `--shims` (see below)
+    used_for: The Epic toolbox UCG conducts, `bmad-sprint-planning`, `bmad-code-review` and the rest. No deprecated shims are needed, since UCG ships its own story skills (see below)
     minimum: "6.2"
     tested: ["6.12.0"]
-    basis: The minimum is the first release that installs `bmad-create-story` and `bmad-dev-story` under those names (earlier releases named them differently; see the --shims paragraph below the table). Preflight checks the two skills by name, not the version. Tested is the README "Tested with" run of 2026-10-16.
+    basis: The minimum is unchanged from when UCG delegated to BMAD's `bmad-create-story` and `bmad-dev-story`, which 6.2 was the first release to install under those names. UCG now ships its own story skills, so that reason no longer sets the minimum, but no earlier release has been checked against the rest of the toolbox. Preflight checks no BMAD version. Tested is the README "Tested with" run of 2026-10-16.
     install_url: https://docs.bmad-method.org
     tested_with_row: BMAD Method
 

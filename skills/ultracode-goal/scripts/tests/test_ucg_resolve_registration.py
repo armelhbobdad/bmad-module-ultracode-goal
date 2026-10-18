@@ -20,6 +20,10 @@ _SIBLING_SKILLS_DIR = _SKILL_ROOT.parent
 
 _MODULE = "UltraCode Goal"
 _PARENT_SKILL = "ultracode-goal"
+# The story skills the parent delegates story creation and implementation to.
+# They are sub-skills, not operator entry points, so the help catalog never
+# offers them: bmad-help would otherwise suggest running them by hand.
+_DELEGATED_SKILLS = {"ucg-create-story", "ucg-dev-story"}
 _EXPECTED_COLUMNS = 13
 
 
@@ -68,6 +72,7 @@ def test_every_shipped_nested_skill_has_a_help_row():
         for d in _SIBLING_SKILLS_DIR.iterdir()
         if d.is_dir()
         and d.name != _PARENT_SKILL
+        and d.name not in _DELEGATED_SKILLS
         and d.name.startswith("ucg-")
         and (d / "SKILL.md").is_file()
     }
@@ -79,3 +84,13 @@ def test_every_shipped_nested_skill_has_a_help_row():
         "shipped-but-unregistered=%s, registered-but-unshipped=%s"
         % (sorted(shipped - registered), sorted(registered - shipped))
     )
+
+
+def test_delegated_story_skills_ship_without_a_help_row():
+    """The delegated story skills ship as top-level skills (the run invokes them by
+    name) and stay out of the help catalog, which lists operator entry points."""
+    header, data = _rows()
+    registered = {r[header.index("skill")] for r in data}
+    for name in sorted(_DELEGATED_SKILLS):
+        assert (_SIBLING_SKILLS_DIR / name / "SKILL.md").is_file(), name
+        assert name not in registered, "%s must not be offered as a menu entry" % name

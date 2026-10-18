@@ -9,7 +9,7 @@ UltraCode Goal is a conductor. It orchestrates the installed BMAD epic toolbox a
 
 The skill owns no implementation logic of its own for building features or running tests. What it owns is the *order*, the *gates*, and the *enforcement*. It delegates:
 
-- **Epic toolbox**: `bmad-sprint-planning`, `bmad-create-story`, `bmad-dev-story`, `bmad-code-review`, `bmad-correct-course`, `bmad-retrospective`. On BMAD Method 6.12 or later, `bmad-create-story` and `bmad-dev-story` are deprecated shims that a fresh install leaves out unless asked for (`--shims`); preflight refuses to launch without them.
+- **Epic toolbox**: `bmad-sprint-planning`, `bmad-code-review`, `bmad-correct-course`, `bmad-retrospective`, and UCG's own story skills, `ucg-create-story` and `ucg-dev-story`. Those two are adapted from BMAD Method's `bmad-create-story` and `bmad-dev-story`, which 6.12 made opt-in shims and v7 removes, so a run needs no BMAD shim; preflight refuses to launch without them.
 - **TEA gates**: `bmad-testarch-framework`, `-ci`, `-test-design`, `-atdd`, `-automate`, `-test-review`, `-nfr`, `-trace`.
 - **Claude Code primitives**: each story is driven against a written `/goal`-style condition (only an operator can start a live `/goal`); Auto Mode and ultracode session effort make the unattended run possible; Auto Memory carries learnings forward; hooks enforce invariants; git branches provide isolation and rollback.
 
@@ -86,6 +86,11 @@ skills/ucg-status/                 # Read-only status view over a run
                                    #   the IDE's skill loader enumerates one level, so a
                                    #   nested command never resolves. Each stays thin and
                                    #   reaches back into the parent via `{ucg-root}`.
+skills/ucg-create-story/           # Story creation the run delegates to (adapted from BMAD)
+skills/ucg-dev-story/              # Story implementation the run delegates to (adapted from BMAD)
+                                   #   Self-contained, each with its own customize.toml and
+                                   #   LICENSE.md; no help-catalog row, since the run, not
+                                   #   the operator, invokes them.
 ```
 
 `SKILL.md` carries the routing and the contract; the `references/*.md` files carry each stage's procedure and testable routing conditions; the `scripts/*.py` files carry the deterministic facts the model cannot fudge (the gate, preflight, readiness kernel, hooks, and the install-time/recall plumbing); the top-level sibling skills `skills/ucg-*` are the operator-facing surfaces (`ucg-formalize` the standalone readiness gate, `ucg-resolve` the decide-surface for a stopped run, `ucg-status` the read-only run view); and the `assets/` hold install metadata and the planning-customization fragments. See [how it works](./how-it-works.md) for the stages.

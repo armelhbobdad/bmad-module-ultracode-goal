@@ -75,7 +75,7 @@ def test_the_script_no_longer_records_a_forced_create_check():
 
 def test_step1_reports_impl_artifacts_tracked_as_a_fact_not_a_blocker():
     step1 = _section("## 1. Run the mechanical check", "\n## 1b.")
-    assert "bmad_install, impl_artifacts_tracked}}" in step1
+    assert "story_skills,\n          impl_artifacts_tracked}}" in step1
     assert "`impl_artifacts_tracked` is a reported fact, never a blocker" in step1
     assert "`null` only when there is no repository to ask" in step1
 

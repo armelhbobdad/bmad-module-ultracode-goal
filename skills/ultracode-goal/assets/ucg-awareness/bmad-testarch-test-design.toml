@@ -8,7 +8,7 @@
 #
 # WIRING: authored, not auto-enrolled. The installer's Step 6b enrolls only the four
 # planning-workflow fragments (bmad-prd, bmad-architecture, bmad-create-epics-and-stories,
-# bmad-create-story); the TEA fragments are deliberately excluded there, so a stock install
+# ucg-create-story); the TEA fragments are deliberately excluded there, so a stock install
 # never merges this file. It applies only when an operator runs it explicitly:
 #   merge_customization.py --target _bmad/custom/bmad-testarch-test-design.toml \
 #     --fragment <this file>          (--remove to uninstall)
