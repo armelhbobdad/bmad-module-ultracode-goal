@@ -919,6 +919,155 @@ def apply_sweep_scope(
 # story's status, and an unknown status is treated as the worst there is.
 _ROLLUP_SEVERITY = ("PASS", "WAIVED", "CONCERNS", "FAIL", "NOT_EVALUATED")
 
+def _split_record(sprint_status: Path, key: str) -> tuple[list[str] | None, str | None]:
+    """The children a decomposed parent's split record names, or why it cannot be read.
+
+    `scripts/story_sizing.py --parent <key> --record <dir>` writes
+    `.split-<key>.json` beside sprint-status.yaml once the split's claim map
+    reconciles. It is the only evidence of a split the roll-up reads: a row's
+    id, its place and which story files exist each waive a never-gated row's
+    gate under some placement or file name, so none of them is read.
+
+    Returns `(children, None)` for a well-formed record, `(None, problem)` for
+    one that is present but unusable, and `(None, None)` when there is none.
+    """
+    path = sprint_status.parent / f".split-{key}.json"
+    if not path.is_file():
+        return None, None
+    record = _read_json(path)
+    children = record.get("children") if record is not None else None
+    if (
+        record is None
+        or record.get("parent") != key
+        or not isinstance(children, list)
+        or not children
+        or not all(isinstance(child, str) and child for child in children)
+    ):
+        return None, f"{path.name} is not a split record of {key} (parent and children), so it is not read"
+    return children, None
+
+
+def _rows_extending_above(stories: list[str], key: str) -> list[str]:
+    """The rows above the first row of this key's id whose id extends it.
+
+    Only a pointer for a reason line: a row with these and no split record may
+    be a parent split before the record existed. It never decides a verdict.
+    """
+    import formalize_check  # noqa: PLC0415  (sibling script, path set by the caller)
+
+    stem = formalize_check._story_stem(key)
+    if stem is None:
+        return []
+    found = []
+    for other in stories:
+        other_stem = formalize_check._story_stem(other)
+        if other_stem == stem:
+            break
+        ancestor = formalize_check._parent_stem(other_stem) if other_stem else None
+        while ancestor is not None and ancestor != stem:
+            ancestor = formalize_check._parent_stem(ancestor)
+        if ancestor == stem:
+            found.append(other)
+    return found
+
+
+def _own_gate_artifact(trace_output: Path, key: str) -> Path | None:
+    """The gate artifact the per-story resolver finds as this key's own, or None.
+
+    The identity is the one `--story <key>` resolves by, so this asks the
+    resolver's own questions: a trace report named for the key that declares
+    itself one, the key's gate decision, or its per-story trace summary. A
+    parent with any of them was gated on its own, so it must resolve like any
+    story whatever its split record says. Files the resolver never reads as
+    the key's (its story file, its ATDD checklist, notes, the split record, a
+    gate filed under a bare id or another slug) are not its gate, by the
+    naming rule `references/gate.md` states for every per-story gate.
+    """
+    for report in sorted(trace_output.glob("*.md")):
+        if _stem_matches_story(report.stem, key) and _declares_trace_report(report):
+            return report
+    slim = _per_story_slim(trace_output, key)
+    if slim is not None:
+        return slim
+    for variant in _story_variants(key):
+        summary = trace_output / f"e2e-trace-summary-{variant}.json"
+        if summary.is_file():
+            return summary
+    return None
+
+
+def _split_cycle(key: str, candidates: dict[str, list[str]]) -> list[str] | None:
+    """The chain of split records that leads from this parent back to it, if any."""
+    stack = [(child, [key, child]) for child in reversed(candidates[key])]
+    seen: set[str] = set()
+    while stack:
+        row, chain = stack.pop()
+        if row == key:
+            return chain
+        if row in seen or row not in candidates:
+            continue
+        seen.add(row)
+        stack.extend((child, chain + [child]) for child in reversed(candidates[row]))
+    return None
+
+
+def _read_splits(
+    trace_output: Path,
+    sprint_status: Path,
+    stories: list[str],
+    ungated: set[str],
+    epic: str,
+) -> tuple[dict[str, list[str]], dict[str, str]]:
+    """Which ungated rows are read through their children, and why each other record is not.
+
+    Returns `(read, notes)`: `read` maps a parent read through to the children
+    its record names; `notes` holds the reason line of every other row whose
+    record is present and not read. A record is read when it is well-formed,
+    names only other story rows of this epic, its parent has no gate artifact
+    of its own (`_own_gate_artifact`), and no chain of records leads back to
+    it. That last test is what keeps the aggregate honest: in a graph of
+    records with no cycle, every parent read through bottoms out in rows the
+    roll-up reads, so a PASS is never computed over parents alone.
+    """
+    candidates: dict[str, list[str]] = {}
+    notes: dict[str, str] = {}
+    for key in stories:
+        if key not in ungated:
+            continue
+        children, problem = _split_record(sprint_status, key)
+        if problem is not None:
+            notes[key] = f"story {key}: {problem}"
+            continue
+        if children is None:
+            continue
+        strays = [child for child in children if child == key or child not in stories]
+        if strays:
+            notes[key] = (
+                f"story {key}: .split-{key}.json names {', '.join(strays)}, "
+                f"not another story row of epic {epic}, so it is not read"
+            )
+            continue
+        owned = _own_gate_artifact(trace_output, key)
+        if owned is not None:
+            notes[key] = (
+                f"story {key}: a decomposed parent ({', '.join(children)}), but "
+                f"{owned.name} in {trace_output} is a gate artifact of its own, so "
+                "its own gate must resolve"
+            )
+            continue
+        candidates[key] = children
+    read: dict[str, list[str]] = {}
+    for key, children in candidates.items():
+        cycle = _split_cycle(key, candidates)
+        if cycle is not None:
+            notes[key] = (
+                f"story {key}: its split record leads back to it "
+                f"({' -> '.join(cycle)}), so it is not read"
+            )
+        else:
+            read[key] = children
+    return read, notes
+
 
 def rollup_gate(
     trace_output: Path, sprint_status: Path, epic: str, reasons: list[str]
@@ -934,6 +1083,11 @@ def rollup_gate(
     refused rather than answered), and any done story whose own gate artifact
     does not resolve - a `done` row nothing ever gated is exactly what this
     aggregate must surface, not paper over.
+
+    One `done` row owes no gate of its own: a decomposed parent whose split
+    record is read (`_read_splits`). Its children's gates count in its place,
+    and a reason line names it with them. A parent whose record is not read is
+    read like any story, with a reason line saying why.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import preflight_check  # noqa: PLC0415  (sibling script, path set above)
@@ -992,11 +1146,44 @@ def rollup_gate(
             "overall_status": None,
         }
 
-    worst = "PASS"
+    gates = []
     for key in stories:
         sub: list[str] = []
         gate = load_gate(trace_output, sub, key)
-        status = (gate["gate_status"] or "NOT_EVALUATED").upper()
+        gates.append((key, sub, (gate["gate_status"] or "NOT_EVALUATED").upper()))
+    read, notes = _read_splits(
+        trace_output,
+        sprint_status,
+        stories,
+        {key for key, _, status in gates if status == "NOT_EVALUATED"},
+        str(epic),
+    )
+
+    read_through = 0
+    worst = "PASS"
+    for key, sub, status in gates:
+        if key in read:
+            reasons.append(
+                f"story {key}: a decomposed parent, split into "
+                f"{', '.join(read[key])} (.split-{key}.json); it owes no gate "
+                "of its own, and theirs count in its place"
+            )
+            read_through += 1
+            continue
+        if key in notes:
+            reasons.append(notes[key])
+        elif status == "NOT_EVALUATED" and _own_gate_artifact(trace_output, key) is None:
+            # The pointer names the record as the way out, which it is only for
+            # a row with no gate artifact of its own: one that has one must
+            # resolve it, record or not.
+            above = _rows_extending_above(stories, key)
+            if above:
+                reasons.append(
+                    f"story {key}: rows above it extend its id ({', '.join(above)}) "
+                    "and no split record is beside sprint-status.yaml; if it was "
+                    "decomposed, record the split with story_sizing.py --parent "
+                    f"{key} --record and re-run the roll-up"
+                )
         if status not in _ROLLUP_SEVERITY:
             reasons.append(
                 f"story {key}: unrecognized gate_status {status!r}; treated as NOT_EVALUATED"
@@ -1018,9 +1205,14 @@ def rollup_gate(
                 reasons.append(f"story {key}: {line}")
         if _ROLLUP_SEVERITY.index(status) > _ROLLUP_SEVERITY.index(worst):
             worst = status
-    reasons.append(
-        "roll-up over %d stories: worst gate_status %s" % (len(stories), worst)
-    )
+    over = "%d stories" % len(stories)
+    if read_through:
+        over += " (%d decomposed parent%s read through %s children)" % (
+            read_through,
+            "" if read_through == 1 else "s",
+            "its" if read_through == 1 else "their",
+        )
+    reasons.append("roll-up over %s: worst gate_status %s" % (over, worst))
     return {
         "gate_status": worst,
         "p0_status": None,
@@ -1182,7 +1374,12 @@ def main(argv: list[str] | None = None) -> int:
         "the sprint-status story set, instead of reading a single epic-named "
         "artifact. Requires --epic-level, --story <epic id> and "
         "--sprint-status. Fail-closed: any not-done story, and any done story "
-        "with no resolvable gate artifact of its own, refuses to NOT_EVALUATED.",
+        "with no resolvable gate artifact of its own, refuses to NOT_EVALUATED, "
+        "except a decomposed parent whose split record (.split-<key>.json beside "
+        "--sprint-status, written by story_sizing.py --record) names children that "
+        "are each another story row of the epic, with no chain of records back to "
+        "it, and which has no trace report, gate decision or trace summary of its "
+        "own: its children's gates stand in for it.",
     )
     parser.add_argument(
         "--sprint-status",

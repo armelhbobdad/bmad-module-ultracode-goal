@@ -1,0 +1,6 @@
+type: breaking
+scope: ultracode-goal
+summary: |
+  `scripts/story_sizing.py` now refuses a `--child` row given more than once, as a usage error (exit 2). It used to merge the flags and keep only the last one's claims, so a double claim or an unknown id in the others dropped out of the check and the run could exit 0 on a claim map that does not reconcile.
+migration: |
+  Give each child row one `--child` flag that lists every parent AC it claims, such as `--child '7-1a=AC-1,AC-2'`.

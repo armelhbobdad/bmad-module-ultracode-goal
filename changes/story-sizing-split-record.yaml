@@ -1,0 +1,4 @@
+type: added
+scope: ultracode-goal
+summary: |
+  `scripts/story_sizing.py` takes `--parent <key>` and `--record <dir>`. When the decomposition's claim map reconciles (exit 0), it also writes the split record `.split-<key>.json` into that directory: the parent, its children in the order given, and the claim map. Execute's decomposition step now passes both, with the directory that holds the Epic's `sprint-status.yaml`, which is where the Epic-level roll-up reads the record. A failing run writes no record and leaves an earlier one as it was, and so does a write that fails, since the record is moved into place whole. A record asked for with no `--parent-acs`, with a child that claims no AC, or with a parent that is also a child is a usage error (exit 2), and so is a record the script cannot write. A parent split before the record existed gets one from a single reconciling run for its split.
