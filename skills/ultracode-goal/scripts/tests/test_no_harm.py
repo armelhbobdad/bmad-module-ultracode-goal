@@ -7,8 +7,10 @@
 
 With the four planning shaping fragments merged into their
 ``_bmad/custom/{skill}.toml`` overlays but UCG itself NEVER invoked, a plain
-BMAD authoring run resolves through the SAME live engine (``deep_merge`` from
-``_bmad/scripts/resolve_customization.py``) identically-except-additively, and
+BMAD authoring run resolves through the SAME live engine (``deep_merge`` in
+``resolve_customization.py`` before BMAD 6.11, ``merge_layers`` over
+``config_utils.structural_merge`` from 6.11; every engine test runs on both)
+identically-except-additively, and
 never auto-fires a ``/ucg-formalize`` prompt or gate.
 
 CRITICAL NESTING FACT (load-bearing, audit fix): the live engine returns a
@@ -42,10 +44,16 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[1] / "merge_customization.py"
-# The live engine a plain BMAD run resolves through — vendored under fixtures/
+# The live engines a plain BMAD run resolves through, vendored under fixtures/
 # so the suite stays hermetic in CI (the real _bmad/ tree is gitignored).
-REAL_ENGINE = Path(__file__).resolve().parent / "fixtures" / "engine" / "resolve_customization.py"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+ENGINES = {
+    "bmad-before-6.11": FIXTURES / "engine",
+    "bmad-6.12": FIXTURES / "engine-6.12",
+}
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets" / "ucg-awareness"
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -79,16 +87,30 @@ UCG_MARKER = re.compile(r"\[ucg:([a-z0-9-]+-\d+)\]")
 # --- engine + tooling helpers ----------------------------------------------
 
 
-def _import_deep_merge():
-    """Import deep_merge from the REAL engine (the live import contract)."""
-    spec = importlib.util.spec_from_file_location("_resolve_customization_no_harm", REAL_ENGINE)
-    assert spec is not None and spec.loader is not None, REAL_ENGINE
+def _load_engine_module(engine: str, name: str):
+    """Load one module of a vendored engine under a name unique to it."""
+    path = ENGINES[engine] / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"_no_harm_{engine}_{name}".replace(".", "_"), path)
+    assert spec is not None and spec.loader is not None, path
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.deep_merge
+    return module
 
 
-DEEP_MERGE = _import_deep_merge()
+def _live_merge(engine: str):
+    """The base-then-overlay merge the engine's resolver applies."""
+    if engine == "bmad-before-6.11":
+        return _load_engine_module(engine, "resolve_customization").deep_merge
+    merge_layers = _load_engine_module(engine, "config_utils").merge_layers
+    return lambda base, overlay: merge_layers((base, overlay))
+
+
+LIVE_MERGE = {engine: _live_merge(engine) for engine in ENGINES}
+
+
+@pytest.fixture(params=sorted(ENGINES))
+def engine(request) -> str:
+    return request.param
 
 
 def _tomli_w_dumps(data: dict) -> str:
@@ -113,16 +135,17 @@ def _tomli_w_dumps(data: dict) -> str:
         return proc.stdout
 
 
-def _engine_tree(tmp_path: Path) -> Path:
-    """Synthetic project tree with the real engine at _bmad/scripts/, so the
-    tool's guarded deep_merge import resolves exactly as at install time.
+def _engine_tree(tmp_path: Path, engine: str) -> Path:
+    """Synthetic project tree with the named real engine at _bmad/scripts/, so
+    the tool's guarded merge import resolves exactly as at install time.
     Returns the _bmad/custom/ dir where targets live.
     """
     custom = tmp_path / "_bmad" / "custom"
     scripts = tmp_path / "_bmad" / "scripts"
     custom.mkdir(parents=True, exist_ok=True)
     scripts.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(REAL_ENGINE, scripts / "resolve_customization.py")
+    for source in sorted(ENGINES[engine].glob("*.py")):
+        shutil.copy2(source, scripts / source.name)
     return custom
 
 
@@ -149,9 +172,9 @@ def load_toml(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
-def resolve(base: dict, overlay: dict) -> dict:
+def resolve(engine: str, base: dict, overlay: dict) -> dict:
     """The plain-BMAD resolve: base + (team) overlay through the LIVE engine."""
-    return DEEP_MERGE(base, overlay)
+    return LIVE_MERGE[engine](base, overlay)
 
 
 # A faithful fixture BASE mirroring the real bmad-prd customize.toml shape: the
@@ -171,8 +194,8 @@ def _fixture_base() -> dict:
 # --- resolve diff is persistent_facts append-only ---------------------------
 
 
-def test_resolve_diff_is_persistent_facts_append_only(tmp_path):
-    custom = _engine_tree(tmp_path)
+def test_resolve_diff_is_persistent_facts_append_only(tmp_path, engine):
+    custom = _engine_tree(tmp_path, engine)
     base = _fixture_base()
 
     # Merge the REAL fragment into a temp _bmad/custom/bmad-prd.toml. The target
@@ -185,8 +208,8 @@ def test_resolve_diff_is_persistent_facts_append_only(tmp_path):
     assert json.loads(proc.stdout)["status"] == "success"
     overlay = load_toml(target)
 
-    resolved_with = resolve(base, overlay)
-    resolved_without = resolve(base, {})  # no overlay == plain BMAD run
+    resolved_with = resolve(engine, base, overlay)
+    resolved_without = resolve(engine, base, {})  # no overlay == plain BMAD run
 
     # NESTING: bind to the workflow sub-table that owns persistent_facts AND the
     # human scalars (NEVER the top-level dict, whose only key is `workflow`).
@@ -220,7 +243,7 @@ def test_resolve_diff_is_persistent_facts_append_only(tmp_path):
             "prd_template": "hijacked.md",  # out-of-channel scalar write
         },
     }
-    m_with = resolve(base, mutant_overlay)[WORKFLOW_KEY]
+    m_with = resolve(engine, base, mutant_overlay)[WORKFLOW_KEY]
     m_except_pf = {k: v for k, v in m_with.items() if k != CHANNEL}
     assert m_except_pf != except_pf_without  # the workflow-level check has teeth
     assert m_with["prd_template"] == "hijacked.md"
@@ -325,16 +348,16 @@ def test_no_formalize_autofire_surface():
 # --- opt-out resolves to baseline -------------------------------------------
 
 
-def test_optout_resolves_to_baseline(tmp_path):
-    custom = _engine_tree(tmp_path)
+def test_optout_resolves_to_baseline(tmp_path, engine):
+    custom = _engine_tree(tmp_path, engine)
     base = _fixture_base()
 
     # Opt-OUT (enable_ucg_awareness=OFF): Installer Step 6b never spawns the
     # merge tool, so the team overlay is empty. Model that as no merge call.
-    baseline = resolve(base, {})  # the no-overlay baseline
+    baseline = resolve(engine, base, {})  # the no-overlay baseline
 
     optout_overlay = {}  # nothing merged (Step 6b gated off)
-    resolved_optout = resolve(base, optout_overlay)
+    resolved_optout = resolve(engine, base, optout_overlay)
 
     # FULL recursive dict equality (walks the entire nested workflow sub-table):
     # a declined/uninstalled state is a true no-op.
@@ -348,7 +371,7 @@ def test_optout_resolves_to_baseline(tmp_path):
     proc = run_tool(target, REAL_PRD_FRAGMENT)
     assert proc.returncode == 0, proc.stderr
     optin_overlay = load_toml(target)
-    resolved_optin = resolve(base, optin_overlay)
+    resolved_optin = resolve(engine, base, optin_overlay)
     assert resolved_optin != baseline
     # And the divergence is precisely in workflow.persistent_facts.
     assert resolved_optin[WORKFLOW_KEY][CHANNEL] != baseline[WORKFLOW_KEY][CHANNEL]
@@ -357,8 +380,8 @@ def test_optout_resolves_to_baseline(tmp_path):
 # --- schema-mismatch target is untouched ------------------------------------
 
 
-def test_schema_mismatch_target_is_untouched(tmp_path):
-    custom = _engine_tree(tmp_path)
+def test_schema_mismatch_target_is_untouched(tmp_path, engine):
+    custom = _engine_tree(tmp_path, engine)
 
     # A synthetic target with a [workflow] table but NO persistent_facts key
     # under it (the schema-drift case). It is non-empty so the probe's
@@ -378,8 +401,8 @@ def test_schema_mismatch_target_is_untouched(tmp_path):
     # FULL recursive baseline-equal resolve: the schema-mismatch target resolves
     # exactly as its no-overlay baseline (the overlay == the unchanged file).
     base = load_toml(target)
-    baseline = resolve(base, {})
-    resolved = resolve(base, load_toml(target))
+    baseline = resolve(engine, base, {})
+    resolved = resolve(engine, base, load_toml(target))
     assert resolved == baseline
 
     # Anti-vacuous twin: a target that DOES expose workflow.persistent_facts is

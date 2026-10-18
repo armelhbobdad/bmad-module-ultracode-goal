@@ -17,9 +17,11 @@ Covers the seven behaviors of the merge tool, each with its anti-vacuous twin:
   test_exit_code_lane_and_pep723
 
 Each test builds its fixtures programmatically in tmp_path. The target lives
-under a synthetic ``_bmad/custom/`` tree with the real
-``_bmad/scripts/resolve_customization.py`` copied alongside, so the tool's
-guarded ``deep_merge`` import resolves exactly as it will at install time.
+under a synthetic ``_bmad/custom/`` tree with a real BMAD engine copied to
+``_bmad/scripts/``, so the tool's guarded merge import resolves exactly as it
+will at install time. Each such test runs once per vendored engine: the
+single-file one of BMAD before 6.11, and a 6.12 one with the layout 6.11
+introduced, where the merge moved to ``config_utils.py``.
 
 Byte-identity note (the idempotent-reinstall and remove tests): tomli-w round-trips reorder/reformat unrelated
 tables, so every byte-identity assertion compares against a snapshot produced
@@ -35,13 +37,23 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[1] / "merge_customization.py"
-# The real engine the tool imports deep_merge from — vendored under fixtures/
-# so the suite stays hermetic in CI (the real _bmad/ tree is gitignored).
-REAL_ENGINE = Path(__file__).resolve().parent / "fixtures" / "engine" / "resolve_customization.py"
+# The engines the tool imports its merge from, vendored under fixtures/ so the
+# suite stays hermetic in CI (the real _bmad/ tree is gitignored). BMAD before
+# 6.11 defines deep_merge in resolve_customization.py; 6.11 moved the same
+# merge to config_utils.py as structural_merge. Every test that runs the tool
+# runs once per engine.
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+ENGINES = {
+    "bmad-before-6.11": FIXTURES / "engine",
+    "bmad-6.12": FIXTURES / "engine-6.12",
+}
 
 
 # tomli-w is the writer dep the TOOL declares in its PEP-723 block. The shared
@@ -108,15 +120,21 @@ HUMAN_WORKFLOW_SCALAR_VAL = "assets/prd-template.md"
 # --- fixture builders -------------------------------------------------------
 
 
-def _engine_tree(tmp_path: Path) -> Path:
-    """Build a synthetic project tree with the real engine at _bmad/scripts/
-    and return the _bmad/custom/ dir where targets should live.
+@pytest.fixture(params=sorted(ENGINES))
+def engine(request) -> str:
+    return request.param
+
+
+def _engine_tree(tmp_path: Path, engine: str) -> Path:
+    """Build a synthetic project tree with the named real engine at
+    _bmad/scripts/ and return the _bmad/custom/ dir where targets should live.
     """
     custom = tmp_path / "_bmad" / "custom"
     scripts = tmp_path / "_bmad" / "scripts"
     custom.mkdir(parents=True, exist_ok=True)
     scripts.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(REAL_ENGINE, scripts / "resolve_customization.py")
+    for source in sorted(ENGINES[engine].glob("*.py")):
+        shutil.copy2(source, scripts / source.name)
     return custom
 
 
@@ -237,8 +255,8 @@ def ucg_facts(data: dict) -> list[str]:
 # --- merge appends stamped facts --------------------------------------------
 
 
-def test_merge_appends_stamped_facts(tmp_path):
-    custom = _engine_tree(tmp_path)
+def test_merge_appends_stamped_facts(tmp_path, engine):
+    custom = _engine_tree(tmp_path, engine)
     target = write_target_with_channel(custom)
     fragment = write_fragment(tmp_path)
 
@@ -277,8 +295,8 @@ def test_merge_appends_stamped_facts(tmp_path):
 # --- idempotent reinstall ---------------------------------------------------
 
 
-def test_idempotent_reinstall(tmp_path):
-    custom = _engine_tree(tmp_path)
+def test_idempotent_reinstall(tmp_path, engine):
+    custom = _engine_tree(tmp_path, engine)
     target = write_target_with_channel(custom)
     fragment = write_fragment(tmp_path)
 
@@ -321,8 +339,8 @@ def test_idempotent_reinstall(tmp_path):
 # --- absent channel is a fail-loud skip -------------------------------------
 
 
-def test_absent_channel_is_failloud_skip(tmp_path):
-    custom = _engine_tree(tmp_path)
+def test_absent_channel_is_failloud_skip(tmp_path, engine):
+    custom = _engine_tree(tmp_path, engine)
     target = write_target_without_channel(custom)
     fragment = write_fragment(tmp_path)
 
@@ -338,7 +356,7 @@ def test_absent_channel_is_failloud_skip(tmp_path):
     # Anti-vacuous twin (positive control): a target that DOES expose the
     # channel does NOT skip and DOES mutate — proving the probe discriminates,
     # not always-skips.
-    good_custom = _engine_tree(tmp_path / "good")
+    good_custom = _engine_tree(tmp_path / "good", engine)
     good_target = write_target_with_channel(good_custom)
     good_before = good_target.read_bytes()
     good_proc = run_tool(good_target, fragment)
@@ -353,8 +371,8 @@ def test_absent_channel_is_failloud_skip(tmp_path):
 # --- hand-edit conflict reported, not clobbered -----------------------------
 
 
-def test_handedit_conflict_reported_not_clobbered(tmp_path):
-    custom = _engine_tree(tmp_path)
+def test_handedit_conflict_reported_not_clobbered(tmp_path, engine):
+    custom = _engine_tree(tmp_path, engine)
     target = write_target_with_channel(custom)
     fragment = write_fragment(tmp_path)
 
@@ -406,10 +424,10 @@ def test_handedit_conflict_reported_not_clobbered(tmp_path):
 # --- guarded import, engine never reimplemented -----------------------------
 
 
-def test_guarded_import_and_no_reimplement(tmp_path):
-    # (a) The script never defines deep_merge/_merge_arrays locally.
+def test_guarded_import_and_no_reimplement(tmp_path, engine):
+    # (a) The script never defines the engine's merge functions locally.
     proc = subprocess.run(
-        ["grep", "-c", r"def deep_merge\|def _merge_arrays", str(SCRIPT)],
+        ["grep", "-c", r"def deep_merge\|def structural_merge\|def _merge_arrays", str(SCRIPT)],
         capture_output=True,
         text=True,
     )
@@ -417,7 +435,7 @@ def test_guarded_import_and_no_reimplement(tmp_path):
     assert proc.stdout.strip() == "0", proc.stdout
 
     # (b) With the engine REMOVED, exit code 2, target untouched, one stderr line.
-    custom = _engine_tree(tmp_path)
+    custom = _engine_tree(tmp_path, engine)
     (custom.parent / "scripts" / "resolve_customization.py").unlink()
     target = write_target_with_channel(custom)
     fragment = write_fragment(tmp_path)
@@ -437,22 +455,46 @@ def test_guarded_import_and_no_reimplement(tmp_path):
     # the merge and exits 0 (not 2) — exit 2 is the missing-dep signal, not the
     # default. (A bare `import` would raise an unhandled traceback here; the
     # guarded try/except is what yields the clean exit 2 above.)
-    custom2 = _engine_tree(tmp_path / "present")
+    custom2 = _engine_tree(tmp_path / "present", engine)
     target2 = write_target_with_channel(custom2)
     proc_present = run_tool(target2, fragment)
     assert proc_present.returncode == 0, proc_present.stderr
 
 
+def test_bmad_6_12_merge_is_imported_from_config_utils(tmp_path):
+    # BMAD's resolver no longer defines deep_merge from 6.11, so the 6.12 runs of
+    # every test above reach the merge only through the config_utils import.
+    resolver = (ENGINES["bmad-6.12"] / "resolve_customization.py").read_text(encoding="utf-8")
+    assert "def deep_merge" not in resolver
+    assert "from config_utils import" in resolver
+    assert "def deep_merge" in (ENGINES["bmad-before-6.11"] / "resolve_customization.py").read_text(
+        encoding="utf-8"
+    )
+
+    # Twin: with config_utils.py gone the resolver is present but neither
+    # merge function imports, which is the clean missing-engine exit 2, not a
+    # traceback and not a write.
+    custom = _engine_tree(tmp_path, "bmad-6.12")
+    (custom.parent / "scripts" / "config_utils.py").unlink()
+    target = write_target_with_channel(custom)
+    before = target.read_bytes()
+    proc = run_tool(target, write_fragment(tmp_path))
+    assert proc.returncode == 2, proc.stderr
+    assert target.read_bytes() == before
+    warning_lines = _tool_stderr_lines(proc.stderr)
+    assert len(warning_lines) == 1 and warning_lines[0].startswith("warning:"), proc.stderr
+
+
 # --- remove strips only stamped rows ----------------------------------------
 
 
-def test_remove_strips_only_ucg_stamped(tmp_path):
+def test_remove_strips_only_ucg_stamped(tmp_path, engine):
     """--remove deletes exactly
     the [ucg:<id>]-marked rows + the [ucg] table — determinism is grep-c == 0
     for both the marker substring and the literal [ucg] header — while every
     human-authored non-stamped row + workflow scalar survives byte-identical.
     """
-    custom = _engine_tree(tmp_path)
+    custom = _engine_tree(tmp_path, engine)
     # Pre-install snapshot: a baseline with a HUMAN-authored non-stamped row,
     # written THROUGH tomli-w once so byte-identity tests the strip, not drift.
     human_extra = "Operator: always cite an ADR for load-bearing decisions."
@@ -504,13 +546,13 @@ def test_remove_strips_only_ucg_stamped(tmp_path):
     assert human_extra not in tomli_w_dumps(mutant)
 
 
-def test_remove_leaves_human_content_byte_identical(tmp_path):
+def test_remove_leaves_human_content_byte_identical(tmp_path, engine):
     """--remove leaves the human-owned region BYTE-identical.
     Baseline = a tomli-w-serialized human file (human channel entry + a
     [workflow] scalar + a top-level scalar); install a UCG fragment, then
     --remove; the post-remove bytes equal the baseline bytes exactly.
     """
-    custom = _engine_tree(tmp_path)
+    custom = _engine_tree(tmp_path, engine)
     # Human baseline written THROUGH the same serializer the tool uses, so the
     # byte assertion tests the strip's surgical scoping, not tomli-w drift.
     baseline = write_target_with_channel(custom)  # human channel + workflow scalar + on_complete
@@ -532,7 +574,7 @@ def test_remove_leaves_human_content_byte_identical(tmp_path):
     # Anti-vacuous twin (a): a human-added persistent_facts entry whose wording
     # OVERLAPS a UCG directive but carries NO marker is NOT removed (a
     # different/absent id is always preserved).
-    custom_b = _engine_tree(tmp_path / "overlap")
+    custom_b = _engine_tree(tmp_path / "overlap", engine)
     look_alike = FRAGMENT_FACTS[0].replace(" [ucg:bmad-prd-01]", "")  # same text, no marker
     assert UCG_MARKER.search(look_alike) is None
     base_b = write_target_with_channel(custom_b, extra_facts=[look_alike])
@@ -552,12 +594,12 @@ def test_remove_leaves_human_content_byte_identical(tmp_path):
     assert tomli_w_dumps(reordered).encode("utf-8") != baseline_bytes
 
 
-def test_remove_idempotent_and_noop_on_clean(tmp_path):
+def test_remove_idempotent_and_noop_on_clean(tmp_path, engine):
     """--remove on an already-clean / never-installed target is a
     TRUE no-op — byte-identical in==out (or absent stays absent), exit 0,
     JSON removed:0. A second consecutive --remove is also a no-op.
     """
-    custom = _engine_tree(tmp_path)
+    custom = _engine_tree(tmp_path, engine)
     # (a) A clean target with NO [ucg] stamp and no marked rows.
     clean = write_target_with_channel(custom)  # human-only, no UCG
     clean_bytes = clean.read_bytes()
@@ -604,12 +646,12 @@ def test_remove_idempotent_and_noop_on_clean(tmp_path):
     assert touched != clean_bytes  # a touched file is detectably different
 
 
-def test_install_then_remove_roundtrip_identity(tmp_path):
+def test_install_then_remove_roundtrip_identity(tmp_path, engine):
     """--remove is the EXACT inverse of install. baseline ==
     bytes after (install then --remove). Twin: install TWICE then --remove ONCE
     still round-trips to baseline (matches on stamp, not append count).
     """
-    custom = _engine_tree(tmp_path)
+    custom = _engine_tree(tmp_path, engine)
     baseline = write_target_with_channel(custom)
     baseline_bytes = baseline.read_bytes()
     fragment = write_fragment(tmp_path)
@@ -643,7 +685,7 @@ def test_install_then_remove_roundtrip_identity(tmp_path):
 # --- exit-code lane and PEP-723 block ---------------------------------------
 
 
-def test_exit_code_lane_and_pep723(tmp_path):
+def test_exit_code_lane_and_pep723(tmp_path, engine):
     # (a) The PEP-723 inline-script block declares tomli-w as a dependency.
     text = SCRIPT.read_text(encoding="utf-8")
     block = re.search(r"# /// script\n(.*?)# ///", text, re.DOTALL)
@@ -653,7 +695,7 @@ def test_exit_code_lane_and_pep723(tmp_path):
     assert 'requires-python = ">=3.11"' in block_body
 
     # (b) A syntactically-broken fragment TOML => exit 1 (validation), not 2.
-    custom = _engine_tree(tmp_path)
+    custom = _engine_tree(tmp_path, engine)
     target = write_target_with_channel(custom)
     bad_fragment = tmp_path / "broken.toml"
     bad_fragment.write_text("persistent_facts = [ this is not valid toml\n", encoding="utf-8")
@@ -661,7 +703,7 @@ def test_exit_code_lane_and_pep723(tmp_path):
     assert proc_bad.returncode == 1, (proc_bad.returncode, proc_bad.stderr)
 
     # An unparseable TARGET is also a validation error (exit 1).
-    custom_b = _engine_tree(tmp_path / "badtarget")
+    custom_b = _engine_tree(tmp_path / "badtarget", engine)
     bad_target = custom_b / "bmad-prd.toml"
     bad_target.write_text("persistent_facts = [ broken\n", encoding="utf-8")
     good_fragment = write_fragment(tmp_path)
@@ -670,7 +712,7 @@ def test_exit_code_lane_and_pep723(tmp_path):
 
     # Anti-vacuous twin: a well-formed successful merge exits 0 (not 1) —
     # exit 1 is reserved for validation failure, not emitted unconditionally.
-    custom_ok = _engine_tree(tmp_path / "ok")
+    custom_ok = _engine_tree(tmp_path / "ok", engine)
     ok_target = write_target_with_channel(custom_ok)
     proc_ok = run_tool(ok_target, good_fragment)
     assert proc_ok.returncode == 0, proc_ok.stderr
@@ -682,10 +724,11 @@ def test_exit_code_lane_and_pep723(tmp_path):
 
 
 # --- Integration: the real fragment must reach the RESOLVED workflow channel.
-# This is the regression test that catches the top-level dark-write bug — a
+# This is the regression test that catches the top-level dark-write bug: a
 # tool that wrote a TOP-LEVEL persistent_facts key would leave the items OUT of
-# deep_merge(base, overlay)['workflow']['persistent_facts'] (the live resolve
-# ignores top-level keys when the base nests under [workflow]).
+# the resolved ['workflow']['persistent_facts'] (the live resolve ignores
+# top-level keys when the base nests under [workflow]). The resolve runs
+# through each engine's own resolve_customization.py, as a BMAD skill does.
 
 
 REAL_FRAGMENT = (
@@ -693,18 +736,29 @@ REAL_FRAGMENT = (
 )
 
 
-def _import_real_deep_merge():
-    """Import deep_merge from the same REAL_ENGINE the tool imports it from."""
-    import importlib.util
+def _live_resolve(project: Path, skill_dir: Path) -> dict:
+    """The resolved ``workflow`` table, from the project's own
+    ``_bmad/scripts/resolve_customization.py`` run the way a BMAD skill runs it
+    (``--skill <dir> --key workflow``, from the project root)."""
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(project / "_bmad" / "scripts" / "resolve_customization.py"),
+            "--skill",
+            str(skill_dir),
+            "--key",
+            WORKFLOW_KEY,
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)[WORKFLOW_KEY]
 
-    spec = importlib.util.spec_from_file_location("_resolve_customization_for_test", REAL_ENGINE)
-    assert spec is not None and spec.loader is not None, REAL_ENGINE
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.deep_merge
 
-
-def test_real_fragment_lands_in_resolved_workflow_channel(tmp_path):
+def test_real_fragment_lands_in_resolved_workflow_channel(tmp_path, engine):
     assert REAL_FRAGMENT.exists(), REAL_FRAGMENT
     fragment_data = tomllib.loads(REAL_FRAGMENT.read_text(encoding="utf-8"))
     fragment_ucg_facts = [
@@ -714,7 +768,7 @@ def test_real_fragment_lands_in_resolved_workflow_channel(tmp_path):
 
     # Merge the REAL fragment into a FRESH temp target via the tool. Fresh-seed
     # path: the tool creates [workflow] and lands the channel there.
-    custom = _engine_tree(tmp_path)
+    custom = _engine_tree(tmp_path, engine)
     target = custom / "bmad-prd.toml"  # does not exist yet -> fresh install
     proc = run_tool(target, REAL_FRAGMENT)
     assert proc.returncode == 0, proc.stderr
@@ -722,20 +776,23 @@ def test_real_fragment_lands_in_resolved_workflow_channel(tmp_path):
 
     overlay = load_target(target)
 
-    # A COMMITTED-style base customize.toml mirroring the real shape (built as a
-    # fixture string so the test is CI-portable — _bmad/ and .claude/ are
-    # gitignored). It carries a HUMAN baseline fact + a human scalar.
+    # A COMMITTED-style base customize.toml mirroring the real shape, written
+    # into a skill folder of the temp project (CI-portable: the repo's _bmad/
+    # and .claude/ are gitignored). It carries a HUMAN baseline fact + a human
+    # scalar.
     base_human_fact = "file:human-baseline [ucg-not]"
-    base = tomllib.loads(
+    base_text = (
         f'[{WORKFLOW_KEY}]\n'
         f'{CHANNEL} = ["{base_human_fact}"]\n'
         f'{HUMAN_WORKFLOW_SCALAR_KEY} = "base.md"\n'
     )
+    base = tomllib.loads(base_text)
     base_channel = list(base[WORKFLOW_KEY][CHANNEL])  # [base_human_fact]
+    skill_dir = tmp_path / ".claude" / "skills" / "bmad-prd"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "customize.toml").write_text(base_text, encoding="utf-8")
 
-    deep_merge = _import_real_deep_merge()
-    resolved = deep_merge(base, overlay)
-    resolved_channel = resolved[WORKFLOW_KEY][CHANNEL]
+    resolved_channel = _live_resolve(tmp_path, skill_dir)[CHANNEL]
 
     # THE load-bearing assertion: the fragment's UCG items genuinely reach the
     # RESOLVED workflow channel (a top-level-writing tool would leave them out).
@@ -755,10 +812,11 @@ def test_real_fragment_lands_in_resolved_workflow_channel(tmp_path):
     toplevel_overlay = dict(overlay)
     toplevel_overlay.pop(WORKFLOW_KEY, None)
     toplevel_overlay[CHANNEL] = list(fragment_ucg_facts)  # the dark write
-    mutant_resolved = deep_merge(base, toplevel_overlay)
-    assert mutant_resolved[WORKFLOW_KEY][CHANNEL] == base_channel  # items lost
+    _write_through_serializer(target, toplevel_overlay)
+    mutant_channel = _live_resolve(tmp_path, skill_dir)[CHANNEL]
+    assert mutant_channel == base_channel  # items lost
     for fact in fragment_ucg_facts:
-        assert fact not in mutant_resolved[WORKFLOW_KEY][CHANNEL]
+        assert fact not in mutant_channel
 
 
 if __name__ == "__main__":

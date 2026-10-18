@@ -894,19 +894,25 @@ async function testGitignoreEntries() {
 // ============================================================
 
 const REPO_ROOT = path.resolve(__dirname, '..');
-// Vendored under skills/.../tests/fixtures/engine/ so the suite stays hermetic
-// in CI (the real _bmad/ tree is gitignored and absent on a clean checkout).
-const REAL_ENGINE = path.join(REPO_ROOT, 'skills', 'ultracode-goal', 'scripts', 'tests', 'fixtures', 'engine', 'resolve_customization.py');
+// Vendored under skills/.../tests/fixtures/ so the suite stays hermetic in CI
+// (the real _bmad/ tree is gitignored and absent on a clean checkout). BMAD
+// before 6.11 ships a single-file engine that defines deep_merge; 6.11 moved
+// the merge into config_utils.py as structural_merge.
+const ENGINE_FIXTURES = path.join(REPO_ROOT, 'skills', 'ultracode-goal', 'scripts', 'tests', 'fixtures');
+const ENGINE_BEFORE_6_11 = path.join(ENGINE_FIXTURES, 'engine');
+const ENGINE_6_12 = path.join(ENGINE_FIXTURES, 'engine-6.12');
 
 /**
- * Copy the real deep_merge engine into a temp project so merge_customization.py
- * resolves it exactly as it will at install time (mirrors REAL_ENGINE in
- * skills/.../tests/test_merge_customization.py).
+ * Copy a real BMAD engine's scripts into a temp project's _bmad/scripts/ so
+ * merge_customization.py resolves them exactly as it will at install time
+ * (mirrors ENGINES in skills/.../tests/test_merge_customization.py).
  */
-async function seedEngine(projectDir) {
-  const dest = path.join(projectDir, '_bmad', 'scripts', 'resolve_customization.py');
-  await fs.ensureDir(path.dirname(dest));
-  await fs.copy(REAL_ENGINE, dest);
+async function seedEngine(projectDir, engineDir = ENGINE_BEFORE_6_11) {
+  const destDir = path.join(projectDir, '_bmad', 'scripts');
+  await fs.ensureDir(destDir);
+  for (const name of await fs.readdir(engineDir)) {
+    if (name.endsWith('.py')) await fs.copy(path.join(engineDir, name), path.join(destDir, name));
+  }
 }
 
 /** Seed present BMAD skills by creating .claude/skills/{skill}/ dirs. */
@@ -1216,6 +1222,80 @@ async function testStep6bUcgAwareness() {
       );
     } catch (error) {
       assert(false, 'absent-resolve completes without error', error.message + '\n' + error.stack);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  }
+
+  // --- BMAD 6.12 engine (merge in config_utils.py) -> every fragment merges --
+  // Since 6.11, resolve_customization.py no longer defines deep_merge, so Step 6b
+  // reaches the merge through config_utils.structural_merge. Each present
+  // planning skill gets its overlay with no warning, and BMAD 6.12's own
+  // resolver reads the ucg-create-story facts back. Twin: the same project
+  // without config_utils.py warns once per fragment and writes nothing.
+  for (const withConfigUtils of [true, false]) {
+    const label = withConfigUtils ? 'BMAD 6.12 engine' : 'Twin: BMAD 6.12 engine without config_utils.py';
+    const projectDir = await makeTempDir(withConfigUtils ? 's6b-engine-6-12' : 's6b-engine-6-12-broken');
+    try {
+      await seedEngine(projectDir, ENGINE_6_12);
+      if (!withConfigUtils) await fs.remove(path.join(projectDir, '_bmad', 'scripts', 'config_utils.py'));
+      await seedSkills(projectDir, PLANNING_SKILLS);
+      const installer = new Installer();
+      const spy = spyClackSinks();
+      const restore = suppressConsole();
+      const result = await installer.install({
+        projectDir,
+        ucgFolder: '_bmad/ucg',
+        project_name: 'engine-6-12',
+        ides: ['claude-code'],
+        install_learning: false,
+        enable_ucg_awareness: true,
+        _action: 'fresh',
+      });
+      restore();
+      spy.restore();
+
+      assert(result.success === true, `${label}: install returns success`);
+      const customDir = path.join(projectDir, '_bmad', 'custom');
+      const failed = spy.captured.filter((m) => /UCG-awareness shaping for .* failed/.test(m));
+      if (withConfigUtils) {
+        assert(failed.length === 0, `${label}: no fragment fails`, failed.join('\n'));
+        for (const skill of PLANNING_SKILLS) {
+          const overlay = path.join(customDir, `${skill}.toml`);
+          const text = (await fs.pathExists(overlay)) ? await fs.readFile(overlay, 'utf8') : '';
+          assert(new RegExp(`\\[ucg:${skill}-\\d+\\]`).test(text), `${label}: ${skill}.toml carries its stamped facts`);
+        }
+        const { spawnSync } = require('node:child_process');
+        const resolver = path.join(projectDir, '_bmad', 'scripts', 'resolve_customization.py');
+        const skillDir = path.join(projectDir, '.claude', 'skills', 'ucg-create-story');
+        const proc = spawnSync('uv', ['run', '--script', resolver, '--skill', skillDir, '--key', 'workflow'], {
+          cwd: projectDir,
+          encoding: 'utf8',
+        });
+        assert(proc.status === 0, `${label}: BMAD's resolver runs on the merged overlay`, proc.stderr);
+        let facts = [];
+        try {
+          facts = JSON.parse(proc.stdout).workflow.persistent_facts;
+        } catch {
+          facts = [];
+        }
+        assert(
+          facts.some((fact) => /\[ucg:ucg-create-story-\d+\]/.test(fact)),
+          `${label}: the resolved ucg-create-story workflow carries the UCG facts`,
+        );
+      } else {
+        assert(failed.length === PLANNING_SKILLS.length, `${label}: one warning per fragment`, `found ${failed.length}`);
+        assert(
+          failed.every((m) => m.includes('merge engine missing')),
+          `${label}: the warning names the missing engine`,
+          failed.join('\n'),
+        );
+        const wrote = (await fs.pathExists(customDir)) ? await fs.readdir(customDir) : [];
+        const tomls = wrote.filter((f) => f.endsWith('.toml'));
+        assert(tomls.length === 0, `${label}: no overlay written`, `found ${tomls.join(', ')}`);
+      }
+    } catch (error) {
+      assert(false, `${label} completes without error`, error.message + '\n' + error.stack);
     } finally {
       await fs.remove(projectDir);
     }

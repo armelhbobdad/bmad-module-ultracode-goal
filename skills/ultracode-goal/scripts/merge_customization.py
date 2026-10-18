@@ -21,20 +21,22 @@ The landing channel is the NESTED ``workflow.persistent_facts`` path, because
 every real BMad customize target nests ``persistent_facts`` under a
 ``[workflow]`` table (verified: ``.claude/skills/{bmad-prd,bmad-architecture,
 bmad-create-epics-and-stories,ucg-create-story}/customize.toml``). The runtime
-``deep_merge`` only lands an overlay's items in
+merge only lands an overlay's items in
 ``resolved['workflow']['persistent_facts']`` when the overlay nests them under
 ``[workflow]`` too; writing a TOP-LEVEL ``persistent_facts`` key would be a
 dark write the live resolve silently ignores. The ``[ucg]`` stamp + manifest
 stay TOP-LEVEL of the overlay — that is UCG bookkeeping the live resolve never
 reads, and the tool finds its own stamp top-level.
 
-The runtime ``deep_merge`` engine is IMPORTED from
-``_bmad/scripts/resolve_customization.py`` (never reimplemented). Because
-``persistent_facts`` is a flat STRING array, that engine can only APPEND
-(``_merge_arrays`` keys-merges only dict items with ``code``/``id``); therefore
-idempotency, anti-zombie, uninstall and conflict are owned ENTIRELY by this
-tool's strip-then-reappend — ``deep_merge`` is the appender the strip
-compensates for, never the enforcer.
+The runtime merge engine is IMPORTED from the project's ``_bmad/scripts/``
+(never reimplemented): ``deep_merge`` from ``resolve_customization.py`` on
+BMAD releases before 6.11, which define it there, and ``structural_merge``
+from ``config_utils.py`` on 6.11 and later, which moved it there and apply
+it through ``load_customization``. Because ``persistent_facts`` is a flat
+STRING array, that engine can only APPEND (``_merge_arrays`` keys-merges only
+dict items with ``code``/``id``); therefore idempotency, anti-zombie,
+uninstall and conflict are owned ENTIRELY by this tool's strip-then-reappend:
+the engine is the appender the strip compensates for, never the enforcer.
 
 Pre-merge shape probe (three branches):
   - target absent or empty ``{}`` → FRESH install: seed ``[workflow]`` with
@@ -52,7 +54,8 @@ clobbered. Non-``[ucg:``-marked human rows are always preserved.
 Exit codes (the merge-family lane, NOT the gate_eval lane):
   0 = success / skip / conflict
   1 = validation error (unparseable --target or --fragment TOML)
-  2 = missing engine dependency (resolve_customization.py absent)
+  2 = missing engine dependency (resolve_customization.py absent, or neither
+      merge function importable from _bmad/scripts/)
 """
 
 from __future__ import annotations
@@ -70,7 +73,7 @@ import tomli_w
 # The single universal sanctioned landing channel the live customize schema
 # exposes, nested under the [workflow] table in every real target. The
 # fragment declares persistent_facts top-level; the tool lands it at
-# workflow.persistent_facts so the live deep_merge actually resolves it.
+# workflow.persistent_facts so the live merge actually resolves it.
 WORKFLOW_KEY = "workflow"
 CHANNEL = "persistent_facts"
 
@@ -180,26 +183,49 @@ def _load_toml(path: Path) -> dict:
         return tomllib.load(fh)
 
 
-def _resolve_deep_merge(target_path: Path, verbose: bool):
-    """Guarded import of deep_merge from the engine at
-    ``<project>/_bmad/scripts/resolve_customization.py`` relative to --target
-    (which lives under ``_bmad/custom/``). Never define it locally.
+def _resolve_merge_engine(target_path: Path, verbose: bool):
+    """Guarded import of the structural merge BMAD's resolver uses, from
+    ``<project>/_bmad/scripts/`` relative to --target (which lives under
+    ``_bmad/custom/``). Never define it locally.
 
-    Returns the imported callable, or None when the engine is absent — the
-    caller then takes the documented exit-2 missing-dep path.
+    BMAD before 6.11 defines it in ``resolve_customization.py`` as
+    ``deep_merge``. BMAD 6.11 moved it to ``config_utils.py`` as
+    ``structural_merge``, which the resolver applies through
+    ``load_customization``, so ``deep_merge`` no longer exists there. The
+    resolver itself must be present either way: without it no BMAD skill
+    reads the overlay this tool writes.
+
+    Returns the imported callable, or None when the resolver is absent or
+    neither function imports; the caller then takes the documented exit-2
+    missing-dep path.
     """
     # --target == .../_bmad/custom/<name>.toml ; engine == .../_bmad/scripts/.
     custom_dir = target_path.resolve().parent  # _bmad/custom
     engine_dir = custom_dir.parent / "scripts"  # _bmad/scripts
+    if not (engine_dir / "resolve_customization.py").is_file():
+        if verbose:
+            print(f"resolve_customization.py not found in {engine_dir}", file=sys.stderr)
+        return None
     if str(engine_dir) not in sys.path:
         sys.path.insert(0, str(engine_dir))
     try:
-        from resolve_customization import deep_merge  # noqa: WPS433 (guarded)
+        from resolve_customization import deep_merge  # noqa: WPS433 (guarded; BMAD before 6.11)
+
+        return deep_merge
+    except ImportError:
+        pass
+    try:
+        from config_utils import structural_merge  # noqa: WPS433 (guarded; BMAD 6.11+)
+
+        return structural_merge
     except ImportError:
         if verbose:
-            print(f"resolve_customization not importable from {engine_dir}", file=sys.stderr)
+            print(
+                f"neither resolve_customization.deep_merge nor "
+                f"config_utils.structural_merge importable from {engine_dir}",
+                file=sys.stderr,
+            )
         return None
-    return deep_merge
 
 
 def _emit(result: dict) -> None:
@@ -214,10 +240,11 @@ def main() -> None:
     # --- Guarded engine import. Even --remove honors the
     # contract: the merge family always proves the engine is present, so an
     # absent engine is the exit-2 missing-dep signal regardless of operation.
-    deep_merge = _resolve_deep_merge(target_path, verbose)
-    if deep_merge is None:
+    merge = _resolve_merge_engine(target_path, verbose)
+    if merge is None:
         print(
-            "warning: resolve_customization.py (deep_merge engine) not found; "
+            "warning: BMAD's customization merge engine not found in _bmad/scripts/ "
+            "(resolve_customization.py, plus config_utils.py on BMAD 6.11 and later); "
             "writing nothing. Install BMAD's customization layer first.",
             file=sys.stderr,
         )
@@ -305,8 +332,8 @@ def main() -> None:
 
     # --- Re-append the fragment's items (each carrying its embedded marker),
     # skipping any id we are leaving as a conflicted hand-edit. The flat
-    # string array is what the imported deep_merge engine would itself APPEND
-    # (resolve_customization.py:_merge_arrays); we drive it explicitly so the
+    # string array is what the imported merge engine would itself APPEND
+    # (its _merge_arrays); we drive it explicitly so the
     # idempotency comes from the strip above, not from the appender.
     appended: list[str] = []
     manifest: dict[str, str] = {}
@@ -339,7 +366,7 @@ def main() -> None:
     merged_facts = stripped_facts + appended
     rows_added = len(appended)
 
-    # --- Reconstruct the output dict deterministically: drive deep_merge for
+    # --- Reconstruct the output dict deterministically: drive the engine for
     # the channel array (proving the engine is wired), then write exactly one
     # refreshed [ucg] stamp + manifest. Rebuilding from human content + a
     # fixed-order UCG block is what makes re-serialization byte-stable.
@@ -349,7 +376,7 @@ def main() -> None:
     if isinstance(merged.get(WORKFLOW_KEY), dict):
         merged[WORKFLOW_KEY] = dict(merged[WORKFLOW_KEY])  # don't mutate the read
     # engine append over empty base == identity (proves the engine is wired):
-    _set_channel(merged, deep_merge([], merged_facts))
+    _set_channel(merged, merge([], merged_facts))
 
     stamp = {
         "managed": True,
