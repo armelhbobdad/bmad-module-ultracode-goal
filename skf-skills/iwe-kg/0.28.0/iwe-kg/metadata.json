@@ -1,0 +1,508 @@
+{
+  "name": "iwe-kg",
+  "version": "0.28.0",
+  "skill_type": "single",
+  "scope_type": "reference-app",
+  "source_authority": "community",
+  "source_repo": "https://github.com/iwe-org/iwe",
+  "source_root": "/home/armel/.skf/workspace/repos/github.com/iwe-org/iwe",
+  "source_commit": "5edc6d9a1243d9fcb25476d6b8fa01754daa5b8e",
+  "source_ref": "iwe-v0.28.0",
+  "confidence_tier": "Deep",
+  "spec_version": "1.3",
+  "generation_date": "2026-10-18T21:23:30Z",
+  "description": "IWE 0.28.0 markdown knowledge-graph tooling for agent memory: the iwe CLI and its query language, the iwes LSP server, the iwec MCP server, the version-4 .iwe/config.toml contract and the hidden iwe internal claude commands behind the IWE Claude Code plugin's hooks and memory skills. Use when reading or writing this repository's IWE workspace or memory, editing .iwe/config.toml or .iwe/schemas, wiring iwes or iwec into an editor or MCP client, or debugging the plugin's SessionStart and PostToolUse hooks and session records. Not for IWE versions other than 0.28.0, and not for changing the iwe-org/skills plugin itself.",
+  "language": "rust",
+  "ast_node_count": 90,
+  "exports": [],
+  "tool_versions": {
+    "ast_grep": "0.45.3",
+    "qmd": "2.8.3",
+    "skf": "4.0.0"
+  },
+  "confidence_distribution": {
+    "t1": 90,
+    "t1_low": 138,
+    "t2": 0,
+    "t3": 14
+  },
+  "stats": {
+    "exports_documented": 22,
+    "exports_public_api": 22,
+    "exports_internal": 0,
+    "exports_total": 22,
+    "public_api_coverage": 1.0,
+    "total_coverage": 1.0,
+    "scripts_count": 0,
+    "assets_count": 0,
+    "pattern_surfaces_documented": 22,
+    "notes": "reference-app: export counts are pattern-surface proxies, not library exports (22 Pattern Surface rows; the recipe runner counted 634 public names across the workspace's five crates, most in liwe and diwe files outside scope.include)"
+  },
+  "generated_by": "create-skill",
+  "dependencies": [],
+  "compatibility": "",
+  "doc_sources": [
+    {
+      "url": "https://iwe.md",
+      "detected_via": "homepageUrl",
+      "content_hash": "sha256:31573598f96e361a8357e190f77a86d4b42a2ae1268f67fe008c16fec71b793b",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/?ref=readme-header",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:5fbedfa1e767be4ee24853914e2569cca24a4b722bac04dbc82887c88b0570b4",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/cli/?ref=readme-table",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:5846dac33e793f30d59f061ac8852e4b01ae0def521abfb13dbd7081554d293b",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/agentic/?ref=readme-table",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:e4eb92c1c197b0e7e6daa1efb04448fc1f11f18bd9cc36cab4d3a802fb32e151",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/editors/neovim/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:5519e8a56f1b9d9496525c1bd7ed6fba5c7276501848c0692e3ea1a5b7b3fd86",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/editors/helix/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:2c7929fe8511fcd10053e2e8a65805524c19098bb146fcc40d542e8fabb4dcbb",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/editors/vscode/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:fdca3a453d4a465182dbbfbfbb649def9d165977080e53f5af19b4763d995af9",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/editors/zed/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:be9deaf8084e40766a0242faa81724b3d6104770d2e3ff6bf3c9a9e6d57469d4",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/getting-started/installation/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:71c009b8582ff445f1f842a679c57a44393dc70ba997e62f27dd0ebd590bf5f4",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/cli/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:f53e31bd793958eaa32f1d101860d2150206065dc9ad55c076b4205c7d8d818f",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/agentic/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:40fb6bd7f54b1b111afb3e4fea6a2f3d57f3cf0387fd08c659b2f0a4a940ce27",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/getting-started/usage/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:2d997d5abba23db05b8ed7ca2ae710eaada3a278869ca9d8d823bcf63f6fc32b",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/examples/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:44863242dd6c4bdf30721f3e91848a96d1cbc5027de9b64c8fa254d4589c2231",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://iwe.md/docs/agentic/mcp/",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:a5b09f272eaace5993fb685584434c082a697324f04919b121701417776d12b6",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/architecture.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a18d649f72e5cfb0ff6d61d710ce8c50062eb36046e0c04099e7017c67291839",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/benchmark.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a84f1d72ab1872c6c394ced1c5a639831de112fa1219f44402b56cf16972058e",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-attach.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d3260c5450b0a7088a91c47d31a780452e2eb2770aab8c8ab42ac80b0985c4ee",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-count.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:36b82b75334f1ffc58116ca85980453029c25a58415d9141e35e127ac024a237",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-create.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e128405ff583de6fc55831c45c4056b3bafe65f8ae80e71d9ae388db53456195",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-delete.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:83c62dfe9a0338bda5dd81d7f785b38a64bd58e5033bd694394f8a117911dede",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-export.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:f77cc58fd2b0ee62c4f459bf67f78a19cfd0d49e824bf8a8aaec6aca00f1c2e0",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-extract.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d907def707c7d94c5107ffcffcf68aa868e79159ced7e3074f0cc60407a36109",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-find.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b76970fc526300bb391532e0eff20858df89f761e96f4fa8230f22d984b276c8",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-init.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b9f31e6fdf41fcd9f6c888bb1e5fe7c9ed06c1e06764bd5fe31e708dc6ca9209",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-inline.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:96528dc5291e723a726f7b43ab9bb8ca897297eae077d034df8722d163e29f53",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-new.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e59abe2a1a0c5ceb9ac84e5ee0d074e68a249a1397ef1475762cdbf49ccf64e2",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-normalize.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:26e35b1432f63c701ca223c8a3a52018e31c9b61694240c6d645411fb86a89fc",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-rename.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:90c5fca0ce0637c3f7a2bc8c644077a56e71e9fdb4bc91f1dc3db96ae546dd8c",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-retrieve.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:670df3aa421adfa39f3737c544d26d8748e9850ba0bacd1397c04ff5547701eb",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-schema.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:1bce7e81009f593213d59a933e62851033e91ad7b11067c5e2fe33aea4a4d966",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-squash.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:61fa78c7c643e5ff9699a88c2439ced9a32e942646ae66493d8d0087faaef72e",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-stats.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b1e878a1e5f6fb73ff02e42be4dd652b527791b9d64a3db69c5511aefc5f26d5",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-tree.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9b1e03ed71e231ad3c43c37e0db05fbea052c5efbfd56ae392ff852f7bdaded9",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-troubleshooting.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:841b9793a6435f60ce3f6567874c5e12c1e55314db990e4cf238c47be6acc2ba",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-update.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:698602896fd55c4739b43bc45baf9ce50d71e917699c38a7c11dd3bcd797231b",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli-workflows.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:55ac9d64f569c4972725487d38811dd586ab71522d708200b4cc821d701b0f41",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/cli.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:f621cab268d14e138ac195594ac626e75a6e7e656d9848bce7ebea0b8f3efced",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/comparison.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:94cc96d89bc8217ca3e5042e36380ce9d22768809054998f4bb55befce72c04c",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/configuration.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:818c564ccb84f4b0775db3c0a1277994f517de395afd9defe874483f029aa529",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/data-model.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:ef2e0a6915c76406a581435d1830ae3c5a530c3ab6f68a83874f151d8a14e0a6",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/debug-mode.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:ec0fa904c57a5f51c6d0c78dd77d52d69304a5f2ead09a3603037bf40e26ec3a",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/design-principles.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c27715d57ad6632b042721320b04e54c16afcb7b567a24d2df01a06b30e952f5",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/document-schema.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:f73d90fbbaf936a0361e246a96776ef62d2ae2f42b47fda990a24c7c47ef0066",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-ai-commands.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:61598f86da844db792d24f40ac8c63ed17eb31c28745ae97da31313210db6ac4",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-attach.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:1c7255ef299ef5983c14bc187d72ca9b3fab7b9c2c5ed91d32e38d2d05f2afad",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-auto-format.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:969724c6af7b8d15136ee5f7b6774cd27fc29ce93cf3136684d959b0b7b31cc6",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-autocomplete.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:5538bb5de761bda7a4cdcbd36905c798e79e58b7f59bc7ba61904dbbc2bb8a2e",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-delete.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:891e8887b0d364c9f543253e9fd10eace84d9a87a059db9bf8608d20e8369098",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-extract.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:3e401e00a2b33ebe8eb86189ed51b4acb1e2f859f395123d38e13ed99c788c54",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-hover-preview.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:055d31ad492fbdf7716fdd1cd804255131746f0195b35ffdc8c0e970fccd1496",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-inlay-hints.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6fe022e056e7a9de44f13a6856eb257a758126f3890f38e369d86fdfcc676277",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-inline.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:8098b5903cfd83f67b4ebfa99977cb0b731c3234a3405ea08cd7c19378137db0",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-link.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:8619856ba0ee0d889fe475e967af564e10273385ec17f611e325ae72b934ad0f",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-navigation.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:40953d49e0f4e3b2b17409f2931825666c6cffb1f4429ec05f1c553c115f6c7c",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-normalization.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:9f6f5d724f52d44be9ddcc951f88379a3455e2c4838079b10be0cb6c4bb40f8f",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-overview.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:92cbbdc89daf179691029697523626e53b1c9882c271935e1a16b1bf02deaaeb",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-renaming.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:6b55e17afeb0310b379554d6d42e09f7458e01ac25d67abb0b167231bdded8f0",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-search.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b222f3bc28d37f7a61bdbda00ceb8954e69a9b3401f3ae28dd5235b433062f71",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-subdirectories.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:500047d9826e34494d401b2ae70e08adbc0281d48cd77432a47ef45c1e7b3b7c",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-text-manipulation.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:4586b589bb2d085abbf93d6bc54df1a77072224b8af2ce82968a8e0bd8d498e6",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/feature-visualization.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:de71bb953cf9815d246b39c25e6737bc0784deeef1c632ae52e0b977a087518c",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/helix.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:50676fe19eaf1c5db5fe12649cf967efdb9cb173f6f4cd133dbc3356f09f6f6b",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/how-to-install.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:c8b6b2fb6216ff45c07fbe788ae37d54b7feed1d3c043fbdd7f8cdfa3c17e381",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/how-to-use.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b87c3b63566fa789bcc39be2d07fdcb6d68737787dffd42893e9b6d8d066163d",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/inclusion-links.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:7f71f9e0a2067ac4c904c7f0714f715cb814bfe0ab03b64901834db3ddcef010",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/index.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b1492143838b939d71a5cd6b352f546fa22ae3afba3394473a5dad6213317fc9",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/keys.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a3955673e912a5b7ad808545a4f32d3b3aa928bd7ca63b7f0df5479abcc9a554",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/mcp.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:efa02414d2c6c3d771ef2d36e34a27b2c23c9045f6651dc5ae8db5564830b282",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/neovim.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b19a2c8c6fb17b5c94f9f6d0a1817d0cb4ad2e230e3e5518708d300205215a47",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/okf.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:0328bb2d9499a61cc98b8800ed5b2d08c54c567fdf7ff8c50783ab7ee8dc3190",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/query-language.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:5bea740ca5563058052f19eb8ceb9ee0e4201db6ec19e60845e94d58057efaa8",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/search-ranking.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:b7cb20591e757b26d881c2d67a11a5e70200a424175cceb486c07c2a0466e829",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/spec.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:cd566d254f92f5992cb68e2e7af3672f489134aa8dd43855701e0e250a625b13",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/vscode.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:496666be65f1692105934d0fad702903ff2246bf72a7312e0f361c8291f5ac14",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/why-it-exists.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:a2827d6d76d8bc2a00925f95a17bc9fddf593a89c2b6bc1a447a77b6736c5abd",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/master/docs/zed.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:02e055cc3c6b8999f353a894143f3574461617bf91d1aa94d063c32e678615b7",
+      "recorded_at": "2026-10-18T19:47:11.485508+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/iwe-org/iwe/iwe-v0.28.0/README.md",
+      "detected_via": "readme_always",
+      "content_hash": "sha256:17c6c243df33e71019ae77ed967ccddeec58b5db60affcb6112f6d04c779644c",
+      "recorded_at": "2026-10-18T19:46:59.498059+00:00"
+    }
+  ]
+}
