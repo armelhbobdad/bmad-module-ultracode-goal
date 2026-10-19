@@ -1,0 +1,154 @@
+{
+  "name": "graphify-kg",
+  "version": "0.9.92",
+  "skill_type": "single",
+  "scope_type": "reference-app",
+  "source_authority": "community",
+  "source_repo": "https://github.com/Graphify-Labs/graphify",
+  "source_root": "/home/armel/.skf/workspace/repos/github.com/Graphify-Labs/graphify",
+  "source_commit": "86c57be8204673c2a1b9849a3292a7dd3ab373d8",
+  "source_ref": "v0.9.92",
+  "confidence_tier": "Deep",
+  "spec_version": "1.3",
+  "generation_date": "2026-10-18T20:36:52Z",
+  "description": "Graphify v0.9.92 knowledge-graph CLI (PyPI package graphifyy; console scripts graphify and graphify-mcp): the update refresh and its shrink guard, every subcommand's flags and exit codes, the graphify-out/ layout and formats, the ignore rules, and what graphify install and graphify claude install write. Use when running or debugging the UltraCode Goal Finalize refresh (graphify update .), reading graph.json or GRAPH_REPORT.md, or wiring graphify's Claude Code skill, CLAUDE.md blocks, git hooks or MCP server into a project. Not for graphify's extraction internals (the extract, cache, build and llm modules).",
+  "language": "python",
+  "ast_node_count": 77,
+  "exports": [],
+  "tool_versions": {
+    "ast_grep": "0.45.3",
+    "qmd": "2.8.3",
+    "skf": "4.0.0"
+  },
+  "confidence_distribution": {
+    "t1": 77,
+    "t1_low": 0,
+    "t2": 0,
+    "t3": 0
+  },
+  "stats": {
+    "exports_documented": 14,
+    "exports_public_api": 76,
+    "exports_internal": 0,
+    "exports_total": 76,
+    "public_api_coverage": 0.1842,
+    "total_coverage": 0.1842,
+    "scripts_count": 0,
+    "assets_count": 0,
+    "pattern_surfaces_documented": 14,
+    "notes": "reference-app: exports_documented counts the 14 Pattern Surface rows; exports_public_api counts the 76 public names the AST recipes found in the 14 in-scope Python files, which the skill uses as citations, not as a documented library surface"
+  },
+  "generated_by": "create-skill",
+  "dependencies": [],
+  "compatibility": "",
+  "doc_sources": [
+    {
+      "url": "https://www.graphify.com",
+      "detected_via": "homepageUrl",
+      "content_hash": "sha256:798dd006b17aa14162bed99cc5b4875e23441ebb69b73e02fe9a3e80d2591158",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:0f4153eb04d155d275831394c5367143fb08e2de9fd9a26aa058f09d3e89a17f",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/quickstart",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:b0f82d94067237dff84b8ffcb26f95a5f0103674991a565df30c59e3472407aa",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/reference/overview",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:2b197933f05ebef13c40e0dfe6c34e79e6f84e5b21e42ea8ccff2ad278d542f2",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/guides/querying",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:181615598ba7e9322d09b27bf0bd32e4f4f4f787bfa8398dafb4cf42789e7a9a",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/reference/configuration",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:84b197e1ae03e1eeef42453e4a9e5920ea4d7f1922456e3806e3e323add26780",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/concepts/supported-inputs",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:7dff2eec9fddb9635b4861c208467e3749772c719611eb869c573a853e07c576",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/guides/team-workflows",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:d5205a53762c728a2318b02e0108e28085b26a95a2922e23d122ccc557d6c965",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/guides/pull-requests",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:088af573626602d618c24fe186dec66bd3c7e0b9dce83c2f6fd45a3a4768b825",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/troubleshooting",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:35132120a4fd38fc1f867bc70d3d7a241829778947715022eec4b599a09debec",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/concepts/architecture",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:0209b97434b16d32253af5ced3c820874c5e4cc29fa8968fd347c4d0e2d45877",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/installation",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:4a9dc4421059ec198fef77d0302f3768f38478bcfb18d3db87db7137dea96077",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/guides/always-on",
+      "detected_via": "readme_link",
+      "content_hash": null,
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://docs.graphify.com/reference/query",
+      "detected_via": "readme_link",
+      "content_hash": "sha256:98f952e3758973ba8a2855b2f7e9e1605918982a1e2ce6883d574d9a4c3f3ccd",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/Graphify-Labs/graphify/v8/docs/docker-mcp-sqlite.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:d5906f604e5b6480ac5a923008a2dc46adfb02e9ad047356375dede46d8a72bc",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/Graphify-Labs/graphify/v8/docs/how-it-works.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:cd4a67001704eddc557d67eaa783d0608cd200302fa1b89c3f1a4819497cdc26",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/Graphify-Labs/graphify/v8/docs/node-summaries-rfc.md",
+      "detected_via": "docs_folder",
+      "content_hash": "sha256:e45167aa31910a79a78dea4e97a251ec9d7a860eef1537d621311fee13c8dd41",
+      "recorded_at": "2026-10-18T20:02:46.181917+00:00"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/Graphify-Labs/graphify/v0.9.92/README.md",
+      "detected_via": "readme_always",
+      "content_hash": "sha256:e69b709b0753cb3389d230343d40aa4451814bdb3ceb525f504c5cd46c65cb12",
+      "recorded_at": "2026-10-18T20:02:36.010881+00:00"
+    }
+  ]
+}
