@@ -3,7 +3,7 @@ title: Knowledge-Graph Refresh
 description: The optional graphify integration - UCG refreshes your project's knowledge graph as a run exits, so the next session starts from a current graph. Opt-in, advisory, never in the gate path, off by default.
 ---
 
-> **Optional, opt-in, off by default.** The refresh is one time-boxed call on the way out of a run. It writes `graphify-out/` in your project, and graphify's own housekeeping can also refresh files graphify installed elsewhere, such as its skill files after an upgrade ([where it writes](#what-it-runs-and-where-it-writes) has the detail). It changes nothing in the run: not the gate verdict, not the recorded run-status, not the headless envelope. When it is off, or when the [graphify](https://github.com/Graphify-Labs/graphify) CLI or an existing graph is missing, the run is byte-for-byte the same as a run without it.
+> **Optional, opt-in, off by default.** The refresh is one time-boxed call on the way out of a run. It writes `graphify-out/` in your project (or wherever `GRAPHIFY_OUT` points) and nothing else, because Finalize turns graphify's own housekeeping off for that call ([where it writes](#what-it-runs-and-where-it-writes) has the detail). It changes nothing in the run: not the gate verdict, not the recorded run-status, not the headless envelope. When it is off, or when the [graphify](https://github.com/Graphify-Labs/graphify) CLI or an existing graph is missing, the run is byte-for-byte the same as a run without it.
 
 ## What it does
 
@@ -36,6 +36,16 @@ graphify_integration = "refresh"
 
 The `[workflow]` table header matters: the resolver extracts the `workflow` block from the merged files, so a bare top-level `graphify_integration` line is silently discarded and the feature stays off.
 
+**To let the refresh run unattended**, allow its command. Without an allow rule, the command is left to Claude Code's permission check: under Auto Mode the classifier decides whether it runs, and in a mode that asks first, such as `drive_epic.py`'s default `acceptEdits`, nobody is there to answer. A refusal is logged as a `WARN graphify-refresh-failed` line like any other failure. Add the whole command to `allowlist_commands` under the same `[workflow]` header, not a second one: TOML refuses a table declared twice, and the resolver then rejects the whole file. Arrays append to the shipped list, and preflight writes each entry as an allow rule in `.claude/settings.local.json`. The whole file then reads:
+
+```toml
+[workflow]
+graphify_integration = "refresh"
+allowlist_commands = ["GRAPHIFY_NO_AUTO_REFRESH=1 timeout 300 graphify update ."]
+```
+
+An entry for the binary alone, `graphify`, does not cover it: Claude Code does not match an allow rule past a leading assignment of a variable it does not know, such as `GRAPHIFY_NO_AUTO_REFRESH=1`. If you added that entry for an earlier version, replace it. Replacing it leaves the allow rule an earlier preflight wrote for it, such as `Bash(graphify:*)`, in `.claude/settings.local.json`, because preflight only adds rules. Delete that rule yourself unless you want every graphify command, `graphify extract` included, to run without asking.
+
 ## Three things to know before you turn it on
 
 - **The values are `off` and `refresh`, not `on` and `off`.** `cross_session_recall` sits directly above it in the shipped file and takes `on`, so copying that shape here produces `"on"`, which is not a legal value: only `refresh` turns the step on.
@@ -44,7 +54,7 @@ The `[workflow]` table header matters: the resolver extracts the `workflow` bloc
 
 ## What it runs, and where it writes
 
-The delegation is exactly one command, `graphify update .`, time-boxed to 300 seconds and never retried. That subcommand re-extracts the graph's **parsed layer** against what is on disk, using graphify's local parsers (tree-sitter for most code, rule-based parsers for Markdown and package manifests): **no LLM call, no API key, no token spend** at the end of a run you were not watching, and **no network request** unless you have turned on graphify's Google Workspace export (`GRAPHIFY_GOOGLE_WORKSPACE=1`), which fetches each `.gdoc`, `.gsheet` or `.gslides` shortcut from Google Drive on every refresh.
+The delegation is exactly one command, `GRAPHIFY_NO_AUTO_REFRESH=1 timeout 300 graphify update .`, time-boxed to 300 seconds and never retried. Its `update` subcommand re-extracts the graph's **parsed layer** against what is on disk, using graphify's local parsers (tree-sitter for most code, rule-based parsers for Markdown and package manifests): **no LLM call, no API key, no token spend** at the end of a run you were not watching, and **no network request** unless you have turned on graphify's Google Workspace export (`GRAPHIFY_GOOGLE_WORKSPACE=1`), which fetches each `.gdoc`, `.gsheet` or `.gslides` shortcut from Google Drive on every refresh.
 
 The parsed layer covers the files graphify has a local parser for: source code and the Markdown family (`.md`, `.mdx`, `.qmd`, `.skill`). Source code here includes shell scripts, `.sql` and `.tf` files, package manifests such as `pyproject.toml` and `go.mod`, and config JSON such as `package.json` and `tsconfig.json`; a data `.json` file, such as a fixture, gets no nodes. So an Epic's new modules and the story and documentation files it wrote are both picked up, with one exception: a Markdown file the last full build already gave LLM-derived nodes is not re-parsed, so an edit to it waits for the next semantic pass. What stays as the last full build left it is the **semantic** layer: images, PDFs and papers, documents graphify has no parser for (such as `.txt`, `.rst`, `.html` and `.yaml`), and anything an LLM derived from a document, except that a source deleted from disk or newly ignored loses its nodes. That pass is the one that sends your files to an LLM and spends tokens, which is exactly what an unattended exit step should not decide to do. Run it yourself, on your own terms, when you want it.
 
@@ -56,12 +66,12 @@ One behaviour worth knowing, because it is the opposite of what people expect:
 
 The output is a `graphify-out/` directory at your project root, not in the run folder, so it is not part of the run's evidence and nothing in the gate path reads it. It holds `graph.json`, `GRAPH_REPORT.md`, `graph.html`, `manifest.json`, a `cache/` and a few dotfiles, and a refresh that finds no change leaves the graph and the report as they were. Before a refresh rewrites the graph, graphify copies the old one into a dated folder such as `graphify-out/2026-10-20/`, one a day, if a shell `graphify .` built it with an LLM backend (graphify then leaves a `.graphify_semantic_marker`) or `.graphify_labels.json` holds community names, which a `/graphify .` build in your assistant saves. The hub names `update` fills in go to a separate file and do not count. Setting `GRAPHIFY_NO_BACKUP` turns the copy off. **Add `graphify-out/` to your `.gitignore`**: UCG commits each green story, and an untracked-but-not-ignored tree at the repo root is exactly what a story commit should never sweep up.
 
-Some writes can land outside `graphify-out/`, because graphify does some housekeeping before most commands, `update` included (graphify skips it only for `install`, `uninstall` and the `hook-check` and `hook-guard` calls made by its editor hooks):
+Before most commands, `update` included, graphify does some housekeeping outside `graphify-out/` (it skips it only for `install`, `uninstall` and the `hook-check` and `hook-guard` calls made by its editor hooks):
 
-- On the first such command after you upgrade graphify, it re-copies any skill files `graphify install` put in your home directory, such as `~/.claude/skills/graphify/` for Claude Code, if their version stamp is older than the new package. It keeps the previous `SKILL.md` as `SKILL.md.bak` whenever it differs from the new one, so a `.bak` can appear even if you never edited the file.
-- On every such command, upgrade or not, it checks `.opencode/` in the project and in your home directory: it replaces a graphify OpenCode plugin written by graphify 0.9.74 or earlier once your OpenCode can load the current one, and drops graphify's stale plugin entry from `opencode.json`. In a project that commits `.opencode/`, that can leave a modified tracked file after the last story commit.
+- On the first such command after you upgrade graphify, it re-copies any skill files `graphify install` put in your home directory, such as `~/.claude/skills/graphify/` for Claude Code, if their version stamp is older than the new package, and keeps the previous `SKILL.md` as `SKILL.md.bak` whenever it differs from the new one.
+- On every such command, upgrade or not, it checks `.opencode/` in the project and in your home directory: it replaces a graphify OpenCode plugin written by graphify 0.9.74 or earlier once your OpenCode can load the current one, and drops graphify's stale plugin entry from `opencode.json`.
 
-Finalize turns neither off. To stop both, set `GRAPHIFY_NO_AUTO_REFRESH=1` in the environment you start the run from.
+Each of these also leaves a lock file under `~/.cache/graphify/skill-locks/`. The `GRAPHIFY_NO_AUTO_REFRESH=1` at the start of Finalize's command turns all of it off for the refresh, so the refresh writes nothing outside `graphify-out/` (or wherever `GRAPHIFY_OUT` points): no skill, OpenCode or lock file in your home directory, and, in a project that commits `.opencode/`, no modified tracked file there after the last story commit. You don't need to set anything. The next graphify command you run yourself does the housekeeping as usual. Until you do, after a graphify upgrade the refresh prints graphify's warning that its installed skill is out of date, and Finalize does not act on it.
 
 ## What it never touches
 
