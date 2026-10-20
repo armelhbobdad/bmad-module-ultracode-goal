@@ -13,7 +13,10 @@ absent graphify is a SILENT no-op that leaves the run byte-identical to an `off`
 run. The delegation is graphify's `update` subcommand, which re-extracts code
 and Markdown-family files against the existing graph with no LLM call, so an
 unattended exit step spends no API budget and, unless GRAPHIFY_GOOGLE_WORKSPACE
-is set, makes no network request.
+is set, makes no network request. The line also sets GRAPHIFY_NO_AUTO_REFRESH=1,
+which turns off graphify's pre-command housekeeping (re-copying its installed
+skill files, replacing an old OpenCode plugin), so the refresh writes only the
+graph's own output.
 
 Two halves, and the second is what makes the first mean anything:
 
@@ -33,10 +36,11 @@ the set must be exactly `{off, refresh}` — that is what makes the closed enum
 mechanically checkable, so a re-added `query` (or any third mode) reds. Spell
 non-mode bare words in that section without backticks; every other token the
 section needs (`graphify update`, `command -v graphify`, `graphify-out/graph.json`,
-`WARN graphify-refresh-failed`, `.decision-log.md`) already carries a character
-that excludes it. That is why the delegation is written as `graphify update` and
-never as a bare `update`: the bare form would be read as a third mode literal and
-red the closed-enum assertion, which is the convention working, not fighting.
+`GRAPHIFY_NO_AUTO_REFRESH=1`, `WARN graphify-refresh-failed`, `.decision-log.md`)
+already carries a character that excludes it. That is why the delegation is
+written as `graphify update` and never as a bare `update`: the bare form would be
+read as a third mode literal and red the closed-enum assertion, which is the
+convention working, not fighting.
 
 Anti-vacuous twin: `fixtures/finalize_no_graphify_section.md` is a verbatim
 pre-edit snapshot of `references/finalize.md`, taken before this contract landed.
@@ -89,6 +93,19 @@ _TERMINAL_HEADING = "## Workflow health check"
 
 # The closed value space. Nothing else is a legal mode.
 _MODES = {"off", "refresh"}
+
+# The assignment that opens the delegation line. It turns off graphify's
+# pre-command housekeeping, which otherwise writes outside the graph.
+_OPT_OUT = "GRAPHIFY_NO_AUTO_REFRESH=1 "
+
+# The time box, after the opt-out when there is one. The opt-out is optional
+# here so that a dropped assignment leaves this check green and a dropped
+# bound leaves the opt-out check green. Either drop also fails the whole-line
+# match and the allowlist advice, which quotes the line.
+_TIMEBOX = re.compile(rf"^(?:{re.escape(_OPT_OUT)})?timeout (\d+) ")
+
+# The whole delegation line, and nothing else on it.
+_WHOLE_LINE = re.compile(rf"{re.escape(_OPT_OUT)}timeout \d+ graphify update \.")
 
 # The surfaces graphify must never reach: the preflight scan, the per-story
 # spine's prose, the gate that judges a story, the two hooks that can deny or
@@ -195,7 +212,19 @@ _SECTION_CHECKS = {
     "refuses a cold full build": lambda s: "Never a cold full build." in s,
     # bounding
     "time-boxes the delegation": lambda s: any(
-        re.match(r"^timeout \d+ ", line) for line in _delegation_lines(s)
+        _TIMEBOX.match(line) for line in _delegation_lines(s)
+    ),
+    # housekeeping opt-out: the refresh writes the graph and nothing else
+    "opens the delegation with the housekeeping opt-out": lambda s: any(
+        line.startswith(_OPT_OUT) for line in _delegation_lines(s)
+    ),
+    "names the housekeeping the opt-out turns off": lambda s: (
+        "re-copies the skill files" in s and "OpenCode plugin" in s
+    ),
+    # The advice quotes the delegated line itself, so it cannot drift from it.
+    "allowlist advice names the whole delegation line": lambda s: any(
+        f"`{line}`, to their own `{{workflow.allowlist_commands}}`" in s
+        for line in _delegation_lines(s)
     ),
     "logs one WARN line on failure": lambda s: "`WARN graphify-refresh-failed`" in s,
     "does not retry": lambda s: "not retried" in s,
@@ -383,18 +412,25 @@ def test_refresh_is_incremental_and_finalize_only():
     # is a test that cannot fail. `graphify extract` is the LLM path and a
     # bare-path `graphify .` aliases straight to it, so either one chained ahead
     # of the update would dispatch semantic extraction from an unattended exit.
-    assert re.fullmatch(r"timeout \d+ graphify update \.", delegation), (
+    assert _WHOLE_LINE.fullmatch(delegation), (
         f"the delegation must be exactly the no-LLM incremental subcommand: {delegation!r}"
     )
 
-    # Positive control for that fullmatch: the smuggle it exists to reject has to
+    # Positive control for that fullmatch: each shape it exists to reject has to
     # actually fail it, and the weaker form has to actually let it through, or
-    # the assertion above is decoration.
-    smuggle = "timeout 300 graphify extract . && graphify update ."
-    assert re.search(r"\bgraphify update \.$", smuggle), "control is not a valid smuggle"
-    assert not re.fullmatch(r"timeout \d+ graphify update \.", smuggle), (
-        "the fullmatch does not reject a chained `graphify extract`"
-    )
+    # the assertion above is decoration. A chained extract dispatches the LLM
+    # path, a dropped opt-out lets graphify's housekeeping write outside the
+    # graph, and an extra variable such as GRAPHIFY_FORCE=1 overrides the
+    # shrink guard that keeps an unexplained loss off the graph.
+    for smuggle in (
+        f"{_OPT_OUT}timeout 300 graphify extract . && graphify update .",
+        "timeout 300 graphify update .",
+        f"{_OPT_OUT}GRAPHIFY_FORCE=1 timeout 300 graphify update .",
+    ):
+        assert re.search(r"\bgraphify update \.$", smuggle), f"control is not valid: {smuggle!r}"
+        assert not _WHOLE_LINE.fullmatch(smuggle), (
+            f"the fullmatch does not reject {smuggle!r}"
+        )
 
     # Position: after the run's other optional integration, and well before the
     # true terminal step. finalize.md forbids acting between the health-check
@@ -462,7 +498,7 @@ def test_refresh_delegation_is_hard_timeboxed():
     section = _section()
     delegation = _delegation_lines(section)[0]
 
-    bound = re.match(r"^timeout (\d+) ", delegation)
+    bound = _TIMEBOX.match(delegation)
     assert bound, (
         f"the delegation carries no literal time-box: {delegation!r}. The bound must be "
         "an integer the shell enforces, not an adverb in the prose"
@@ -490,23 +526,62 @@ def test_refresh_delegation_command_survives_the_timeout_mutation():
     The time-box assertion must red, and the red must be attributable to the
     missing bound alone — so this asserts the command is still present, still
     names graphify and still names the update subcommand under that mutation.
+    The allowlist advice reds with it, because it quotes the line.
     """
     section = _section()
     delegation = _delegation_lines(section)[0]
 
-    mutant_line = re.sub(r"^timeout \d+ ", "", delegation)
+    mutant_line = re.sub(r"\btimeout \d+ ", "", delegation, count=1)
     assert mutant_line != delegation, "mutation did not apply"
 
-    mutant = section.replace(delegation, mutant_line, 1)
-    # the bound assertion reds ...
-    assert not _SECTION_CHECKS["time-boxes the delegation"](mutant)
-    assert not re.match(r"^timeout \d+ ", _delegation_lines(mutant)[0])
+    mutant = section.replace(f"\n{delegation}\n", f"\n{mutant_line}\n", 1)
+    assert mutant != section, "mutation did not apply to the delegation line"
+    # the bound assertion reds, and so does the advice that quotes the line ...
+    assert sorted(set(_unmet(mutant)) - set(_unmet(section))) == [
+        "allowlist advice names the whole delegation line",
+        "time-boxes the delegation",
+    ]
+    assert not _TIMEBOX.match(_delegation_lines(mutant)[0])
     # ... while the command itself is intact, so no deleted or garbled command
     # can explain the failure
+    assert _SECTION_CHECKS["opens the delegation with the housekeeping opt-out"](mutant)
     assert re.search(r"\bgraphify update \.$", mutant_line)
     assert _SECTION_CHECKS["delegates the `update` subcommand"](mutant)
     assert _SECTION_CHECKS["logs one WARN line on failure"](mutant)
     assert _SECTION_CHECKS["does not retry"](mutant)
+
+
+# --- the housekeeping opt-out: the refresh writes only the graph -------------
+def test_housekeeping_opt_out_reds_alone_when_dropped():
+    """Drop the GRAPHIFY_NO_AUTO_REFRESH=1 assignment and keep the rest.
+
+    Without it, graphify's housekeeping runs with the refresh and can write in
+    the home directory and under `.opencode/`. The opt-out check must red, and
+    the red must be the opt-out's alone: the time box and the subcommand stay
+    green. The allowlist advice reds with it, because it quotes the line.
+    """
+    section = _section()
+    delegation = _delegation_lines(section)[0]
+    assert delegation.startswith(_OPT_OUT), f"the delegation has no opt-out: {delegation!r}"
+
+    mutant_line = delegation[len(_OPT_OUT):]
+    mutant = section.replace(f"\n{delegation}\n", f"\n{mutant_line}\n", 1)
+    assert mutant != section, "mutation did not apply to the delegation line"
+
+    # the opt-out assertions red, and no other section check does ...
+    assert sorted(set(_unmet(mutant)) - set(_unmet(section))) == [
+        "allowlist advice names the whole delegation line",
+        "opens the delegation with the housekeeping opt-out",
+    ]
+    assert not _WHOLE_LINE.fullmatch(_delegation_lines(mutant)[0])
+    # ... while the bound and the subcommand are intact
+    assert _SECTION_CHECKS["time-boxes the delegation"](mutant)
+    assert _SECTION_CHECKS["delegates the `update` subcommand"](mutant)
+
+    # positive control: the live section passes all three
+    assert _SECTION_CHECKS["opens the delegation with the housekeeping opt-out"](section)
+    assert _SECTION_CHECKS["allowlist advice names the whole delegation line"](section)
+    assert _WHOLE_LINE.fullmatch(delegation)
 
 
 # --- the twin: the pre-edit file satisfies none of it ------------------------
