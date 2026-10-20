@@ -38,7 +38,7 @@
       }
     },
     "bmad-module-ultracode-goal-stack": {
-      "active_version": "1.4.0",
+      "active_version": "1.5.0",
       "versions": {
         "1.2.0": {
           "ides": [
@@ -52,6 +52,13 @@
             "claude-code"
           ],
           "last_exported": "2026-10-19",
+          "status": "archived"
+        },
+        "1.5.0": {
+          "ides": [
+            "claude-code"
+          ],
+          "last_exported": "2026-10-20",
           "status": "active"
         }
       }
@@ -105,5 +112,5 @@
       }
     }
   },
-  "updated_at": "2026-10-19T07:16:52.961291+00:00"
+  "updated_at": "2026-10-20T17:29:03.868070+00:00"
 }
