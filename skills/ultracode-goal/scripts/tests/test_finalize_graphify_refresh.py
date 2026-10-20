@@ -11,8 +11,9 @@ incremental rebuild of the project's `graphify-out/` and nothing else: the
 delegation is hard time-boxed, a failure is logged once and never retried, and an
 absent graphify is a SILENT no-op that leaves the run byte-identical to an `off`
 run. The delegation is graphify's `update` subcommand, which re-extracts code
-files against the existing graph with no LLM call, so an unattended exit step
-spends no API budget and makes no network request.
+and Markdown-family files against the existing graph with no LLM call, so an
+unattended exit step spends no API budget and, unless GRAPHIFY_GOOGLE_WORKSPACE
+is set, makes no network request.
 
 Two halves, and the second is what makes the first mean anything:
 
@@ -488,7 +489,7 @@ def test_refresh_delegation_command_survives_the_timeout_mutation():
 
     The time-box assertion must red, and the red must be attributable to the
     missing bound alone — so this asserts the command is still present, still
-    names graphify and still names the incremental flag under that mutation.
+    names graphify and still names the update subcommand under that mutation.
     """
     section = _section()
     delegation = _delegation_lines(section)[0]
