@@ -1,0 +1,8 @@
+---
+created: "2026-10-21 23:25"
+session: "3db662c1-d326-4c49-93fb-f5b18179d765"
+---
+
+# TEA 3.0 renamed the bmad-testarch skills UCG calls
+
+TEA v3.0.0 (bmad-code-org/bmad-method-test-architecture-enterprise, published 2026-10-14; v3.3.0 on 2026-10-20) says in its release notes: "TEA 3.0 publishes all eight direct workflows as `bmad-tea-*` commands. The former `bmad-testarch-*` and `bmad-teach-me-testing` commands are removed"; `tea-migrate-customizations` moves customization files. TEA 2.0 had already left the BMAD 6 module format: v1.27.2 is the last tag with `src/module.yaml`, while v2.0.3 and v3.x ship per-skill `bmod.toml` files and install with `npx skills add` beside BMAD core's `bmad` and `bmod-core-tools` skills, the BMAD 7 module system. A BMAD 6 install does not get TEA 3: BMAD 6.12.2's release notes say "CIS and TEA install at their last v6 releases (v0.3.2 and v1.27.2); newer releases target v7", the registry `bmad-modules.yaml` carries `pin: v1.27.2` for `tea`, and 6.12.4 skips the channel picker for that pin (`--pin CODE=TAG` still overrides it); BMAD 7 was a preview on 2026-10-21, not on npm (latest 6.12.4). An earlier claim in this session that a fresh BMAD plus TEA install already gets TEA 3.x and breaks UCG was wrong. UCG still delegates by the old `bmad-testarch-*` IDs in about ten files (skills/ultracode-goal/SKILL.md, references/define-done.md, gate.md, execute.md, preflight.md, scripts/gate_eval.py, scripts/preflight_check.py, the ucg-awareness assets), tools/tool-requirements.yaml gives TEA no minimum or ceiling, and preflight does not check that those skills exist, so it breaks for a BMAD 7 install or a `--pin tea=v3.x` override. A claim that TEA moved its gate file after 1.27.2 was not confirmed.
