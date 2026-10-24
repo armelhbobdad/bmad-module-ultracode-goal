@@ -1,0 +1,30 @@
+FAIL ./guard.test.js
+  guard
+    ✓ rejects error input (19 ms)
+    ✓ flag is on (1 ms)
+    ✕ fails when mode is loose (8 ms)
+
+  ● guard › fails when mode is loose
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "strict"
+    Received: "loose"
+
+      4 |   test('rejects error input', () => expect(() => assertLimit(9)).toThrow());
+      5 |   test('flag is on', () => expect(FLAG).toBe('on'));
+    > 6 |   test('fails when mode is loose', () => expect(MODE).toBe('strict'));
+        |                                                       ^
+      7 | });
+      8 |
+
+      at Object.toBe (guard.test.js:6:55)
+
+PASS ./other.test.js
+  ✓ other passes (1 ms)
+
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 3 passed, 4 total
+Snapshots:   0 total
+Time:        0.619 s, estimated 1 s
+Ran all test suites.

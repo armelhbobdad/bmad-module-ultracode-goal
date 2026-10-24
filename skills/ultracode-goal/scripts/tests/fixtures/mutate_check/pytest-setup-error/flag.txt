@@ -1,0 +1,23 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.7, pytest-9.1.1, pluggy-1.7.0
+rootdir: /home/dev/work/py
+configfile: pytest.ini
+plugins: xdist-3.8.0
+collected 4 items
+
+test_guard.py .E.                                                        [ 75%]
+test_other.py .                                                          [100%]
+
+==================================== ERRORS ====================================
+________________________ ERROR at setup of test_flag_on ________________________
+
+    @pytest.fixture
+    def flag():
+        if FLAG != "on":
+>           raise ValueError("flag is off")
+E           ValueError: flag is off
+
+test_guard.py:9: ValueError
+=========================== short test summary info ============================
+ERROR test_guard.py::test_flag_on - ValueError: flag is off
+========================== 3 passed, 1 error in 0.08s ==========================

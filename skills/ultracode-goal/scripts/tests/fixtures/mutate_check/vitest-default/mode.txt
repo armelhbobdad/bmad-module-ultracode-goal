@@ -1,0 +1,34 @@
+
+ RUN  v3.2.4 /home/dev/work/runners/vt
+
+ ❯ guard.test.js (3 tests | 1 failed) 11ms
+   ✓ guard > rejects error input 2ms
+   ✓ guard > flag is on 0ms
+   × guard > fails when mode is loose 8ms
+     → expected 'loose' to be 'strict' // Object.is equality
+ ✓ other.test.js (1 test) 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  guard.test.js > guard > fails when mode is loose
+AssertionError: expected 'loose' to be 'strict' // Object.is equality
+
+Expected: [32m"strict"[39m
+Received: [31m"loose"[39m
+
+ ❯ guard.test.js:7:55
+      5|   test('rejects error input', () => expect(() => assertLimit(9)).toThr…
+      6|   test('flag is on', () => expect(FLAG).toBe('on'));
+      7|   test('fails when mode is loose', () => expect(MODE).toBe('strict'));
+       |                                                       ^
+      8| });
+      9| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 3 passed (4)
+   Start at  01:52:40
+   Duration  371ms (transform 29ms, setup 0ms, collect 27ms, tests 14ms, environment 0ms, prepare 180ms)
+

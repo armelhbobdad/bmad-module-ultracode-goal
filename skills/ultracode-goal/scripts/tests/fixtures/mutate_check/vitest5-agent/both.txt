@@ -1,0 +1,48 @@
+
+ RUN  v5.0.5 /home/dev/work/runners-latest/vt
+
+ ❯ guard.test.js (3 tests | 2 failed) 12ms
+   ❯ guard (3)
+     × flag is on 6ms
+     × fails when mode is loose 1ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  guard.test.js > guard > flag is on
+AssertionError: expected 'off' to be 'on' // Object.is equality
+
+Expected: "on"
+Received: "off"
+
+ ❯ guard.test.js:6:41
+      4| describe('guard', () => {
+      5|   test('rejects error input', () => expect(() => assertLimit(9)).toThr…
+      6|   test('flag is on', () => expect(FLAG).toBe('on'));
+       |                                         ^
+      7|   test('fails when mode is loose', () => expect(MODE).toBe('strict'));
+      8| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  guard.test.js > guard > fails when mode is loose
+AssertionError: expected 'loose' to be 'strict' // Object.is equality
+
+Expected: "strict"
+Received: "loose"
+
+ ❯ guard.test.js:7:55
+      5|   test('rejects error input', () => expect(() => assertLimit(9)).toThr…
+      6|   test('flag is on', () => expect(FLAG).toBe('on'));
+      7|   test('fails when mode is loose', () => expect(MODE).toBe('strict'));
+       |                                                       ^
+      8| });
+      9|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  2 failed | 2 passed (4)
+   Start at  01:52:47
+   Duration  178ms (transform 35%, import 31%, tests 22%, worker 12%, environment 1%)
+

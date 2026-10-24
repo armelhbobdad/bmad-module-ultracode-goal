@@ -1,0 +1,34 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.7, pytest-9.1.1, pluggy-1.7.0 -- /home/dev/work/py/.venv/bin/python
+rootdir: /home/dev/work/py
+configfile: pytest.ini
+plugins: xdist-3.8.0
+created: 2/2 workers
+2 workers [4 items]
+
+scheduling tests via LoadScheduling
+
+test_guard.py::test_rejects_error_input 
+test_guard.py::test_fails_when_mode_is_loose 
+[gw0] [ 25%] PASSED test_guard.py::test_rejects_error_input 
+[gw1] [ 50%] PASSED test_guard.py::test_fails_when_mode_is_loose 
+test_guard.py::test_flag_on 
+test_other.py::test_other_passes 
+[gw1] [ 75%] PASSED test_other.py::test_other_passes 
+[gw0] [100%] FAILED test_guard.py::test_flag_on 
+
+=================================== FAILURES ===================================
+_________________________________ test_flag_on _________________________________
+[gw0] linux -- Python 3.14.7 /home/dev/work/py/.venv/bin/python
+
+    def test_flag_on():
+>       assert FLAG == "on"
+E       AssertionError: assert 'off' == 'on'
+E         
+E         - on
+E         + off
+
+test_guard.py:10: AssertionError
+=========================== short test summary info ============================
+FAILED test_guard.py::test_flag_on - AssertionError: assert 'off' == 'on'
+========================= 1 failed, 3 passed in 0.60s ==========================

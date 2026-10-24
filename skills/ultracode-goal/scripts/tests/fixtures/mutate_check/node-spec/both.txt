@@ -1,0 +1,56 @@
+✔ rejects error input (1.018692ms)
+✖ flag is on (1.086764ms)
+✖ fails when mode is loose (0.27295ms)
+✔ other passes (1.333395ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 111.029858
+
+✖ failing tests:
+
+test at guard.test.mjs:6:1
+✖ flag is on (1.086764ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  'off' !== 'on'
+  
+      at TestContext.<anonymous> (file:///home/dev/work/node/guard.test.mjs:6:33)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'off',
+    expected: 'on',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at guard.test.mjs:7:1
+✖ fails when mode is loose (0.27295ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  'loose' !== 'strict'
+  
+      at TestContext.<anonymous> (file:///home/dev/work/node/guard.test.mjs:7:47)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'loose',
+    expected: 'strict',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

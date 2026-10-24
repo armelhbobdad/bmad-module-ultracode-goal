@@ -1,0 +1,24 @@
+✔ other passes (0.895716ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 76.583055
+..F.                                                                     [100%]
+=================================== FAILURES ===================================
+________________________ test_fails_when_mode_is_loose _________________________
+
+    def test_fails_when_mode_is_loose():
+>       assert MODE == "strict"
+E       AssertionError: assert 'loose' == 'strict'
+E         
+E         - strict
+E         + loose
+
+test_guard.py:14: AssertionError
+=========================== short test summary info ============================
+FAILED test_guard.py::test_fails_when_mode_is_loose - AssertionError: assert ...
+1 failed, 3 passed in 0.03s

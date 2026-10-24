@@ -1,0 +1,31 @@
+
+ RUN  v5.0.5 /home/dev/work/runners-latest/vt
+
+ ❯ guard.test.js (3 tests | 1 failed) 37ms
+   ❯ guard (3)
+     × flag is on 25ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  guard.test.js > guard > flag is on
+AssertionError: expected 'off' to be 'on' // Object.is equality
+
+Expected: "on"
+Received: "off"
+
+ ❯ guard.test.js:6:41
+      4| describe('guard', () => {
+      5|   test('rejects error input', () => expect(() => assertLimit(9)).toThr…
+      6|   test('flag is on', () => expect(FLAG).toBe('on'));
+       |                                         ^
+      7|   test('fails when mode is loose', () => expect(MODE).toBe('strict'));
+      8| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 3 passed (4)
+   Start at  01:52:45
+   Duration  382ms (import 36%, tests 27%, transform 24%, worker 13%)
+

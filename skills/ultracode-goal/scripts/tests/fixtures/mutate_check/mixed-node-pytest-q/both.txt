@@ -1,0 +1,35 @@
+✔ other passes (1.071127ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 94.932933
+.FF.                                                                     [100%]
+=================================== FAILURES ===================================
+_________________________________ test_flag_on _________________________________
+
+    def test_flag_on():
+>       assert FLAG == "on"
+E       AssertionError: assert 'off' == 'on'
+E         
+E         - on
+E         + off
+
+test_guard.py:10: AssertionError
+________________________ test_fails_when_mode_is_loose _________________________
+
+    def test_fails_when_mode_is_loose():
+>       assert MODE == "strict"
+E       AssertionError: assert 'loose' == 'strict'
+E         
+E         - strict
+E         + loose
+
+test_guard.py:14: AssertionError
+=========================== short test summary info ============================
+FAILED test_guard.py::test_flag_on - AssertionError: assert 'off' == 'on'
+FAILED test_guard.py::test_fails_when_mode_is_loose - AssertionError: assert ...
+2 failed, 2 passed in 0.03s
