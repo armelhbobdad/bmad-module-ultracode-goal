@@ -22,7 +22,13 @@
  * generates; the reference skills under skf-skills/, which a generator
  * writes (CONTRIBUTING.md, Reference skills); and the Python files of BMAD's
  * customization engine vendored verbatim as test fixtures, which are refreshed
- * with cp (the READMEs beside them are ours and stay checked).
+ * with cp (the READMEs beside them are ours and stay checked). In the root
+ * CLAUDE.md, lines shaped like "|key: ..." are skipped too: the context index
+ * rows an export writes there, such as "|IMPORTANT: ..." and
+ * "|key-types:{SKILL.md#key-types} ...". Such a line starts with a pipe
+ * followed directly by a key and a colon; a Markdown table row starts "| "
+ * and stays checked, and so does the same shape in any other file or in a
+ * commit message.
  *
  * Base branch for the added-lines and commit checks: --base <ref>, else
  * $EM_DASH_BASE, else origin/$GITHUB_BASE_REF on a pull request, else
@@ -44,6 +50,9 @@ const path = require('node:path');
 // Assembled from parts so that this file does not trip its own check.
 const AMP = '&';
 const EM_DASH = new RegExp(`${String.fromCodePoint(0x20_14)}|${AMP}mdash;|${AMP}#8212;|${AMP}#x2014;`, 'i');
+// A context index row, and the one file an export writes such rows into.
+const EXEMPT_LINE = /^\s*\|[A-Za-z][\w-]*:/;
+const INDEX_FILE = 'CLAUDE.md';
 const CLEAN_SET = ['README.md', 'docs/', 'website/'];
 const CLEAN_SET_EXCLUDED = ['docs/_internal/'];
 const GENERATED = new Set(['CHANGELOG.md', 'package-lock.json']);
@@ -56,9 +65,15 @@ function argValue(argv, flag) {
   return index === -1 ? null : argv[index + 1];
 }
 
-/** True when the line holds an em dash. */
-function hasEmDash(line) {
-  return EM_DASH.test(line);
+/**
+ * True when the line holds an em dash and is not a context index row of the
+ * root CLAUDE.md.
+ *
+ * @param {string} line - The line's text
+ * @param {string|null} file - Its repository-relative POSIX path, or null for a commit message
+ */
+function hasEmDash(line, file = null) {
+  return EM_DASH.test(line) && !(file === INDEX_FILE && EXEMPT_LINE.test(line));
 }
 
 /** True for a Python file directly inside a vendored engine folder. */
@@ -109,7 +124,7 @@ function findAddedEmDashes(diff) {
     }
     if (line.startsWith('+') && file) {
       const text = line.slice(1);
-      if (!isGenerated(file) && hasEmDash(text)) findings.push({ file, line: lineNo, text });
+      if (!isGenerated(file) && hasEmDash(text, file)) findings.push({ file, line: lineNo, text });
       lineNo += 1;
     }
   }
@@ -138,7 +153,7 @@ function checkCleanSet(root, git) {
     }
     if (buffer.includes(0)) continue; // binary
     for (const [index, text] of buffer.toString('utf8').split(/\r?\n/).entries()) {
-      if (hasEmDash(text)) findings.push({ file, line: index + 1, text });
+      if (hasEmDash(text, file)) findings.push({ file, line: index + 1, text });
     }
   }
   return findings;

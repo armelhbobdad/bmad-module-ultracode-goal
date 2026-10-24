@@ -3,8 +3,8 @@
  *
  * `npm run validate:em-dash` runs this tool with --strict in CI. These tests
  * pin its three checks (the clean published docs, the lines a branch adds and
- * the branch's commit messages), the generated files they skip and the
- * base-branch fallback.
+ * the branch's commit messages), the generated files they skip, the context
+ * index rows of the root CLAUDE.md they exempt and the base-branch fallback.
  *
  * The pure helpers are called directly; the exit-code tests drive the tool
  * against throwaway git repositories through its --root and --base flags.
@@ -126,9 +126,25 @@ test('hasEmDash: hyphens and en dashes pass', () => {
   assert.strictEqual(hasEmDash('steps 2\u201310 - see below'), false);
 });
 
-test('hasEmDash: no line shape is exempt', () => {
-  assert.strictEqual(hasEmDash(`|IMPORTANT: x v1 ${D} read SKILL.md`), true);
-  assert.strictEqual(hasEmDash(`| Name | Value ${D} note |`), true);
+test('hasEmDash: context index rows of CLAUDE.md are exempt', () => {
+  assert.strictEqual(hasEmDash(`|IMPORTANT: tool v1.2.0 ${D} read SKILL.md before writing tool code.`, 'CLAUDE.md'), false);
+  assert.strictEqual(hasEmDash(`  |IMPORTANT: x v1 ${D} read SKILL.md`, 'CLAUDE.md'), false);
+  assert.strictEqual(hasEmDash(`|quick-start:{SKILL.md#quick-start} ${D} run the tool`, 'CLAUDE.md'), false);
+  assert.strictEqual(hasEmDash(`|key-types:{SKILL.md#key-types} ${D} exit 0 ok, 1 failed`, 'CLAUDE.md'), false);
+  assert.strictEqual(hasEmDash(`Note |IMPORTANT: x ${D} y`, 'CLAUDE.md'), true);
+});
+
+test('hasEmDash: the same row in another file or a commit message is checked', () => {
+  const row = `|IMPORTANT: tool v1.2.0 ${D} read SKILL.md`;
+  assert.strictEqual(hasEmDash(row), true);
+  assert.strictEqual(hasEmDash(row, 'docs/reference.md'), true);
+  assert.strictEqual(hasEmDash(row, 'skills/ultracode-goal/CLAUDE.md'), true);
+});
+
+test('hasEmDash: a Markdown table row is not a context index row', () => {
+  assert.strictEqual(hasEmDash(`| Name | Value ${D} note |`, 'CLAUDE.md'), true);
+  assert.strictEqual(hasEmDash(`| quick-start: value ${D} note |`, 'CLAUDE.md'), true);
+  assert.strictEqual(hasEmDash(`|| Name ${D} note |`, 'CLAUDE.md'), true);
 });
 
 test('inCleanSet: README, docs and website, minus docs/_internal and generated files', () => {
@@ -240,7 +256,7 @@ test('docs/_internal is outside the clean set', () => {
 
 test('the generated reference skills are not checked', () => {
   const root = makeRepo(BASE);
-  write(root, { 'skf-skills/tool/1.0.0/tool/SKILL.md': `# Tool\n\n|IMPORTANT: tool v1 ${D} read SKILL.md\n` });
+  write(root, { 'skf-skills/tool/1.0.0/tool/SKILL.md': `# Tool\n\nRead this first ${D} it is generated.\n` });
   commitAll(root, 'chore: regenerate a reference skill');
   const { status, out } = run(root);
   assert.strictEqual(status, 0, out);
@@ -276,6 +292,36 @@ test('a Python file below a vendored engine folder is checked', () => {
   const { status, out } = run(root);
   assert.strictEqual(status, 1, out);
   assert.match(out, /engine\/nested\/x\.py:1:/);
+});
+
+test('in CLAUDE.md the context index rows are skipped, a prose line and a table row are not', () => {
+  const index = `|[tool v1.2.0]|root: .claude/skills/tool/\n|quick-start:{SKILL.md#quick-start} ${D} run the tool\n`;
+  const root = makeRepo(BASE);
+  write(root, { 'CLAUDE.md': index });
+  commitAll(root, 'chore: track CLAUDE.md');
+  assert.strictEqual(run(root).status, 0);
+
+  write(root, { 'CLAUDE.md': `${index}\nRead the index ${D} it is short.\n\n| Library | Note ${D} |\n` });
+  commitAll(root, 'docs: add notes below the index');
+  const { status, out } = run(root);
+  assert.strictEqual(status, 1, out);
+  assert.match(out, /CLAUDE\.md:4: Read the index/);
+  assert.match(out, /CLAUDE\.md:6: \| Library/);
+  assert.doesNotMatch(out, /CLAUDE\.md:2:/);
+  assert.match(out, /2 em dash finding/);
+});
+
+test('outside the root CLAUDE.md a context index row is checked, in files and commit messages', () => {
+  const row = `|quick-start:{SKILL.md#quick-start} ${D} run the tool\n`;
+  const root = makeRepo(BASE);
+  write(root, { 'notes/index.md': row, 'skills/demo/CLAUDE.md': row });
+  commitAll(root, `chore: copy the index\n\n${row}`);
+  const { status, out } = run(root);
+  assert.strictEqual(status, 1, out);
+  assert.match(out, /notes\/index\.md:1: \|quick-start:/);
+  assert.match(out, /skills\/demo\/CLAUDE\.md:1: \|quick-start:/);
+  assert.match(out, /commit [0-9a-f]{8} "chore: copy the index" \(message line 3\): \|quick-start:/);
+  assert.match(out, /3 em dash finding/);
 });
 
 test('CHANGELOG.md is not checked', () => {

@@ -32,9 +32,12 @@ Thumbs.db
 .prettierrc
 
 # AI assistant files
-# CLAUDE.md holds the reference skills index that an export of those skills
-# writes; keep personal instructions in CLAUDE.local.md. Both stay local.
+# The root CLAUDE.md is tracked: the contributor instructions, plus the
+# reference skills index that an export of those skills writes between its
+# markers. Personal instructions go in CLAUDE.local.md, which stays local, and
+# so does a CLAUDE.md anywhere below the root.
 CLAUDE.md
+!/CLAUDE.md
 .ai/*
 .idea
 .gemini
