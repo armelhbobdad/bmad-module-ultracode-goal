@@ -45,7 +45,7 @@ cannot and does not evaluate.
 Severity is advisory metadata for the LLM, not a gate. `remediable` flags
 blockers the remediation pass can plausibly auto-clear (e.g. scaffold the
 framework, branch off, commit/stash) vs. ones that need a human (the Claude
-Code version, a broken git repo, an unborn HEAD, a missing BMAD story skill,
+Code version, a broken git repo, an unborn HEAD, a missing UCG story skill,
 a missing TEA skill; true-RED items never reach this script).
 
 Version gates (from the grounded constraints in .decision-log.md):
@@ -71,8 +71,9 @@ run makes in place of the tool-action-per-fact environment sweep the resume
 rule otherwise costs (references/execute.md, resume). It asserts the epic
 branch, both hooks with the all-tools PreToolUse matcher, the five injected
 hook env vars (accepted from the hook command strings OR the inherited process
-env, both of which preflight step 5 permits), and the BMAD story skills (a
-BMAD update between spawns can remove them), reports the recall latch WITHOUT
+env, both of which preflight step 5 permits), and the UCG story skills (a
+manual deletion between spawns, or an interrupted UCG install or update, can
+remove them), reports the recall latch WITHOUT
 certifying it (re-latching stays a model-owned Stage 1 step on every resume;
 a present latch also reports its `latch_version` and a derived `store_ok`
 colour, red for anything but a green latch v2),
@@ -1043,17 +1044,21 @@ def _assert_branch(
     }
 
 
-def _latch_view(data: dict) -> dict:
-    """lib/mem_common.py's latch_view(), so this report reads a latch the way
-    the store module (and, by its parity test, the guard) does. Imported the way
-    _story_gate_artifacts_present imports gate_eval: sibling module, path set
-    here, never at module load."""
+def _mem_common():
+    """lib/mem_common.py, imported the way _story_gate_artifacts_present imports
+    gate_eval: sibling module, path set here, never at module load."""
     scripts_dir = str(Path(__file__).resolve().parent)
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
     from lib import mem_common  # noqa: PLC0415  (sibling package, path set above)
 
-    return mem_common.latch_view(data)
+    return mem_common
+
+
+def _latch_view(data: dict) -> dict:
+    """lib/mem_common.py's latch_view(), so this report reads a latch the way
+    the store module (and, by its parity test, the guard) does."""
+    return _mem_common().latch_view(data)
 
 
 def _read_latch(impl_artifacts: Path, run_id: str | None) -> dict:
@@ -1073,10 +1078,16 @@ def _read_latch(impl_artifacts: Path, run_id: str | None) -> dict:
     """
     path = impl_artifacts / ".mem-state.json"
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # A FIFO under the latch's name is never opened (that blocks with no
+        # writer): read_regular_file returns None for anything but a file.
+        raw = _mem_common().read_regular_file(path)
     except OSError:
         return {"state": "absent", "certifies": None}
-    except (ValueError, UnicodeDecodeError):
+    if raw is None:
+        return {"state": "unreadable", "certifies": None}
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):  # RecursionError: JSON nested too deep
         return {"state": "unreadable", "certifies": None}
     if not isinstance(data, dict):
         # Valid JSON that is not an object is still not a latch; reporting it
@@ -1309,7 +1320,8 @@ def main(argv: list[str] | None = None) -> int:
         "--assert-armed",
         action="store_true",
         help="Emit only the resume manifest: branch, hooks (incl. the all-tools "
-        "matcher), injected hook env, the BMAD story skills, the recall latch "
+        "matcher), injected hook env, the UCG story skills (ucg-create-story, "
+        "ucg-dev-story), the recall latch "
         "(reported, never certified), and, with --story, the story's "
         "artifact-derived resume route. Exit 0 iff branch+hooks+env+skills are "
         "armed. When set, --epic, --tea-config, and the mechanical preflight "

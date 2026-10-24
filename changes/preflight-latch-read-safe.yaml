@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `preflight_check.py --assert-armed` no longer crashes on a recall latch nested too deep to parse, or hangs on a FIFO under the latch's name (`.mem-state.json` in the artifact tree). Either now reports the latch as `unreadable`, as a latch that is not valid JSON already did, and the manifest prints as usual.

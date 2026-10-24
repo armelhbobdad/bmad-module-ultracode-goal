@@ -145,6 +145,7 @@ def _run(
     *extra: str,
     impl: Path | None = None,
     env: dict | None = None,
+    timeout: float | None = None,
 ) -> tuple[int, dict]:
     impl_dir = impl if impl is not None else root / "impl"
     impl_dir.mkdir(exist_ok=True)
@@ -178,6 +179,7 @@ def _run(
         capture_output=True,
         text=True,
         env=base_env,
+        timeout=timeout,
     )
     assert proc.stdout, proc.stderr
     return proc.returncode, json.loads(proc.stdout)
@@ -251,6 +253,24 @@ def test_a_story_skill_removed_since_launch_fails_the_resume(tmp_path: Path) -> 
     assert skills["missing"] == ["ucg-dev-story"]
     assert skills["ok"] is False
     assert any(r.startswith("UCG story skill(s) not installed: ucg-dev-story.") for r in out["reasons"])
+
+
+def test_the_help_and_the_docs_name_the_ucg_story_skills() -> None:
+    """The manifest probes UCG's story skills, never BMAD's deprecated shims,
+    so text that says "the BMAD story skills" sends an operator to install
+    shims that cannot pass it."""
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    help_text = " ".join(proc.stdout.split())
+    assert "the UCG story skills (ucg-create-story, ucg-dev-story)" in help_text
+    preflight_md = SCRIPTS.parent / "references" / "preflight.md"
+    for path in (SCRIPT, preflight_md):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert "BMAD story skill" not in text, path.name
+    doc = " ".join(SCRIPT.read_text(encoding="utf-8").split())
+    assert "the UCG story skills (a manual deletion between spawns" in doc
+    step5 = " ".join(preflight_md.read_text(encoding="utf-8").split())
+    assert "injected env, and the UCG story skills `ucg-create-story` and `ucg-dev-story`) in one read" in step5
 
 
 def test_an_unexpandable_config_dir_still_emits_the_manifest(tmp_path: Path) -> None:
@@ -524,6 +544,29 @@ def test_a_non_object_latch_is_unreadable_not_a_crash(tmp_path: Path) -> None:
     impl.mkdir()
     (impl / ".mem-state.json").write_text("[1, 2, 3]", encoding="utf-8")
     code, out = _run(root, impl=impl)
+    assert code == 0
+    assert out["checks"]["latch"] == {"state": "unreadable", "certifies": None}
+
+
+def test_a_latch_nested_too_deep_to_parse_is_unreadable_not_a_crash(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    impl.mkdir()
+    (impl / ".mem-state.json").write_text("[" * 200_000 + "]" * 200_000, encoding="utf-8")
+    code, out = _run(root, impl=impl)
+    assert code == 0
+    assert out["checks"]["latch"] == {"state": "unreadable", "certifies": None}
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs a FIFO (POSIX)")
+def test_a_fifo_under_the_latch_name_is_unreadable_not_a_hang(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    impl.mkdir()
+    os.mkfifo(impl / ".mem-state.json")
+    code, out = _run(root, impl=impl, timeout=60)
     assert code == 0
     assert out["checks"]["latch"] == {"state": "unreadable", "certifies": None}
 

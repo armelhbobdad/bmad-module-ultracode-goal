@@ -51,7 +51,7 @@ def _blocker_fields(blocker: dict) -> tuple[str, str]:
     Formalize and semantic-scan reds carry {source, decision_needed};
     preflight_check.py's mechanical blockers carry {id, detail}. Reading only the
     first shape rendered an empty `reason` whenever a mechanical blocker led the
-    list (a missing BMAD story skill, an unborn HEAD), so a headless operator got
+    list (a missing story skill, an unborn HEAD), so a headless operator got
     a blocked envelope with no cause in it.
     """
     source = str(blocker.get("source") or blocker.get("id") or "").strip()

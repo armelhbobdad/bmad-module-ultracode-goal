@@ -20,8 +20,11 @@ why `--message` repeats. This pins:
 - matching: a path that exists must match exactly or as a directory holding a
   staged path (a root `README.md` is not `docs/README.md`); one that exists
   nowhere matches by trailing segments or as a directory anywhere; both sides
-  of a rename; a staged deletion; a non-ASCII name;
+  of a rename; a staged deletion; a non-ASCII name; a project root below the
+  git top level, named from either;
 - the exit codes, `-` for stdin, and several `--message` texts read as one;
+  stdin and the JSON are UTF-8 whatever the console's code page, and a staged
+  name that is not UTF-8 still prints;
 - execute.md step 4 runs it between staging and the commit, and the
   documented command is not a git write the PreToolUse guard would gate.
 
@@ -211,6 +214,95 @@ def test_a_rename_and_a_deletion_match_by_either_name(repo):
     assert out["not_in_diff"] == []
 
 
+@pytest.fixture
+def subdir_project(tmp_path: Path) -> Path:
+    """A project root one folder below the repository's top level, as a
+    BMAD install into a monorepo's `app/` folder leaves it."""
+    top = tmp_path / "mono"
+    for rel in ("README.md", "app/README.md", "app/src/a.py", "app/src/b.py", "other/c.py"):
+        (top / rel).parent.mkdir(parents=True, exist_ok=True)
+        (top / rel).write_text("x = 1\n", encoding="utf-8")
+    _git(top, "init", "-q")
+    _git(top, "config", "user.email", "t@example.com")
+    _git(top, "config", "user.name", "t")
+    _git(top, "add", ".")
+    _git(top, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "base")
+    return top / "app"
+
+
+def test_a_project_root_below_the_top_level_reads_names_from_it(subdir_project):
+    # git names a staged path from the top level (`app/src/a.py`); a text
+    # names it from the project root (`src/a.py`), as execute.md's command
+    # passes `--project-root {project-root}`.
+    app = subdir_project
+    _stage(app, "src/a.py")
+    out = cc.check("feat: change src/a.py", app)
+    assert out == {"named": ["src/a.py"], "staged": ["app/src/a.py"], "not_in_diff": [], "ignored": [], "clean": True}
+    # The top-level form, an absolute path and the folder name it as well.
+    assert cc.check("feat: change app/src/a.py", app)["clean"] is True
+    assert cc.check("feat: change %s/src/a.py under src/" % app.resolve().as_posix(), app)["clean"] is True
+    # An edit that did not land is still listed, in either form.
+    out = cc.check("feat: change src/a.py, src/b.py and app/src/b.py", app)
+    assert out["not_in_diff"] == ["src/b.py", "app/src/b.py"]
+    # A real path under the project root is read there: the top level's
+    # staged README.md is not the project's own.
+    _stage(app.parent, "README.md", "top v2\n")
+    assert cc.check("docs: update README.md", app)["not_in_diff"] == ["README.md"]
+    _stage(app, "README.md", "app v2\n")
+    assert cc.check("docs: update README.md", app)["not_in_diff"] == []
+
+
+def test_a_project_root_below_the_top_level_ignores_diff_relative(subdir_project):
+    # With diff.relative set, git would name the staged paths from the cwd
+    # and drop the ones outside it; the check reads them from the top level
+    # whatever the config says.
+    app = subdir_project
+    _git(app.parent, "config", "diff.relative", "true")
+    _stage(app, "src/a.py")
+    _stage(app.parent, "other/c.py")
+    out = cc.check("feat: change src/a.py and app/src/a.py", app)
+    assert out["staged"] == ["app/src/a.py", "other/c.py"]
+    assert out["clean"] is True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="a file name that is not UTF-8 needs bytes in argv")
+def test_a_staged_name_that_is_not_utf8_still_prints_json(repo):
+    # git stores the bytes it was given; this one is Latin-1. Read back as a
+    # lone surrogate, it crashed the UTF-8 print with exit 1 and no JSON.
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=repo, input=b"x\n", capture_output=True, check=True
+    ).stdout.decode().strip()
+    subprocess.run(
+        [b"git", b"update-index", b"--add", b"--cacheinfo", b"100644", blob.encode(), b"caf\xe9.txt"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--message", "-", "--project-root", str(repo)],
+        input=b"edit src/guard.py", capture_output=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout.decode("utf-8"))
+    # The JSON escape names the same bytes git holds.
+    assert out["staged"] == ["caf\udce9.txt"]
+    assert os.fsencode(out["staged"][0]) == b"caf\xe9.txt"
+    assert out["not_in_diff"] == ["src/guard.py"]
+
+
+def test_the_json_is_utf8_whatever_the_console_code_page(repo):
+    # A Windows pipe writes the ANSI code page (cp1252), which has no CJK.
+    (repo / "docs").mkdir()
+    _stage(repo, "docs/日本.md", "n\n")
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--message", "-", "--project-root", str(repo)],
+        input="edit docs/日本.md".encode("utf-8"), capture_output=True, timeout=60, env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout.decode("utf-8"))
+    assert out["staged"] == ["docs/日本.md"]
+    assert out["clean"] is True
+
+
 def test_the_cli_reports_json_and_reads_stdin(repo):
     _stage(repo, "src/guard.py")
     proc = subprocess.run(
@@ -367,7 +459,10 @@ def test_step4_runs_the_check_between_staging_and_the_commit():
         " --message {workflow.implementation_artifacts}/.scratch-<story_id>/record-notes.md --project-root {project-root}"
     ) in paragraph
     assert "and the story-record notes this cycle added" in paragraph
-    assert "an empty file when it added none" in paragraph
+    assert "an empty file when the cycle added none" in paragraph
+    # A decomposed child has no story record: its notes are the File List and
+    # completion notes ucg-dev-story gives in its summary, so they are checked.
+    assert "for a decomposed child, which has no record, the File List and completion notes" in paragraph
     assert "Reading either first if an earlier session left it" in paragraph
     # The three remedies, and the ignored list apart.
     assert "if the work tree shows no change there, the edit did not happen, so make it or remove the claim" in paragraph
