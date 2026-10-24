@@ -4141,12 +4141,14 @@ def test_csr_deny_reason_quotes_a_long_segment_cut_short(store_world: _StoreWorl
     """A heredoc is one segment: its reason quotes at most 160 characters of it,
     not the whole body back into the model's context (bmad review 10)."""
     body = "x " * 20000
-    code, out = _bash(store_world, f"cat {store_world.s}/runs/x.jsonl {body}")
+    segment = f"cat {store_world.s}/runs/x.jsonl {body}"
+    code, out = _bash(store_world, segment)
 
     reason = _assert_latch_denied(code, out, store_world.latch)
     assert len(reason) < 2000
-    assert f"segment 'cat {store_world.s}/runs/x.jsonl x x" in reason
-    assert "...' names the recall store" in reason
+    # The first 160 characters, whatever the length of the tmp path (a Windows
+    # runner's is long enough that the cut falls inside the store path).
+    assert f"segment {segment.strip()[:160] + '...'!r} names the recall store" in reason
 
 
 def _rebinding_commands(world: _StoreWorld) -> dict[str, str]:
