@@ -13,9 +13,13 @@ counts, so attribution and the exactly-one claim are both exercised for real.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "mutate_check.py"
 
@@ -369,3 +373,332 @@ def test_sigterm_mid_command_still_restores(tmp_path):
 
     assert proc.returncode == 128 + signal_module.SIGTERM
     assert (project / "code.py").read_bytes() == before
+
+
+# --- Node's test runner (issue #158) -----------------------------------------
+#
+# Since Node 23 the spec reporter is Node's default even when the output is
+# captured, as it is here. It marks a failed test with U+2716, a passed one
+# with U+2714, and ends with "fail N" behind U+2139. The runner used to know
+# none of that: every kill read MISATTRIBUTED until a run switched Node to TAP.
+# The checker below prints that output from fixed lines (taken from a real
+# `node --test` run on Node 24), so these cases run without Node; the last
+# case drives the real runner when Node is on PATH.
+
+NODE_CHECKER = """\
+import sys
+SHAPE = __SHAPE__
+FAIL, PASS, INFO = chr(0x2716), chr(0x2714), chr(0x2139)
+COLOUR = SHAPE == "spec-colour"
+RED, GREEN, BLUE, OFF = (
+    ("\\x1b[31m", "\\x1b[32m", "\\x1b[34m", "\\x1b[39m") if COLOUR else ("", "", "", "")
+)
+text = open("code.py", encoding="utf-8").read()
+cases = [
+    ("limit rejects error input", "LIMIT = 5" in text),
+    ("flag is on", 'FLAG = "on"' in text),
+]
+failed = [name for name, ok in cases if not ok]
+if SHAPE == "tap":
+    lines = ["TAP version 13"]
+    for number, (name, ok) in enumerate(cases, 1):
+        lines += ["# Subtest: " + name, ("ok " if ok else "not ok ") + str(number) + " - " + name]
+    lines += ["1..2", "# tests 2", "# pass " + str(2 - len(failed)), "# fail " + str(len(failed))]
+else:
+    lines = [
+        (GREEN + PASS if ok else RED + FAIL) + " " + name + " (0.4ms)" + OFF
+        for name, ok in cases
+    ]
+    for key in ("tests 2", "pass " + str(2 - len(failed)), "fail " + str(len(failed))):
+        lines.append(BLUE + INFO + " " + key + OFF)
+    if failed:
+        lines += ["", RED + FAIL + " failing tests:" + OFF, ""]
+        for name in failed:
+            lines += [
+                "test at check.test.mjs:3:1",
+                RED + FAIL + " " + name + " (0.4ms)" + OFF,
+                "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
+            ]
+# Bytes, so a Windows console code page cannot refuse the marks.
+sys.stdout.buffer.write(("\\n".join(lines) + "\\n").encode("utf-8"))
+sys.exit(1 if failed else 0)
+"""
+
+
+def _node_project(tmp_path: Path, shape: str) -> Path:
+    project = _project(tmp_path)
+    _custom_checker(project, NODE_CHECKER.replace("__SHAPE__", repr(shape)))
+    return project
+
+
+_FLAG_ROW = {"anchor": 'FLAG = "on"', "replacement": 'FLAG = "off"'}
+
+
+def test_node_spec_reporter_kill_is_attributed_and_counted(tmp_path):
+    """The rehearsal's failure: a real kill, named on a line marked U+2716 and
+    nothing else, used to read MISATTRIBUTED. It now reads KILLED, and the
+    summary's "fail 1" gives the exactly-one claim."""
+    project = _node_project(tmp_path, "spec")
+    proc = _run_table(project, [_row(**_FLAG_ROW, expect_red="flag is on")])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "| KILLED |" in proc.stdout
+    assert "exactly 'flag is on' went red" in proc.stdout
+
+
+def test_node_spec_reporter_pass_mark_never_attributes(tmp_path):
+    """A test named with a failure word ("error") that PASSED, on a line marked
+    U+2714, is not the observer that fired. Before the pass mark was read,
+    this row claimed a kill for a test that stayed green."""
+    project = _node_project(tmp_path, "spec")
+    proc = _run_table(project, [_row(**_FLAG_ROW, expect_red="limit rejects error input")])
+    assert proc.returncode == 1
+    assert "| MISATTRIBUTED |" in proc.stdout
+
+
+def test_node_spec_reporter_extra_reds_are_counted(tmp_path):
+    project = _node_project(tmp_path, "spec")
+    row = _row(
+        anchor='LIMIT = 5\nFLAG = "on"',
+        replacement='LIMIT = 6\nFLAG = "off"',
+        expect_red="flag is on",
+    )
+    proc = _run_table(project, [row])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "| KILLED+others |" in proc.stdout
+    assert "among 2 failures" in proc.stdout
+
+
+def test_node_spec_reporter_with_colour_codes(tmp_path):
+    """FORCE_COLOR puts escape codes before each mark; they must not hide it."""
+    project = _node_project(tmp_path, "spec-colour")
+    proc = _run_table(project, [_row(**_FLAG_ROW, expect_red="flag is on")])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "| KILLED |" in proc.stdout
+    assert "exactly 'flag is on' went red" in proc.stdout
+    passed = _run_table(project, [_row(**_FLAG_ROW, expect_red="limit rejects error input")])
+    assert "| MISATTRIBUTED |" in passed.stdout
+
+
+def test_node_tap_reporter_count_and_pass_lines(tmp_path):
+    """Node's TAP shape (its default before Node 23 when captured): `# fail 1`
+    now gives the exactly-one claim, and an `ok N` line is a pass."""
+    project = _node_project(tmp_path, "tap")
+    proc = _run_table(project, [_row(**_FLAG_ROW, expect_red="flag is on")])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "exactly 'flag is on' went red" in proc.stdout
+    passed = _run_table(project, [_row(**_FLAG_ROW, expect_red="limit rejects error input")])
+    assert "| MISATTRIBUTED |" in passed.stdout
+
+
+NODE_TEST_FILE = """\
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { LIMIT, FLAG } from './code.mjs';
+test('limit is pinned', () => { assert.equal(LIMIT, 5); });
+test('flag is on', () => { assert.equal(FLAG, 'on'); });
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_real_node_test_runner_kill(tmp_path):
+    """The real `node --test`, with whatever reporter this Node defaults to."""
+    (tmp_path / "code.mjs").write_text(
+        "export const LIMIT = 5;\nexport const FLAG = 'on';\n", encoding="utf-8", newline="\n"
+    )
+    (tmp_path / "check.test.mjs").write_text(NODE_TEST_FILE, encoding="utf-8", newline="\n")
+    row = {
+        "file": "code.mjs",
+        "anchor": "LIMIT = 5",
+        "replacement": "LIMIT = 6",
+        "command": "node --test check.test.mjs",
+        "expect_red": "limit is pinned",
+    }
+    proc = _run_table(tmp_path, [row])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "| KILLED |" in proc.stdout
+    assert "exactly 'limit is pinned' went red" in proc.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_real_node_test_runner_two_runs_add_their_counts(tmp_path):
+    """A command that runs a passing suite before the failing one prints two
+    summaries, `fail 0` first. Reading only the first called a real kill
+    MISATTRIBUTED, with "0 failed"."""
+    (tmp_path / "code.mjs").write_text(
+        "export const LIMIT = 5;\nexport const FLAG = 'on';\n", encoding="utf-8", newline="\n"
+    )
+    (tmp_path / "check.test.mjs").write_text(NODE_TEST_FILE, encoding="utf-8", newline="\n")
+    (tmp_path / "other.test.mjs").write_text(
+        "import { test } from 'node:test';\ntest('other passes', () => {});\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    row = {
+        "file": "code.mjs",
+        "anchor": "LIMIT = 5",
+        "replacement": "LIMIT = 6",
+        "command": "node --test other.test.mjs && node --test check.test.mjs",
+        "expect_red": "limit is pinned",
+    }
+    proc = _run_table(tmp_path, [row])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "| KILLED |" in proc.stdout
+    assert "exactly 'limit is pinned' went red" in proc.stdout
+
+
+# --- Other reporters' pass and failure marks -----------------------------------
+#
+# The checker prints fixed lines in each runner's shape: GREEN while FLAG is
+# on, RED once the row turns it off. Every RED output also names a PASSING test
+# whose name holds a failure word, which must never be credited with the kill.
+
+FIXED_CHECKER = """\
+import sys
+GREEN = __GREEN__
+RED = __RED__
+flag_on = 'FLAG = "on"' in open("code.py", encoding="utf-8").read()
+sys.stdout.buffer.write(("\\n".join(GREEN if flag_on else RED) + "\\n").encode("utf-8"))
+sys.exit(0 if flag_on else 1)
+"""
+
+SHAPES = {
+    # Two `node --test` runs, the passing one first: both summaries count.
+    "node-spec-two-runs": (
+        ["✔ other passes (0.2ms)", "ℹ fail 0", "✔ flag is on (0.3ms)", "ℹ fail 0"],
+        [
+            "✔ other passes (0.2ms)",
+            "ℹ tests 1",
+            "ℹ fail 0",
+            "✖ flag is on (0.3ms)",
+            "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
+            "ℹ tests 1",
+            "ℹ fail 1",
+        ],
+    ),
+    "node-tap-two-runs": (
+        ["ok 1 - other passes", "# fail 0", "ok 1 - flag is on", "# fail 0"],
+        [
+            "TAP version 13",
+            "ok 1 - other passes",
+            "# fail 0",
+            "TAP version 13",
+            "not ok 1 - flag is on",
+            "# fail 1",
+        ],
+    ),
+    # pytest -v, with xdist, and the -rA summary line.
+    "pytest-verbose": (
+        ["t.py::test_rejects_error_input PASSED [ 50%]", "t.py::test_flag_on PASSED [100%]"],
+        [
+            "t.py::test_rejects_error_input PASSED                    [ 50%]",
+            "t.py::test_flag_on FAILED                                [100%]",
+            "FAILED t.py::test_flag_on - AssertionError: assert 'off' == 'on'",
+            "========== 1 failed, 1 passed in 0.02s ==========",
+        ],
+    ),
+    "pytest-xdist": (
+        ["[gw0] [ 50%] PASSED t.py::test_rejects_error_input"],
+        [
+            "[gw0] [ 50%] PASSED t.py::test_rejects_error_input",
+            "[gw1] [100%] FAILED t.py::test_flag_on",
+            "PASSED t.py::test_rejects_error_input",
+            "FAILED t.py::test_flag_on - AssertionError",
+            "========== 1 failed, 1 passed in 0.02s ==========",
+        ],
+    ),
+    # jest's verbose reporter, which also names a lone test file's tests.
+    "jest": (
+        ["  ✓ rejects error input (2 ms)", "  ✓ flag is on (1 ms)"],
+        [
+            "  ✓ rejects error input (2 ms)",
+            "  ✕ flag is on (3 ms)",
+            "  ● suite › flag is on",
+            "Tests:       1 failed, 1 passed, 2 total",
+        ],
+    ),
+    # jest on Windows prints U+221A and U+00D7.
+    "jest-windows": (
+        ["  √ rejects error input (2 ms)", "  √ flag is on (1 ms)"],
+        [
+            "  √ rejects error input (2 ms)",
+            "  × flag is on (3 ms)",
+            "Tests:       1 failed, 1 passed, 2 total",
+        ],
+    ),
+}
+
+_PYTEST_SHAPES = ("pytest-verbose", "pytest-xdist")
+
+
+def _fixed_project(tmp_path: Path, shape: str) -> Path:
+    project = _project(tmp_path)
+    green, red = SHAPES[shape]
+    _custom_checker(
+        project,
+        FIXED_CHECKER.replace("__GREEN__", repr(green)).replace("__RED__", repr(red)),
+    )
+    return project
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_each_reporter_shape_attributes_and_counts_a_real_kill(tmp_path, shape):
+    project = _fixed_project(tmp_path, shape)
+    name = "test_flag_on" if shape in _PYTEST_SHAPES else "flag is on"
+    proc = _run_table(project, [_row(**_FLAG_ROW, expect_red=name)])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "| KILLED |" in proc.stdout
+    assert f"exactly {name!r} went red" in proc.stdout
+
+
+@pytest.mark.parametrize("shape", sorted(s for s in SHAPES if not s.startswith("node")))
+def test_a_passing_test_named_with_a_failure_word_is_never_credited(tmp_path, shape):
+    """Before these pass lines were read, this row read KILLED for a test that
+    stayed green, because "error" on its PASSED line counted as a failure."""
+    project = _fixed_project(tmp_path, shape)
+    name = "test_rejects_error_input" if shape in _PYTEST_SHAPES else "rejects error input"
+    proc = _run_table(project, [_row(**_FLAG_ROW, expect_red=name)])
+    assert proc.returncode == 1
+    assert "| MISATTRIBUTED |" in proc.stdout
+
+
+# --- The PEP 723 header (issue #158) -------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="uv not on PATH")
+def test_plain_uv_run_works_inside_a_project_with_its_own_pyproject(tmp_path):
+    """Installed under a project with its own pyproject.toml, the script once
+    had no `# /// script` header, so a plain `uv run .../mutate_check.py` set
+    up THAT project first and failed with it, and runs fell back to
+    `uv run --no-project`. With the header, uv runs the script on its own.
+
+    The host project depends on a package that does not exist, and uv runs
+    offline, so any attempt to set up the project fails at once.
+    """
+    host = tmp_path / "host"
+    scripts = host / ".claude" / "skills" / "ultracode-goal" / "scripts"
+    scripts.mkdir(parents=True)
+    installed = scripts / SCRIPT.name
+    shutil.copy2(SCRIPT, installed)
+    (host / "pyproject.toml").write_text(
+        '[project]\nname = "host"\nversion = "0"\nrequires-python = ">=3.11"\n'
+        'dependencies = ["ucg-issue-158-no-such-package==9.9.9"]\n',
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "UV_OFFLINE": "1",
+        "UV_PYTHON": sys.executable,
+        "UV_PYTHON_DOWNLOADS": "never",
+    }
+    proc = subprocess.run(
+        ["uv", "run", str(installed), "--help"],
+        cwd=host,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "--table" in proc.stdout
+    assert not (host / ".venv").exists(), "uv set up the host project"

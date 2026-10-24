@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `mutate_check.py` now carries the `# /// script` header the other scripts carry, so a plain `uv run` of it works inside a project that has its own `pyproject.toml`. It also reads more test runners' output. Under Node's default spec reporter, a test marked ✖ counts as a failure and a test marked ✔ as a pass. The `fail` count of Node's summary is read in the spec and TAP shapes, and the counts of several summaries are added, so a command that runs a passing suite first does not read 0 failed. A pytest `PASSED` line and a jest or vitest ✓ line count as passes, and jest's ✕ and vitest's × as failures. Before, under `node --test` on Node 23 or later, a real kill read `MISATTRIBUTED`, and a passing test whose name held a word such as `error` could be credited with a kill under Node, pytest `-v`, jest or vitest.
+issues: [158]
