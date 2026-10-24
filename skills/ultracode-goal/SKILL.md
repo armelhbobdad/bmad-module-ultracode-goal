@@ -22,7 +22,9 @@ Module `bmad-module-ultracode-goal`. It orchestrates the installed BMAD epic too
 
 ### Step 1: Resolve the Workflow Block
 
-Run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow`
+Run: `uv run --no-project {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow`
+
+Keep `--no-project` on every call to this resolver. Before BMAD Method 6.11 the script has no `# /// script` header, so a plain `uv run` inside a Python project sets up that project first and leaves a `.venv` and a `uv.lock` in the tree before preflight checks it.
 
 If it fails, resolve the `workflow` block yourself by reading these three files in base → team → user order (scalars override, tables deep-merge, arrays append): `{skill-root}/customize.toml`, `{project-root}/_bmad/custom/{skill-name}.toml`, `{project-root}/_bmad/custom/{skill-name}.user.toml`. Read every customized value below as `{workflow.<name>}`.
 

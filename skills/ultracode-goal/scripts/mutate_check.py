@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """Drive a table of mutations against a green baseline, and prove each one red.
 
 The module's anti-vacuity discipline says a guard is non-vacuous only under
@@ -41,6 +45,22 @@ Classification, per row:
                      of failure, because verbose reporters echo PASSING names.
   - STALE / NOT UNIQUE / UNDECODABLE  the anchor (or the file) did not hold;
                      nothing was mutated for the row.
+
+Node's test runner is read in its two default reporters. The spec reporter
+(the default even when the output is captured, since Node 23) marks a failed
+test with U+2716 and a passed one with U+2714, and ends with a summary line
+`fail N` behind U+2139. The TAP reporter (the default for captured output
+before Node 23) writes `not ok`, `ok N` for a pass and `# fail N`. When the
+output holds several such summaries, as a command that runs `node --test`
+twice does, their counts are added.
+
+A line never counts as a failure line, whatever the test's name says, when it
+reports a pass or only opens a suite or a test: one that starts with a pass
+mark (U+2714, U+2713 as jest and vitest print it, U+221A as jest prints it on
+Windows, or TAP's `ok N`), a pytest line that reports `PASSED`, or one that
+starts with U+25B6 (spec) or `# Subtest:` (TAP). The failure marks U+2715
+(jest) and U+00D7 (vitest, and jest on Windows) count as failure tokens beside
+U+2716. Colour codes are removed before any line is read.
 
 Exit code: 0 when every row KILLED (with or without +others); 1 when any row
 is GREEN, MISATTRIBUTED, STALE, NOT UNIQUE or UNDECODABLE (each is a finding
@@ -95,9 +115,19 @@ def _install_signal_unwind() -> None:
         except (ValueError, OSError):
             continue
 
-# Failure-count shapes across the common runners (pytest, vitest/jest, mocha,
-# cargo, go). First match wins; no match means the count is unparseable and the
-# kill is reported without the exactly-one claim.
+# Node's test runner summary line, `fail N` behind U+2139 (spec reporter) or
+# `#` (TAP). It is read first because it is a whole line of its own, so a
+# "3 failed" quoted inside an assertion message above it cannot win. Node
+# prints it once per run, `fail 0` included, so every match is added: with
+# only the first, a command that runs a passing suite before the failing one
+# would read 0 failed.
+_NODE_FAIL_SUMMARY_RE = re.compile(
+    r"^[ \t]*(?:ℹ|#)[ \t]*fail[ \t]+(\d+)[ \t]*$", re.IGNORECASE | re.MULTILINE
+)
+
+# Failure-count shapes across the other common runners (pytest, vitest/jest,
+# mocha, cargo, go). First match wins; no match means the count is
+# unparseable and the kill is reported without the exactly-one claim.
 _FAIL_COUNT_RES = (
     re.compile(r"(\d+)\s+failed", re.IGNORECASE),
     re.compile(r"failures[:=]\s*(\d+)", re.IGNORECASE),
@@ -144,6 +174,9 @@ def _run(command: str, cwd: Path) -> tuple[int, str]:
 
 
 def _fail_count(output: str) -> int | None:
+    node_counts = _NODE_FAIL_SUMMARY_RE.findall(output)
+    if node_counts:
+        return sum(int(count) for count in node_counts)
     for pattern in _FAIL_COUNT_RES:
         match = pattern.search(output)
         if match:
@@ -151,7 +184,28 @@ def _fail_count(output: str) -> int | None:
     return None
 
 
-_FAIL_TOKEN_RE = re.compile(r"fail|error|not ok|assert|✗|✘", re.IGNORECASE)
+# U+2716 is the failure mark of Node's spec reporter, U+2715 jest's, and
+# U+00D7 vitest's (and jest's on Windows); U+2717 and U+2718 are the crosses
+# other runners print.
+_FAIL_TOKEN_RE = re.compile(r"fail|error|not ok|assert|✖|✕|×|✗|✘", re.IGNORECASE)
+
+# Lines that name a test without reporting its failure, so a name like
+# "rejects error input" on one is not a failure. U+2714 (Node's spec
+# reporter), U+2713 (jest, vitest), U+221A (jest on Windows) and TAP's `ok N`
+# lead a line for a PASSING test, and U+25B6 (spec) and `# Subtest:` (TAP)
+# only open a suite or a test.
+_PASS_LINE_RE = re.compile(r"^\s*(?:✔|✓|√|▶|ok\s+\d+\b|#\s*Subtest:)")
+
+# pytest's PASSED lines: `-v` puts the outcome after the test id, with an
+# optional progress percentage, xdist's `-v` puts it after the worker and the
+# percentage, and `-rA` leads its summary line with it.
+_PYTEST_PASSED_RE = re.compile(
+    r"^\s*(?:\[gw\d+\]\s*(?:\[\s*\d+%\]\s*)?)?PASSED\s|\sPASSED(?:\s+\[\s*\d+%\])?\s*$"
+)
+
+# Colour codes a runner emits when FORCE_COLOR is set or it thinks it has a
+# terminal. Left in, they sit between a line's start and its mark.
+_ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _named_in_failure_context(output: str, expect_red: str) -> bool:
@@ -160,18 +214,23 @@ def _named_in_failure_context(output: str, expect_red: str) -> bool:
     A whole-output substring match is defeated by any verbose reporter that
     echoes PASSING names (`pytest -v` prints every test), which made a wrongly
     attributed kill read as a clean one. So the name only counts on a line
-    that also carries a failure token. Heuristic, and documented as one: a
-    runner whose failure lines carry none of the tokens reads MISATTRIBUTED,
-    which fails toward the honest side - a human looks.
+    that also carries a failure token, and never on a line a reporter marks
+    passed. Heuristic, and documented as one: a runner whose failure lines
+    carry none of the tokens reads MISATTRIBUTED, which fails toward the
+    honest side - a human looks.
     """
     return any(
-        expect_red in line and _FAIL_TOKEN_RE.search(line)
+        expect_red in line
+        and not _PASS_LINE_RE.match(line)
+        and not _PYTEST_PASSED_RE.search(line)
+        and _FAIL_TOKEN_RE.search(line)
         for line in output.splitlines()
     )
 
 
 def _classify_red(output: str, expect_red: str) -> tuple[str, str, bool]:
     """(status, detail, is_finding) for a red run."""
+    output = _ANSI_SGR_RE.sub("", output)
     if not _named_in_failure_context(output, expect_red):
         return (
             "MISATTRIBUTED",

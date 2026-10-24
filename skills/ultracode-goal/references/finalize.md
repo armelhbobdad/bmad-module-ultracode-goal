@@ -87,7 +87,7 @@ It removes the latch only when it carries this run's id, leaves another run's la
 ## Knowledge-graph refresh (optional)
 
 Resolve the mode exactly as the hooks below resolve theirs:
-`python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.graphify_integration`
+`uv run --no-project {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.graphify_integration`
 
 Two values, and no others. `off` is the shipped default and a complete no-op — no probe, no delegation, no decision-log line, no output; there is nothing to read further in this section. `refresh` refreshes the project's knowledge graph on the way out, so the next session starts from a current one instead of a stale one.
 
@@ -125,7 +125,7 @@ Show the user **this run's Epic heading** from the ledger at `{workflow.deferred
 
 This hook fires **only when the Epic-level gate verdict was `advance`** (a `complete` run). On a `blocked` run — a story escalated and the Epic never advanced — skip this step entirely; a "notify success" command must not fire on a blocked Epic.
 
-When the Epic advanced, run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_epic_complete`
+When the Epic advanced, run: `uv run --no-project {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_epic_complete`
 
 If the resolved `{workflow.on_epic_complete}` is non-empty, follow it as the final terminal instruction (a prompt to run or a shell command) before exiting.
 
@@ -133,7 +133,7 @@ If the resolved `{workflow.on_epic_complete}` is non-empty, follow it as the fin
 
 The mirror of the epic-complete hook at the opposite terminal. This hook fires **only on a `blocked` run** — a story escalated and the Epic never advanced — and never on a clean advance, so an operator who walked away learns that the run stopped being able to make progress on its own.
 
-Execute may already have pinged when the gate escalated a story on its turn count, so this site is deduped against that same run-scoped marker, `{workflow.implementation_artifacts}/.on-escalation-fired-<run-id>`, **check-then-write**, at that byte-identical path, where `<run-id>` is this invocation's run id, minted at Stage 1 or at a resume's re-entry and carried forward verbatim. If the marker is already present, skip silently: the other fire site already pinged for this run. If it is absent, run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_escalation`
+Execute may already have pinged when the gate escalated a story on its turn count, so this site is deduped against that same run-scoped marker, `{workflow.implementation_artifacts}/.on-escalation-fired-<run-id>`, **check-then-write**, at that byte-identical path, where `<run-id>` is this invocation's run id, minted at Stage 1 or at a resume's re-entry and carried forward verbatim. If the marker is already present, skip silently: the other fire site already pinged for this run. If it is absent, run: `uv run --no-project {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_escalation`
 
 When the resolved `{workflow.on_escalation}` is non-empty, follow it as an instruction (a prompt to run or a shell command), stating alongside it **the escalating story id** and the path to that story's typed `escalation-<story_id>.json` sidecar as the context it carries, and only then write the fired-marker. A resolved-empty value is a silent no-op — nothing fires and no fired-marker is written — so an empty hook can never suppress a later real one.
 

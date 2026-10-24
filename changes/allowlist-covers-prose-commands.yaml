@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal, ucg-status, ucg-resolve, ucg-formalize, ucg-create-story, ucg-dev-story
+summary: |
+  An unattended run no longer stops for approval on the git and script commands its own stage prose runs. The default `allowlist_commands` now also holds `git check-ignore`, which preflight and Execute run, and `git worktree`, which the gate runs. An `allowlist_commands` override in `_bmad/custom/ultracode-goal.toml` is appended to the default, so it gets the two new entries too, and the next preflight writes their allow rules, one `Bash(<entry>:*)` rule per entry. Every call to BMAD's `resolve_customization.py` now runs with `uv run --no-project`, which the default list covers, instead of `python3`, which it does not. `--no-project` also keeps uv from setting up a Python project's own environment: before BMAD Method 6.11 the resolver has no script header, and a plain `uv run` of it inside such a project left a `.venv` and a `uv.lock` in the tree.
+issues: [158]

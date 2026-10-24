@@ -114,9 +114,9 @@ tools:
     name: TEA
     summary: Test Architect
     kind: gate
-    used_for: "**The gate: non-negotiable.** UCG invokes the `bmad-testarch-*` skills to produce the `gate-decision.json` that `gate_eval.py` reads. Required in both profiles: `--light` still runs test-design and trace"
+    used_for: "**The gate: non-negotiable.** UCG invokes the `bmad-testarch-*` skills to produce the `gate-decision.json` that `gate_eval.py` reads. Required in both profiles: `--light` still runs test-design and trace. Supported: TEA 1.27.x with BMAD Method 6. TEA 2.0 and later, and BMAD 7, are not supported yet. Preflight refuses to launch without the skills the run's profile delegates to"
     minimum: null
     tested: ["1.27.2"]
-    basis: No minimum yet. Tested is the README "Tested with" run of 2026-10-16, under --light.
+    basis: No minimum yet. UCG supports TEA 1.27.x, the release BMAD Method 6.12.2 and later install (they pin it at 1.27.2; an older BMAD 6 installer can pick a later TEA). Preflight checks the skill names, not the TEA version, so it does not catch TEA 2.x, which kept them. TEA 2.0 moved to BMAD 7's module format and TEA 3.0 renamed the `bmad-testarch-*` skills UCG calls to `bmad-tea-*`, so neither is supported yet. This list has no key for a ceiling, so the range is stated here and in used_for. Tested is the README "Tested with" run of 2026-10-16, under --light.
     install_url: https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise
     tested_with_row: TEA (Test Architect)
