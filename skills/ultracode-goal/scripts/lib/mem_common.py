@@ -346,7 +346,7 @@ def read_state(impl_artifacts: str | os.PathLike[str]) -> dict | None:
         return None
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: JSON nested too deep
         return None
     return data if isinstance(data, dict) else None
 

@@ -221,6 +221,18 @@ def test_read_state_returns_none_on_missing_and_corrupt(tmp_path):
     assert mc.read_state(tmp_path) is None
 
 
+@pytest.mark.parametrize(
+    "payload",
+    ["[" * 100000 + "]" * 100000, '{"a":' * 50000 + "1" + "}" * 50000],
+    ids=["deep-array", "deep-object"],
+)
+def test_read_state_returns_none_on_json_nested_past_the_recursion_limit(tmp_path, payload):
+    # json.loads raises RecursionError, not ValueError, on these; read_state
+    # still never raises, and reads them as the PreToolUse guard does (AC-24).
+    mc.state_path(tmp_path).write_text(payload, encoding="utf-8")
+    assert mc.read_state(tmp_path) is None
+
+
 # ===========================================================================
 # Local run store (cross_session_recall_store)
 # ===========================================================================
