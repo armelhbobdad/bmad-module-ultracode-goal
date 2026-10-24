@@ -93,7 +93,7 @@ def _init_repo(repo: Path, remote: str | None = "https://github.com/acme/widget.
     return "local:" + root[:16]
 
 
-def _run(*args: str, cwd: Path | None = None, stdin: str | None = None):
+def _run(*args: str, cwd: Path | None = None, stdin: str | None = None, timeout: float | None = None):
     # PYTHONIOENCODING=cp1252 simulates the hostile Windows console default on
     # every platform; the script must pin its own streams to UTF-8 (regression
     # guard for the windows-latest UnicodeEncodeError CI failure). The parent
@@ -106,6 +106,7 @@ def _run(*args: str, cwd: Path | None = None, stdin: str | None = None):
         input=stdin,
         cwd=str(cwd) if cwd else None,
         env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+        timeout=timeout,
     )
 
 
@@ -207,13 +208,15 @@ def _latch_out(proc) -> dict:
     return json.loads(proc.stdout)
 
 
-def _store_filter(store, cwd: Path, *extra: str, now_epoch: int = NOW, impl: Path | None = None):
+def _store_filter(
+    store, cwd: Path, *extra: str, now_epoch: int = NOW, impl: Path | None = None, timeout: float | None = None
+):
     """Run `filter --store` with a pinned now; return (stdout, parsed)."""
     impl_dir = impl if impl is not None else cwd.parent / "impl"
     proc = _run(
         "filter", "--impl-artifacts", str(impl_dir), "--store", str(store),
         "--now-epoch", str(now_epoch), "--cwd", str(cwd), *extra,
-        cwd=cwd,
+        cwd=cwd, timeout=timeout,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout, json.loads(proc.stdout)
@@ -803,6 +806,69 @@ def test_store_filter_skips_leftover_temps_and_unreadable_run_files(tmp_path, ho
     assert out["dropped"] == _NO_DROPS
     latch = _latch_out(_latch_store(tmp_path / "impl", repo, "--store", str(store)))
     assert latch["latch"]["store_ok"] is True
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    "nested",
+    ["[" * 100000 + "]" * 100000, '{"a":' * 50000 + "1" + "}" * 50000],
+    ids=["deep-array", "deep-object"],
+)
+def test_store_filter_drops_a_file_nested_past_the_recursion_limit_as_invalid(nested, tmp_path, home):
+    # json.loads raises RecursionError, not ValueError, on these (about 2 KB of
+    # brackets on Python 3.11): the file is invalid and the read goes on.
+    repo = tmp_path / "widget"
+    fp = _init_repo(repo)
+    store = tmp_path / "store"
+    _put(store, fp, _store_record(_rid(1), fp))
+    _put_raw(store, fp, f"{_rid(2)}.jsonl", nested)
+    _, out = _store_filter(store, repo)
+    assert [r["id"] for r in out["records"]] == [_rid(1)]
+    assert out["dropped"] == {**_NO_DROPS, "invalid": 1}
+
+
+@_needs_git
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this platform")
+def test_store_filter_never_blocks_on_a_fifo_named_like_a_run_file(tmp_path, home):
+    # Opening a FIFO with no writer for reading blocks forever, so Stage 1
+    # would hang. A FIFO, or a link to one, is skipped unread like a directory.
+    repo = tmp_path / "widget"
+    fp = _init_repo(repo)
+    store = tmp_path / "store"
+    _put(store, fp, _store_record(_rid(1), fp))
+    runs = mc.runs_dir(store, fp)
+    os.mkfifo(runs / f"{_rid(2)}.jsonl")
+    os.mkfifo(tmp_path / "pipe")
+    (runs / f"{_rid(3)}.jsonl").symlink_to(tmp_path / "pipe")
+    _, out = _store_filter(store, repo, timeout=30)
+    assert [r["id"] for r in out["records"]] == [_rid(1)]
+    assert out["dropped"] == _NO_DROPS
+
+
+@_needs_git
+def test_store_filter_replaces_a_lone_surrogate_in_every_free_text_field(tmp_path, home):
+    # A "\ud800" escape is valid JSON, twelve ASCII bytes in a hand edit, and
+    # decodes to text UTF-8 cannot encode. The record still reads, with U+FFFD
+    # in its place, and the read goes on instead of the filter exiting 1.
+    repo = tmp_path / "widget"
+    fp = _init_repo(repo)
+    store = tmp_path / "store"
+    for n in (1, 2):
+        record = _store_record(
+            _rid(n), fp, verdict="advance \ud800 tail", signatures=[_sig("sig \udcff")],
+            project="widget \udfff",
+        )
+        record["kind"] = "run-summary \ud800"
+        _put(store, fp, record)
+    raw = (mc.runs_dir(store, fp) / f"{_rid(1)}.jsonl").read_text(encoding="utf-8")
+    assert "\\ud800" in raw  # the file holds the escape, as a hand edit would
+    _, out = _store_filter(store, repo)
+    assert [r["id"] for r in out["records"]] == [_rid(1), _rid(2)]
+    assert out["dropped"] == _NO_DROPS
+    for record in out["records"]:
+        assert record["title_noun_phrase"] == "UCG run epic 7: gate PASS, verdict advance \ufffd tail"
+        assert (record["kind"], record["project"]) == ("run-summary \ufffd", "widget \ufffd")
+    assert [e["sig"] for e in out["recurrence"]] == ["sig \ufffd"]
 
 
 def _partner(kind: str, fingerprint: str, sig: str) -> dict:

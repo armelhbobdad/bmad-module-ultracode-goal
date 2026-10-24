@@ -93,7 +93,7 @@ Each recall call is attempted once and never retried. A run whose recall turned 
 
 **What a record holds.** The Epic, the run id, the repo fingerprint, the gate status and verdict, the root-cause signatures (each with a class from a fixed taxonomy and an artifact path), the count of deferred items, the advisories the run consumed with whether they recurred, the time, and the project's folder name for display. Free text is redacted before it is written. A run whose gate was never evaluated writes no record; a `WAIVED` outcome is written.
 
-**When the store cannot take a record.** The record waits in `mem-outbox.<run_id>.jsonl` in the implementation artifacts folder, and the run logs `WARN mem-write-deferred`. The next run that reaches Finalize with a green latch drains it, keeping its original time. A deferred record older than 14 days is dropped, and one whose drain fails three times moves to `mem-outbox.dead.jsonl`.
+**When the store cannot take a record.** The record waits in `mem-outbox.<run_id>.jsonl` in the implementation artifacts folder, and the run logs `WARN mem-write-deferred`. The next run that reaches Finalize with a green latch drains it, keeping its original time. A deferred record older than 14 days is dropped, and one whose drain fails three times moves to `mem-outbox.dead.jsonl`, with `WARN mem-write-dead-lettered`. No drain replays that file.
 
 ### One record per spawn
 
@@ -105,7 +105,7 @@ The latch is how the guard knows a run is active. Only `mem_recall.py` changes i
 
 While a latch is present, whatever it records, the guard:
 
-- **denies every claude-mem call**: claude-mem's MCP tools, its MCP resources, and any reach into `.claude-mem`. There is no green path, since UCG does not use claude-mem any more.
+- **denies every claude-mem call**: claude-mem's MCP tools, its MCP resources, a resource listing that names no server (it lists every server's resources, claude-mem's included), and any reach into `.claude-mem` by its name or a path to it. A search of a folder above it, such as your home folder, is not seen. There is no green path, since UCG does not use claude-mem any more.
 - **denies tool calls that name the store**: Read, Grep, Glob, Write, Edit, MultiEdit, NotebookEdit and Bash. Only the two recall scripts get through, run by the path the skill is installed at.
 - **denies tool calls that would change the latch**: Write, Edit, MultiEdit and NotebookEdit, and Bash commands such as `rm`, `mv`, `cp`, `tee`, a redirection, `sed -i`, `truncate` or `python -c`. A Bash command counts when it names the latch by its path or by its file name alone, so a `cd` into its folder first changes nothing. Reading it stays allowed (Read, Grep, Glob, or a plain `cat`), since Finalize reads it.
 
@@ -131,8 +131,8 @@ What the reader **does** before any advisory is surfaced:
 
 - **Scopes to this repo.** The repository fingerprint pins recall to the same origin and root commit, so another project's history cannot leak in.
 - **Redacts secrets.** High-precision patterns (AWS keys, `ghp_`/`gho_` tokens, `sk-` keys, bearer tokens, PEM headers, `password=`/`token=`/`api_key=` values) are replaced with `[redacted]`, when a record is written and again when it is read.
-- **Neutralizes shape.** The line shown for each record is built from its Epic, gate status and verdict. Bidi controls are stripped, backticks removed, newlines collapsed, and each line clamped, so an advisory cannot carry instruction-shaped or prompt-injection payloads.
-- **Drops the bad one by one.** A file that does not parse or has the wrong shape is dropped as `invalid`, a newer record format as `cross_schema`, and another repo's record as foreign. One bad file never turns the latch red.
+- **Neutralizes shape.** The line shown for each record is built from its Epic, gate status and verdict. Bidi controls are stripped, backticks removed, newlines collapsed, a lone surrogate escape (text that is not valid Unicode) replaced with U+FFFD, and each line clamped, so an advisory cannot carry instruction-shaped or prompt-injection payloads.
+- **Drops the bad one by one.** A file that does not parse, nests deeper than any record, or has the wrong shape is dropped as `invalid`, a newer record format as `cross_schema`, and another repo's record as foreign. A name that is not a regular file, such as a FIFO, is skipped unread. One bad file never stops the read or turns the latch red.
 - **Drops the stale.** Records past the 120-day horizon are dropped, unless a root cause in them was recorded by two or more distinct runs.
 - **Stays bounded.** At most 5 records, 2048 bytes each and 8192 bytes in all, in the same order every time: this Epic first, then recurring, then the most recent.
 
@@ -154,7 +154,7 @@ What it honestly does **not** do:
 
 ## Troubleshooting
 
-Each recall problem leaves a line in `.decision-log.md` and the run report: one of these tokens, or a red latch's `reason`.
+Each recall problem leaves a line in `.decision-log.md` and the run report: one of these tokens, a red latch's `reason`, or what a recall call that exited non-zero printed.
 
 | Token | When | What to do |
 | --- | --- | --- |
@@ -162,11 +162,13 @@ Each recall problem leaves a line in `.decision-log.md` and the run report: one 
 | Red latch, `reason` `store-unwritable: <error>` | Stage 1: recall is `on` but the store folder could not be created or written. Recall is off for the run, and the run report repeats the reason. | Fix the folder (permissions, disk space, sandbox) or set the key to another folder. |
 | Red latch, `reason` `no-fingerprint` | Stage 1: the repo has no commit yet, or the session's working folder is not inside it, so its records have no folder. Recall is off for the run. | Make a first commit, or start the session from the project folder. |
 | A latch call that exits non-zero | Stage 1: the latch call failed (for example, the implementation artifacts folder cannot be written). It writes no latch, so Finalize also logs `NOTE recall-latch-missing`; the log holds what it printed. | Fix what the log names. |
+| A filter, drain or write call that exits non-zero | Stage 1 or Finalize: the call failed. The log and the run report hold what it printed, and the run goes on: a failed filter surfaces no advisories, a failed drain still lets the write run, and a failed write may leave no record. | Fix what the log names. |
 | `NOTE recall-read-refused` | Stage 1: the permission layer refused the latch or filter call. A refused latch call leaves no latch, so recall is off for the run and Finalize also logs `NOTE recall-latch-missing`. A refused filter call only skips the read: Finalize still writes the record. | Let the recall scripts' `uv run` calls through your permission mode. |
 | `NOTE recall-latch-missing` | Finalize: there was no latch, or another run's latch. No record is written. | Look earlier in the log for the cause, such as `NOTE recall-read-refused`, a latch call that failed, or another run started in the same folder. |
 | `NOTE recall-write-refused` | Finalize: the permission layer refused the drain or write call. Nothing is parked. | Let the recall scripts' `uv run` calls through your permission mode. |
 | `NOTE recall-unlatch-failed` | Any exit: removing this run's latch was refused or failed, so the latch is still there and keeps the guard denying. | Delete the latch file the NOTE names by hand. |
 | `WARN mem-write-deferred` | Finalize: the store could not take the record, so it waits in the outbox. | Fix the store folder (permissions, disk space, sandbox). The next green Finalize drains it. |
+| `WARN mem-write-dead-lettered` | Drain: a parked record failed its third write, so it moved to `mem-outbox.dead.jsonl`, and the run report's `dead_lettered` count includes it. No drain replays that file. | Fix the store folder. The record stays in `mem-outbox.dead.jsonl` for you to inspect. |
 | `NOTE mem-target-foreign` | The run's file already exists but is not this run's, or cannot be parsed. It is never touched; the record moves to `mem-outbox.dead.jsonl`. | Inspect that run file. |
 | `NOTE mem-run-id-invalid` | Drain: a parked record carries a malformed run id. It moves to `mem-outbox.dead.jsonl`; the others still land. | Inspect `mem-outbox.dead.jsonl`. |
 | `NOTE mem-legacy-unconvertible` | Drain: a summary parked by a claude-mem era run cannot be converted. It moves to `mem-outbox.dead.jsonl`. | Inspect `mem-outbox.dead.jsonl`. |

@@ -1,0 +1,4 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  `mem_observation.py drain` now prints `WARN mem-write-dead-lettered` when a record parked in the outbox fails its third write and moves to `mem-outbox.dead.jsonl`, which no drain replays, and the dead-letter line carries that token in its `note`. Before, that move printed nothing. Finalize logs the token, and the run report adds the drain's `dead_lettered` count to its `converted`, `legacy_unconvertible` and `tombstones` counts. A recall call that exits non-zero (the filter at Stage 1, the drain or the write at Finalize) is logged with what it printed, and the run goes on: recall stays advisory.

@@ -23,13 +23,16 @@ Contents:
   - canonical_class()                     unknown -> "other"
   - repo_fingerprint(cwd)                 stable per-repo identity
   - redact(text)                          high-precision secret scrubbing
+  - replace_surrogates(text)              lone surrogates to U+FFFD, so text encodes
   - neutralize(text)                      bidi/code-fence strip + 80cp clamp
   - state_path / read_state / write_state / remove_own_state   machine latch plumbing
+  - nested_too_deep                       the depth bound on JSON from an edited file
   - carries_marker / extract_payload      legacy claude-mem payload parsing
   - valid_run_id                          the run_id check both scripts share
   - is_store_unset / resolve_store_root / store_unset_note   the cross_session_recall_store key
   - fingerprint_dir / runs_dir / run_file_path   store layout
   - ensure_store_root                     store root plus its self-ignoring .gitignore
+  - read_regular_file                     a read that never opens a FIFO or a device
   - validate_record / classify_record     per-record validation
   - write_run_record                      the immutable per-run writer
   - iter_store_records / read_store       the reader over a list of roots
@@ -57,6 +60,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import tempfile
 import time
@@ -295,18 +299,29 @@ def _clamp_codepoints(text: str, limit: int) -> str:
     return "".join(chars[:limit])
 
 
+def replace_surrogates(text: str) -> str:
+    """Replace each lone surrogate with U+FFFD, so the text encodes as UTF-8.
+
+    A JSON ``\\ud800`` escape decodes to one, and so does a non-UTF-8 byte in
+    an argument (Python reads argv with surrogateescape). UTF-8 cannot encode
+    one, so any text that reaches a byte count or the output goes through here.
+    """
+    return "".join("\ufffd" if "\ud800" <= ch <= "\udfff" else ch for ch in text)
+
+
 def neutralize(text: str | None) -> str:
     """Defang untrusted free text into a single short, plain phrase.
 
     Strips bidi controls, removes backticks / code-fence markers, collapses all
     whitespace runs (including newlines/tabs) to single spaces, drops other
-    control characters, and clamps to 80 codepoints on a boundary. Idempotent.
-    Returns "" for None.
+    control characters, replaces a lone surrogate with U+FFFD
+    (replace_surrogates), and clamps to 80 codepoints on a boundary.
+    Idempotent. Returns "" for None.
     """
     if not text:
         return ""
     out_chars = []
-    for ch in text:
+    for ch in replace_surrogates(text):
         if ch in _BIDI_CONTROLS:
             continue
         if ch == "`":
@@ -438,6 +453,38 @@ def remove_own_state(impl_artifacts: str | os.PathLike[str], run_id: str) -> tup
 
 
 # ---------------------------------------------------------------------------
+# JSON from files anyone can edit (run files, outbox lines)
+# ---------------------------------------------------------------------------
+
+# A store record nests three levels (the record, its signatures, one
+# signature) and an outbox line one more. json.loads raises RecursionError, not
+# ValueError, on JSON nested past the interpreter's limit, and JSON parsed just
+# inside that limit can still raise it when json.dumps writes it back out, a
+# few calls deeper. Nothing nested deeper than this is read as ours.
+_MAX_JSON_DEPTH = 32
+
+
+def nested_too_deep(value: object) -> bool:
+    """True when ``value`` nests lists and objects deeper than _MAX_JSON_DEPTH.
+
+    Walked without recursion, so the check itself can never raise.
+    """
+    pending = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if isinstance(item, dict):
+            children = item.values()
+        elif isinstance(item, list):
+            children = item
+        else:
+            continue
+        if depth > _MAX_JSON_DEPTH:
+            return True
+        pending.extend((child, depth + 1) for child in children)
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Legacy claude-mem payload parsing (drain's outbox conversion)
 # ---------------------------------------------------------------------------
 
@@ -460,7 +507,8 @@ def extract_payload(record: dict) -> dict | None:
     The text field is one human line, then the marker, then a fenced json block.
     We locate the first ``{`` after the marker and JSON-decode from there using a
     raw decoder so trailing fence characters do not break parsing. Never raises;
-    returns None when nothing parseable is present.
+    returns None when nothing parseable is present, or when it nests deeper
+    than any payload (nested_too_deep).
     """
     if not isinstance(record, dict):
         return None
@@ -476,9 +524,9 @@ def extract_payload(record: dict) -> dict | None:
     decoder = json.JSONDecoder()
     try:
         obj, _end = decoder.raw_decode(text[brace_at:])
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: JSON nested too deep
         return None
-    return obj if isinstance(obj, dict) else None
+    return obj if isinstance(obj, dict) and not nested_too_deep(obj) else None
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +564,7 @@ NOTE_MEM_TARGET_FOREIGN = "NOTE mem-target-foreign"
 NOTE_MEM_RUN_ID_INVALID = "NOTE mem-run-id-invalid"
 NOTE_MEM_LEGACY_UNCONVERTIBLE = "NOTE mem-legacy-unconvertible"
 WARN_MEM_WRITE_DEFERRED = "WARN mem-write-deferred"
+WARN_MEM_WRITE_DEAD_LETTERED = "WARN mem-write-dead-lettered"
 
 # A run file larger than this is never a record of ours: dropped as invalid
 # without decoding it.
@@ -889,7 +938,8 @@ def _parse_run_file_bytes(raw: bytes) -> dict | None:
     """Decode one run file's bytes to its JSON object, or None (unparseable).
 
     A leading UTF-8 byte order mark (an editor such as Notepad can add one) is
-    not part of the record.
+    not part of the record. JSON nested deeper than any record
+    (nested_too_deep) is unparseable too.
     """
     if len(raw) > _MAX_RUN_FILE_BYTES:
         return None
@@ -901,15 +951,42 @@ def _parse_run_file_bytes(raw: bytes) -> dict | None:
         return None
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: JSON nested too deep
         return None
-    return data if isinstance(data, dict) else None
+    return data if isinstance(data, dict) and not nested_too_deep(data) else None
 
 
-def _read_run_file(path: Path) -> bytes:
-    """Read at most _MAX_RUN_FILE_BYTES + 1 bytes. OSError propagates."""
-    with open(path, "rb") as handle:
-        return handle.read(_MAX_RUN_FILE_BYTES + 1)
+def read_regular_file(path: str | os.PathLike[str], limit: int | None = None) -> bytes | None:
+    """Read a regular file (at most ``limit`` bytes), or None when it is not one.
+
+    A FIFO, a socket, a device or a directory under a run file's or an
+    outbox's name is never read: open() on a FIFO with no writer blocks
+    forever. The path is checked before it is opened, then opened non-blocking
+    and checked again, so one swapped in between is not read either. A symlink
+    is followed. OSError propagates (a missing file, a dangling link, no
+    permission).
+    """
+    if not stat.S_ISREG(os.stat(path).st_mode):
+        return None
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    try:
+        regular = stat.S_ISREG(os.fstat(fd).st_mode)
+    except OSError:
+        os.close(fd)
+        raise
+    if not regular:
+        os.close(fd)
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        return handle.read() if limit is None else handle.read(limit)
+
+
+def _read_run_file(path: Path) -> bytes | None:
+    """Read at most _MAX_RUN_FILE_BYTES + 1 bytes; None when not a regular file.
+
+    OSError propagates.
+    """
+    return read_regular_file(path, _MAX_RUN_FILE_BYTES + 1)
 
 
 # ---------------------------------------------------------------------------
@@ -972,12 +1049,12 @@ def _existing_target_status(target: Path, run_id: str, fingerprint: str) -> str:
 
     WRITE_SKIPPED_EXISTING when it holds one JSON object with this run_id and
     this fingerprint that validate_record() does not reject as invalid;
-    otherwise (a directory, unparseable bytes, another run or another repo)
-    WRITE_FOREIGN_TARGET. An OSError reading it propagates (the caller spills).
+    otherwise (a directory, a FIFO or anything else that is not a regular
+    file, unparseable bytes, another run or another repo) WRITE_FOREIGN_TARGET.
+    An OSError reading it propagates (the caller spills).
     """
-    if os.path.isdir(target):
-        return WRITE_FOREIGN_TARGET
-    existing = _parse_run_file_bytes(_read_run_file(target))
+    raw = _read_run_file(target)
+    existing = None if raw is None else _parse_run_file_bytes(raw)
     if (
         existing is not None
         and existing.get("run_id") == run_id
@@ -1067,10 +1144,12 @@ def iter_store_records(
 
     For each root in order (None entries are skipped), reads
     ``<root>/<fingerprint-dir>/runs/`` in sorted name order. Names not ending in
-    ``.jsonl`` are skipped, a file that raises OSError on read is skipped (one
-    bad file never stops the read), and a root whose runs directory cannot be
-    listed contributes nothing. Each yielded item carries RECORD_OK,
-    RECORD_INVALID (unparseable or wrong shape), RECORD_CROSS_SCHEMA or
+    ``.jsonl`` are skipped, a file that raises OSError on read is skipped, and so
+    is anything that is not a regular file (a directory, a FIFO), which is never
+    read (one bad file never stops the read); a root whose runs directory
+    cannot be listed contributes nothing. Each yielded item carries RECORD_OK,
+    RECORD_INVALID (unparseable, nested past the recursion limit, or wrong
+    shape), RECORD_CROSS_SCHEMA or
     RECORD_FOREIGN (classify_record). An OK record whose run_id an earlier OK
     record already had (the same run seen through two roots) is not yielded
     again. Yields nothing when ``fingerprint`` has no directory name.
@@ -1095,6 +1174,8 @@ def iter_store_records(
             try:
                 raw = _read_run_file(path)
             except OSError:
+                continue
+            if raw is None:
                 continue
             record = _parse_run_file_bytes(raw)
             status = RECORD_INVALID if record is None else classify_record(record, fingerprint)
