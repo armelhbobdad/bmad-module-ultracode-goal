@@ -16,6 +16,8 @@ name: Quality & Validation
 # - Fixture tracking (no test fixture may be matched by a .gitignore rule)
 # - Tool versions (tools/tool-requirements.yaml against the prerequisites
 #   table and every copy of those versions)
+# - Context index (the generated block of CLAUDE.md against the exported
+#   reference skills)
 # - Action pins (every `uses:` in .github/workflows/ names a commit SHA)
 # - Python script tests (pytest via uv), and the workflow tests under test/
 
@@ -135,10 +137,11 @@ jobs:
   # docs (README.md, docs/ except docs/_internal/, website/) must hold none,
   # and a pull request may add none, in its changed lines or its commit
   # messages, outside the generated files the tool skips (CHANGELOG.md,
-  # package-lock.json, skf-skills/). fetch-depth: 0 fetches the base branch
-  # the tool diffs against; without it the tool fails in CI rather than skip
-  # the check. Linux only: it reads text, so a Windows run would only repeat
-  # it.
+  # package-lock.json, skf-skills/) and the generated "|key: ..." context
+  # index rows an export writes into CLAUDE.md. fetch-depth: 0 fetches the
+  # base branch the tool diffs against; without it the tool fails in CI
+  # rather than skip the check. Linux only: it reads text, so a Windows run
+  # would only repeat it.
   #
   # The change-fragment steps run here too, for the same reason: they read
   # history. tools/changes.js and tools/covered-surfaces.js compare the tree
@@ -291,6 +294,19 @@ jobs:
 
       - name: Check the reference skill links
         run: node tools/link-reference-skills.js --check
+
+      # CLAUDE.md is tracked, and its generated block indexes the reference
+      # skills. The check rebuilds that block from skf-skills/.export-manifest.json
+      # and each exported version's context-snippet.md, as an export writes it,
+      # and fails on a stale, missing, extra or misordered row, a wrong header
+      # or a second block, so a snippet changed without a re-export cannot
+      # leave the index stale.
+      # It reads files only: no git history, no network.
+      - name: Test the context index check
+        run: npm run test:context-index-tool
+
+      - name: Check the context index in CLAUDE.md
+        run: npm run validate:context-index
 
       # tools/tool-requirements.yaml is the one list of tool versions: the
       # check compares the prerequisites table it generates and every copy

@@ -20,10 +20,10 @@ ignores:
   - _skf-learn/**
   - forge-data/**
   - skf-skills/**
-  # The local CLAUDE.md and CLAUDE.local.md (gitignored): the reference skills
-  # index, written there by an export or copied from the skills' snippets, is
-  # pipe-delimited rows, not markdown.
-  - CLAUDE.md
+  # CLAUDE.local.md holds a contributor's personal notes (gitignored). The
+  # tracked CLAUDE.md is linted; the reference skills index an export writes
+  # in it is pipe-delimited rows, not markdown, so markdownlint-disable
+  # comments fence it off there.
   - CLAUDE.local.md
   # Skill quality-analysis artifacts and decision logs (local-only, gitignored)
   - skills/**/.analysis/**
