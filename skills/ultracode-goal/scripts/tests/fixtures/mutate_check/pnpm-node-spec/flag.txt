@@ -1,0 +1,50 @@
+Scope: 2 of 3 workspace projects
+packages/guard test$ node --test guard.test.mjs
+packages/other test$ node --test other.test.mjs
+packages/guard test: ✔ rejects error input (0.792873ms)
+packages/guard test: ✖ flag is on (0.928361ms)
+packages/guard test: ✔ fails when mode is loose (0.12428ms)
+packages/other test: ✔ other passes (0.785698ms)
+packages/other test: ℹ tests 1
+packages/other test: ℹ suites 0
+packages/other test: ℹ pass 1
+packages/other test: ℹ fail 0
+packages/other test: ℹ cancelled 0
+packages/other test: ℹ skipped 0
+packages/other test: ℹ todo 0
+packages/other test: ℹ duration_ms 56.557653
+packages/guard test: ℹ tests 3
+packages/guard test: ℹ suites 0
+packages/guard test: ℹ pass 2
+packages/guard test: ℹ fail 1
+packages/guard test: ℹ cancelled 0
+packages/guard test: ℹ skipped 0
+packages/guard test: ℹ todo 0
+packages/guard test: ℹ duration_ms 66.02334
+packages/guard test: ✖ failing tests:
+packages/guard test: test at guard.test.mjs:6:1
+packages/guard test: ✖ flag is on (0.928361ms)
+packages/guard test:   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+packages/guard test:   
+packages/guard test:   'off' !== 'on'
+packages/guard test:   
+packages/guard test:       at TestContext.<anonymous> (file:///home/dev/work/pnpm/packages/guard/guard.test.mjs:6:33)
+packages/guard test:       at Test.runInAsyncScope (node:async_hooks:227:14)
+packages/guard test:       at Test.run (node:internal/test_runner/test:1402:25)
+packages/guard test:       at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+packages/guard test:       at Test.postRun (node:internal/test_runner/test:1542:19)
+packages/guard test:       at Test.run (node:internal/test_runner/test:1467:12)
+packages/guard test:       at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+packages/guard test:     generatedMessage: true,
+packages/guard test:     code: 'ERR_ASSERTION',
+packages/guard test:     actual: 'off',
+packages/guard test:     expected: 'on',
+packages/guard test:     operator: 'strictEqual',
+packages/guard test:     diff: 'simple'
+packages/guard test:   }
+packages/other test: Done
+packages/guard test: Failed
+/home/dev/work/pnpm/packages/guard:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  guard@0.0.0 test: `node --test guard.test.mjs`
+Exit status 1
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?

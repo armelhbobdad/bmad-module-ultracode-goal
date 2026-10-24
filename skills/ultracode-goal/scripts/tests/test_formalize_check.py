@@ -1425,3 +1425,70 @@ def test_kernel_reports_a_story_inserted_below_a_done_parent(tmp_path):
     assert "7-1a-reset-password (parent row 7-1-the-login), 7-1b-audit (parent row 7-1-the-login)" in gaps[0]["detail"]
     assert gaps[0]["remediable"] is True
     assert out["checks"]["decomposed_children"] == []
+
+
+def test_kernel_covers_a_lettered_story_whose_slug_carries_a_tea_word(tmp_path):
+    # End to end: `7-1a-trace-export.md` is the story's own file, written from
+    # the story template with no authored_by header. Read as a leaked TEA
+    # artifact, its only clearing move archived it and left the key uncovered,
+    # so the verdict could never reach ready.
+    root = tmp_path / "lettered"
+    planning = root / "planning-artifacts"
+    impl = root / "impl-artifacts"
+    planning.mkdir(parents=True)
+    impl.mkdir(parents=True)
+    (planning / "prd-fixture.md").write_text("# PRD\n", encoding="utf-8")
+    (planning / "architecture-fixture.md").write_text("# Architecture\n", encoding="utf-8")
+    (impl / "sprint-status.yaml").write_text(
+        "generated: fixture\ndevelopment_status:\n  epic-7: in-progress\n"
+        "  7-1-the-login: done\n  7-1a-trace-export: ready-for-dev\n",
+        encoding="utf-8",
+    )
+    (impl / "7-1-the-login.md").write_text(_story_body("7-1-the-login"), encoding="utf-8")
+    (impl / "7-1a-trace-export.md").write_text(_story_body("7-1a-trace-export"), encoding="utf-8")
+    out = _run_project(root)
+    kinds = [g["kind"] for g in out["mechanical_gaps"]]
+    assert "leaked_tea_artifact" not in kinds, out["mechanical_gaps"]
+    assert "story_keys_uncovered" not in kinds, out["mechanical_gaps"]
+    assert not out["checks"]["tea_artifacts_in_source"]
+
+
+def test_a_title_starting_with_a_letter_reads_its_bare_number_file_as_a_parent():
+    # `2-4-a-new-login-page` has the stem 2-4-a, and the operator's `2-4.md`
+    # the stem 2-4. With its row and no 2-4 row, the key reads as a child of a
+    # parent whose row the split removed; the order cannot tell the two apart,
+    # so the report lists it (define-done.md renames such a file after its key).
+    files = [Path("2-4.md")]
+    keys = ["2-4-a-new-login-page"]
+    rows = {"2-1-setup": "done", "2-4-a-new-login-page": "ready-for-dev"}
+    coverage = fc._story_coverage(files, keys, rows)
+    assert coverage.uncovered == []
+    assert coverage.children == [("2-4-a-new-login-page", Path("2-4.md"), None)]
+    assert fc._story_coverage([Path("2-4-login-page.md")], keys, rows).children == [
+        ("2-4-a-new-login-page", Path("2-4-login-page.md"), None)
+    ]
+    # Without the rows no parent covers anything, and the key reads uncovered.
+    assert fc._story_coverage(files, keys).uncovered == keys
+    # Named after its full key, the file is its own.
+    assert fc._story_coverage([Path("2-4-a-new-login-page.md")], keys, rows) == fc._Coverage([], [], {})
+
+
+def test_the_stem_docstring_says_what_a_bare_number_file_reads_as():
+    doc = re.sub(r"\s+", " ", fc._story_stem.__doc__)
+    assert "fails closed;" not in doc
+    assert "reads as a child of that file whose parent row the split removed" in doc
+    assert "without them it reads uncovered" in doc
+
+
+def test_define_done_renames_a_story_file_the_kernel_read_as_a_parent():
+    text = re.sub(r"\s+", " ", (SCRIPT.parent.parent / "references" / "define-done.md").read_text(encoding="utf-8"))
+    start = text.index("**A decomposed child gets no story file.**")
+    paragraph = text[start : text.index("On a project whose artifact tree git does not track", start)]
+    assert "rename that file to `<key>.md`" in paragraph
+    assert "the readiness check did read its criteria" in paragraph
+    # The rename names its command, one `acceptEdits` runs without asking
+    # (no allow rule covers a git move), and a file two listed keys share is a
+    # parent's, so neither key takes it.
+    assert "in one `mv <that file> <its folder>/<key>.md` call" in paragraph
+    assert "no other key in the list names the same file" in paragraph
+    assert "A file two listed keys name is a parent's, so rename it for neither." in paragraph

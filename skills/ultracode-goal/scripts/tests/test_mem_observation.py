@@ -481,7 +481,13 @@ def test_write_replay_prints_skipped_existing_and_leaves_the_file_byte_identical
 
 
 @_needs_git
-def test_write_never_touches_an_unparseable_target_and_dead_letters_the_entry(tmp_path, home):
+@pytest.mark.parametrize("content", [
+    b"{not json at all\n",
+    # Nested past the recursion limit: json.loads raises RecursionError, not
+    # ValueError, so it once escaped the write with exit 1 and nothing parked.
+    ("[" * 100000 + "]" * 100000).encode(),
+], ids=["unparseable", "nested-past-the-recursion-limit"])
+def test_write_never_touches_an_unparseable_target_and_dead_letters_the_entry(tmp_path, home, content):
     # CSR-INT-003 (AC-3, AC-25): untouched, dead-lettered at once with the
     # pinned token on stdout, nothing spilled.
     repo = _repo(tmp_path)
@@ -489,7 +495,7 @@ def test_write_never_touches_an_unparseable_target_and_dead_letters_the_entry(tm
     impl = tmp_path / "impl"
     target = _runs_of(store, repo) / f"{_RUN}.jsonl"
     target.parent.mkdir(parents=True)
-    target.write_bytes(b"{not json at all\n")
+    target.write_bytes(content)
     before = _sha(target)
 
     proc = _write(impl, store, repo)
@@ -530,6 +536,39 @@ def test_write_never_touches_a_parseable_record_of_another_run_or_repo(tmp_path,
     assert _sha(target) == before
     assert [e["note"] for e in _lines(impl / _DEAD)] == ["NOTE mem-target-foreign"]
     assert not (impl / f"mem-outbox.{_RUN}.jsonl").exists()
+
+
+@_needs_git
+@pytest.mark.skipif(os.name != "posix", reason="argv carries bytes only on POSIX")
+def test_write_replaces_an_argument_byte_that_is_not_utf8(tmp_path, home):
+    # Python decodes a non-UTF-8 argv byte to a lone surrogate, which UTF-8
+    # cannot encode: a root-cause path holding one made the signature hash
+    # raise, and a verdict holding one stayed in the record for good. Each
+    # becomes U+FFFD, and the record reads back through the filter.
+    repo = _repo(tmp_path)
+    store = tmp_path / "store"
+    impl = tmp_path / "impl"
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "write", "--impl-artifacts", str(impl), "--store", str(store),
+         "--epic", b"7\xff", "--run-id", _RUN, "--gate-status", b"PASS\xfe", "--verdict", b"advance \xff",
+         "--root-cause", b"class=build-error,path=src/\xff.py", "--advisory", b"sig=\xfe,recurred=yes",
+         "--cwd", str(repo), "--valid-until-date", _DATE],
+        capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+    )
+    out = _out(proc)
+    assert out["status"] == "written"
+    record = json.loads(Path(out["path"]).read_text(encoding="utf-8"))
+    fingerprint = mc.repo_fingerprint(repo)["value"]
+    assert (record["epic"], record["gate_status"], record["verdict"]) == ("7\ufffd", "PASS\ufffd", "advance \ufffd")
+    assert record["signatures"] == [{
+        "class": "build-error", "path": "src/\ufffd.py",
+        "sig": _signature("build-error", "src/\ufffd.py", fingerprint),
+    }]
+    assert record["advisories"] == [{"sig": "\ufffd", "recurred": "yes"}]
+    read = _recall_filter(impl, store, repo)
+    assert read.returncode == 0, read.stderr
+    assert [r["id"] for r in json.loads(read.stdout)["records"]] == [_RUN]
 
 
 # --- write: run_id check (AC-4) ---------------------------------------------
@@ -855,10 +894,15 @@ def test_store_drain_bumps_attempts_only_on_oserror_and_dead_letters_at_the_thir
         assert entry["payload"] == spilled["payload"]
     out = _out(_drain(impl, store))
     assert out["dead_lettered"] == 1 and out["deferred"] == 0
+    # The record leaves the replay path for good, so the drain says so: the
+    # run report carries the token, and the dead line names it.
+    assert [n.split(":", 1)[0] for n in out["notes"]] == ["WARN mem-write-dead-lettered"]
+    assert f"{outbox.name} line 1" in out["notes"][0] and _DEAD in out["notes"][0]
     assert not outbox.exists()
     (dead,) = _lines(impl / _DEAD)
     assert dead["attempts"] == 3
     assert dead["payload"] == spilled["payload"]
+    assert dead["note"] == "WARN mem-write-dead-lettered"
 
 
 @_needs_git
@@ -1011,7 +1055,8 @@ def test_store_drain_requeues_a_failed_legacy_conversion_so_the_next_drain_lands
 @pytest.mark.parametrize("payload", [
     _hand_legacy("{not json"),
     _hand_legacy(json.dumps({k: v for k, v in _inner().items() if k != "run_id"})),
-], ids=["fenced-json-unparseable", "missing-run-id"])
+    _hand_legacy('{"a": ' + "[" * 100000 + "]" * 100000 + "}"),
+], ids=["fenced-json-unparseable", "missing-run-id", "fenced-json-nested-past-the-recursion-limit"])
 def test_store_drain_dead_letters_an_unconvertible_legacy_entry_at_once(tmp_path, home, payload):
     # CSR-UNIT-021 (AC-15, AC-27): no store needed, nothing written.
     impl = tmp_path / "impl"
@@ -1106,7 +1151,10 @@ def test_store_drain_dead_letters_an_entry_already_at_the_attempt_cap_with_its_s
     out = _out(_drain(impl, store, "--now-epoch", str(_NOW_MS)))
     assert out["dead_lettered"] == 1
     assert out["written"] == 0 and out["deferred"] == 0 and out["tombstones"] == 0
-    assert _lines(impl / _DEAD) == [{"payload": record, "attempts": 3, "spilled_at": fresh}]
+    assert [n.split(":", 1)[0] for n in out["notes"]] == ["WARN mem-write-dead-lettered"]
+    assert _lines(impl / _DEAD) == [
+        {"payload": record, "attempts": 3, "spilled_at": fresh, "note": "WARN mem-write-dead-lettered"}
+    ]
     assert not (impl / f"mem-outbox.{_RUN}.jsonl").exists()
     assert not store.exists()
 
@@ -1130,6 +1178,62 @@ def test_store_drain_handles_a_mixed_batch_across_two_outboxes(tmp_path, home):
     assert _jsonl_names(mc.runs_dir(store, _inner()["fingerprint"])) == [f"{_RUN}.jsonl"]
     assert [e["payload"]["run_id"] for e in _lines(impl / _DEAD)] == [_RUN_C]
     assert sorted(p.name for p in impl.iterdir()) == [_DEAD]
+
+
+def test_store_drain_tombstones_a_line_nested_past_the_recursion_limit_and_lands_the_rest(tmp_path, home):
+    # json.loads raises RecursionError, not ValueError, on such a line: it is
+    # unparseable like any other, so it is dropped, and the outboxes sorted
+    # after it still land instead of every drain exiting 1 on it.
+    impl = tmp_path / "impl"
+    store = tmp_path / "store"
+    impl.mkdir()
+    (impl / "mem-outbox.epic-1-20260101T000000Z.jsonl").write_text(
+        "[" * 100000 + "]" * 100000 + "\n", encoding="utf-8"
+    )
+    record = mc.store_record(_inner(), created_at_epoch=_DATE_MS, project="widget")
+    _spill_raw(impl, _RUN, record, attempts=0, spilled_at=_iso(_NOW - timedelta(days=1)))
+    out = _out(_drain(impl, store, "--now-epoch", str(_NOW_MS)))
+    assert (out["tombstones"], out["written"], out["dead_lettered"]) == (1, 1, 0)
+    assert _jsonl_names(mc.runs_dir(store, _inner()["fingerprint"])) == [f"{_RUN}.jsonl"]
+    assert list(impl.iterdir()) == []
+
+
+def test_store_drain_tombstones_a_record_nested_deeper_than_any_record(tmp_path, home):
+    # JSON parsed just inside the recursion limit can still raise it when the
+    # drain writes it back out (on Python 3.11 a field nested 990 deep crashed
+    # every drain). Nothing nested deeper than a record could be is replayed.
+    impl = tmp_path / "impl"
+    store = tmp_path / "store"
+    deep: object = []
+    for _ in range(39):
+        deep = [deep]
+    record = mc.store_record(_inner(), created_at_epoch=_DATE_MS, project="widget")
+    _spill_raw(impl, _RUN, {**record, "extra": deep}, attempts=0, spilled_at=_iso(_NOW - timedelta(days=1)))
+    out = _out(_drain(impl, store, "--now-epoch", str(_NOW_MS)))
+    assert (out["tombstones"], out["written"], out["dead_lettered"]) == (1, 0, 0)
+    assert not store.exists()
+    assert list(impl.iterdir()) == []
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this platform")
+def test_store_drain_never_blocks_on_a_fifo_named_like_an_outbox(tmp_path, home):
+    # Opening a FIFO with no writer for reading blocks forever, so Finalize
+    # would hang. It is not a regular file: never read, left as it is.
+    impl = tmp_path / "impl"
+    store = tmp_path / "store"
+    record = mc.store_record(_inner(run_id=_RUN_B), created_at_epoch=_DATE_MS, project="widget")
+    _spill_raw(impl, _RUN_B, record, attempts=0, spilled_at=_iso(_NOW - timedelta(days=1)))
+    fifo = impl / f"mem-outbox.{_RUN}.jsonl"
+    os.mkfifo(fifo)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "drain", "--impl-artifacts", str(impl), "--store", str(store),
+         "--now-epoch", str(_NOW_MS)],
+        capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=30,
+    )
+    out = _out(proc)
+    assert out["written"] == 1 and out["tombstones"] == 0 and out["dead_lettered"] == 0
+    assert _jsonl_names(mc.runs_dir(store, _inner()["fingerprint"])) == [f"{_RUN_B}.jsonl"]
+    assert fifo.is_fifo()
 
 
 def test_store_drain_of_an_empty_artifacts_folder_reports_zero_counts(tmp_path, home):
@@ -1349,10 +1453,25 @@ def test_store_drain_dead_letters_a_converted_entry_at_the_attempt_cap(tmp_path,
         out = _out(_drain(impl, store, "--now-epoch", str(clock)))
         assert out["deferred"] == deferred and out["tombstones"] == 0
     assert out["dead_lettered"] == 1
+    assert [n.split(":", 1)[0] for n in out["notes"]] == ["WARN mem-write-dead-lettered"]
     assert not (impl / f"mem-outbox.{_RUN}.jsonl").exists()
     (dead,) = _lines(impl / _DEAD)
     assert dead["attempts"] == 3 and dead["converted"] is True
     assert dead["payload"] == mc.legacy_payload_to_record(wrapper)
+    assert dead["note"] == "WARN mem-write-dead-lettered"
+
+
+def test_every_token_the_scripts_print_is_logged_and_explained():
+    # A token the scripts print but Finalize never logs, or the operator doc
+    # never explains, is a recall problem that leaves no line anyone can act on.
+    tokens = sorted(v for k, v in vars(mc).items() if k.startswith(("NOTE_", "WARN_")))
+    assert "WARN mem-write-dead-lettered" in tokens
+    root = SCRIPT.parents[3]
+    finalize = (SCRIPT.parents[1] / "references" / "finalize.md").read_text(encoding="utf-8")
+    doc = (root / "docs" / "cross-session-recall.md").read_text(encoding="utf-8")
+    for token in tokens:
+        assert f"`{token}`" in finalize, f"finalize.md must tell the run to log {token}"
+        assert f"| `{token}` |" in doc, f"the troubleshooting table must explain {token}"
 
 
 if __name__ == "__main__":

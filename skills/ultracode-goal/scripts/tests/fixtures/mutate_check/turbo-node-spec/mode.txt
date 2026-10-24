@@ -1,0 +1,60 @@
+turbo 2.5.8
+
+• Packages in scope: guard
+• Running test in 1 packages
+• Remote caching disabled
+guard:test: cache bypass, force executing 78dd067bdbb051a8
+guard:test: 
+guard:test: > guard@0.0.0 test
+guard:test: > node --test guard.test.mjs
+guard:test: 
+guard:test: ✔ rejects error input (1.067099ms)
+guard:test: ✔ flag is on (0.28288ms)
+guard:test: ✖ fails when mode is loose (1.12856ms)
+guard:test: ℹ tests 3
+guard:test: ℹ suites 0
+guard:test: ℹ pass 2
+guard:test: ℹ fail 1
+guard:test: ℹ cancelled 0
+guard:test: ℹ skipped 0
+guard:test: ℹ todo 0
+guard:test: ℹ duration_ms 118.620303
+guard:test: 
+guard:test: ✖ failing tests:
+guard:test: 
+guard:test: test at guard.test.mjs:7:1
+guard:test: ✖ fails when mode is loose (1.12856ms)
+guard:test:   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+guard:test:   
+guard:test:   'loose' !== 'strict'
+guard:test:   
+guard:test:       at TestContext.<anonymous> (file:///home/dev/work/mono/packages/guard/guard.test.mjs:7:47)
+guard:test:       at Test.runInAsyncScope (node:async_hooks:227:14)
+guard:test:       at Test.run (node:internal/test_runner/test:1402:25)
+guard:test:       at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+guard:test:       at Test.postRun (node:internal/test_runner/test:1542:19)
+guard:test:       at Test.run (node:internal/test_runner/test:1467:12)
+guard:test:       at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+guard:test:     generatedMessage: true,
+guard:test:     code: 'ERR_ASSERTION',
+guard:test:     actual: 'loose',
+guard:test:     expected: 'strict',
+guard:test:     operator: 'strictEqual',
+guard:test:     diff: 'simple'
+guard:test:   }
+guard:test: npm error Lifecycle script `test` failed with error:
+guard:test: npm error code 1
+guard:test: npm error path /home/dev/work/mono/packages/guard
+guard:test: npm error workspace guard@0.0.0
+guard:test: npm error location /home/dev/work/mono/packages/guard
+guard:test: npm error command failed
+guard:test: npm error command sh -c node --test guard.test.mjs
+guard:test: ERROR: command finished with error: command (/home/dev/work/mono/packages/guard) /usr/local/bin/npm run test exited (1)
+guard#test: command (/home/dev/work/mono/packages/guard) /usr/local/bin/npm run test exited (1)
+
+ Tasks:    0 successful, 1 total
+Cached:    0 cached, 1 total
+  Time:    529ms 
+Failed:    guard#test
+
+ ERROR  run failed: command  exited (1)

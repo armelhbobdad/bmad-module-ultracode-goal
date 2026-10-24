@@ -20,15 +20,21 @@ is no claim the commit can make good. Only a relative path inside the tree
 that holds a `/` or exists there is asked about: a bare name that exists
 nowhere could be any file of that name, and stays in `not_in_diff`.
 
-This reads the texts, collects the paths they name, and compares them with `git diff --cached --name-only --no-renames -z` (a rename
-lists both names, so a message naming either one matches; `-z` keeps a
-non-ASCII name unquoted).
+This reads the texts, collects the paths they name, and compares them with
+`git diff --cached --name-only --no-renames -z` (a rename lists both names,
+so a message naming either one matches; `-z` keeps a non-ASCII name
+unquoted). git names a staged path from the repository's top level, and a
+text names one from the project root, so when the project root is a folder
+below the top level (a BMAD install in a monorepo's `app/`), `src/a.py` and
+`app/src/a.py` both name a staged `app/src/a.py`.
 
 Matching. A named path that exists in the work tree or the index must match a
 staged path exactly, or be a directory holding one: `README.md` does not match
-a staged `docs/README.md` when a root `README.md` exists. A named path that
-exists nowhere matches by its trailing segments or as a directory anywhere in
-a staged path, so `guard.py` or `hooks/` still match `src/hooks/guard.py`.
+a staged `docs/README.md` when a root `README.md` exists, and below the top
+level it does not match the top level's `README.md` when the project root
+holds one. A named path that exists nowhere matches by its trailing segments
+or as a directory anywhere in a staged path, so `guard.py` or `hooks/` still
+match `src/hooks/guard.py`.
 
 The output is a list to resolve before the commit, not a verdict. For each
 path: stage it if this commit changed it; if the work tree shows no change
@@ -55,10 +61,13 @@ Usage:
 
 Output: JSON on stdout, `{"named": [...], "staged": [...], "not_in_diff":
 [...], "ignored": [...], "clean": bool}`, where `clean` means `not_in_diff`
-is empty. Several `--message` files are read as one text, in order. Exit 0
-whenever it ran (a non-empty `not_in_diff` is a result, not an error); exit 2
-when a message file cannot be read, when `-` (stdin) is given more than
-once, or when the project root is not a git work tree.
+is empty and `staged` lists paths from the top level, as git does. Stdin and
+the JSON are UTF-8 whatever the console's code page, and a staged name that
+is not UTF-8 is written as its `\\udcXX` escape, which a JSON reader reads
+back as the name git holds. Several `--message` files are read as one text,
+in order. Exit 0 whenever it ran (a non-empty `not_in_diff` is a result, not
+an error); exit 2 when a message file cannot be read, when `-` (stdin) is
+given more than once, or when the project root is not a git work tree.
 """
 
 from __future__ import annotations
@@ -163,20 +172,49 @@ def named_paths(message: str, project_root: Path, staged: list[str]) -> list[str
     return list(seen)
 
 
-def _matches(named: str, staged: list[str], project_root: Path) -> bool:
+def _project_relative(staged: list[str], prefix: str) -> list[str]:
+    """The staged paths under the project root, named from it.
+
+    `prefix` is the project root's folder below the top level (`app/`), empty
+    at the top level, where git's names are already the project's.
+    """
+    if not prefix:
+        return staged
+    return [path[len(prefix) :] for path in staged if path.startswith(prefix)]
+
+
+def _matches(named: str, staged: list[str], project_root: Path, prefix: str = "") -> bool:
     bare = named.strip("/")
-    if any(path == bare or path.startswith(bare + "/") for path in staged):
+    local = _project_relative(staged, prefix)
+    if any(path == bare or path.startswith(bare + "/") for path in local):
         return True
-    if _known(bare, project_root, set(staged)):
+    if _known(bare, project_root, set(local)):
         # It names a real path: only that path, or a file under it, will do.
         return False
+    if prefix and any(path == bare or path.startswith(bare + "/") for path in staged):
+        # Named from the top level (`app/src/a.py`).
+        return True
     return any(path.endswith("/" + bare) or ("/" + bare + "/") in ("/" + path) for path in staged)
+
+
+def project_prefix(project_root: Path) -> str:
+    """The project root's folder below the git top level (`app/`), or ""."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-prefix"], cwd=project_root, capture_output=True, timeout=60
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.decode("utf-8", errors="surrogateescape").rstrip("\r\n")
 
 
 def staged_paths(project_root: Path) -> list[str] | None:
     try:
         proc = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--no-renames", "-z"],
+            # From the top level even where diff.relative would name them from the cwd.
+            ["git", "-c", "diff.relative=false", "diff", "--cached", "--name-only", "--no-renames", "-z"],
             cwd=project_root,
             capture_output=True,
             timeout=60,
@@ -239,8 +277,9 @@ def check(message: str, project_root: Path) -> dict | None:
     staged = staged_paths(project_root)
     if staged is None:
         return None
-    named = named_paths(message, project_root, staged)
-    unmatched = [path for path in named if not _matches(path, staged, project_root)]
+    prefix = project_prefix(project_root)
+    named = named_paths(message, project_root, [*staged, *_project_relative(staged, prefix)])
+    unmatched = [path for path in named if not _matches(path, staged, project_root, prefix)]
     ignored = ignored_paths(unmatched, project_root)
     missing = [path for path in unmatched if path not in ignored]
     return {
@@ -267,6 +306,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.message.count("-") > 1:
         parser.error("stdin (-) can be read only once")
+    # A Windows pipe reads and writes the ANSI code page, which has no CJK, and
+    # git hands back a name that is not UTF-8 as lone surrogates, which UTF-8
+    # cannot encode: such a name is written as its \udcXX escape.
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     texts = []
     try:
         for source in args.message:

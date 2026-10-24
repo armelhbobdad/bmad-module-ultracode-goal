@@ -22,7 +22,8 @@ write
     this run's file in the local store,
     ``<store>/<fingerprint-dir>/runs/<run_id>.jsonl``, through the immutable
     writer in lib/mem_common. A bad ``--run-id`` exits 2 before anything is
-    touched. A replay prints ``skipped-existing`` and leaves the file
+    touched. A byte that is not UTF-8 in a free-text argument is stored as
+    U+FFFD. A replay prints ``skipped-existing`` and leaves the file
     byte-identical; a foreign or unparseable target is never touched and the
     entry is dead-lettered with ``NOTE mem-target-foreign``; an OSError spills
     the record to ``<impl>/mem-outbox.<run_id>.jsonl`` with
@@ -31,15 +32,18 @@ write
 drain --store
     Replays each spilled record through the same write and removes it once it
     lands (or is ``skipped-existing``), counting ``attempts`` only on an
-    OSError and dead-lettering at the third. A deferred write older than the
+    OSError and dead-lettering at the third with ``WARN mem-write-dead-lettered``,
+    since no drain replays the dead-letter file. A deferred write older than the
     TTL is tombstoned. A claude-mem era ``{text,title,project}`` entry carrying
     the marker is converted into a store record BEFORE the TTL check, with
     ``attempts`` reset to 0, and if the store refuses it, it is requeued marked
     ``converted`` and never meets the TTL; one that cannot convert is
     dead-lettered with ``NOTE mem-legacy-unconvertible``. An entry whose
     ``run_id`` fails the check is dead-lettered with ``NOTE mem-run-id-invalid``,
-    whatever its age, and the others still land. ``mem-outbox.dead.jsonl`` is
-    never converted.
+    whatever its age, and the others still land. A line that does not parse
+    (nested past the recursion limit included) is dropped as a tombstone, and an
+    outbox name that is not a regular file (a FIFO) is never read.
+    ``mem-outbox.dead.jsonl`` is never converted.
 
 The claude-mem forms are gone: ``build``, ``spill`` and a drain without
 ``--store`` each exit 2 with one line on stderr naming its replacement.
@@ -348,8 +352,15 @@ def _deferred_note(exc: OSError, outbox: str) -> str:
     )
 
 
+def _dead_lettered_note(where: str, what: str) -> str:
+    return (
+        f"{mc.WARN_MEM_WRITE_DEAD_LETTERED}: {where} {what}; it was dead-lettered to "
+        f"{_DEAD_LETTER}, which no drain replays"
+    )
+
+
 def _dead_entry(entry: dict, token: str) -> dict:
-    """A dead-letter line: the outbox entry as it stands, plus the NOTE token that sent it there."""
+    """A dead-letter line: the outbox entry as it stands, plus the NOTE or WARN token that sent it there."""
     dead = dict(entry)
     dead["note"] = token
     return dead
@@ -366,12 +377,29 @@ def _spill_entry(impl: Path, run_id: str, entry: dict) -> Path:
     return path
 
 
+# The free-text arguments write stores. A byte that is not UTF-8 in one reaches
+# Python as a lone surrogate (argv is read with surrogateescape), which UTF-8
+# cannot encode: the signature hash would raise on it, and an immutable record
+# would keep it for good. The path arguments keep theirs, for the filesystem.
+_TEXT_ARGS = ("epic", "gate_status", "verdict", "root_cause", "advisory", "valid_until_sha", "valid_until_date")
+
+
+def _replace_surrogates_in_text_args(args: argparse.Namespace) -> None:
+    for name in _TEXT_ARGS:
+        value = getattr(args, name)
+        if isinstance(value, str):
+            setattr(args, name, mc.replace_surrogates(value))
+        elif isinstance(value, list):
+            setattr(args, name, [mc.replace_surrogates(item) for item in value])
+
+
 def cmd_write(args: argparse.Namespace) -> int:
     # The run_id names the run file and the outbox, so it is checked before
     # anything else: no git call, no store root, no outbox, no dead-letter.
     if not mc.valid_run_id(args.run_id):
         print(json.dumps({"error": f"invalid run_id {args.run_id!r}: expected epic-<id>-<YYYYMMDD>T<HHMMSS>Z"}))
         return 2
+    _replace_surrogates_in_text_args(args)
 
     gate_status = (args.gate_status or "").strip().upper()
     if gate_status == "NOT_EVALUATED":
@@ -497,7 +525,10 @@ def _replay_into_store(
         bumped["attempts"] = entry["attempts"] + 1
         if bumped["attempts"] >= _MAX_ATTEMPTS:
             counts["dead_lettered"] += 1
-            return "dead", bumped
+            notes.append(_dead_lettered_note(
+                where, f"could not be written to the store {bumped['attempts']} times ({exc})"
+            ))
+            return "dead", _dead_entry(bumped, mc.WARN_MEM_WRITE_DEAD_LETTERED)
         counts["deferred"] += 1
         notes.append(_deferred_note(exc, outbox_name))
         return "keep", bumped
@@ -588,7 +619,8 @@ def _drain_store_entry(
 
     if attempts >= _MAX_ATTEMPTS:
         counts["dead_lettered"] += 1
-        return "dead", current
+        notes.append(_dead_lettered_note(where, f"had already failed {attempts} writes to the store"))
+        return "dead", _dead_entry(current, mc.WARN_MEM_WRITE_DEAD_LETTERED)
 
     return _replay_into_store(store, current, where, outbox_name, counts, notes)
 
@@ -628,9 +660,12 @@ def cmd_drain(args: argparse.Namespace) -> int:
 
     for path in outboxes:
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
+            raw = mc.read_regular_file(path)
         except OSError:
             continue
+        if raw is None:
+            continue  # a FIFO or a directory under an outbox name: never read, left as it is
+        content = raw.decode("utf-8", errors="replace")
 
         kept_lines: list[str] = []
         dead_entries: list[dict] = []
@@ -641,10 +676,12 @@ def cmd_drain(args: argparse.Namespace) -> int:
             line_no += 1
             try:
                 entry = json.loads(raw_line)
-            except ValueError:
+            except (ValueError, RecursionError):  # RecursionError: JSON nested too deep
                 counts["tombstones"] += 1
                 continue
-            if not isinstance(entry, dict):
+            if not isinstance(entry, dict) or mc.nested_too_deep(entry):
+                # Writing one back out (requeued or dead-lettered) could
+                # raise RecursionError of its own.
                 counts["tombstones"] += 1
                 continue
 

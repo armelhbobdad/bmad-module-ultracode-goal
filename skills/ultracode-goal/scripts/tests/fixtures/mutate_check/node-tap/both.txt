@@ -1,0 +1,74 @@
+TAP version 13
+# Subtest: rejects error input
+ok 1 - rejects error input
+  ---
+  duration_ms: 1.001934
+  type: 'test'
+  ...
+# Subtest: flag is on
+not ok 2 - flag is on
+  ---
+  duration_ms: 1.092135
+  type: 'test'
+  location: '/home/dev/work/node/guard.test.mjs:6:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    'off' !== 'on'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'on'
+  actual: 'off'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///home/dev/work/node/guard.test.mjs:6:33)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+# Subtest: fails when mode is loose
+not ok 3 - fails when mode is loose
+  ---
+  duration_ms: 0.301109
+  type: 'test'
+  location: '/home/dev/work/node/guard.test.mjs:7:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    'loose' !== 'strict'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'strict'
+  actual: 'loose'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///home/dev/work/node/guard.test.mjs:7:47)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: other passes
+ok 4 - other passes
+  ---
+  duration_ms: 0.942176
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 2
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 76.386654

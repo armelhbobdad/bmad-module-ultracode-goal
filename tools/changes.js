@@ -36,10 +36,12 @@
  *              produce is below the minimum (semver.diff from the last stable
  *              tag) or below the current version, when a hard surface change
  *              is not named in backticks in a breaking fragment, when a major
- *              release has no breaking fragment, when a stable release has no
- *              fragment or a non-empty "## [Unreleased]", when a file in
- *              changes/ needs fixing, and when a prerelease cannot reach the
- *              minimum (it names the hand bump to make).
+ *              release has no breaking fragment or a major other than the one
+ *              the Status line of docs/_internal/STABILITY.md names, when a
+ *              stable release has no fragment or a non-empty
+ *              "## [Unreleased]", when a file in changes/ needs fixing, and
+ *              when a prerelease cannot reach the minimum (it names the hand
+ *              bump to make, and the STABILITY.md restatement a major needs).
  *   release    Render the block for the version in package.json (or
  *              --version). A stable release inserts it under an empty
  *              "## [Unreleased]" in CHANGELOG.md, leaving older history
@@ -125,6 +127,10 @@ const { KINDS, compareRefs, isSurfaceFile, lastStableTag, resolveCommit } = requ
 const { hasEmDash } = require('./validate-no-em-dash.js');
 
 const CHANGES_DIR = 'changes';
+// The public contract ships in the package, and its Status line names the
+// major it describes: "> **Status:** 3.x. ...".
+const STABILITY_PATH = 'docs/_internal/STABILITY.md';
+const STATUS_LINE = /^> \*\*Status:\*\* (\d+)\.x\./m;
 const NOT_FRAGMENTS = new Set(['README.md', '.gitkeep']);
 const NOT_A_FRAGMENT = 'not a fragment: fragments are <topic>.yaml files (README.md and .gitkeep are the only other files allowed)';
 const IN_SUBFOLDER = 'fragments go directly in changes/, not in a subfolder';
@@ -410,6 +416,26 @@ function reachedLevel(from, to) {
   return LEVELS.includes(level) ? level : 'none';
 }
 
+/**
+ * Why STABILITY.md cannot ship with `version`, or null when it can: its
+ * Status line must name the major of the version. The posture sentence and
+ * the description in its front matter move with it by hand.
+ *
+ * @param {string} stability - The text of STABILITY.md
+ * @param {string} version - The version being released
+ */
+function postureProblem(stability, version) {
+  const major = semver.major(version);
+  const status = STATUS_LINE.exec(stability);
+  if (!status)
+    return `${STABILITY_PATH} has no "> **Status:** N.x." line to name the major ${version} ships; add one that says ${major}.x.`;
+  if (Number(status[1]) === major) return null;
+  return (
+    `${version} is a major release, but ${STABILITY_PATH} states the ${status[1]}.x posture: restate it as ${major}.x by pull request ` +
+    `(its Status line, the posture sentence under it and the description in its front matter), so the contract the package ships names its major.`
+  );
+}
+
 /** "a", "a or b", "a, b or c". */
 function orList(items) {
   return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items.at(-1)}`;
@@ -427,8 +453,9 @@ function orList(items) {
  * @param {object|null} input.surfaces - Covered-surface findings, or null when skipped
  * @param {{file: string, errors: string[]}[]} [input.problems] - Files in changes/ that are not usable fragments
  * @param {string|null} [input.changelog] - CHANGELOG.md, checked for a stable release; null skips the check
+ * @param {string|null} [input.stability] - STABILITY.md, checked for a major release; null skips the check
  */
-function evaluateGate({ next, bump, current, baseTag, fragments, surfaces, problems = [], changelog = null }) {
+function evaluateGate({ next, bump, current, baseTag, fragments, surfaces, problems = [], changelog = null, stability = null }) {
   const refusals = [];
   const valid = fragments.filter((fragment) => fragment.errors.length === 0);
   for (const { file, errors } of [...problems, ...fragments]) {
@@ -454,10 +481,15 @@ function evaluateGate({ next, bump, current, baseTag, fragments, surfaces, probl
       if (prerelease) {
         const preid = PREIDS.has(bump) ? bump : 'rc';
         const handBump = semver.inc(from, `pre${floor.level}`, preid);
+        // The prerelease after a premajor hand bump is checked for its posture: name it now, not one dispatch later.
+        const restate =
+          stability !== null && reachedLevel(from, handBump) === 'major' && postureProblem(stability, handBump)
+            ? ` that also restates ${STABILITY_PATH} as ${semver.major(handBump)}.x`
+            : '';
         refusals.push(
           `${bump} from ${current} gives ${next}, a ${reached} step from ${fromLabel}, and a prerelease cannot reach the minimum ${floor.level} ` +
             `(${why.join('; ')}). Set the version to ${handBump} by hand in a pull request (package.json, package-lock.json ` +
-            `and .claude-plugin/marketplace.json), then dispatch ${preid}: the first ${preid} published is ` +
+            `and .claude-plugin/marketplace.json)${restate}, then dispatch ${preid}: the first ${preid} published is ` +
             `${semver.inc(handBump, 'prerelease', preid)}. Or release ${floor.level} directly.`,
         );
       } else {
@@ -482,6 +514,13 @@ function evaluateGate({ next, bump, current, baseTag, fragments, surfaces, probl
   }
   if (reached === 'major' && breaking.length === 0) {
     refusals.push(`${next} is a major release, but no fragment has type: breaking. Add one per breaking change, or pick a lower bump.`);
+  }
+  // A major ships a new contract, so STABILITY.md must say which. Only a major
+  // step is checked: inside a major the label cannot have moved, and a bump
+  // refused as too small would otherwise be told to restate the old major.
+  if (reached === 'major' && stability !== null) {
+    const problem = postureProblem(stability, next);
+    if (problem) refusals.push(problem);
   }
   const changes = valid.filter((fragment) => fragment.data.type !== 'lead');
   if (!prerelease && changes.length === 0) {
@@ -918,6 +957,15 @@ function readChangelog(root) {
   }
 }
 
+/** STABILITY.md, or null for a tree without one, which skips the posture check. */
+function readStability(root) {
+  try {
+    return fs.readFileSync(path.join(root, STABILITY_PATH), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 /** Fragments, surfaces and versions shared by preview, gate and release. */
 function loadContext(root, argv, env) {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -940,6 +988,7 @@ function loadContext(root, argv, env) {
     surfaces,
     warnings,
     changelog: readChangelog(root),
+    stability: readStability(root),
   };
 }
 
@@ -981,12 +1030,12 @@ function fragmentLines(selected) {
 
 function runPreview(root, argv, env) {
   const context = loadContext(root, argv, env);
-  const { pkg, baseTag, selected, surfaces, warnings, problems, changelog } = context;
+  const { pkg, baseTag, selected, surfaces, warnings, problems, changelog, stability } = context;
   const valid = selected.filter((fragment) => fragment.errors.length === 0);
   const floor = minimumBump(valid, surfaces);
   const bump = argValue(argv, '--bump') || (floor.level === 'none' ? 'patch' : floor.level);
   const next = nextVersion(pkg.version, bump);
-  const gate = evaluateGate({ next, bump, current: pkg.version, baseTag, fragments: selected, surfaces, problems, changelog });
+  const gate = evaluateGate({ next, bump, current: pkg.version, baseTag, fragments: selected, surfaces, problems, changelog, stability });
   const since = baseTag || 'the start';
   const out = [
     ...warnings.map((warning) => `warning: ${warning}`),
@@ -1046,9 +1095,9 @@ function writeStepSummary(env, lines) {
 function runGate(root, argv, env) {
   const bump = argValue(argv, '--bump');
   if (!bump) throw new ToolError(`gate needs --bump <${BUMPS.join('|')}>.`, 2);
-  const { pkg, baseTag, selected, surfaces, warnings, problems, changelog } = loadContext(root, argv, env);
+  const { pkg, baseTag, selected, surfaces, warnings, problems, changelog, stability } = loadContext(root, argv, env);
   const next = nextVersion(pkg.version, bump);
-  const gate = evaluateGate({ next, bump, current: pkg.version, baseTag, fragments: selected, surfaces, problems, changelog });
+  const gate = evaluateGate({ next, bump, current: pkg.version, baseTag, fragments: selected, surfaces, problems, changelog, stability });
   for (const warning of warnings) console.log(`warning: ${warning}`);
   const lines = [
     `Last stable tag: ${baseTag || '(none)'}`,
@@ -1083,7 +1132,7 @@ function today() {
 
 function runRelease(root, argv, env) {
   const context = loadContext(root, argv, env);
-  const { pkg, baseTag, selected, surfaces, repoUrl, problems } = context;
+  const { pkg, baseTag, selected, surfaces, repoUrl, problems, stability } = context;
   const version = argValue(argv, '--version') || pkg.version;
   if (!semver.valid(version)) throw new ToolError(`version ${version} is not a valid semantic version.`, 2);
   const date = argValue(argv, '--date') || today();
@@ -1098,6 +1147,7 @@ function runRelease(root, argv, env) {
     surfaces,
     problems,
     changelog,
+    stability,
   });
   if (gate.refusals.length > 0) {
     for (const refusal of gate.refusals) {
@@ -1908,6 +1958,7 @@ module.exports = {
   namesToken,
   nextVersion,
   parseFragment,
+  postureProblem,
   reachedLevel,
   readFragments,
   renderBlock,

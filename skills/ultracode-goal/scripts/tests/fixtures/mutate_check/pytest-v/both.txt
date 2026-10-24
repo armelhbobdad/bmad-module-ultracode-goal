@@ -1,0 +1,37 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.7, pytest-9.1.1, pluggy-1.7.0 -- /home/dev/work/py/.venv/bin/python
+rootdir: /home/dev/work/py
+configfile: pytest.ini
+plugins: xdist-3.8.0
+collecting ... collected 4 items
+
+test_guard.py::test_rejects_error_input PASSED                           [ 25%]
+test_guard.py::test_flag_on FAILED                                       [ 50%]
+test_guard.py::test_fails_when_mode_is_loose FAILED                      [ 75%]
+test_other.py::test_other_passes PASSED                                  [100%]
+
+=================================== FAILURES ===================================
+_________________________________ test_flag_on _________________________________
+
+    def test_flag_on():
+>       assert FLAG == "on"
+E       AssertionError: assert 'off' == 'on'
+E         
+E         - on
+E         + off
+
+test_guard.py:10: AssertionError
+________________________ test_fails_when_mode_is_loose _________________________
+
+    def test_fails_when_mode_is_loose():
+>       assert MODE == "strict"
+E       AssertionError: assert 'loose' == 'strict'
+E         
+E         - strict
+E         + loose
+
+test_guard.py:14: AssertionError
+=========================== short test summary info ============================
+FAILED test_guard.py::test_flag_on - AssertionError: assert 'off' == 'on'
+FAILED test_guard.py::test_fails_when_mode_is_loose - AssertionError: assert ...
+========================= 2 failed, 2 passed in 0.05s ==========================

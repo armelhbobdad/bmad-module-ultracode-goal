@@ -11,6 +11,7 @@ name: Quality & Validation
 #   requests only), and the release-notes tools
 # - Installation component tests (module.yaml, SKILL.md, scripts)
 # - CLI integration tests (install/update/uninstall flows)
+# - Package contents (the files `npm pack` would publish)
 # - Skill structure validation
 # - File reference validation
 # - Fixture tracking (no test fixture may be matched by a .gitignore rule)
@@ -258,6 +259,13 @@ jobs:
 
       - name: Test CLI integration
         run: npm run test:cli
+
+      # Reads the file list `npm pack --dry-run` gives: every skill the
+      # installer copies ships, and tests, change fragments and maintainer
+      # tools stay out. Linux only: release.yaml packs and publishes on Linux.
+      - name: Test the package contents
+        if: runner.os == 'Linux'
+        run: npm run test:pack
 
       - name: Validate skills structure
         run: npm run validate:skills

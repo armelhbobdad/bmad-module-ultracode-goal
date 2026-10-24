@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `mutate_check.py` no longer runs stale Python bytecode. Python reuses a cached `.pyc` when the source file's size and its modification time, in whole seconds, match, so two same-size mutations of one module, or a mutation and its restore, written within one second ran each other's bytecode: a row could read `MISATTRIBUTED` for a real kill, and after a run that reported the restore as verified the project's tests could stay red until the file was touched again. Each write the script makes now moves the file's modification time to a later second.

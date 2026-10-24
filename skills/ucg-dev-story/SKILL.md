@@ -1,6 +1,6 @@
 ---
 name: ucg-dev-story
-description: "Implements an UltraCode Goal story file to completion (red-green-refactor, every task checked, the story set to review), adapted from BMAD Method's dev-story workflow so a run needs no deprecated BMAD shim. Use when the ultracode-goal skill delegates a story's implementation to it, or when invoked by name; not for implementation outside an UltraCode Goal run."
+description: "Implements an UltraCode Goal story file to completion (red-green-refactor, every task checked, the story set to review), or a decomposed child's claimed acceptance criteria with no story file written, adapted from BMAD Method's dev-story workflow so a run needs no deprecated BMAD shim. Use when the ultracode-goal skill delegates a story's implementation to it, or when invoked by name; not for implementation outside an UltraCode Goal run."
 ---
 
 <!-- Adapted for UltraCode Goal from BMAD Method 6.12.4, src/bmm-skills/v6-shims/bmad-dev-story. Copyright (c) 2025 BMad Code, LLC. MIT License: see LICENSE.md in this folder. UltraCode Goal ships this copy so a run never depends on BMAD's deprecated shim, which BMAD removes at v7. -->
@@ -49,7 +49,7 @@ Treat every entry in `{workflow.persistent_facts}` as foundational context you c
 
 ### Step 4: Load Config
 
-Run `uv run {project-root}/_bmad/scripts/resolve_config.py --project-root {project-root}` and resolve:
+Run `uv run --no-project {project-root}/_bmad/scripts/resolve_config.py --project-root {project-root}` and resolve:
 
 - `project_name`, `user_name`
 - `communication_language`, `document_output_language`
@@ -75,6 +75,25 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
 - `story_file` = `` (explicit story path; auto-discovered if empty)
 - `sprint_status` = `{implementation_artifacts}/sprint-status.yaml`
 
+## Decomposed Child
+
+An UltraCode Goal run splits a story too large to drive into child rows in `sprint-status.yaml`, above the parent's row, and sets the parent's row to `done`. Each child row claims some of the parent's acceptance criteria by AC id and has no story file of its own: the parent's story file holds the text of every criterion. To implement a child, the run passes these inputs in place of a story path:
+
+- `{{story_key}}`: the child's own sprint-status key.
+- `{{parent_story_path}}`: the parent's story file, read only.
+- `{{claimed_acs}}`: the parent AC ids the child's row claims.
+- `{{review_findings}}`: on a re-loop only, the reasons of the gate verdict that sent the child back and the findings of that cycle's reviews.
+
+When `{{parent_story_path}}` is provided, the workflow runs as written except:
+
+- **Read the parent's file for the claimed ACs' text and its Dev Notes only.** Steps 1 and 2 take from it the text of each AC in `{{claimed_acs}}`, and its Dev Notes as the architecture and coding guidance steps 5 and 6 follow. Its tasks and its other ACs are the parent's: never work through them. Keep `{{story_key}}` as given, never taken from that file's name.
+- **Write no story file.** Never edit the parent's file and never create `{{story_key}}.md`: a child must never get one. Skip every write to a story file (`baseline_commit`, checkboxes, Dev Agent Record, File List, Change Log, Status), and give the File List and the completion notes in step 10's summary instead.
+- **Implement the claimed ACs only.** Where steps 1 and 5 to 9 work through the story's tasks and subtasks, work through the claimed ACs in the order `{{claimed_acs}}` gives them: implement and test each in turn, and track their completion in this session. A parent AC the child does not claim belongs to a sibling: leave it alone.
+- **Take review findings from the input.** Step 3 sets review_continuation = true when `{{review_findings}}` is given, and false otherwise, and never reads a review section of the parent's file. Each finding is a review follow-up: fix and test it before re-checking the claimed ACs.
+- **Check the definition of done against the child.** At steps 9 and 10 the definition of done and `checklist.md` read the claimed ACs for the story's tasks and acceptance criteria, and step 10's summary for the File List and the Dev Agent Record. The items only a story file can meet (the Change Log, the story's Status, the story sections modified) do not apply: mark them N/A, never failed.
+- **Move only the child's row.** Step 4 sets development_status[{{story_key}}] to `in-progress` and step 9 sets it to `review`. The parent's row stays `done`.
+- **HALT rather than repair.** HALT when the parent's file cannot be read, when `sprint-status.yaml` has no row for `{{story_key}}`, when an id in `{{claimed_acs}}` names no AC in the parent's file, or when a claimed AC is too vague to implement, and name the ACs concerned. Never edit the parent's file to fix one.
+
 ## Execution
 
 <workflow>
@@ -88,8 +107,15 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
     other instruction.</critical>
   <critical>Do NOT schedule a "next session" or request review pauses unless a HALT condition applies. Only Step 9 decides completion.</critical>
   <critical>User skill level ({user_skill_level}) affects conversation style ONLY, not code updates.</critical>
+  <critical>When {{parent_story_path}} is provided, the story is a decomposed child: the "Decomposed Child" section above governs every step, and no step writes a story file</critical>
 
   <step n="1" goal="Find next ready story and load it" tag="sprint-status">
+    <check if="{{parent_story_path}} is provided">
+      <action>Keep {{story_key}} as given: it is the child's sprint-status key</action>
+      <action>Read COMPLETE parent story file at {{parent_story_path}}, for the text of the ACs in {{claimed_acs}} and its Dev Notes only</action>
+      <goto anchor="task_check" />
+    </check>
+
     <check if="{{story_path}} is provided">
       <action>Use {{story_path}} directly</action>
       <action>Read COMPLETE story file</action>
@@ -202,13 +228,20 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
     <action>Extract developer guidance from Dev Notes: architecture requirements, previous learnings, technical specifications</action>
     <action>Use enhanced story context to inform implementation decisions and approaches</action>
 
-    <action>Identify first incomplete task (unchecked [ ]) in Tasks/Subtasks</action>
+    <check if="{{parent_story_path}} is provided">
+      <action>Take the ACs in {{claimed_acs}}, in the order given, as the work list in place of Tasks/Subtasks: the parent's tasks are never this child's</action>
+      <action if="parent story file inaccessible, an id in {{claimed_acs}} names no AC in it, or a claimed AC is too vague to implement">HALT and name the ACs concerned</action>
+    </check>
 
-    <action if="no incomplete tasks">
-      <goto step="9">Completion sequence</goto>
-    </action>
-    <action if="story file inaccessible">HALT: "Cannot develop story without access to story file"</action>
-    <action if="incomplete task or subtask requirements ambiguous">ASK user to clarify or HALT</action>
+    <check if="{{parent_story_path}} is not provided">
+      <action>Identify first incomplete task (unchecked [ ]) in Tasks/Subtasks</action>
+
+      <action if="no incomplete tasks">
+        <goto step="9">Completion sequence</goto>
+      </action>
+      <action if="story file inaccessible">HALT: "Cannot develop story without access to story file"</action>
+      <action if="incomplete task or subtask requirements ambiguous">ASK user to clarify or HALT</action>
+    </check>
   </step>
 
   <step n="2" goal="Load project context and story information">
@@ -227,8 +260,16 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
   <step n="3" goal="Detect review continuation and extract review context">
     <critical>Determine if this is a fresh start or continuation after code review</critical>
 
-    <action>Check if "Senior Developer Review (AI)" section exists in the story file</action>
-    <action>Check if "Review Follow-ups (AI)" subsection exists under Tasks/Subtasks</action>
+    <check if="{{parent_story_path}} is provided">
+      <action>Set review_continuation = true when {{review_findings}} is given, and false otherwise: a child's findings arrive as that input, never from the parent's file</action>
+      <action>Set {{pending_review_items}} to the findings in {{review_findings}}, or empty</action>
+      <goto step="4">Mark story in-progress</goto>
+    </check>
+
+    <check if="{{parent_story_path}} is not provided">
+      <action>Check if "Senior Developer Review (AI)" section exists in the story file</action>
+      <action>Check if "Review Follow-ups (AI)" subsection exists under Tasks/Subtasks</action>
+    </check>
 
     <check if="Senior Developer Review section exists">
       <action>Set review_continuation = true</action>
@@ -277,14 +318,14 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
       <action>Set {{current_status}} to the story file Status section value</action>
     </check>
 
-    <check if="{{current_status}} == 'ready-for-dev' AND story file YAML frontmatter does NOT contain baseline_commit">
+    <check if="{{current_status}} == 'ready-for-dev' AND story file YAML frontmatter does NOT contain baseline_commit AND {{parent_story_path}} is not provided">
       <action>Run `git rev-parse HEAD` to capture current commit into {{baseline_commit}}; if git/version control is unavailable, set {{baseline_commit}} = `NO_VCS`</action>
       <action>If story file YAML frontmatter exists, add `baseline_commit: {{baseline_commit}}` to the frontmatter</action>
       <action>If story file has no YAML frontmatter, create frontmatter at the top containing only `baseline_commit: {{baseline_commit}}`</action>
     </check>
 
     <check if="{{sprint_status}} file exists">
-      <check if="{{current_status}} == 'ready-for-dev' OR (review_continuation == true AND {{current_status}} != 'in-progress')">
+      <check if="{{current_status}} == 'ready-for-dev' OR (review_continuation == true AND {{current_status}} != 'in-progress') OR ({{parent_story_path}} is provided AND {{current_status}} != 'in-progress')">
         <action>Update the story in the sprint status report to = "in-progress"</action>
         <action>Update last_updated field to current date</action>
         <output>🚀 Starting work on story {{story_key}}
@@ -298,7 +339,7 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
         </output>
       </check>
 
-      <check if="{{current_status}} is neither ready-for-dev nor in-progress">
+      <check if="{{current_status}} is neither ready-for-dev nor in-progress AND {{parent_story_path}} is not provided">
         <output>⚠️ Unexpected story status: {{current_status}}
           Expected ready-for-dev or in-progress. Continuing anyway...
         </output>
@@ -332,7 +373,8 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
     <action>Improve code structure while keeping tests green</action>
     <action>Ensure code follows architecture patterns and coding standards from Dev Notes</action>
 
-    <action>Document technical approach and decisions in Dev Agent Record → Implementation Plan</action>
+    <action if="{{parent_story_path}} is not provided">Document technical approach and decisions in Dev Agent Record → Implementation Plan</action>
+    <action if="{{parent_story_path}} is provided">Keep the technical approach and decisions for step 10's summary</action>
 
     <action if="new dependencies required beyond story specifications">HALT: "Additional dependencies need user approval"</action>
     <action if="3 consecutive implementation failures occur">HALT and request guidance</action>
@@ -371,7 +413,11 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
     <action>Run full test suite to ensure NO regressions introduced</action>
 
     <!-- REVIEW FOLLOW-UP HANDLING -->
-    <check if="task is review follow-up (has [AI-Review] prefix)">
+    <check if="{{parent_story_path}} is provided AND the work item is a finding from {{review_findings}}">
+      <action>Add it to {{resolved_review_items}} once fixed and tested; mark nothing in a file</action>
+    </check>
+
+    <check if="task is review follow-up (has [AI-Review] prefix) AND {{parent_story_path}} is not provided">
       <action>Extract review item details (severity, description, related AC/file)</action>
       <action>Add to resolution tracking list: {{resolved_review_items}}</action>
 
@@ -386,10 +432,15 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
     </check>
 
     <!-- ONLY MARK COMPLETE IF ALL VALIDATION PASS -->
-    <check if="ALL validation gates pass AND tests ACTUALLY exist and pass">
+    <check if="ALL validation gates pass AND tests ACTUALLY exist and pass AND {{parent_story_path}} is not provided">
       <action>ONLY THEN mark the task (and subtasks) checkbox with [x]</action>
       <action>Update File List section with ALL new, modified, or deleted files (paths relative to repo root)</action>
       <action>Add completion notes to Dev Agent Record summarizing what was ACTUALLY implemented and tested</action>
+    </check>
+
+    <check if="ALL validation gates pass AND tests ACTUALLY exist and pass AND {{parent_story_path}} is provided">
+      <action>ONLY THEN record the claimed AC as complete in this session</action>
+      <action>Add ALL new, modified, or deleted files (paths relative to repo root) to the File List step 10's summary gives, and what was ACTUALLY implemented and tested to its completion notes</action>
     </check>
 
     <check if="ANY validation fails">
@@ -397,12 +448,12 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
       <action>HALT if unable to fix validation failures</action>
     </check>
 
-    <check if="review_continuation == true and {{resolved_review_items}} is not empty">
+    <check if="review_continuation == true and {{resolved_review_items}} is not empty and {{parent_story_path}} is not provided">
       <action>Count total resolved review items in this session</action>
       <action>Add Change Log entry: "Addressed code review findings - {{resolved_count}} items resolved (Date: {{date}})"</action>
     </check>
 
-    <action>Save the story file</action>
+    <action if="{{parent_story_path}} is not provided">Save the story file</action>
     <action>Determine if more incomplete tasks remain</action>
     <action if="more tasks remain">
       <goto step="5">Next task</goto>
@@ -413,14 +464,16 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
   </step>
 
   <step n="9" goal="Story completion and mark for review" tag="sprint-status">
-    <action>Verify ALL tasks and subtasks are marked [x] (re-scan the story document now)</action>
+    <action if="{{parent_story_path}} is not provided">Verify ALL tasks and subtasks are marked [x] (re-scan the story document now)</action>
+    <action if="{{parent_story_path}} is provided">Verify every AC in {{claimed_acs}} is implemented and tested, and every finding in {{review_findings}} resolved</action>
     <action>Run the full regression suite (do not skip)</action>
     <action>Confirm File List includes every changed file</action>
     <action>Execute enhanced definition-of-done validation</action>
-    <action>Update the story Status to: "review"</action>
+    <action if="{{parent_story_path}} is not provided">Update the story Status to: "review"</action>
 
     <!-- Enhanced Definition of Done Validation -->
-    <action>Validate definition-of-done checklist with essential requirements:
+    <action if="{{parent_story_path}} is provided">Validate the list below against the child, as the "Decomposed Child" section says: the claimed ACs stand for the tasks and the Acceptance Criteria, step 10's summary for the File List and the Dev Agent Record, and the Change Log and story-section items are N/A</action>
+    <action if="{{parent_story_path}} is not provided">Validate definition-of-done checklist with essential requirements:
       - All tasks/subtasks marked complete with [x]
       - Implementation satisfies every Acceptance Criterion
       - Unit tests for core functionality added/updated
@@ -465,11 +518,13 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
 
   <step n="10" goal="Completion communication and user support">
     <action>Execute the enhanced definition-of-done checklist using the validation framework</action>
-    <action>Prepare a concise summary in Dev Agent Record → Completion Notes</action>
+    <action if="{{parent_story_path}} is not provided">Prepare a concise summary in Dev Agent Record → Completion Notes</action>
+    <action if="{{parent_story_path}} is provided">Prepare the record a child has in place of a story file: the File List (every new, modified, or deleted file, relative to the repo root) and the completion notes, both given in this summary</action>
 
     <action>Communicate to {user_name} that story implementation is complete and ready for review</action>
     <action>Summarize key accomplishments: story ID, story key, title, key changes made, tests added, files modified</action>
-    <action>Provide the story file path and current status (now "review")</action>
+    <action if="{{parent_story_path}} is not provided">Provide the story file path and current status (now "review")</action>
+    <action if="{{parent_story_path}} is provided">Provide {{story_key}}, the parent story file path, the claimed ACs and the child row's status (now "review")</action>
 
     <action>Based on {user_skill_level}, ask if user needs any explanations about:
       - What was implemented and how it works

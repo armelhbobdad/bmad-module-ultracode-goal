@@ -1,11 +1,11 @@
 ---
 title: Stability and Public Contract
-description: "The 2.x stability posture: which CLI, config, JSON, and gate surfaces are the supported public contract, what a major costs, and everything that is @internal and free to change."
+description: "The 3.x stability posture: which CLI, config, JSON, and gate surfaces are the supported public contract, what a major costs, and everything that is @internal and free to change."
 ---
 
-> **Status:** 2.x. The surfaces below are the public contract. Per [Semantic Versioning 2.0.0](https://semver.org/), a breaking change to any of them requires a MAJOR bump; everything marked `@internal` may change in any release. This document is what a consumer pins against.
+> **Status:** 3.x. The surfaces below are the public contract. Per [Semantic Versioning 2.0.0](https://semver.org/), a breaking change to any of them requires a MAJOR bump; everything marked `@internal` may change in any release. This document is what a consumer pins against.
 
-This is the stability posture for `bmad-module-ultracode-goal` at `2.x`. It enumerates the surfaces a downstream consumer or automator may reasonably depend on, versus everything else, which is `@internal`.
+This is the stability posture for `bmad-module-ultracode-goal` at `3.x`. It enumerates the surfaces a downstream consumer or automator may reasonably depend on, versus everything else, which is `@internal`.
 
 ## Public contract
 
@@ -87,7 +87,7 @@ The printed JSON object's key set (`verdict`, `gate_status`, `p0_status`, `p1_st
 
 The minimum versions UCG supports, listed in `tools/tool-requirements.yaml` and shown in the [prerequisites table](../getting-started.md#prerequisites): Claude Code (the version preflight refuses to launch below), Node.js (`engines.node`), Python (the `requires-python` header of every script) and BMAD Method. Raising a minimum, or giving a tool its first one, turns away a setup the release before accepted, so it is a contract change. Lowering or removing a minimum is additive. The tested versions in the same list record what UCG's own runs used and are not part of the contract.
 
-This bucket was added in the release after 2.3.0. Adding it widens what the contract covers and removes nothing from it, so it is an additive change to this contract.
+This bucket was added in 3.0.0. Adding it widens what the contract covers and removes nothing from it, so it is an additive change to this contract.
 
 ## @internal: not covered
 
@@ -115,6 +115,6 @@ What does not:
 - Anything behind `@internal`, including which file a resolver picks and how it decides a name carries a story id.
 - Prose in `references/*.md`, which is an authoring surface.
 
-**How a release checks this.** Every pull request that changes something a user can notice adds a change fragment to `changes/` ([`changes/README.md`](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/changes/README.md)), and the release notes and the minimum version bump come from those fragments. `tools/covered-surfaces.js` reads the surfaces above (the CLI subcommands and options, the `[workflow]` keys, the headless emit keys and result file, the skill name and invocation phrases, the `gate_eval.py` flags, choices, statuses, verdicts and printed keys, and the tool minimums) at the last stable tag and now. The release gate (`node tools/changes.js gate`) refuses a release that removes one of them without a major bump and a `breaking` fragment that names it, or that adds one without at least a minor bump. Three kinds of change go the other way: adding or removing a key of the headless emit shape, or renaming the result file, is a major change, since the shape is exactly those keys; raising a tool minimum, or giving a tool its first one, is a major change, and lowering or removing one a minor one; and a `gate_status` that maps to another verdict is a major change. A key added to the printed `gate_eval.py` result is listed for a person to judge, since the text cannot tell a key every invocation prints from one only a new flag prints. A changed verdict for an unchanged invocation is not something the diff can see: its fragment says so, as a `breaking` one.
+**How a release checks this.** Every pull request that changes something a user can notice adds a change fragment to `changes/` ([`changes/README.md`](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/changes/README.md)), and the release notes and the minimum version bump come from those fragments. `tools/covered-surfaces.js` reads the surfaces above (the CLI subcommands and options, the `[workflow]` keys, the headless emit keys and result file, the skill name and invocation phrases, the `gate_eval.py` flags, choices, statuses, verdicts and printed keys, and the tool minimums) at the last stable tag and now. The release gate (`node tools/changes.js gate`) refuses a release that removes one of them without a major bump and a `breaking` fragment that names it, or that adds one without at least a minor bump. Three kinds of change go the other way: adding or removing a key of the headless emit shape, or renaming the result file, is a major change, since the shape is exactly those keys; raising a tool minimum, or giving a tool its first one, is a major change, and lowering or removing one a minor one; and a `gate_status` that maps to another verdict is a major change. A key added to the printed `gate_eval.py` result is listed for a person to judge, since the text cannot tell a key every invocation prints from one only a new flag prints. A changed verdict for an unchanged invocation is not something the diff can see: its fragment says so, as a `breaking` one. The gate also refuses a major release while the **Status** line above names another major, so the copy of this document in each package names the major it describes.
 
 **Deprecation.** The two surfaces an automator is most likely to encode against, the **headless five-key JSON emit shape** and the **`[workflow]` customize.toml keys**, get a deprecation note in the release notes (a change fragment, rendered into `CHANGELOG.md`) at least one minor before changing, and the key stays shipped and accepted meanwhile. `story_token_budget` is the worked example: deprecated, still resolving, no-op.

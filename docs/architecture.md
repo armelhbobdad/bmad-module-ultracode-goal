@@ -93,7 +93,7 @@ skills/ucg-dev-story/              # Story implementation the run delegates to (
                                    #   the operator, invokes them.
 ```
 
-`SKILL.md` carries the routing and the contract; the `references/*.md` files carry each stage's procedure and testable routing conditions; the `scripts/*.py` files carry the deterministic facts the model cannot fudge (the gate, preflight, readiness kernel, hooks, and the install-time/recall plumbing); the top-level sibling skills `skills/ucg-*` are the operator-facing surfaces (`ucg-formalize` the standalone readiness gate, `ucg-resolve` the decide-surface for a stopped run, `ucg-status` the read-only run view); and the `assets/` hold install metadata and the planning-customization fragments. See [how it works](./how-it-works.md) for the stages.
+`SKILL.md` carries the routing and the contract; the `references/*.md` files carry each stage's procedure and testable routing conditions; the `scripts/*.py` files carry the deterministic facts the model cannot fudge (the gate, preflight, readiness kernel, hooks, and the install-time/recall plumbing); three of the top-level sibling skills are the operator-facing surfaces (`ucg-formalize` the standalone readiness gate, `ucg-resolve` the decide-surface for a stopped run, `ucg-status` the read-only run view), and the other two, `ucg-create-story` and `ucg-dev-story`, are the story skills the run delegates to; and the `assets/` hold install metadata and the planning-customization fragments. See [how it works](./how-it-works.md) for the stages.
 
 ## Customization resolution
 

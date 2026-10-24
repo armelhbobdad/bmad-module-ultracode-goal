@@ -386,11 +386,14 @@ def _story_stem(name: str) -> str | None:
     cut at its first `.` or `_` first, so `1-1_draft.md` gives `1-1`. A title
     word that is itself a single letter or a roman numeral reads as a child
     segment (`2-4-a-new-thing` gives `2-4-a`). A story file named after its
-    full key gives the same stem, so only a file named otherwise for such a
-    key (a bare number, or a retitled slug) reads as a different story, which
-    fails closed; and a parent whose title starts that way (`5-1-i-o-layer`
-    gives `5-1-i-o`) never covers its decomposed children, which fails closed
-    too.
+    full key gives the same stem. A file named otherwise for such a key (a
+    bare number, or a retitled slug) has a shorter stem: given the
+    sprint-status rows, with the key's row and no row of that stem, the key
+    reads as a child of that file whose parent row the split removed, and
+    `checks.decomposed_children` lists it with no parent row (define-done.md
+    renames such a file after its key); without them it reads uncovered. A
+    parent whose title starts that way (`5-1-i-o-layer` gives `5-1-i-o`)
+    never covers its decomposed children, which fails closed.
     """
     base = re.split(r"[._]", name.lower(), maxsplit=1)[0]
     parts = base.split("-")
@@ -479,9 +482,10 @@ def _story_coverage(
     a key that has no row there.
 
     What the order cannot tell apart is a story inserted ABOVE a done parent's
-    row, or a child whose parent row was removed: both read as children. So
-    every key a parent covers is returned in `children`, for the report to
-    show rather than to gate on.
+    row, or a child whose parent row was removed: both read as children, and
+    so does a story whose own file has a shorter stem than its key
+    (`_story_stem`). So every key a parent covers is returned in `children`,
+    for the report to show rather than to gate on.
 
     A key whose slug carries no story number (an alpha-keyed track) has no
     stem, so it falls back to the whole-key prefix rather than being silently
@@ -715,10 +719,12 @@ def _tea_trace_output_root(tea_config: Path, project_root: Path) -> Path | None:
 # carries a TEA marker token because the STORY SLUG does (e.g. a story-note
 # "2-7-...-test-design-nfr.md", or a ".tests-ran-<story>" / ".budget-<story>"
 # sentinel for that story). The leak check must skip these: relocating one is a
-# misfile, and — because they live under impl-artifacts BY DESIGN — moving it would
+# misfile, and (because they live under impl-artifacts BY DESIGN) moving it would
 # be the only thing that clears the gate, so a "leave it in place" disposition would
 # deadlock the budget==0 launch gate. Identity decides, not the marker substring.
-_UCG_STORY_NOTE_RE = re.compile(r"^\d+-\d+-")
+# The story number may carry letters (`3-2a-trace-export.md`), as _STORY_SEGMENT
+# reads it: archiving a lettered story's own file leaves its key uncovered.
+_UCG_STORY_NOTE_RE = re.compile(r"^\d+-\d+[a-z]*-")
 
 
 def _is_ucg_impl_artifact(path: Path, name: str) -> bool:
@@ -727,7 +733,7 @@ def _is_ucg_impl_artifact(path: Path, name: str) -> bool:
     if name.startswith("."):
         return True  # run sentinels: .tests-ran-<story>, .budget-<story>
     if _UCG_STORY_NOTE_RE.match(name):
-        return True  # story notes: <epic>-<story>-<slug>.md
+        return True  # story notes: <epic>-<story>-<slug>.md, <story> as 2 or 2a
     if name.endswith(".md"):
         try:
             head = path.read_text(encoding="utf-8", errors="ignore")[:600]

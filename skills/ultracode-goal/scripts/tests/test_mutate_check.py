@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -375,6 +376,64 @@ def test_sigterm_mid_command_still_restores(tmp_path):
     assert (project / "code.py").read_bytes() == before
 
 
+# Imports the module under test, so CPython caches its bytecode in __pycache__.
+IMPORT_CHECKER = """\
+import sys
+import guard
+failures = []
+if guard.LIMIT != 5:
+    failures.append("test_limit_pinned")
+if guard.FLAG != "on":
+    failures.append("test_flag_on")
+if failures:
+    print(f"{len(failures)} failed:", ", ".join(failures))
+    sys.exit(1)
+print("all green")
+"""
+
+
+def test_same_size_mutations_never_run_stale_bytecode(tmp_path, monkeypatch):
+    """CPython reuses cached bytecode whose recorded source mtime, in whole
+    seconds, and size match the file. Two same-size mutations of one module
+    and their restores, all written within one second, used to run each
+    other's bytecode: the second row read MISATTRIBUTED (the first mutation
+    failed again), and the next run refused a red baseline, the restored
+    source still running the mutated bytecode. Every write now lands in a
+    later second than the file's mtime before it; the file starts an hour
+    ahead here so that holds whatever the clock does during the run."""
+    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
+    project = tmp_path
+    guard = project / "guard.py"
+    guard.write_text('LIMIT = 5\nFLAG = "on"\n', encoding="utf-8", newline="\n")
+    (project / "check.py").write_text(IMPORT_CHECKER, encoding="utf-8", newline="\n")
+    ahead = (int(time.time()) + 3600) * 1_000_000_000
+    os.utime(guard, ns=(ahead, ahead))
+    before = guard.read_bytes()
+    rows = [
+        _row(file="guard.py", expect_red="test_limit_pinned"),
+        _row(
+            file="guard.py",
+            anchor='FLAG = "on"',
+            replacement='FLAG = "no"',
+            expect_red="test_flag_on",
+        ),
+    ]
+    killed = {
+        0: ("KILLED", "exactly 'test_limit_pinned' went red"),
+        1: ("KILLED", "exactly 'test_flag_on' went red"),
+    }
+
+    first = _run_table(project, rows)
+    assert _ledger_rows(first.stdout) == killed, first.stdout + first.stderr
+    assert first.returncode == 0
+    assert guard.read_bytes() == before
+    assert guard.stat().st_mtime_ns // 1_000_000_000 > ahead // 1_000_000_000
+
+    again = _run_table(project, rows)
+    assert _ledger_rows(again.stdout) == killed, again.stdout + again.stderr
+    assert again.returncode == 0
+
+
 # --- Node's test runner (issue #158) -----------------------------------------
 #
 # Since Node 23 the spec reporter is Node's default even when the output is
@@ -546,119 +605,178 @@ def test_real_node_test_runner_two_runs_add_their_counts(tmp_path):
     assert "exactly 'limit is pinned' went red" in proc.stdout
 
 
-# --- Other reporters' pass and failure marks -----------------------------------
+# --- Real runners' output ------------------------------------------------------
 #
-# The checker prints fixed lines in each runner's shape: GREEN while FLAG is
-# on, RED once the row turns it off. Every RED output also names a PASSING test
-# whose name holds a failure word, which must never be credited with the kill.
+# Each folder under fixtures/mutate_check/ holds what a real runner printed for
+# one test file of three cases after three mutations: flag.txt with FLAG turned
+# off (one red), mode.txt with MODE turned off (one red, a case whose own name
+# holds "fails"), and both.txt with both (two reds in one file). Every passing
+# neighbour is named with a failure word ("rejects error input", "fails when
+# mode is loose"). In the JavaScript file the first case's body calls
+# assertLimit, which jest and vitest quote in the code frame of the failing
+# case beside it, and in the pytest file the first case prints, so -rA lists
+# it in its PASSES section. Local paths are replaced with /home/dev/work.
+#
+# Captured on Linux with Node 24.21.0 and Python 3.14:
+#   jest-default          jest 30.2.0, `jest` over two test files
+#   jest-verbose          jest 30.2.0, `jest --verbose`
+#   jest-agent            jest 30.5.2, `jest` under Claude Code, which makes
+#                         jest pick its agent reporter (no per-test lines)
+#   vitest-default        vitest 3.2.4, `vitest run`
+#   vitest5-agent         vitest 5.0.5, `vitest run` under Claude Code
+#   vitest5-colour        vitest 5.0.5, `vitest run` with COLORTERM set
+#   pytest-default        pytest 9.1.1, `pytest`
+#   pytest-v              `pytest -v`
+#   pytest-sv             `pytest -sv`: the passing case's print lands on the
+#                         line that names it, before its PASSED
+#   pytest-rA             `pytest -rA`
+#   pytest-xdist-v        pytest-xdist 3.8.0, `pytest -v -n 2`
+#   pytest-class-rA       `pytest -rA`, the cases in a class TestErrorCases
+#   pytest-class-xdist-v  `pytest -v -n 2`, the same class
+#   pytest-setup-error    `pytest`, the FLAG case reading FLAG through a fixture
+#                         that raises, so pytest counts it as an error
+#   node-spec             `node --test`, the spec reporter
+#   node-tap              `node --test --test-reporter=tap`
+#   node-spec-two-runs    a passing `node --test` run, then the failing one
+#   node-tap-two-runs     the same under TAP
+#   turbo-node-spec       turbo 2.5.8, `turbo run test --force --filter=guard`,
+#                         each line behind turbo's `guard:test: ` prefix
+#   pnpm-node-spec        pnpm 9.15.9, `pnpm -r test` over two packages, each
+#                         line behind pnpm's `packages/guard test: ` prefix
+#   mixed-node-pytest-q   a passing `node --test` run, then `pytest -q`
+#   mixed-node-jest       a passing `node --test` run, then `jest`
+#
+# jest-windows is not a capture: it is jest-verbose with the marks jest prints
+# on Windows (U+221A for a pass, U+00D7 for a failure, from jest-util's ICONS).
 
-FIXED_CHECKER = """\
+CAPTURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check"
+REAL_RUNS = sorted(p.name for p in CAPTURES.iterdir() if p.is_dir()) + ["jest-windows"]
+
+REPLAY_CHECKER = """\
 import sys
-GREEN = __GREEN__
-RED = __RED__
-flag_on = 'FLAG = "on"' in open("code.py", encoding="utf-8").read()
-sys.stdout.buffer.write(("\\n".join(GREEN if flag_on else RED) + "\\n").encode("utf-8"))
-sys.exit(0 if flag_on else 1)
+from pathlib import Path
+text = open("code.py", encoding="utf-8").read()
+flag_off = 'FLAG = "on"' not in text
+mode_off = 'MODE = "strict"' not in text
+state = "both" if flag_off and mode_off else "flag" if flag_off else "mode" if mode_off else ""
+if not state:
+    print("all green")
+    sys.exit(0)
+sys.stdout.buffer.write(Path("captures", state + ".txt").read_bytes())
+sys.exit(1)
 """
 
-SHAPES = {
-    # Two `node --test` runs, the passing one first: both summaries count.
-    "node-spec-two-runs": (
-        ["✔ other passes (0.2ms)", "ℹ fail 0", "✔ flag is on (0.3ms)", "ℹ fail 0"],
-        [
-            "✔ other passes (0.2ms)",
-            "ℹ tests 1",
-            "ℹ fail 0",
-            "✖ flag is on (0.3ms)",
-            "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
-            "ℹ tests 1",
-            "ℹ fail 1",
-        ],
-    ),
-    "node-tap-two-runs": (
-        ["ok 1 - other passes", "# fail 0", "ok 1 - flag is on", "# fail 0"],
-        [
-            "TAP version 13",
-            "ok 1 - other passes",
-            "# fail 0",
-            "TAP version 13",
-            "not ok 1 - flag is on",
-            "# fail 1",
-        ],
-    ),
-    # pytest -v, with xdist, and the -rA summary line.
-    "pytest-verbose": (
-        ["t.py::test_rejects_error_input PASSED [ 50%]", "t.py::test_flag_on PASSED [100%]"],
-        [
-            "t.py::test_rejects_error_input PASSED                    [ 50%]",
-            "t.py::test_flag_on FAILED                                [100%]",
-            "FAILED t.py::test_flag_on - AssertionError: assert 'off' == 'on'",
-            "========== 1 failed, 1 passed in 0.02s ==========",
-        ],
-    ),
-    "pytest-xdist": (
-        ["[gw0] [ 50%] PASSED t.py::test_rejects_error_input"],
-        [
-            "[gw0] [ 50%] PASSED t.py::test_rejects_error_input",
-            "[gw1] [100%] FAILED t.py::test_flag_on",
-            "PASSED t.py::test_rejects_error_input",
-            "FAILED t.py::test_flag_on - AssertionError",
-            "========== 1 failed, 1 passed in 0.02s ==========",
-        ],
-    ),
-    # jest's verbose reporter, which also names a lone test file's tests.
-    "jest": (
-        ["  ✓ rejects error input (2 ms)", "  ✓ flag is on (1 ms)"],
-        [
-            "  ✓ rejects error input (2 ms)",
-            "  ✕ flag is on (3 ms)",
-            "  ● suite › flag is on",
-            "Tests:       1 failed, 1 passed, 2 total",
-        ],
-    ),
-    # jest on Windows prints U+221A and U+00D7.
-    "jest-windows": (
-        ["  √ rejects error input (2 ms)", "  √ flag is on (1 ms)"],
-        [
-            "  √ rejects error input (2 ms)",
-            "  × flag is on (3 ms)",
-            "Tests:       1 failed, 1 passed, 2 total",
-        ],
-    ),
+_MODE_ROW = {"anchor": 'MODE = "strict"', "replacement": 'MODE = "loose"'}
+_BOTH_ROW = {
+    "anchor": 'FLAG = "on"\nMODE = "strict"',
+    "replacement": 'FLAG = "off"\nMODE = "loose"',
 }
 
-_PYTEST_SHAPES = ("pytest-verbose", "pytest-xdist")
+
+def _names(run: str) -> dict[str, str]:
+    if "pytest" in run:
+        return {
+            "error": "test_rejects_error_input",
+            "flag": "test_flag_on",
+            "mode": "test_fails_when_mode_is_loose",
+        }
+    return {
+        "error": "rejects error input",
+        "flag": "flag is on",
+        "mode": "fails when mode is loose",
+    }
 
 
-def _fixed_project(tmp_path: Path, shape: str) -> Path:
-    project = _project(tmp_path)
-    green, red = SHAPES[shape]
-    _custom_checker(
-        project,
-        FIXED_CHECKER.replace("__GREEN__", repr(green)).replace("__RED__", repr(red)),
-    )
+def _replay_project(tmp_path: Path, run: str) -> Path:
+    project = _project(tmp_path, code='LIMIT = 5\nFLAG = "on"\nMODE = "strict"\n')
+    _custom_checker(project, REPLAY_CHECKER)
+    (project / "captures").mkdir()
+    for state in ("flag", "mode", "both"):
+        captured = "jest-verbose" if run == "jest-windows" else run
+        text = (CAPTURES / captured / f"{state}.txt").read_bytes()
+        if run == "jest-windows":
+            text = text.replace("✓".encode(), "√".encode()).replace("✕".encode(), "×".encode())
+        (project / "captures" / f"{state}.txt").write_bytes(text)
     return project
 
 
-@pytest.mark.parametrize("shape", sorted(SHAPES))
-def test_each_reporter_shape_attributes_and_counts_a_real_kill(tmp_path, shape):
-    project = _fixed_project(tmp_path, shape)
-    name = "test_flag_on" if shape in _PYTEST_SHAPES else "flag is on"
-    proc = _run_table(project, [_row(**_FLAG_ROW, expect_red=name)])
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "| KILLED |" in proc.stdout
-    assert f"exactly {name!r} went red" in proc.stdout
+def _ledger_rows(stdout: str) -> dict[int, tuple[str, str]]:
+    """{row index: (status, detail)} from the printed ledger."""
+    rows = {}
+    for line in stdout.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) == 7 and cells[0].isdigit():
+            rows[int(cells[0])] = (cells[1], cells[4])
+    return rows
 
 
-@pytest.mark.parametrize("shape", sorted(s for s in SHAPES if not s.startswith("node")))
-def test_a_passing_test_named_with_a_failure_word_is_never_credited(tmp_path, shape):
-    """Before these pass lines were read, this row read KILLED for a test that
-    stayed green, because "error" on its PASSED line counted as a failure."""
-    project = _fixed_project(tmp_path, shape)
-    name = "test_rejects_error_input" if shape in _PYTEST_SHAPES else "rejects error input"
-    proc = _run_table(project, [_row(**_FLAG_ROW, expect_red=name)])
+@pytest.mark.parametrize("run", REAL_RUNS)
+def test_real_runner_output_attributes_and_counts_a_kill(tmp_path, run):
+    """A real kill reads KILLED with the exactly-one claim, also when the
+    case's own name holds a failure word, and two reds in one file read
+    KILLED+others with both counted. Before, jest's default and agent
+    reporters read MISATTRIBUTED, jest counted failing files instead of
+    failing tests, turbo's or pnpm's prefix hid every count, and a passing
+    Node run before pytest or jest read 0 failed."""
+    names = _names(run)
+    project = _replay_project(tmp_path, run)
+    proc = _run_table(
+        project,
+        [
+            _row(**_FLAG_ROW, expect_red=names["flag"]),
+            _row(**_MODE_ROW, expect_red=names["mode"]),
+            _row(**_BOTH_ROW, expect_red=names["flag"]),
+        ],
+    )
+    assert _ledger_rows(proc.stdout) == {
+        0: ("KILLED", f"exactly {names['flag']!r} went red"),
+        1: ("KILLED", f"exactly {names['mode']!r} went red"),
+        2: ("KILLED+others", f"{names['flag']!r} went red among 2 failures"),
+    }, proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize("run", REAL_RUNS)
+def test_real_runner_output_never_credits_a_passing_test_named_with_a_failure_word(
+    tmp_path, run
+):
+    """Each row names a case that stayed green while a neighbour went red.
+    Before, the failure word in its own name credited it from a jest or
+    vitest code frame, a pytest -rA PASSES header, an xdist start line, the
+    line `pytest -sv` prints its output on, or a line behind turbo's or
+    pnpm's prefix."""
+    names = _names(run)
+    project = _replay_project(tmp_path, run)
+    proc = _run_table(
+        project,
+        [
+            _row(**_FLAG_ROW, expect_red=names["error"]),
+            _row(**_FLAG_ROW, expect_red=names["mode"]),
+            _row(**_MODE_ROW, expect_red=names["error"]),
+        ],
+    )
+    rows = _ledger_rows(proc.stdout)
+    assert [rows[index][0] for index in range(3)] == ["MISATTRIBUTED"] * 3, proc.stdout
     assert proc.returncode == 1
-    assert "| MISATTRIBUTED |" in proc.stdout
+
+
+def test_a_count_never_reads_a_digit_from_the_line_above(tmp_path):
+    """`2` ending one line and `FAILED` opening the next are not "2 failed"."""
+    project = _project(tmp_path)
+    _custom_checker(
+        project,
+        "import sys\n"
+        'text = open("code.py", encoding="utf-8").read()\n'
+        'if "LIMIT = 5" not in text:\n'
+        '    print("collected on shard 2")\n'
+        '    print("FAILED test_limit_pinned")\n'
+        '    print("failures: 1")\n'
+        "    sys.exit(1)\n"
+        'print("all green")\n',
+    )
+    proc = _run_table(project, [_row()])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "exactly 'test_limit_pinned' went red" in proc.stdout
 
 
 # --- The PEP 723 header (issue #158) -------------------------------------------

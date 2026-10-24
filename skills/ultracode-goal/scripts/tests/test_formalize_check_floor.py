@@ -210,6 +210,24 @@ def test_leaked_tea_excludes_ucg_impl_artifacts(tmp_path):
     assert leaked == {"test-design-9-1.md"}, leaked
 
 
+def test_leaked_tea_excludes_a_lettered_story_file(tmp_path):
+    """A lettered story key (`3-2a`) is a story key like `3-2`, so its own file
+    is a story note even when its slug carries a TEA marker word. The story
+    template writes no authored_by header, so only the name tells. Flagged,
+    the only clearing move archives the story's file, its key then reads
+    uncovered, and the re-scaffolded file is flagged again.
+    """
+    impl = tmp_path / "impl-artifacts"
+    impl.mkdir()
+    (impl / "3-2a-trace-export.md").write_text("# Story 3.2a: Trace export\n", encoding="utf-8")
+    (impl / "94-7bc-test-review-board.md").write_text("# Story 94.7bc\n", encoding="utf-8")
+    # The genuine leak beside them is still flagged.
+    (impl / "test-design-9-1.md").write_text("# Test Design\n", encoding="utf-8")
+
+    leaked = {p.name for p in fc._leaked_tea_artifacts(impl, None)}
+    assert leaked == {"test-design-9-1.md"}, leaked
+
+
 # --- orphaned never-green index ---------------------------------------------
 
 

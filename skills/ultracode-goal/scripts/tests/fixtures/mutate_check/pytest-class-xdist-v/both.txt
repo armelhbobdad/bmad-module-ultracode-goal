@@ -1,0 +1,50 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.7, pytest-9.1.1, pluggy-1.7.0 -- /home/dev/work/py/.venv/bin/python
+rootdir: /home/dev/work/pyclass
+configfile: pytest.ini
+plugins: xdist-3.8.0
+created: 2/2 workers
+2 workers [4 items]
+
+scheduling tests via LoadScheduling
+
+test_guard.py::TestErrorCases::test_fails_when_mode_is_loose 
+test_guard.py::TestErrorCases::test_rejects_error_input 
+[gw0] [ 25%] PASSED test_guard.py::TestErrorCases::test_rejects_error_input 
+test_guard.py::TestErrorCases::test_flag_on 
+[gw1] [ 50%] FAILED test_guard.py::TestErrorCases::test_fails_when_mode_is_loose 
+test_other.py::test_other_passes 
+[gw1] [ 75%] PASSED test_other.py::test_other_passes 
+[gw0] [100%] FAILED test_guard.py::TestErrorCases::test_flag_on 
+
+=================================== FAILURES ===================================
+_________________ TestErrorCases.test_fails_when_mode_is_loose _________________
+[gw1] linux -- Python 3.14.7 /home/dev/work/py/.venv/bin/python
+
+self = <test_guard.TestErrorCases object at 0x7ff8840dd220>
+
+    def test_fails_when_mode_is_loose(self):
+>       assert MODE == "strict"
+E       AssertionError: assert 'loose' == 'strict'
+E         
+E         - strict
+E         + loose
+
+test_guard.py:13: AssertionError
+_________________________ TestErrorCases.test_flag_on __________________________
+[gw0] linux -- Python 3.14.7 /home/dev/work/py/.venv/bin/python
+
+self = <test_guard.TestErrorCases object at 0x7f0de51a7750>
+
+    def test_flag_on(self):
+>       assert FLAG == "on"
+E       AssertionError: assert 'off' == 'on'
+E         
+E         - on
+E         + off
+
+test_guard.py:10: AssertionError
+=========================== short test summary info ============================
+FAILED test_guard.py::TestErrorCases::test_fails_when_mode_is_loose - Asserti...
+FAILED test_guard.py::TestErrorCases::test_flag_on - AssertionError: assert '...
+========================= 2 failed, 2 passed in 0.44s ==========================

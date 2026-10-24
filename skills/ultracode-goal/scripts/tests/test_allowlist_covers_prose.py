@@ -234,18 +234,22 @@ def test_every_resolver_call_in_every_skill_runs_under_uv_run():
     """The customization resolver is the call the rehearsal saw refused 8 times.
     The sibling skills call it too, from a session that may not be the armed
     run; they use the same form so a copied line never brings `python3` back.
-    Every call passes `--no-project`: BMAD's resolver has no PEP 723 header
-    before 6.11, and a plain `uv run` of such a script inside a Python project
-    creates the project's `.venv` and `uv.lock` before preflight's clean-tree
-    check."""
+    Every call to a script under `_bmad/scripts/` passes `--no-project`, the
+    story skills' `resolve_config.py` included: BMAD 6.10's resolvers have no
+    PEP 723 header (and an older BMAD 6 has no `resolve_config.py` at all), and
+    a plain `uv run` of such a script, or of a missing one, inside a Python
+    project creates the project's `.venv` and `uv.lock` before preflight's
+    clean-tree check."""
     calls = []
     for path in sorted([*_SKILLS.glob("*/SKILL.md"), *_SKILLS.glob("*/references/*.md")]):
         _, paragraphs = _fenced_lines_and_paragraphs(path.read_text(encoding="utf-8"))
         for paragraph in paragraphs:
             for span in _code_spans(paragraph):
-                if "_bmad/scripts/resolve_customization.py" in span:
+                if re.search(r"_bmad/scripts/\w+\.py", span):
                     calls.append((f"{path.parent.name}/{path.name}", span))
-    assert len(calls) >= 12, calls
+    assert len(calls) >= 14, calls
+    scripts = {re.search(r"_bmad/scripts/(\w+\.py)", span).group(1) for _, span in calls}
+    assert {"resolve_customization.py", "resolve_config.py"} <= scripts, scripts
     wrong = [
         call for call in calls
         if not call[1].startswith("uv run --no-project {project-root}/_bmad/scripts/")
@@ -264,6 +268,7 @@ def test_the_rule_model():
         "uv run --no-project /p/_bmad/scripts/resolve_customization.py --skill s --key workflow",
         entries,
     )
+    assert _covered("uv run --no-project /p/_bmad/scripts/resolve_config.py --project-root /p", entries)
     # The model's own `git -C <repo> rev-parse` did not match, and still would not.
     assert not _covered("git -C /repo rev-parse HEAD", entries)
     assert not _covered("python3 /p/_bmad/scripts/resolve_customization.py --skill s", entries)

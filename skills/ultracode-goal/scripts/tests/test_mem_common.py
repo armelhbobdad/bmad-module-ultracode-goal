@@ -160,6 +160,16 @@ def test_neutralize_strips_fences_collapses_ws_and_clamps():
     assert mc.neutralize(None) == ""
 
 
+def test_neutralize_replaces_a_lone_surrogate_so_the_text_encodes():
+    # A JSON "\ud800" escape decodes to a lone surrogate, which UTF-8 cannot
+    # encode, so the filter's byte clamp and its output would raise on it.
+    out = mc.neutralize("advance \ud800 tail \udcff")
+    assert out == "advance \ufffd tail \ufffd"
+    assert out.encode("utf-8")
+    assert mc.neutralize("ok \U0001f600") == "ok \U0001f600"  # a real astral character stays
+    assert mc.replace_surrogates("a\ud800b\udfff") == "a\ufffdb\ufffd"
+
+
 # ---------------------------------------------------------------------------
 # repo_fingerprint — stable per-repo identity across basis branches
 # ---------------------------------------------------------------------------
@@ -250,6 +260,25 @@ _RUN_B = "epic-7-20260605T090000Z"
 _DATE = "2026-06-04T17:25:12Z"
 _DATE_MS = int(datetime(2026, 6, 4, 17, 25, 12, tzinfo=timezone.utc).timestamp()) * 1000
 _WINDOWS_ILLEGAL = set('<>:"/\\|?*')
+# JSON nested past the recursion limit: json.loads raises RecursionError, not
+# ValueError, on these (about 2 KB of brackets is enough on Python 3.11).
+_DEEP_ARRAY = "[" * 100000 + "]" * 100000
+_DEEP_OBJECT = '{"a":' * 50000 + "1" + "}" * 50000
+_nested_past_the_limit = pytest.mark.parametrize(
+    "nested", [_DEEP_ARRAY, _DEEP_OBJECT], ids=["deep-array", "deep-object"]
+)
+_needs_fifo = pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this platform")
+
+
+def _returns_within(call, seconds: float = 10):
+    """call() on a daemon thread; fails when it blocks (a FIFO opened with no writer)."""
+    result: list = []
+    worker = threading.Thread(target=lambda: result.append(call()), daemon=True)
+    worker.start()
+    worker.join(timeout=seconds)
+    assert not worker.is_alive(), "blocked opening a FIFO"
+    assert result, "raised instead of returning"
+    return result[0]
 
 
 @pytest.fixture
@@ -771,8 +800,10 @@ def test_replay_skips_existing_and_leaves_the_file_byte_identical(tmp_path, home
         json.dumps(_record(fingerprint="ffffffffffffffff")).encode(),  # another repo
         json.dumps(_record(run_id=_RUN_B)).encode(),  # another run
         json.dumps({"run_id": _RUN, "fingerprint": _FP}).encode(),  # wrong shape
+        _DEEP_ARRAY.encode(),
+        _DEEP_OBJECT.encode(),
     ],
-    ids=["unparseable", "empty", "other-fingerprint", "other-run-id", "wrong-shape"],
+    ids=["unparseable", "empty", "other-fingerprint", "other-run-id", "wrong-shape", "deep-array", "deep-object"],
 )
 def test_foreign_or_unparseable_target_is_never_touched(content, tmp_path, home):
     store = home / "recall"
@@ -790,6 +821,19 @@ def test_directory_at_the_target_path_is_foreign(tmp_path, home):
     target.mkdir(parents=True)
     assert mc.write_run_record(store, _record()).status == mc.WRITE_FOREIGN_TARGET
     assert target.is_dir()
+
+
+@_needs_fifo
+def test_fifo_at_the_target_path_is_foreign_and_never_blocks(tmp_path, home):
+    # Opening a FIFO with no writer for reading blocks forever, so the write
+    # would hang at Finalize. It is not a regular file: foreign, left in place.
+    store = home / "recall"
+    target = mc.run_file_path(store, _FP, _RUN)
+    target.parent.mkdir(parents=True)
+    os.mkfifo(target)
+    result = _returns_within(lambda: mc.write_run_record(store, _record()))
+    assert result.status == mc.WRITE_FOREIGN_TARGET
+    assert stat.S_ISFIFO(os.lstat(target).st_mode)
 
 
 @pytest.mark.parametrize("run_id", ["epic-7/../../x-20260604T172512Z", "../x", "r1", "epic-..-20260604T172512Z"])
@@ -1053,6 +1097,64 @@ def test_run_file_with_a_byte_order_mark_reads_as_its_record(tmp_path, home):
     # A replay of that run meets its own record, not a foreign target.
     assert mc.write_run_record(store, record).status == mc.WRITE_SKIPPED_EXISTING
     assert _sha(target) == before
+
+
+@_nested_past_the_limit
+def test_reader_drops_a_run_file_nested_past_the_recursion_limit_as_invalid(nested, tmp_path, home):
+    # One hand-made file must not stop the read: it is invalid like any other
+    # file that does not parse, and the records beside it still come back.
+    store = home / "recall"
+    mc.write_run_record(store, _record())
+    (mc.runs_dir(store, _FP) / "epic-9-20260101T000000Z.jsonl").write_text(nested, encoding="utf-8")
+    records, dropped = mc.read_store([store], _FP)
+    assert records == [_record()]
+    assert dropped == {"invalid": 1, "cross_schema": 0, "foreign": 0}
+
+
+def _nest(depth: int) -> object:
+    """A list nested ``depth`` levels deep, built without recursion."""
+    value: object = []
+    for _ in range(depth - 1):
+        value = [value]
+    return value
+
+
+def test_nested_too_deep_counts_lists_and_objects_past_the_bound():
+    assert not mc.nested_too_deep(_record())
+    assert not mc.nested_too_deep(_nest(32))
+    assert mc.nested_too_deep(_nest(33))
+    assert mc.nested_too_deep({"a": {"b": _nest(31)}})
+    assert not mc.nested_too_deep({"a": [_nest(30)], "b": "text"})
+    assert not mc.nested_too_deep("[[[[")
+
+
+def test_reader_drops_a_record_nested_deeper_than_any_record_as_invalid(tmp_path, home):
+    # Parseable on every Python, but json.dumps can still raise RecursionError
+    # writing JSON nested just inside the limit back out (a drain requeue or
+    # dead-letter): nothing that deep reads as a record, on any version.
+    store = home / "recall"
+    mc.write_run_record(store, _record())
+    deep = _record(run_id=_RUN_B, extra=_nest(40))
+    (mc.runs_dir(store, _FP) / f"{_RUN_B}.jsonl").write_text(json.dumps(deep), encoding="utf-8")
+    records, dropped = mc.read_store([store], _FP)
+    assert records == [_record()]
+    assert dropped == {"invalid": 1, "cross_schema": 0, "foreign": 0}
+    assert mc.extract_payload(_legacy(_payload(run_id=_RUN_B) | {"extra": _nest(40)})) is None
+
+
+@_needs_fifo
+def test_reader_never_blocks_on_a_fifo_named_like_a_run_file(tmp_path, home):
+    # A FIFO, or a link to one, is not a regular file: it is skipped unread,
+    # like a directory of that name, and the read goes on.
+    store = home / "recall"
+    mc.write_run_record(store, _record())
+    runs = mc.runs_dir(store, _FP)
+    os.mkfifo(runs / "epic-8-20260101T000000Z.jsonl")
+    os.mkfifo(tmp_path / "elsewhere")
+    (runs / "epic-9-20260101T000000Z.jsonl").symlink_to(tmp_path / "elsewhere")
+    records, dropped = _returns_within(lambda: mc.read_store([store], _FP))
+    assert records == [_record()]
+    assert dropped == {"invalid": 0, "cross_schema": 0, "foreign": 0}
 
 
 def test_reader_order_does_not_depend_on_write_order(tmp_path, home):
@@ -1390,6 +1492,14 @@ def test_extract_payload_reads_only_what_follows_the_marker():
     assert mc.carries_marker(_legacy(_payload())) is True
     assert mc.carries_marker({"text": "UCG run for epic 7"}) is False
     assert mc.carries_marker("text") is False
+
+
+@_nested_past_the_limit
+def test_extract_payload_returns_none_on_json_nested_past_the_recursion_limit(nested):
+    # Never raises: the drain dead-letters such an entry as unconvertible.
+    legacy = _legacy('{"a": ' + nested + "}")
+    assert mc.extract_payload(legacy) is None
+    assert mc.legacy_payload_to_record(legacy) is None
 
 
 # ---------------------------------------------------------------------------

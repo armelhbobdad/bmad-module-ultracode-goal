@@ -1,0 +1,50 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.5 [39m[90m/home/dev/work/runners-latest/vt[39m
+
+ [32m✓[39m other.test.js [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [31m❯[39m guard.test.js [2m([22m[2m3 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[32m 30[2mms[22m[39m
+   [31m❯[39m guard [2m(3)[22m
+     [32m✓[39m rejects error input[32m 8[2mms[22m[39m
+[31m     [31m×[31m flag is on[39m[32m 17[2mms[22m[39m
+[31m     [31m×[31m fails when mode is loose[39m[32m 3[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m guard.test.js[2m > [22mguard[2m > [22mflag is on
+[31m[1mAssertionError[22m: expected 'off' to be 'on' // Object.is equality[39m
+
+Expected: [32m"o[7mn[27m"[39m
+Received: [31m"o[7mff[27m"[39m
+
+[36m [2m❯[22m guard.test.js:[2m6:41[22m[39m
+    [90m  4|[39m describe('guard', () => {
+    [90m  5|[39m   test('rejects error input', () => expect(() => assertLimit(9)).toThr…
+    [90m  6|[39m   test('flag is on', () => expect(FLAG).toBe('on'));
+    [90m   |[39m                                         [31m^[39m
+    [90m  7|[39m   test('fails when mode is loose', () => expect(MODE).toBe('strict'));
+    [90m  8|[39m });
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m guard.test.js[2m > [22mguard[2m > [22mfails when mode is loose
+[31m[1mAssertionError[22m: expected 'loose' to be 'strict' // Object.is equality[39m
+
+Expected: [32m"strict"[39m
+Received: [31m"loose"[39m
+
+[36m [2m❯[22m guard.test.js:[2m7:55[22m[39m
+    [90m  5|[39m   test('rejects error input', () => expect(() => assertLimit(9)).toThr…
+    [90m  6|[39m   test('flag is on', () => expect(FLAG).toBe('on'));
+    [90m  7|[39m   test('fails when mode is loose', () => expect(MODE).toBe('strict'));
+    [90m   |[39m                                                       [31m^[39m
+    [90m  8|[39m });
+    [90m  9|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m2 passed[39m[22m[90m (4)[39m
+[2m   Start at [22m 01:52:43
+[2m   Duration [22m 306ms[2m (transform 38%, import 30%, tests 22%, worker 10%)[22m
+

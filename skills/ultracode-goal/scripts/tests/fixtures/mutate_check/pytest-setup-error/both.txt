@@ -1,0 +1,35 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.7, pytest-9.1.1, pluggy-1.7.0
+rootdir: /home/dev/work/py
+configfile: pytest.ini
+plugins: xdist-3.8.0
+collected 4 items
+
+test_guard.py .EF                                                        [ 75%]
+test_other.py .                                                          [100%]
+
+==================================== ERRORS ====================================
+________________________ ERROR at setup of test_flag_on ________________________
+
+    @pytest.fixture
+    def flag():
+        if FLAG != "on":
+>           raise ValueError("flag is off")
+E           ValueError: flag is off
+
+test_guard.py:9: ValueError
+=================================== FAILURES ===================================
+________________________ test_fails_when_mode_is_loose _________________________
+
+    def test_fails_when_mode_is_loose():
+>       assert MODE == "strict"
+E       AssertionError: assert 'loose' == 'strict'
+E         
+E         - strict
+E         + loose
+
+test_guard.py:23: AssertionError
+=========================== short test summary info ============================
+FAILED test_guard.py::test_fails_when_mode_is_loose - AssertionError: assert ...
+ERROR test_guard.py::test_flag_on - ValueError: flag is off
+===================== 1 failed, 2 passed, 1 error in 0.08s =====================

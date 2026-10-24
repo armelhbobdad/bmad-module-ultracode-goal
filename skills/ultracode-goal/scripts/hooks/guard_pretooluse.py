@@ -30,10 +30,13 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      where there is no prior blob to compare against.
   6. Cross-Session Recall, claude-mem: while a run latch (.mem-state.json) is
      present, every claude-mem MCP call (the plugin form and both bare-server
-     forms, and an MCP resource read or listing on a claude-mem server) and
-     every reach into .claude-mem is denied, whatever the latch's version (v1
-     or v2) or colour. There is no green path: UCG no longer uses claude-mem.
+     forms, an MCP resource read or listing on a claude-mem server, and a
+     resource listing that names no server, which lists them all) and every
+     reach into .claude-mem is denied, whatever the latch's version (v1 or
+     v2) or colour. There is no green path: UCG no longer uses claude-mem.
      With no latch, the user's own claude-mem usage is never touched.
+     Accepted residual, as for the store below: a search of a folder above
+     .claude-mem (a Grep, a `grep -r` or a `**` glob from the home folder).
   7. Cross-Session Recall, local run store and latch file: while a run latch
      is present, the model's tool calls may read the latch but not change it,
      and may not reach the store the latch names.
@@ -830,21 +833,26 @@ _MEM_STATE_FILENAME = ".mem-state.json"
 #   plugin-install form: mcp__plugin_claude-mem_<server-seg>__<op>
 #       the trailing '_' after 'plugin_claude-mem' blocks plugin_claude-memoir_*
 #   bare-server form:    mcp__claude-mem__<op>  (also claude_mem; exact segment)
+# Claude Code writes `_` in a tool name for any character of the server name
+# outside letters, digits, `_` and `-` (_MCP_NAME_UNSAFE), so the plugin's
+# server segment may hold a `_` (a server key `mem.search` or `mem_search`).
 # Case-exact on purpose (real tool names are lowercase); missing/empty -> no match.
-_CLAUDE_MEM_TOOL = re.compile(
-    r"^mcp__plugin_claude-mem_[A-Za-z0-9-]+__.+$"
-    r"|^mcp__claude[-_]mem__.+$"
-)
+_CLAUDE_MEM_SERVER_NAME = r"(?:plugin_claude-mem_[A-Za-z0-9_-]+|claude[-_]mem)"
+_CLAUDE_MEM_TOOL = re.compile(rf"^mcp__{_CLAUDE_MEM_SERVER_NAME}__.+$")
+_MCP_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 
 
 # The client's own MCP resource tools reach a server named in their `server`
-# input rather than in the tool name. A claude-mem server is named
-# `plugin:claude-mem:<server>` (the plugin install, which the tool-name form
-# above spells with `_` for `:`) or `claude-mem` / `claude_mem` (bare).
+# input rather than in the tool name. That input is the server's own name,
+# `plugin:claude-mem:<server>` for the plugin install, so it is matched as the
+# tool name spells it: a server whose tools the form above denies is
+# claude-mem's. A listing that names no server lists every server's resources,
+# claude-mem's included.
 _MCP_RESOURCE_TOOLS = frozenset(
     {"ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool"}
 )
-_CLAUDE_MEM_SERVER = re.compile(r"^plugin:claude-mem:[A-Za-z0-9_-]+$|^claude[-_]mem$")
+_MCP_LIST_RESOURCES = "ListMcpResourcesTool"
+_CLAUDE_MEM_SERVER = re.compile(rf"^{_CLAUDE_MEM_SERVER_NAME}$")
 
 
 def _mem_state_path(impl: Path | None) -> Path | None:
@@ -863,7 +871,7 @@ def _claude_mem_resource_server(tool_name: object, tool_input: dict) -> str | No
     if tool_name not in _MCP_RESOURCE_TOOLS:
         return None
     server = tool_input.get("server")
-    if isinstance(server, str) and _CLAUDE_MEM_SERVER.match(server):
+    if isinstance(server, str) and _CLAUDE_MEM_SERVER.match(_MCP_NAME_UNSAFE.sub("_", server)):
         return server
     return None
 
@@ -1743,7 +1751,11 @@ def _command_allows_reads(command: str) -> bool:
 # a path an interpreter joins at run time (`os.path.join(dir, '.mem-state.json')`)
 # and a `**/` glob all name the file without spelling its path. The name
 # counts when nothing that could extend it (a letter, digit, `_`, `.` or `-`)
-# sits right before it and nothing that would continue it sits right after.
+# sits right before it and nothing that would continue it sits right after,
+# past any trailing dots: Windows drops those from a file name, so there
+# `.mem-state.json.` is the latch. A path needs no such step: on Windows
+# os.path.abspath calls GetFullPathNameW, which trims trailing dots the way
+# opening the path would, and elsewhere `<store>.` is another folder.
 _NAME_EXTENDS = re.compile(r"[A-Za-z0-9_.-]")
 
 
@@ -1774,6 +1786,8 @@ def _names_file_name(segment: str, name: str) -> bool:
                     start = folded.find(target)
                     while start != -1:
                         end = start + len(target)
+                        while folded[end : end + 1] == ".":
+                            end += 1
                         if (start == 0 or not _NAME_EXTENDS.match(folded[start - 1])) and (
                             end == len(folded) or not _ROOT_CONTINUES.match(folded[end])
                         ):
@@ -1936,8 +1950,9 @@ def _latch_gate(event: dict, state_path: Path) -> None:
     if not isinstance(tool_input, dict):
         tool_input = {}
 
-    # 1) claude-mem MCP calls, every name form, whatever the latch says, and an
-    # MCP resource read or listing on a claude-mem server.
+    # 1) claude-mem MCP calls, every name form, whatever the latch says, an MCP
+    # resource read or listing on a claude-mem server, and a listing that
+    # names no server, which lists claude-mem's resources too.
     if _is_claude_mem_tool(tool_name):
         _latch_deny(
             state_path,
@@ -1949,6 +1964,13 @@ def _latch_gate(event: dict, state_path: Path) -> None:
             state_path,
             f"refusing a {tool_name} call on the claude-mem MCP server {server}. "
             f"{_CLAUDE_MEM_REFUSED}",
+        )
+    if tool_name == _MCP_LIST_RESOURCES and not tool_input.get("server"):
+        _latch_deny(
+            state_path,
+            f"refusing a {tool_name} call that names no server: it lists every "
+            "server's resources, claude-mem's included. Name the server whose "
+            f"resources you need. {_CLAUDE_MEM_REFUSED}",
         )
 
     inputs = _tool_inputs(tool_name, tool_input)

@@ -82,7 +82,9 @@ Read the kernel's readiness verdict JSON from stdout. Its shape is
 `checks.decomposed_children` lists each story key the kernel read as a decomposed child,
 with the parent story file its criteria come from and the parent's row (`null` when the
 split removed it). It gates nothing: a story inserted above a `done` parent's row reads
-the same way, so record it in `.decision-log.md` with the verdict, one line per key and
+the same way, as does a story whose title starts with a single letter or a roman numeral
+when its file is named by its story number alone (`2-4.md` for `2-4-a-new-login-page`),
+so record it in `.decision-log.md` with the verdict, one line per key and
 its parent file, and outside `-H` name it to the operator with the verdict.
 Do not recompute it: read `mechanical_budget` and the verdict off the JSON, never re-derive
 them here. There is one kernel — a second readiness evaluator would let the two callers
