@@ -9,10 +9,14 @@ The changes from upstream are limited to: the skill name and description, with t
 metadata removed; this attribution and the notice below; a fallback for loading config when
 `_bmad/scripts/resolve_config.py` is absent; the customization resolver called without
 `--project-root`, which BMAD Method 6.10's resolver does not accept, with a fallback for
-`on_complete` when the call fails; the removed deprecation notice; references to the dev-story
-workflow renamed to `ucg-dev-story`, and the template's note about the nonexistent
-`validate-create-story` replaced by a check against this skill's checklist; and em dashes replaced
-by other punctuation. The workflow steps are otherwise unchanged.
+`on_complete` when the call fails; every call to a BMAD resolver run with `uv run --no-project`,
+so that in a Python project uv never sets up the project's own environment (a `.venv` and a
+`uv.lock`) for a resolver with no script header (BMAD Method 6.10's have none); the removed
+deprecation notice; references to the dev-story workflow renamed to `ucg-dev-story`, and the
+template's note about the nonexistent `validate-create-story` replaced by a check against this
+skill's checklist; the checklist's pointers to a `workflow.md` the skill does not ship replaced by
+its `SKILL.md`; and em dashes replaced by other punctuation. The workflow steps are otherwise
+unchanged.
 
 UltraCode Goal's own changes are under its license (the `LICENSE` file at the repository root).
 The upstream work is distributed under the following license:

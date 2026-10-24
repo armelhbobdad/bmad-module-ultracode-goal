@@ -36,20 +36,20 @@ This is a COMPETITION to create the **ULTIMATE story context** that makes LLM de
 - The workflow framework will automatically:
   - Load this checklist file
   - Load the newly created story file (`{story_file_path}`)
-  - Load workflow variables from `./workflow.md`
+  - Load workflow variables from `{skill-root}/SKILL.md` (its "Load Config" step and "Paths" section)
   - Execute the validation process
 
 ### **When Running in Fresh Context:**
 
 - User should provide the story file path being reviewed
 - Load the story file directly
-- Load the corresponding workflow.md for variable context
+- Load this skill's `{skill-root}/SKILL.md` for variable context (its "Load Config" step and "Paths" section)
 - Proceed with systematic analysis
 
 ### **Required Inputs:**
 
 - **Story file**: The story file to review and improve
-- **Workflow variables**: From workflow.md (implementation_artifacts, epics_file, etc.)
+- **Workflow variables**: From `{skill-root}/SKILL.md` (implementation_artifacts, epics_file, etc.)
 - **Source documents**: Epics, architecture, etc. (discovered or provided)
 - **Validation framework**: The workflow's checklist execution system
 
@@ -61,7 +61,7 @@ You will systematically re-do the entire story creation process, but with a crit
 
 ### **Step 1: Load and Understand the Target**
 
-1. **Load the workflow configuration**: `./workflow.md` for variable inclusion
+1. **Load the workflow configuration**: `{skill-root}/SKILL.md` (its "Load Config" step and "Paths" section) for variable inclusion
 2. **Load the story file**: `{story_file_path}` (provided by user or discovered)
 3. **Extract metadata**: epic_num, story_num, story_key, story_title from story file
 4. **Resolve all workflow variables**: implementation_artifacts, epics_file, architecture_file, etc.

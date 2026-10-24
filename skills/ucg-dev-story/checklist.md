@@ -1,6 +1,6 @@
 ---
 title: 'Enhanced Dev Story Definition of Done Checklist'
-validation-target: 'Story markdown ({{story_path}})'
+validation-target: 'Story markdown ({{story_path}}), or for a decomposed child the ACs in {{claimed_acs}} of the parent story file ({{parent_story_path}}) and the step 10 summary'
 validation-criticality: 'HIGHEST'
 required-inputs:
   - 'Story markdown file with enhanced Dev Notes containing comprehensive implementation context'
@@ -21,6 +21,8 @@ validation-rules:
 # 🎯 Enhanced Definition of Done Checklist
 
 **Critical validation:** Story is truly ready for review only when ALL items below are satisfied
+
+**A decomposed child** (`{{parent_story_path}}` provided, as the "Decomposed Child" section of `SKILL.md` describes) has no story file. Read its tasks and its Acceptance Criteria as the ACs in `{{claimed_acs}}`, its Dev Notes as the parent's, and its File List and Dev Agent Record as the step 10 summary. Mark **Change Log Updated**, **Story Structure Compliance** and **Story Status Updated** N/A: only a story file can meet them.
 
 ## 📋 Context & Requirements Validation
 

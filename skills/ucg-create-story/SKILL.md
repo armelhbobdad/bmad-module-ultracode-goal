@@ -1,6 +1,6 @@
 ---
 name: ucg-create-story
-description: "Creates the story file an UltraCode Goal run gates and implements: `{story_key}.md` with numbered acceptance criteria, adapted from BMAD Method's create-story workflow so a run needs no deprecated BMAD shim. Use when the ultracode-goal skill delegates story creation to it, or when invoked by name; not for story creation outside an UltraCode Goal run."
+description: "Creates the story file an UltraCode Goal run gates and implements: `{story_key}.md` with numbered acceptance criteria, adapted from BMAD Method's create-story workflow so a run needs no deprecated BMAD shim. Use when an UltraCode Goal skill (ultracode-goal or ucg-formalize) delegates story creation to it, or when invoked by name; not a general story-creation entry point."
 ---
 
 <!-- Adapted for UltraCode Goal from BMAD Method 6.12.4, src/bmm-skills/v6-shims/bmad-create-story. Copyright (c) 2025 BMad Code, LLC. MIT License: see LICENSE.md in this folder. UltraCode Goal ships this copy so a run never depends on BMAD's deprecated shim, which BMAD removes at v7. -->
@@ -52,7 +52,7 @@ Treat every entry in `{workflow.persistent_facts}` as foundational context you c
 
 ### Step 4: Load Config
 
-Run `uv run {project-root}/_bmad/scripts/resolve_config.py --project-root {project-root}` and resolve:
+Run `uv run --no-project {project-root}/_bmad/scripts/resolve_config.py --project-root {project-root}` and resolve:
 
 - `project_name`, `user_name`
 - `communication_language`, `document_output_language`
