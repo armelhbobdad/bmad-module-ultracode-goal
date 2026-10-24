@@ -44,7 +44,7 @@ more than a note-taker.
 
 `/ucg-resolve` normally runs **cold** — the operator arrives at a run that stopped, in a
 session that never saw it start. That is the whole point of this surface, so resolve the
-scalars before reading any artifact. Run `python3
+scalars before reading any artifact. Run `uv run --no-project
 {project-root}/_bmad/scripts/resolve_customization.py --skill {ucg-root} --key workflow`
 (on failure, merge `{ucg-root}/customize.toml` →
 `{project-root}/_bmad/custom/ultracode-goal.toml` →

@@ -54,7 +54,7 @@ recomputes the readiness verdict. Each verdict and remediation lands in
 `/ucg-formalize` can run cold (outside an active `ultracode goal` run), so resolve the
 scalars this skill consumes — the step-1 kernel's *and* step 2's
 `{workflow.trace_output_dir}` — before calling the kernel, against the **parent** module,
-so they are the same path scalars the autonomous run reads. Run `python3
+so they are the same path scalars the autonomous run reads. Run `uv run --no-project
 {project-root}/_bmad/scripts/resolve_customization.py --skill {ucg-root} --key workflow`
 (on failure, merge `{ucg-root}/customize.toml` →
 `{project-root}/_bmad/custom/ultracode-goal.toml` →

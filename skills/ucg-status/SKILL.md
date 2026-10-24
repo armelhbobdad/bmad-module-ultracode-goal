@@ -45,7 +45,7 @@ one move: run the renderer and show what came back.
 `/ucg-status` normally runs **cold** - outside the session that owns the run, which is
 exactly the situation where nobody can see the transcript any more. Resolve the scalars
 the renderer needs before calling it, against the **parent** module, so they are the same
-paths the autonomous run wrote to. Run `python3
+paths the autonomous run wrote to. Run `uv run --no-project
 {project-root}/_bmad/scripts/resolve_customization.py --skill {ucg-root} --key workflow`
 (on failure, merge `{ucg-root}/customize.toml` →
 `{project-root}/_bmad/custom/ultracode-goal.toml` →
