@@ -7,7 +7,8 @@
 
 Covers the green-vs-blockers contract: a fully-prepared tree returns green with
 budget 0, and each mechanical fault (stale primitive versions, missing test
-framework, missing story skills, dirty tree, protected branch, broken git)
+framework, missing story skills, missing TEA skills for the run's profile,
+dirty tree, protected branch, broken git)
 surfaces exactly the expected blocker and increments the budget. Also covers TEA-flag parsing
 (YAML scalars) and the CLI exit codes.
 
@@ -92,8 +93,23 @@ def _git(repo: Path, *args: str) -> None:
 
 STORY_SKILLS = ("ucg-create-story", "ucg-dev-story")
 
+# The TEA skills each profile delegates to, written out here rather than read
+# from the script, so a change to either set has to change this contract too.
+TEA_PRODUCTION = (
+    "bmad-testarch-framework",
+    "bmad-testarch-ci",
+    "bmad-testarch-test-design",
+    "bmad-testarch-atdd",
+    "bmad-testarch-automate",
+    "bmad-testarch-test-review",
+    "bmad-testarch-nfr",
+    "bmad-testarch-trace",
+)
+TEA_LIGHT = ("bmad-testarch-framework", "bmad-testarch-test-design", "bmad-testarch-trace")
+TEA_BY_PROFILE = {"production": TEA_PRODUCTION, "light": TEA_LIGHT}
 
-def _seed_story_skills(skills_dir: Path, ids=STORY_SKILLS) -> None:
+
+def _seed_skills(skills_dir: Path, ids=STORY_SKILLS) -> None:
     for skill_id in ids:
         (skills_dir / skill_id).mkdir(parents=True, exist_ok=True)
         (skills_dir / skill_id / "SKILL.md").write_text(
@@ -142,8 +158,10 @@ def project(tmp_path: Path) -> Path:
     (root / "project-context.md").write_text("# ctx\n", encoding="utf-8")
 
     # The story skills the run delegates to, where UCG's installer copies
-    # them for Claude Code.
-    _seed_story_skills(root / ".claude" / "skills")
+    # them for Claude Code, and the TEA 1.27.x skills BMAD's installer puts
+    # beside them.
+    _seed_skills(root / ".claude" / "skills")
+    _seed_skills(root / ".claude" / "skills", ids=TEA_PRODUCTION)
 
     # Commit all scaffolding so the green-path tree is genuinely clean.
     _git(root, "add", "-A")
@@ -152,7 +170,13 @@ def project(tmp_path: Path) -> Path:
     return root
 
 
-def _report(project: Path, monkeypatch, version="2.1.200", protected=("main", "master")):
+def _report(
+    project: Path,
+    monkeypatch,
+    version="2.1.200",
+    protected=("main", "master"),
+    profile="production",
+):
     """Build a report with a controlled cc version."""
     parsed = pf._parse_semver(version) if version else None
     monkeypatch.setattr(pf, "_cc_version", lambda: (version, parsed))
@@ -162,6 +186,7 @@ def _report(project: Path, monkeypatch, version="2.1.200", protected=("main", "m
         tea_config=project / "_bmad" / "tea" / "config.yaml",
         impl_artifacts=project / "_bmad-output" / "implementation-artifacts",
         protected_branches=protected,
+        profile=profile,
     )
 
 
@@ -353,7 +378,8 @@ def _unborn_project(tmp_path: Path, branch: str, *, hide_scaffold: bool) -> Path
     impl = root / "_bmad-output" / "implementation-artifacts"
     impl.mkdir(parents=True)
     (impl / "sprint-status.yaml").write_text("development_status:\n  epic-7: backlog\n", encoding="utf-8")
-    _seed_story_skills(root / ".claude" / "skills")
+    _seed_skills(root / ".claude" / "skills")
+    _seed_skills(root / ".claude" / "skills", ids=TEA_PRODUCTION)
     if hide_scaffold:
         (root / ".git" / "info").mkdir(parents=True, exist_ok=True)
         (root / ".git" / "info" / "exclude").write_text("*\n", encoding="utf-8")
@@ -483,7 +509,7 @@ def test_a_skill_dir_without_skill_md_is_not_installed(project, monkeypatch):
 
 def test_a_personal_skill_counts_as_installed(project, monkeypatch, _isolated_home):
     shutil.rmtree(project / ".claude" / "skills" / "ucg-dev-story")
-    _seed_story_skills(_isolated_home / ".claude" / "skills", ids=("ucg-dev-story",))
+    _seed_skills(_isolated_home / ".claude" / "skills", ids=("ucg-dev-story",))
     report = _report(project, monkeypatch)
     assert "story_skills" not in _blocker_ids(report)
     assert report["checks"]["story_skills"]["ucg-dev-story"] is True
@@ -497,9 +523,9 @@ def test_a_relocated_config_dir_replaces_the_personal_root(
     shutil.rmtree(project / ".claude" / "skills" / "ucg-dev-story")
     config = tmp_path / "claude-config"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
-    _seed_story_skills(_isolated_home / ".claude" / "skills", ids=("ucg-dev-story",))
+    _seed_skills(_isolated_home / ".claude" / "skills", ids=("ucg-dev-story",))
     assert _report(project, monkeypatch)["checks"]["story_skills"]["ucg-dev-story"] is False
-    _seed_story_skills(config / "skills", ids=("ucg-dev-story",))
+    _seed_skills(config / "skills", ids=("ucg-dev-story",))
     report = _report(project, monkeypatch)
     assert "story_skills" not in _blocker_ids(report)
 
@@ -550,10 +576,191 @@ def test_bmad_shims_do_not_stand_in_for_the_ucg_story_skills(project, monkeypatc
     # still leave the run without the skills it delegates to.
     for skill_id in STORY_SKILLS:
         shutil.rmtree(project / ".claude" / "skills" / skill_id)
-    _seed_story_skills(project / ".claude" / "skills", ids=("bmad-create-story", "bmad-dev-story"))
+    _seed_skills(project / ".claude" / "skills", ids=("bmad-create-story", "bmad-dev-story"))
     report = _report(project, monkeypatch)
     assert _skills_blocker(report)["remediable"] is False
     assert report["checks"]["story_skills"] == {"ucg-create-story": False, "ucg-dev-story": False}
+
+
+# --- TEA skills -------------------------------------------------------------
+# The run delegates test design, ATDD, review and the gate to TEA's
+# bmad-testarch-* skills, which TEA 1.27.x installs and TEA 3.0 renamed to
+# bmad-tea-*. A missing one has to stop the launch, not escalate mid-run, and
+# the light profile needs fewer of them than production.
+
+_SUPPORTED = "UCG supports BMAD 6 with TEA 1.27.x"
+# Only TEA 3.0 renamed the skills, so finding the new names says 3.0 or later.
+# TEA 2.x moved to BMAD 7's module format but kept the bmad-testarch-* names.
+_RENAMED = "that looks like TEA 3.0 or later, which renamed these skills and which UCG does not support yet"
+
+
+def _tea_blocker(report: dict) -> dict:
+    hits = [b for b in report["blockers"] if b["id"] == "tea_skills"]
+    assert len(hits) == 1, report["blockers"]
+    return hits[0]
+
+
+def _remove_skills(project: Path, ids) -> None:
+    for skill_id in ids:
+        shutil.rmtree(project / ".claude" / "skills" / skill_id)
+
+
+@pytest.mark.parametrize("profile", ["production", "light"])
+def test_present_tea_skills_raise_no_blocker(project, monkeypatch, profile):
+    report = _report(project, monkeypatch, profile=profile)
+    assert report["green"] is True
+    assert "tea_skills" not in _blocker_ids(report)
+    # The check reports exactly the profile's skills, in delegation order.
+    assert report["checks"]["tea_skills"] == {s: True for s in TEA_BY_PROFILE[profile]}
+    assert list(report["checks"]["tea_skills"]) == list(TEA_BY_PROFILE[profile])
+
+
+@pytest.mark.parametrize(
+    "profile,skill_id",
+    [(p, s) for p, skills in TEA_BY_PROFILE.items() for s in skills],
+)
+def test_one_missing_tea_skill_is_a_non_remediable_blocker(project, monkeypatch, profile, skill_id):
+    _remove_skills(project, [skill_id])
+    report = _report(project, monkeypatch, profile=profile)
+    blocker = _tea_blocker(report)
+    assert blocker["kind"] == "dependency"
+    assert blocker["severity"] == "high"
+    # The run cannot install TEA, and no other skill writes what TEA writes.
+    assert blocker["remediable"] is False
+    # Only the missing skill is named as missing.
+    assert blocker["detail"].startswith(
+        "TEA skill(s) the %s profile delegates to not installed: %s." % (profile, skill_id)
+    )
+    assert _SUPPORTED in blocker["detail"]
+    assert _RENAMED not in blocker["detail"]
+    assert "TEA 2.0" not in blocker["detail"]
+    assert "\n" not in blocker["detail"]  # headless `reason` flattens a blocker to one line
+    assert report["checks"]["tea_skills"][skill_id] is False
+    assert sum(not v for v in report["checks"]["tea_skills"].values()) == 1
+    assert report["green"] is False
+    assert report["budget"] == len(report["blockers"])
+
+
+def test_light_does_not_require_the_production_only_tea_skills(project, monkeypatch):
+    # The light profile skips ci, ATDD, automate, test-review and NFR, so a
+    # project without them can run under --light, and not under production.
+    production_only = [s for s in TEA_PRODUCTION if s not in TEA_LIGHT]
+    assert len(production_only) == 5
+    _remove_skills(project, production_only)
+    light = _report(project, monkeypatch, profile="light")
+    assert "tea_skills" not in _blocker_ids(light)
+    production = _report(project, monkeypatch, profile="production")
+    assert _tea_blocker(production)["detail"].startswith(
+        "TEA skill(s) the production profile delegates to not installed: %s."
+        % ", ".join(production_only)
+    )
+
+
+def test_tea_absent_entirely_names_every_skill_and_the_fix(project, monkeypatch):
+    _remove_skills(project, TEA_PRODUCTION)
+    for profile, skills in TEA_BY_PROFILE.items():
+        report = _report(project, monkeypatch, profile=profile)
+        detail = _tea_blocker(report)["detail"]
+        assert detail.startswith(
+            "TEA skill(s) the %s profile delegates to not installed: %s."
+            % (profile, ", ".join(skills))
+        )
+        assert report["checks"]["tea_skills"] == {s: False for s in skills}
+        assert _SUPPORTED in detail
+        assert "`npx bmad-method install`, module `tea`" in detail
+        # Only BMAD Method 6.12.2 and later pin TEA at 1.27.2; an older BMAD 6
+        # installer takes the newest TEA tag.
+        assert "with BMAD Method 6.12.2 or later" in detail
+        assert "an older BMAD 6 installer can pick a later TEA" in detail
+        assert "the run never installs TEA itself" in detail
+        assert _RENAMED not in detail
+        # The story skills are a separate blocker, still satisfied here.
+        assert "story_skills" not in _blocker_ids(report)
+
+
+@pytest.mark.parametrize("profile", ["production", "light"])
+def test_renamed_tea_skills_read_as_tea_3_or_later(project, monkeypatch, profile):
+    # TEA 3.0 publishes the skills UCG calls as bmad-tea-*, so a project on it
+    # has those and none of the bmad-testarch-* names.
+    _remove_skills(project, TEA_PRODUCTION)
+    renamed = ("bmad-tea-atdd", "bmad-tea-trace", "bmad-tea-test-design")
+    _seed_skills(project / ".claude" / "skills", ids=renamed)
+    report = _report(project, monkeypatch, profile=profile)
+    blocker = _tea_blocker(report)
+    detail = blocker["detail"]
+    assert detail.startswith(
+        "TEA skill(s) the %s profile delegates to not installed: %s."
+        % (profile, ", ".join(TEA_BY_PROFILE[profile]))
+    )
+    assert "Found %s instead: %s." % (", ".join(sorted(renamed)), _RENAMED) in detail
+    assert _SUPPORTED in detail
+    assert blocker["remediable"] is False
+    assert "\n" not in detail
+
+
+def test_renamed_tea_skills_in_the_personal_root_are_named(project, monkeypatch, _isolated_home):
+    _remove_skills(project, TEA_PRODUCTION)
+    _seed_skills(_isolated_home / ".claude" / "skills", ids=("bmad-tea-trace",))
+    detail = _tea_blocker(_report(project, monkeypatch, profile="light"))["detail"]
+    assert "Found bmad-tea-trace instead: %s." % _RENAMED in detail
+
+
+def test_tea_1_27_agent_skills_alone_are_not_read_as_the_rename(project, monkeypatch):
+    # Anti-vacuous twin of the rename case: TEA 1.27.x's own bmad-tea agent and
+    # bmad-teach-me-testing share the prefix up to "bmad-tea" but are not the
+    # renamed skills, and a bmad-tea-* directory without SKILL.md is no skill.
+    _remove_skills(project, TEA_PRODUCTION)
+    _seed_skills(project / ".claude" / "skills", ids=("bmad-tea", "bmad-teach-me-testing"))
+    (project / ".claude" / "skills" / "bmad-tea-atdd").mkdir()
+    detail = _tea_blocker(_report(project, monkeypatch))["detail"]
+    assert _RENAMED not in detail
+    assert "Found " not in detail
+
+
+def test_the_tea_skill_sets_cover_every_delegate_the_prose_names():
+    # The skill and its stage references are where the run's delegates are
+    # named. A new bmad-testarch-* delegate there must reach the check too, and
+    # light must stay a subset of production.
+    import re
+
+    skill_root = SCRIPT.parent.parent
+    texts = [skill_root / "SKILL.md", *sorted((skill_root / "references").glob("*.md"))]
+    named = set()
+    for path in texts:
+        named |= set(re.findall(r"bmad-testarch-[a-z]+(?:-[a-z]+)*", path.read_text(encoding="utf-8")))
+    assert named == set(TEA_PRODUCTION)
+    assert pf.TEA_SKILLS == {"production": TEA_PRODUCTION, "light": TEA_LIGHT}
+    assert set(TEA_LIGHT) < set(TEA_PRODUCTION)
+
+
+def test_cli_profile_picks_the_tea_skills(project):
+    _remove_skills(project, [s for s in TEA_PRODUCTION if s not in TEA_LIGHT])
+    base = [
+        sys.executable,
+        str(SCRIPT),
+        "--project-root",
+        str(project),
+        "--epic",
+        "7",
+        "--tea-config",
+        "{project-root}/_bmad/tea/config.yaml",
+        "--impl-artifacts",
+        "{project-root}/_bmad-output/implementation-artifacts",
+    ]
+    results = {}
+    for profile in (None, "production", "light"):
+        argv = base + (["--profile", profile] if profile else [])
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+        results[profile] = json.loads(proc.stdout)
+    # Production is the default, as it is the run's.
+    assert results[None]["checks"]["tea_skills"] == results["production"]["checks"]["tea_skills"]
+    assert "tea_skills" in _blocker_ids(results["production"])
+    assert "tea_skills" not in _blocker_ids(results["light"])
+    assert list(results["light"]["checks"]["tea_skills"]) == list(TEA_LIGHT)
+    bad = subprocess.run(base + ["--profile", "fast"], capture_output=True, text=True)
+    assert bad.returncode == 2
+    assert "--profile" in bad.stderr
 
 
 # --- TEA flag parsing -------------------------------------------------------

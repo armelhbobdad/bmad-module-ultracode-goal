@@ -21,6 +21,9 @@ What counts as a mechanical blocker (each adds 1 to `budget`):
   - a story skill the run delegates story creation or implementation to
     (`ucg-create-story`, `ucg-dev-story`, which UCG ships) is not installed
     where Claude Code loads skills,
+  - a TEA skill the run's profile (`--profile`, production by default)
+    delegates to is not installed there: UCG calls TEA 1.27.x, the release
+    BMAD Method 6.12.2 and later install, by its `bmad-testarch-*` names,
   - HEAD has no commit yet (a fresh `git init`, or an orphan branch): the
     operator commits a baseline on the base branch first, because the run never
     makes the commit its Epic branch would start from,
@@ -42,8 +45,8 @@ cannot and does not evaluate.
 Severity is advisory metadata for the LLM, not a gate. `remediable` flags
 blockers the remediation pass can plausibly auto-clear (e.g. scaffold the
 framework, branch off, commit/stash) vs. ones that need a human (the Claude
-Code version, a broken git repo, an unborn HEAD, a missing BMAD story skill;
-true-RED items never reach this script).
+Code version, a broken git repo, an unborn HEAD, a missing BMAD story skill,
+a missing TEA skill; true-RED items never reach this script).
 
 Version gates (from the grounded constraints in .decision-log.md):
   /goal >= 2.1.139, dynamic workflows >= 2.1.154, auto memory >= 2.1.59.
@@ -155,6 +158,41 @@ STORY_STATUSES = ("done", "in-progress", "ready-for-dev", "review", "backlog")
 # bmad-project-context, which writes a block into AGENTS.md rather than a
 # project-context.md. The project-context count is advisory and never blocks.)
 STORY_SKILLS = ("ucg-create-story", "ucg-dev-story")
+
+# The TEA skills each run profile can delegate to, by the names TEA 1.27.x
+# installs. Production can call all eight: framework (preflight step 2, when no
+# test framework is found), ci (preflight step 2, production only), test-design
+# (Stage 3, once per Epic), atdd (Stage 3, per story), test-review (Execute, per
+# story) and automate, nfr and trace (the Stage 5 gate). --light skips ci,
+# atdd, automate, test-review and nfr, and keeps framework, test-design and
+# trace. TEA 2.0 moved to BMAD 7's module format and TEA 3.0 renamed every
+# bmad-testarch-* skill to bmad-tea-*, so UCG supports TEA 1.27.x only, the
+# release BMAD Method 6.12.2 and later install. The check reads skill names,
+# not a TEA version: TEA 2.x keeps the bmad-testarch-* names and passes it.
+# TEA's own agent and teaching skills (bmad-tea, bmad-teach-me-testing) are
+# never delegated to, so they are not probed.
+TEA_SKILLS = {
+    "production": (
+        "bmad-testarch-framework",
+        "bmad-testarch-ci",
+        "bmad-testarch-test-design",
+        "bmad-testarch-atdd",
+        "bmad-testarch-automate",
+        "bmad-testarch-test-review",
+        "bmad-testarch-nfr",
+        "bmad-testarch-trace",
+    ),
+    "light": (
+        "bmad-testarch-framework",
+        "bmad-testarch-test-design",
+        "bmad-testarch-trace",
+    ),
+}
+PROFILES = tuple(TEA_SKILLS)
+
+# The prefix TEA 3.0 and later publish those skills under. The trailing hyphen
+# keeps TEA 1.27.x's own bmad-tea and bmad-teach-me-testing out of the match.
+TEA_RENAMED_PREFIX = "bmad-tea-"
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
@@ -574,8 +612,8 @@ def _skill_file_present(path: Path) -> bool:
         return False
 
 
-def _story_skills_installed(project_root: Path) -> dict[str, bool]:
-    """Per story skill, whether a SKILL.md exists under any skill root.
+def _skills_installed(project_root: Path, skill_ids: tuple[str, ...]) -> dict[str, bool]:
+    """Per skill, whether a SKILL.md exists under any skill root.
 
     The skill directory is the evidence, not an install manifest: a manifest
     row does not prove Claude Code can load the skill, and a skill directory
@@ -584,8 +622,39 @@ def _story_skills_installed(project_root: Path) -> dict[str, bool]:
     roots = _skill_roots(project_root)
     return {
         skill_id: any(_skill_file_present(root / skill_id / "SKILL.md") for root in roots)
-        for skill_id in STORY_SKILLS
+        for skill_id in skill_ids
     }
+
+
+def _story_skills_installed(project_root: Path) -> dict[str, bool]:
+    """Per story skill, whether Claude Code can load it."""
+    return _skills_installed(project_root, STORY_SKILLS)
+
+
+def _tea_skills_installed(project_root: Path, profile: str) -> dict[str, bool]:
+    """Per TEA skill the profile delegates to, whether Claude Code can load it."""
+    return _skills_installed(project_root, TEA_SKILLS[profile])
+
+
+def _renamed_tea_skills(project_root: Path) -> list[str]:
+    """The `bmad-tea-*` skills under any skill root, sorted.
+
+    Read only to word the blocker: TEA 3.0 publishes the skills UCG calls under
+    these names, so finding them where a `bmad-testarch-*` skill is missing
+    says which TEA the project has. A root that cannot be listed holds none.
+    """
+    found: set[str] = set()
+    for root in _skill_roots(project_root):
+        try:
+            entries = list(root.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.name.startswith(TEA_RENAMED_PREFIX) and _skill_file_present(
+                entry / "SKILL.md"
+            ):
+                found.add(entry.name)
+    return sorted(found)
 
 
 def _story_skills_detail(project_root: Path, missing: list[str]) -> str:
@@ -604,12 +673,44 @@ def _story_skills_detail(project_root: Path, missing: list[str]) -> str:
         % (", ".join(missing), " and ".join(str(r) for r in _skill_roots(project_root)))
     )
 
+
+def _tea_skills_detail(
+    project_root: Path, profile: str, missing: list[str], renamed: list[str]
+) -> str:
+    """One line, as the story-skills detail is: what is missing, the TEA
+    release UCG supports, and the operator's fix. When `bmad-tea-*` skills
+    are installed, it says which TEA that looks like."""
+    found = (
+        " Found %s instead: that looks like TEA 3.0 or later, which renamed "
+        "these skills and which UCG does not support yet." % ", ".join(renamed)
+        if renamed
+        else ""
+    )
+    return (
+        "TEA skill(s) the %s profile delegates to not installed: %s.%s UCG "
+        "supports BMAD 6 with TEA 1.27.x, calls these skills by their "
+        "bmad-testarch-* names, and has no substitute for them (looked for "
+        "<skill>/SKILL.md under %s). Operator fix (the run never installs TEA "
+        "itself), from the project root: install TEA 1.27.x with BMAD Method "
+        "6.12.2 or later (`npx bmad-method install`, module `tea`), which "
+        "installs TEA 1.27.2 into .claude/skills (an older BMAD 6 installer can "
+        "pick a later TEA)."
+        % (
+            profile,
+            ", ".join(missing),
+            found,
+            " and ".join(str(r) for r in _skill_roots(project_root)),
+        )
+    )
+
+
 def build_report(
     project_root: Path,
     epic: str,
     tea_config: Path,
     impl_artifacts: Path,
     protected_branches: tuple[str, ...],
+    profile: str = "production",
 ) -> dict:
     cc_raw, cc_ver = _cc_version()
     goal_ok = _meets(cc_ver, MIN_GOAL)
@@ -631,6 +732,7 @@ def build_report(
     sprint_status_present = _sprint_status_present(project_root, impl_artifacts)
     project_context_count = _project_context_count(project_root)
     story_skills = _story_skills_installed(project_root)
+    tea_skills = _tea_skills_installed(project_root, profile)
     impl_artifacts_tracked = _impl_artifacts_tracked(project_root, impl_artifacts)
 
     checks = {
@@ -648,6 +750,7 @@ def build_report(
         "project_context_count": project_context_count,
         "tea_flags": tea_flags,
         "story_skills": story_skills,
+        "tea_skills": tea_skills,
         "impl_artifacts_tracked": impl_artifacts_tracked,
     }
 
@@ -690,6 +793,24 @@ def build_report(
                 # Re-running UCG's installer is the operator's call; the
                 # remediation pass neither installs the skills nor works
                 # around their absence.
+                "remediable": False,
+            }
+        )
+
+    missing_tea = [s for s, present in tea_skills.items() if not present]
+    if missing_tea:
+        blockers.append(
+            {
+                "id": "tea_skills",
+                "kind": "dependency",
+                "severity": "high",
+                "detail": _tea_skills_detail(
+                    project_root, profile, missing_tea, _renamed_tea_skills(project_root)
+                ),
+                # The run cannot install TEA: BMAD's installer does, and which
+                # TEA release a project runs is the operator's call. Nor can it
+                # work around a missing one: no other skill writes the
+                # artifacts Stage 3 and the gate read.
                 "remediable": False,
             }
         )
@@ -1176,6 +1297,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Protected branch name; repeatable. Defaults to main, master.",
     )
     parser.add_argument(
+        "--profile",
+        choices=PROFILES,
+        default="production",
+        help="Normal mode only: the run profile, which picks the TEA skills "
+        "the check requires (production needs all eight bmad-testarch-* "
+        "skills UCG can call, light needs framework, test-design and trace). "
+        "Defaults to production.",
+    )
+    parser.add_argument(
         "--assert-armed",
         action="store_true",
         help="Emit only the resume manifest: branch, hooks (incl. the all-tools "
@@ -1264,6 +1394,7 @@ def main(argv: list[str] | None = None) -> int:
         tea_config=tea_config,
         impl_artifacts=impl_artifacts,
         protected_branches=protected,
+        profile=args.profile,
     )
     print(json.dumps(report, indent=2))
     return 0
