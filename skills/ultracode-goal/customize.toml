@@ -53,14 +53,14 @@ on_escalation = ""
 # friction as fingerprint-deduped GitHub issues. Honesty-by-default: zero
 # findings is the expected, healthy outcome.
 # See https://armelhbobdad.github.io/bmad-module-ultracode-goal/health-check/
-# Set health_check_repo = "" to disable the health check entirely — the repo
+# Set health_check_repo = "" to disable the health check entirely; the repo
 # doubles as the on/off switch (no target, nothing to run); there is no
 # separate enabled toggle. (assets/module.yaml mirrors this default for the
 # installer catalog; this file is what the live run reads.)
 health_check_repo = "armelhbobdad/bmad-module-ultracode-goal"
 # Deliberately a home-relative `~` path (expanduser semantics, unlike the
 # {project-root} brace tokens above): the seen-cache is machine-global because
-# dedup must span projects — the same defect met in two repos is still one
+# dedup must span projects: the same defect met in two repos is still one
 # report. Use `~`, not `$HOME`: health_check_fp.py normalises the path with
 # Path.expanduser() only, so a literal `$HOME` survives unexpanded whenever the
 # shell does not expand it first and silently writes a `$HOME/` directory under
@@ -76,7 +76,14 @@ health_check_autosubmit = false
 # --- Cross-Session Recall (optional; consults prior runs via claude-mem) ---
 # Advisory only, never gates. Requires the third-party claude-mem plugin;
 # silently inactive without it. "on" = use claude-mem when present | "off" = never touch it.
+# Its replacement backend, a local run store, is set by cross_session_recall_store below.
 cross_session_recall = "off"
+# Folder of the local run store (one immutable file per run, per machine). No
+# default: "" (or blank, an unresolved {...} token, a literal $VAR or %VAR%, a
+# relative path) is unset. Use a `~` path, expanded like health_check_seen_cache,
+# for example "~/.ultracode-goal/recall"; an absolute or {project-root} path also
+# works, and a store the scripts create ignores itself through its own .gitignore.
+cross_session_recall_store = ""
 
 # --- Knowledge-graph refresh (optional; runs at Finalize only) ---
 # Advisory only, never gates. Requires the third-party graphify CLI on PATH and
