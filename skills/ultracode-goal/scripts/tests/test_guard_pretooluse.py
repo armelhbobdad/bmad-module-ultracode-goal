@@ -1003,11 +1003,14 @@ _GREEN_STATE = {
 }
 
 # Live plugin-install MCP tool names (captured this session) + the lure that
-# tries to smuggle a non-claude-mem op past a sloppy prefix check.
+# tries to smuggle a non-claude-mem op past a sloppy prefix check + a server
+# key with a `_` in it, which Claude Code also writes for any character
+# outside letters, digits, `_` and `-` (so `mem.search` gives `mem_search`).
 _MEM_PLUGIN_TOOLS = (
     "mcp__plugin_claude-mem_mcp-search__search",
     "mcp__plugin_claude-mem_mcp-search__save_observation",
     "mcp__plugin_claude-mem_mcp-search____IMPORTANT",
+    "mcp__plugin_claude-mem_mem_search__search",
 )
 # Bare-server install forms (dash and underscore server segments).
 _MEM_BARE_TOOLS = (
@@ -1018,6 +1021,7 @@ _MEM_BARE_TOOLS = (
 # the bare server segment; an unrelated server entirely).
 _NON_MEM_TOOLS = (
     "mcp__plugin_claude-memoir_x__y",
+    "mcp__plugin_claude-memoir_mem_search__y",
     "mcp__claude-memory__z",
     "mcp__Neon__run_sql",
 )
@@ -3201,6 +3205,27 @@ def test_csr_left_behind_latch_keeps_denying_until_deleted(store_world: _StoreWo
         _assert_allowed(code, out)
 
 
+def test_csr_latch_the_hook_cannot_look_at_counts_as_present(store_world: _StoreWorld) -> None:
+    """Fail closed: in an implementation artifacts folder the hook may not
+    search, whether a latch is there cannot be told, so it counts as present.
+    A claude-mem call and a change to the latch are still denied."""
+    store_world.impl.chmod(0o600)
+    try:
+        try:
+            os.lstat(store_world.latch)
+        except PermissionError:
+            pass
+        else:
+            pytest.skip("folder modes do not bind this user")
+        reason = _assert_latch_denied(*_run_in(store_world, "mcp__claude-mem__search", {}), store_world.latch)
+        assert "refusing the claude-mem MCP call mcp__claude-mem__search." in reason
+        write = {"file_path": store_world.latch.as_posix(), "content": "{}"}
+        reason = _assert_latch_denied(*_run_in(store_world, "Write", write), store_world.latch)
+        assert "refusing a Write call whose file_path names the run latch." in reason
+    finally:
+        store_world.impl.chmod(0o700)
+
+
 def test_csr_anything_at_the_latch_path_counts_as_present(store_world: _StoreWorld) -> None:
     """Fail closed: a latch path that holds a folder is a latch that cannot be
     read, so claude-mem is denied, and so is removing it (the latch-path rule
@@ -4512,7 +4537,17 @@ def test_csr_dot_globs_away_from_claude_mem_are_allowed(store_world: _StoreWorld
 _RESOURCE_TOOLS = ("ReadMcpResourceTool", "ListMcpResourcesTool", "ReadMcpResourceDirTool")
 
 
-@pytest.mark.parametrize("server", ["plugin:claude-mem:mcp-search", "claude-mem", "claude_mem"])
+@pytest.mark.parametrize(
+    "server",
+    [
+        "plugin:claude-mem:mcp-search",
+        "plugin:claude-mem:mem_search",
+        "plugin:claude-mem:mem.search",
+        "claude-mem",
+        "claude_mem",
+        "claude.mem",
+    ],
+)
 @pytest.mark.parametrize("tool", _RESOURCE_TOOLS)
 def test_csr_mcp_resource_calls_on_claude_mem_denied(store_world: _StoreWorld, tool: str, server: str) -> None:
     """A resource read or listing reaches the claude-mem server through its
@@ -4522,10 +4557,30 @@ def test_csr_mcp_resource_calls_on_claude_mem_denied(store_world: _StoreWorld, t
     assert f"refusing a {tool} call on the claude-mem MCP server {server}." in reason
 
 
-@pytest.mark.parametrize("server", ["claude-memory", "plugin:claude-memoir:x", "Neon", None])
+@pytest.mark.parametrize(
+    "server", ["claude-memory", "claude.memory", "plugin:claude-memoir:x", "plugin:claude-memoir:mem_search", "Neon", None]
+)
 def test_csr_mcp_resource_calls_elsewhere_are_allowed(store_world: _StoreWorld, server: str | None) -> None:
+    """The server is matched as Claude Code writes it into a tool name, so a
+    look-alike stays one. A read with no server reaches none (it needs one)."""
     tool_input = {"uri": "x://y"} if server is None else {"server": server, "uri": "x://y"}
     _assert_allowed(*_run_in(store_world, "ReadMcpResourceTool", tool_input))
+
+
+@pytest.mark.parametrize("tool_input", [{}, {"server": ""}], ids=["no-server", "empty-server"])
+def test_csr_resource_listing_of_every_server_denied(store_world: _StoreWorld, tool_input: dict) -> None:
+    """A listing that names no server lists every server's resources,
+    claude-mem's included."""
+    code, out = _run_in(store_world, "ListMcpResourcesTool", tool_input)
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert "refusing a ListMcpResourcesTool call that names no server" in reason
+
+
+def test_csr_resource_listing_of_another_server_allowed(store_world: _StoreWorld) -> None:
+    """Controls: a listing that names another server, and any listing with no latch."""
+    _assert_allowed(*_run_in(store_world, "ListMcpResourcesTool", {"server": "Neon"}))
+    store_world.latch.unlink()
+    _assert_allowed(*_run_in(store_world, "ListMcpResourcesTool", {}))
 
 
 def test_csr_no_latch_leaves_mcp_resource_calls_alone(store_world: _StoreWorld) -> None:
@@ -4743,6 +4798,9 @@ def _latch_changes(world: _StoreWorld) -> dict[str, str]:
         ),
         "node-e": f"node -e \"require('fs').unlinkSync('{_LATCH_DIR}/' + '.mem-state.json')\"",
         "ansi-c-name": f"cd {_LATCH_DIR} && rm -f $'\\x2emem-state.json'",
+        # Windows drops a file name's trailing dots, so these name the latch there.
+        "cd-then-trailing-dot": f"cd {_LATCH_DIR} && rm -f .mem-state.json.",
+        "trailing-dots": f"rm -f {latch}..",
     }
 
 
@@ -4799,6 +4857,8 @@ _LATCH_CHANGES = (
     "python-heredoc",
     "node-e",
     "ansi-c-name",
+    "cd-then-trailing-dot",
+    "trailing-dots",
 )
 
 
@@ -4978,8 +5038,18 @@ def test_csr_read_tools_on_the_latch_allowed(latch_world: _StoreWorld) -> None:
         f"rm -f {_LATCH_DIR}/.mem-state-1a2b.tmp",
         "echo 'x.mem-state.json and .mem-state.jsonl are other files'",
         f"cd {_LATCH_DIR} && rm -f .current-story",
+        f"cd {_LATCH_DIR} && rm -f .mem-state.json.1",
     ],
-    ids=["hidden-skip", "dot-glob-of-other-files", "dotfile-copy", "backup-name", "temp-name", "longer-names", "other-dotfile"],
+    ids=[
+        "hidden-skip",
+        "dot-glob-of-other-files",
+        "dotfile-copy",
+        "backup-name",
+        "temp-name",
+        "longer-names",
+        "other-dotfile",
+        "rotated-name",
+    ],
 )
 def test_csr_latch_name_rule_leaves_other_names_alone(latch_world: _StoreWorld, command: str) -> None:
     """Control for the file-name rule: a dotfile glob that matches every
