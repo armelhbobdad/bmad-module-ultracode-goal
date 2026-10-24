@@ -5081,7 +5081,9 @@ def test_csr_latch_path_deny_reason_states_the_rule(guard_module, latch_world: _
     latch = latch_world.latch.as_posix()
     reason = _assert_latch_denied(*_bash(latch_world, f"rm -f {latch}"), latch_world.latch)
 
-    assert f"segment {'rm -f ' + latch!r} names the run latch and may change it." in reason
+    # Quoted as the guard cuts it: a Windows runner's tmp path is long enough
+    # that the 160-character cut falls inside the latch path.
+    assert f"segment {guard_module._shown('rm -f ' + latch)} names the run latch and may change it." in reason
     assert "the model's tool calls may read it but not change it" in reason
     assert "a `|` counts as a pipe even inside quotes" in reason
     for name in guard_module._LATCH_READERS:
