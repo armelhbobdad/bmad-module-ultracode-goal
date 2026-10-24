@@ -3,57 +3,46 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Cross-Session Recall write path for ultracode-goal — build/spill/drain.
+"""Cross-Session Recall write path for ultracode-goal: write and drain.
 
 Advisory-only, voice-never-vote, fail-closed, OFF by default. This script builds
-the save_observation payload the skill MAY persist after a run, and provides a
-crash-proof outbox (spill) + replayer (drain) so a transient claude-mem outage
-during a run never blocks the run — the payload is parked and replayed later.
+this run's record and writes it to the local run store
+(cross_session_recall_store), and keeps a crash-proof outbox (with its
+replayer, drain) so a store that cannot be written during a run never blocks
+the run: the record is parked and a later drain lands it.
 
 Subcommands
 -----------
-build
-    Assemble a save_observation-ready {text,title,project} from run facts. Every
-    free-text fragment is redacted; root-cause classes are constrained to the
-    12-class TAXONOMY (unknown -> "other"). The structured payload travels inside
-    the human-readable ``text`` field after our marker, because save_observation
-    only accepts {text,title,project}. A NOT_EVALUATED gate is SKIPPED (no
-    payload); WAIVED outcomes ARE written.
-
-spill
-    Append ONE JSON line to <impl>/mem-outbox.<run_id>.jsonl. Per-run-id files
-    mean no locking is ever needed. A run_id holding a path separator or ``..``
-    exits 2 before anything is written.
-
-drain
-    Scan ALL mem-outbox.*.jsonl: expire entries past TTL (tombstones),
-    dead-letter entries that have failed >=3 times, and report the rest as
-    replayable while incrementing their attempt counters in place. Original
-    spill stamps are preserved verbatim.
-
 write
-    Build the same payload as ``build`` (without the claude-mem wrapper), add
-    ``created_at_epoch`` (integer UTC ms, stamped now) and ``project`` (the main
-    worktree's directory name, display only), and create this run's file in the
-    local store, ``<store>/<fingerprint-dir>/runs/<run_id>.jsonl``, through the
-    immutable writer in lib/mem_common. A bad ``--run-id`` exits 2 before
-    anything is touched. A replay prints ``skipped-existing`` and leaves the file
+    Build the run payload from run facts. Every free-text fragment is redacted;
+    root-cause classes are constrained to the 12-class TAXONOMY (unknown ->
+    "other"). A NOT_EVALUATED gate is SKIPPED (no record); WAIVED outcomes ARE
+    written. Add ``created_at_epoch`` (integer UTC ms, stamped now) and
+    ``project`` (the main worktree's directory name, display only), and create
+    this run's file in the local store,
+    ``<store>/<fingerprint-dir>/runs/<run_id>.jsonl``, through the immutable
+    writer in lib/mem_common. A bad ``--run-id`` exits 2 before anything is
+    touched. A replay prints ``skipped-existing`` and leaves the file
     byte-identical; a foreign or unparseable target is never touched and the
     entry is dead-lettered with ``NOTE mem-target-foreign``; an OSError spills
-    the record to the outbox with ``WARN mem-write-deferred``.
+    the record to ``<impl>/mem-outbox.<run_id>.jsonl`` with
+    ``WARN mem-write-deferred``.
 
 drain --store
-    The store mode of drain: replays each spilled record through the same
-    write and removes it once it lands (or is ``skipped-existing``), counting
-    ``attempts`` only on an OSError. A claude-mem era ``{text,title,project}``
-    entry carrying the marker is converted into a store record BEFORE the TTL
-    check, with ``attempts`` reset to 0, and if the store refuses it, it is
-    requeued marked ``converted`` and never meets the TTL; one that cannot
-    convert is dead-lettered with ``NOTE mem-legacy-unconvertible``. An entry
-    whose ``run_id`` fails the check is dead-lettered with
-    ``NOTE mem-run-id-invalid``, whatever its age, and the others still land.
-    ``mem-outbox.dead.jsonl`` is never converted. Without ``--store``, drain
-    keeps the contract above (and refuses ``--project-root`` and ``--cwd``).
+    Replays each spilled record through the same write and removes it once it
+    lands (or is ``skipped-existing``), counting ``attempts`` only on an
+    OSError and dead-lettering at the third. A deferred write older than the
+    TTL is tombstoned. A claude-mem era ``{text,title,project}`` entry carrying
+    the marker is converted into a store record BEFORE the TTL check, with
+    ``attempts`` reset to 0, and if the store refuses it, it is requeued marked
+    ``converted`` and never meets the TTL; one that cannot convert is
+    dead-lettered with ``NOTE mem-legacy-unconvertible``. An entry whose
+    ``run_id`` fails the check is dead-lettered with ``NOTE mem-run-id-invalid``,
+    whatever its age, and the others still land. ``mem-outbox.dead.jsonl`` is
+    never converted.
+
+The claude-mem forms are gone: ``build``, ``spill`` and a drain without
+``--store`` each exit 2 with one line on stderr naming its replacement.
 
 ``--store`` takes the cross_session_recall_store value: a ``~`` path, an
 absolute path or a ``{project-root}`` path (substituted from
@@ -61,8 +50,8 @@ absolute path or a ``{project-root}`` path (substituted from
 unresolved ``{...}`` token, a literal ``$VAR`` or ``%VAR%`` and a relative path
 count as unset: ``NOTE recall-store-unset``, and nothing is written.
 
-Every NOTE and WARN line write and the store drain produce goes to stdout, in
-the ``notes`` list of the one JSON object they print.
+Every NOTE and WARN line write and drain produce goes to stdout, in the
+``notes`` list of the one JSON object they print.
 """
 
 from __future__ import annotations
@@ -76,6 +65,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NoReturn
 
 import gate_trail  # sibling script; the ledger's table parser lives there
 from lib import mem_common as mc
@@ -85,7 +75,7 @@ _MAX_ATTEMPTS = 3
 
 
 # ---------------------------------------------------------------------------
-# build
+# The run payload
 # ---------------------------------------------------------------------------
 
 
@@ -196,11 +186,12 @@ def _count_deferred(deferred_path: Path | None, epic: str) -> int:
 
 
 def _build_payload(args: argparse.Namespace, gate_status: str) -> dict:
-    """The structured run payload: what build embeds and write stores.
+    """The structured run payload write stores, after adding
+    ``created_at_epoch`` and ``project`` (mc.store_record).
 
-    Shared by build (which wraps it in the claude-mem ``{text,title,project}``
-    shape) and write (which adds ``created_at_epoch`` and ``project`` and stores
-    it), so the two can never drift apart.
+    It is the shape the removed ``build`` embedded in its claude-mem
+    ``{text,title,project}`` wrapper, so a legacy outbox entry drain converts
+    becomes the same record.
     """
     fingerprint = mc.repo_fingerprint(args.cwd or ".").get("value")
 
@@ -246,32 +237,8 @@ def _build_payload(args: argparse.Namespace, gate_status: str) -> dict:
     return payload
 
 
-def cmd_build(args: argparse.Namespace) -> int:
-    gate_status = (args.gate_status or "").strip().upper()
-    if gate_status == "NOT_EVALUATED":
-        print(json.dumps({"skip": True, "reason": "gate NOT_EVALUATED; no payload written"}))
-        return 0
-
-    payload = _build_payload(args, gate_status)
-    verdict = payload["verdict"]
-    signatures = payload["signatures"]
-    deferred_count = payload["deferred_count"]
-
-    summary_line = mc.redact(
-        f"UCG run for epic {args.epic}: gate {gate_status}, verdict {verdict}, "
-        f"{len(signatures)} signature(s), {deferred_count} deferred."
-    )
-    fenced = "```json\n" + json.dumps(payload, sort_keys=True) + "\n```"
-    text = f"{summary_line}\n{mc.UCG_MARKER}\n{fenced}"
-
-    title = mc.redact(f"UCG run — epic {args.epic}: {verdict}")
-
-    print(json.dumps({"text": text, "title": title, "project": args.project}))
-    return 0
-
-
 # ---------------------------------------------------------------------------
-# spill
+# Outbox path, UTF-8 streams
 # ---------------------------------------------------------------------------
 
 
@@ -283,59 +250,16 @@ def _force_utf8_stdio() -> None:
     """Pin stdin/stdout/stderr to UTF-8.
 
     Windows consoles default to a legacy codepage (cp1252) that cannot encode
-    the multibyte content build/spill legitimately carry (epic titles, root
-    causes); the payload contract is UTF-8 on every stream.
+    the multibyte content write and drain legitimately carry (epic titles, root
+    causes); the output contract is UTF-8 on every stream.
     """
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
 
 
-def _run_id_leaves_the_folder(run_id: str) -> bool:
-    """True when ``mem-outbox.<run_id>.jsonl`` would name a path outside the
-    artifacts folder: a ``/`` or ``\\`` separator, or ``..``.
-
-    The full run_id check (mc.valid_run_id) guards write and drain --store.
-    spill, which today's Finalize prose calls, refuses only these values, so a
-    run_id of any other shape keeps working as before.
-    """
-    return "/" in run_id or "\\" in run_id or ".." in run_id
-
-
-def cmd_spill(args: argparse.Namespace) -> int:
-    if _run_id_leaves_the_folder(args.run_id):
-        print(json.dumps({"error": f"run_id {args.run_id!r} would leave the outbox folder"}))
-        return 2
-    raw = sys.stdin.read()
-    try:
-        payload = json.loads(raw) if raw.strip() else {}
-    except ValueError as exc:
-        print(json.dumps({"error": f"payload is not valid JSON: {exc}"}))
-        return 1
-
-    impl = Path(args.impl_artifacts)
-    impl.mkdir(parents=True, exist_ok=True)
-    path = _outbox_path(impl, args.run_id)
-
-    entry = {
-        "payload": payload,
-        "attempts": 0,
-        "spilled_at": mc.utc_now_iso(),
-    }
-    # Append one self-contained JSON line. Per-run-id file => no locking
-    # needed; flush+fsync so a normal exit never leaves a buffered partial
-    # line (a crash mid-write is absorbed by drain's tombstone handling).
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, sort_keys=True) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-
-    print(json.dumps({"spilled": True, "file": str(path)}))
-    return 0
-
-
 # ---------------------------------------------------------------------------
-# drain
+# Outbox file helpers
 # ---------------------------------------------------------------------------
 
 
@@ -387,92 +311,6 @@ def _append_dead(impl: Path, entries: list[dict]) -> None:
         os.fsync(handle.fileno())
 
 
-def cmd_drain(args: argparse.Namespace) -> int:
-    if args.store is not None:
-        return _cmd_drain_store(args)
-    impl = Path(args.impl_artifacts)
-    ttl_ms = args.ttl_days * 24 * 60 * 60 * 1000
-    now_dt = datetime.fromtimestamp(args.now_epoch / 1000, tz=timezone.utc)
-
-    replayable: list[dict] = []
-    tombstones = 0
-    dead_lettered = 0
-
-    if not impl.is_dir():
-        print(json.dumps({"replayable": [], "tombstones": 0, "dead_lettered": 0}))
-        return 0
-
-    # Deterministic file order. Skip the dead-letter file itself.
-    outboxes = sorted(
-        p for p in impl.glob("mem-outbox.*.jsonl") if p.name != _DEAD_LETTER
-    )
-
-    for path in outboxes:
-        try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-
-        kept_lines: list[str] = []
-        dead_entries: list[dict] = []
-        line_no = 0
-        for raw_line in content.splitlines():
-            if not raw_line.strip():
-                continue
-            line_no += 1
-            try:
-                entry = json.loads(raw_line)
-            except ValueError:
-                # Unparseable line: drop it as a tombstone (it can never replay).
-                tombstones += 1
-                continue
-            if not isinstance(entry, dict):
-                tombstones += 1
-                continue
-
-            spilled_dt = _parse_iso(entry.get("spilled_at"))
-            attempts = entry.get("attempts")
-            if not isinstance(attempts, int) or isinstance(attempts, bool):
-                attempts = 0
-
-            # TTL expiry (vs spilled_at) -> tombstone, dropped.
-            if spilled_dt is not None:
-                age_ms = (now_dt - spilled_dt).total_seconds() * 1000
-                if age_ms > ttl_ms:
-                    tombstones += 1
-                    continue
-
-            # Too many failures -> dead-letter (preserve original stamps).
-            if attempts >= _MAX_ATTEMPTS:
-                dead_entries.append(entry)
-                dead_lettered += 1
-                continue
-
-            # Replayable: report it and bump attempts in place. Original
-            # payload + spilled_at are preserved verbatim.
-            replayable.append(
-                {"file": str(path), "line_no": line_no, "payload": entry.get("payload")}
-            )
-            bumped = dict(entry)
-            bumped["attempts"] = attempts + 1
-            kept_lines.append(json.dumps(bumped, sort_keys=True))
-
-        _append_dead(impl, dead_entries)
-        _atomic_write_lines(path, kept_lines)
-
-    print(
-        json.dumps(
-            {
-                "replayable": replayable,
-                "tombstones": tombstones,
-                "dead_lettered": dead_lettered,
-            },
-            sort_keys=True,
-        )
-    )
-    return 0
-
-
 # ---------------------------------------------------------------------------
 # write (the local run store)
 # ---------------------------------------------------------------------------
@@ -518,7 +356,7 @@ def _dead_entry(entry: dict, token: str) -> dict:
 
 
 def _spill_entry(impl: Path, run_id: str, entry: dict) -> Path:
-    """Append one entry to this run's outbox (the same line format spill writes)."""
+    """Append one ``{payload, attempts, spilled_at}`` line to this run's outbox."""
     impl.mkdir(parents=True, exist_ok=True)
     path = _outbox_path(impl, run_id)
     with path.open("a", encoding="utf-8") as handle:
@@ -762,7 +600,7 @@ def _print_store_drain(store: Path | None, counts: dict, notes: list[str]) -> No
     ))
 
 
-def _cmd_drain_store(args: argparse.Namespace) -> int:
+def cmd_drain(args: argparse.Namespace) -> int:
     """drain --store: land every spilled record in the local run store."""
     impl = Path(args.impl_artifacts)
     counts = {key: 0 for key in _STORE_DRAIN_COUNTS}
@@ -833,56 +671,61 @@ def _cmd_drain_store(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# The removed claude-mem forms
+# ---------------------------------------------------------------------------
+
+_PROG = "mem_observation.py"
+
+# Subcommands the claude-mem backend needed, with what replaces each.
+_REMOVED_COMMANDS = {
+    "build": "use write --store VALUE, which builds this run's record and writes it to the store",
+    "spill": "use write --store VALUE, which parks the record in the outbox itself when the store cannot be written",
+}
+
+
+def _refuse_removed(form: str, hint: str) -> NoReturn:
+    """Exit 2 on a removed claude-mem form, with one stderr line naming its replacement."""
+    sys.stderr.write(f"{_PROG}: error: {form} was removed with the claude-mem backend; {hint}\n")
+    sys.exit(2)
+
+
+class _RemovedFlag(argparse.Action):
+    """A removed claude-mem flag: hidden from the help, refused when given.
+
+    It is still declared so that an exact match reaches it: undeclared,
+    ``--project`` would pass as an abbreviation of ``--project-root``.
+    """
+
+    def __init__(self, option_strings, dest, *, form: str, hint: str, nargs="?", **kwargs):
+        super().__init__(
+            option_strings, dest, nargs=nargs, default=argparse.SUPPRESS, help=argparse.SUPPRESS, **kwargs
+        )
+        self.form = form
+        self.hint = hint
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        _refuse_removed(self.form, self.hint)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
+_STORE_HELP = (
+    "cross_session_recall_store value (the local run store root); a bare --store counts as unset."
+)
 
-def main(argv: list[str] | None = None) -> int:
-    _force_utf8_stdio()
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Cross-Session Recall observation builder + outbox for ultracode-goal."
+        prog=_PROG,
+        description="Cross-Session Recall run record writer and outbox for ultracode-goal.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_build = sub.add_parser("build", help="Build a save_observation-ready payload.")
-    p_build.add_argument("--impl-artifacts", required=True, dest="impl_artifacts")
-    p_build.add_argument("--epic", required=True)
-    p_build.add_argument("--run-id", required=True, dest="run_id")
-    p_build.add_argument("--gate-status", required=True, dest="gate_status")
-    p_build.add_argument("--verdict", required=True)
-    p_build.add_argument("--project", required=True)
-    p_build.add_argument("--deferred", default=None)
-    p_build.add_argument("--root-cause", action="append", dest="root_cause", default=[])
-    p_build.add_argument("--advisory", action="append", dest="advisory", default=[])
-    p_build.add_argument("--cwd", default=None)
-    p_build.add_argument("--valid-until-sha", default=None, dest="valid_until_sha")
-    p_build.add_argument("--valid-until-date", default=None, dest="valid_until_date")
-    p_build.set_defaults(func=cmd_build)
-
-    p_spill = sub.add_parser("spill", help="Append a payload to the per-run outbox.")
-    p_spill.add_argument("--impl-artifacts", required=True, dest="impl_artifacts")
-    p_spill.add_argument("--run-id", required=True, dest="run_id")
-    p_spill.set_defaults(func=cmd_spill)
-
-    p_drain = sub.add_parser("drain", help="Replay/expire/dead-letter outbox entries.")
-    p_drain.add_argument("--impl-artifacts", required=True, dest="impl_artifacts")
-    p_drain.add_argument("--ttl-days", type=int, default=14, dest="ttl_days")
-    p_drain.add_argument("--now-epoch", type=int, default=None, dest="now_epoch")
-    p_drain.add_argument(
-        "--store", nargs="?", const="", default=None,
-        help="cross_session_recall_store value: land spilled records in the local store "
-        "(a bare --store counts as unset).",
-    )
-    p_drain.add_argument("--project-root", default=None, dest="project_root")
-    p_drain.add_argument("--cwd", default=None)
-    p_drain.set_defaults(func=cmd_drain)
-
     p_write = sub.add_parser("write", help="Build this run's record and create its run file in the local store.")
     p_write.add_argument("--impl-artifacts", required=True, dest="impl_artifacts")
-    p_write.add_argument(
-        "--store", nargs="?", const="", required=True,
-        help="cross_session_recall_store value (a bare --store counts as unset).",
-    )
+    p_write.add_argument("--store", nargs="?", const="", required=True, help=_STORE_HELP)
     p_write.add_argument("--project-root", default=None, dest="project_root")
     p_write.add_argument("--epic", required=True)
     p_write.add_argument("--run-id", required=True, dest="run_id")
@@ -894,14 +737,35 @@ def main(argv: list[str] | None = None) -> int:
     p_write.add_argument("--cwd", default=None)
     p_write.add_argument("--valid-until-sha", default=None, dest="valid_until_sha")
     p_write.add_argument("--valid-until-date", default=None, dest="valid_until_date")
+    p_write.add_argument(
+        "--project", action=_RemovedFlag, form="--project, a build flag,",
+        hint="drop it: write takes project from the main worktree's directory name",
+    )
     p_write.set_defaults(func=cmd_write)
 
-    args = parser.parse_args(argv)
-    if args.command == "drain" and args.store is None:
-        if args.project_root is not None or args.cwd is not None:
-            parser.error("drain: --project-root and --cwd apply only with --store")
+    p_drain = sub.add_parser("drain", help="Land, expire or dead-letter the spilled records in the local store.")
+    p_drain.add_argument("--impl-artifacts", required=True, dest="impl_artifacts")
+    p_drain.add_argument("--store", nargs="?", const="", default=None, help=_STORE_HELP + " Required.")
+    p_drain.add_argument("--project-root", default=None, dest="project_root")
+    p_drain.add_argument("--ttl-days", type=int, default=14, dest="ttl_days")
+    p_drain.add_argument("--now-epoch", type=int, default=None, dest="now_epoch")
+    p_drain.add_argument("--cwd", default=None)
+    p_drain.set_defaults(func=cmd_drain)
+    return parser
 
-    if getattr(args, "command", None) == "drain" and args.now_epoch is None:
+
+def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    if arguments and arguments[0] in _REMOVED_COMMANDS:
+        _refuse_removed(arguments[0], _REMOVED_COMMANDS[arguments[0]])
+    args = _build_parser().parse_args(arguments)
+    if args.command == "drain" and args.store is None:
+        # The drain without --store reported entries for the model to send to
+        # claude-mem.
+        _refuse_removed("drain without --store", "use drain --store VALUE")
+
+    if args.command == "drain" and args.now_epoch is None:
         import time
 
         args.now_epoch = int(time.time() * 1000)

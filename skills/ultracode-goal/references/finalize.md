@@ -13,7 +13,7 @@ The split matters: a team standard buried in machine-local memory never reaches 
 
 ## Optional retrospective (`--retro`)
 
-Interactive runs **offer** the retrospective at Epic close (skip it by default if the user declines); headless runs it **only when `--retro` was passed**. When run, `bmad-retrospective` covers the Epic, and its lessons feed back through the capture step above — durable conclusions go to memory or CLAUDE.md by the same machine-local-vs-team split. It is additive, not required to close the run. A retrospective re-uses the Stage 1 filtered recall (its recurrence counts) — it never makes a fresh MCP call.
+Interactive runs **offer** the retrospective at Epic close (skip it by default if the user declines); headless runs it **only when `--retro` was passed**. When run, `bmad-retrospective` covers the Epic, and its lessons feed back through the capture step above: durable conclusions go to memory or CLAUDE.md by the same machine-local-vs-team split. It is additive, not required to close the run. A retrospective re-uses the Stage 1 filtered recall (its recurrence counts); it never reads the run store again.
 
 ## Decision-log audit
 
@@ -32,7 +32,7 @@ Produce a report (write it as a peer of `.decision-log.md` in the run folder, e.
 - Turns the Stop hook counted per story (`{workflow.implementation_artifacts}/.budget-<story_id>.json`, `0` when the hook never fired for it), against `{workflow.max_turns_per_story}`.
 - Learnings captured and where they went (memory vs CLAUDE.md).
 - A pointer to the deferred-work ledger and its open-item count.
-- Cross-Session Recall: consulted / wrote / skipped, plus the outbox tombstone count when the drain ran — and, when a headless run's probe was denied by the permission layer, the **required** operator-remedy line ingest-and-scope.md's denial rule specifies (grant the permission once, or set `cross_session_recall = "off"`). A run short of turns may drop prose; it may not drop that line.
+- Cross-Session Recall: consulted / wrote / skipped, every `recall-` and `mem-` token the run logged (from Stage 1's latch and filter calls and from the drain and write calls below), and, when the drain ran, its `converted`, `legacy_unconvertible` and `tombstones` counts. A run short of turns may drop prose; it may not drop a `recall-` token, because the report is the one place an operator learns that recall was off for this run.
 
 ## Gate trail
 
@@ -55,31 +55,34 @@ Two properties are load-bearing, so do not "improve" them:
 
 ## Cross-Session Recall write (optional)
 
-Read `{workflow.implementation_artifacts}/.mem-state.json`. Act only on its latched state.
+Read the latch, `{workflow.implementation_artifacts}/.mem-state.json`, with the Read tool (the guard allows reading it), and act only on what it says when it is this run's. Each recall call below is attempted once and never retried, and run exactly as written, with nothing added (no redirection, no `2>&1`, no pipe): the guard lets a recall call through only in that form.
 
-**The latch certifies the READ surface, so check for a write tool before acting on it.** Stage 1 validates the capability contract against a `get_observations`-shaped probe, which says nothing about whether `save_observation` exists — and a claude-mem surface that exposes `search` / `get_observations` / the `smart_*` family and **no write tool of any name** is a real shape, observed. So `present + schema_ok` is clearance to *look*, not proof there is anywhere to write.
+- **No latch, an unreadable one, or a latch whose `run_id` is not this run's id** (the one minted at this invocation's Stage 1 or resume): log `NOTE recall-latch-missing` to `.decision-log.md` and the run report, whatever `{workflow.cross_session_recall}` says, and write nothing: no `drain` and no `write` call. Recall turned off somewhere in this run (a refused or failed Stage 1 latch call, or a latch replaced or removed since), and this line is where the report says it. Another run's latch, or an unreadable one, is left in place; the close-out `unlatch` below never removes it.
+- **This run's latch, with `recall` `"off"`**: print the one-line notice and write nothing: *Cross-Session Recall is off; this run read no prior runs and wrote no record. Enable it with `cross_session_recall = "on"` and a `cross_session_recall_store` folder.*
+- **This run's latch, with `recall` `"on"` and `store_ok` not `true`** (red): write nothing, and repeat the latch's `reason` and the notes Stage 1 logged in the run report (`NOTE recall-store-unset` when the store key is unset; a `reason` alone, such as `store-unwritable: ...` or `no-fingerprint`, otherwise).
+- **This run's latch, green** (`recall` `"on"` and `store_ok` `true`): drain, then write.
 
-**If no write tool is present in this session's surface, do not call and do not drain.** Build the payload, `mem_observation.py spill` it once, print the distinct notice *claude-mem is present for reads but exposes no write tool — this run's summary was parked, not deferred*, and log `NOTE mem-write-unavailable`. Not `WARN mem-write-deferred`: that one means a call was attempted and failed, and conflating a structural absence with a transient failure is why three sessions recorded this as permission-denied when the tool was simply not there. **Skipping the drain is the load-bearing half** — a drain with no write path replays every parked payload against nothing and bumps each one closer to the dead-letter file, so the step meant to rescue parked work destroys it instead.
-
-**Present + `schema_ok` + recall `on` + a write tool** — write this run's summary, draining first so nothing parked in a prior crash is lost:
-
-1. **Drain the outbox** — replay each spilled payload with **one** `save_observation` attempt apiece:
-
-   ```
-   uv run {skill-root}/scripts/mem_observation.py drain --impl-artifacts {workflow.implementation_artifacts}
-   ```
-
-2. **Build this run's payload** — epic, run-id (the one minted at Stage 1, `epic-<id>-<UTC yyyymmddThhmmssZ>`, reused verbatim — the outbox filename derives from it), gate-status, verdict, project, the deferred-work path, any root causes by taxonomy class, and the mechanical `recurred` yes/no for each Stage 1 advisory consumed:
+1. **Drain the outbox**, so a record an earlier run parked when the store could not take it lands before this run's own:
 
    ```
-   uv run {skill-root}/scripts/mem_observation.py build --impl-artifacts {workflow.implementation_artifacts} --epic <id> --run-id <run-id> --gate-status <status> --verdict <advance|blocked> --project <name> --deferred {workflow.deferred_work_path} [--root-cause class=<taxonomy>,path=<artifact>]… [--advisory sig=<s>,recurred=<yes|no|unknown>]…
+   uv run {skill-root}/scripts/mem_observation.py drain --impl-artifacts {workflow.implementation_artifacts} --store '{workflow.cross_session_recall_store}' --project-root {project-root}
    ```
 
-3. **One `save_observation`** with that payload. On any MCP error, do **not** retry — pipe the payload to `mem_observation.py spill`, log `WARN mem-write-deferred` to `.decision-log.md`, and continue. The run report always lands; the memory write is best-effort.
+2. **Write this run's record**: epic, run-id (this invocation's own, minted at Stage 1 or at a resume's re-entry and reused verbatim: the record file is named after it), gate-status, verdict, the deferred-work path, any root causes by taxonomy class, and the mechanical `recurred` yes/no for each Stage 1 advisory consumed. Pass no project name: the script takes it from the main worktree's directory, and the store tells repos apart by fingerprint alone.
 
-**Present but recall `off`** — print the one-line notice and write nothing: *claude-mem detected — Cross-Session Recall is off; this run consulted no memory and wrote none. Enable with `cross_session_recall = "on"`.*
+   ```
+   uv run {skill-root}/scripts/mem_observation.py write --impl-artifacts {workflow.implementation_artifacts} --store '{workflow.cross_session_recall_store}' --project-root {project-root} --epic <id> --run-id <run-id> --gate-status <status> --verdict <advance|blocked> --deferred {workflow.deferred_work_path} [--root-cause class=<taxonomy>,path=<artifact>]… [--advisory sig=<s>,recurred=<yes|no|unknown>]…
+   ```
 
-**Always, both paths** — **remove** `{workflow.implementation_artifacts}/.mem-state.json` as part of close-out. No active run means the hook stops gating claude-mem; an orphaned latch would deny the user's own usage between runs.
+Each call prints one JSON object. Log every line in its `notes` to `.decision-log.md` and carry it into the run report: the `mem-` tokens belong to the write path (`WARN mem-write-deferred` when the store could not take the record and it waits in the outbox for a later drain, `NOTE mem-target-foreign`, `NOTE mem-run-id-invalid`, `NOTE mem-legacy-unconvertible`), and `NOTE recall-store-unset` means the store key is unset. Log the write's `status` the same way: `written`, or why no record landed (`skipped-existing`, `deferred`, `foreign-target`, `skip`, `no-fingerprint` or `store-unset`), since some of those print no note. Print the drain's `converted`, `legacy_unconvertible` and `tombstones` counts in the run report too. If the permission layer refuses the drain or the write call, log `NOTE recall-write-refused`, do not retry it, and continue: a refused write never reaches the script, so nothing is parked. The run report always lands; the record is best-effort.
+
+**Always, on every path above**, remove this run's latch as part of close-out, with the one command that may:
+
+```
+uv run {skill-root}/scripts/mem_recall.py unlatch --impl-artifacts {workflow.implementation_artifacts} --run-id <run-id>
+```
+
+It removes the latch only when it carries this run's id, leaves another run's latch, an unreadable one and an absent one as they are, and prints `{"removed": ..., "reason": ...}`; log the reason when `removed` is `false`. When the call is refused, or its reason is `unreadable` or starts with `remove-failed`, also log `NOTE recall-unlatch-failed` with the latch path to `.decision-log.md` and the run report, so the person knows to delete it by hand. Run it once and never retry it, and never remove the latch any other way (`rm`, a file tool, a script of your own): while a latch is present the guard refuses that, and a latch left in place keeps it denying until the next Stage 1 replaces it or the person deletes it by hand. With no latch the guard stops gating recall, so the user's own tools are untouched between runs.
 
 ## Knowledge-graph refresh (optional)
 
@@ -88,7 +91,7 @@ Resolve the mode exactly as the hooks below resolve theirs:
 
 Two values, and no others. `off` is the shipped default and a complete no-op — no probe, no delegation, no decision-log line, no output; there is nothing to read further in this section. `refresh` refreshes the project's knowledge graph on the way out, so the next session starts from a current one instead of a stale one.
 
-**Probe first, and degrade to silence.** Two preconditions, both required: graphify resolves on PATH (`command -v graphify`), and a prior `graphify-out/graph.json` exists under `{project-root}` to update. If either is missing there is nothing to refresh — do nothing, print nothing, and write no `.decision-log.md` entry, so the run stays byte-identical to an `off` run. A "skipped it" log line is exactly the difference that would break that, so do not add one. Absence is silent; failure is logged. They are different events. **A probe the permission layer refuses to run is a THIRD state**, distinct from both — the ordinary unattended one, and the same shape ingest-and-scope.md names for the Cross-Session Recall probe: neither precondition was *evaluated*, so "missing → silent" misfiles a refusal as a resolved absence, and the `WARN graphify-refresh-failed` below asserts a refresh that never started. Log one line — `NOTE graphify-probe-unavailable` — and skip the rest of the section, so the next reader can tell a stale graph from an intentionally ungraphed project.
+**Probe first, and degrade to silence.** Two preconditions, both required: graphify resolves on PATH (`command -v graphify`), and a prior `graphify-out/graph.json` exists under `{project-root}` to update. If either is missing there is nothing to refresh: do nothing, print nothing, and write no `.decision-log.md` entry, so the run stays byte-identical to an `off` run. A "skipped it" log line is exactly the difference that would break that, so do not add one. Absence is silent; failure is logged. They are different events. **A probe the permission layer refuses to run is a THIRD state**, distinct from both, and the ordinary unattended one: neither precondition was *evaluated*, so "missing → silent" misfiles a refusal as a resolved absence, and the `WARN graphify-refresh-failed` below asserts a refresh that never started. Log one line, `NOTE graphify-probe-unavailable`, and skip the rest of the section, so the next reader can tell a stale graph from an intentionally ungraphed project.
 
 The graph precondition is not defensive padding. Refresh means refresh: the step updates a graph the developer already has and never creates one. `graphify update` would build one from nothing, so the probe is what enforces that: whether a project gets a graph at all is the developer's call, not one a bounded step on the way out may make. A first-ever run in this mode therefore refreshes nothing and says nothing.
 
@@ -130,7 +133,7 @@ If the resolved `{workflow.on_epic_complete}` is non-empty, follow it as the fin
 
 The mirror of the epic-complete hook at the opposite terminal. This hook fires **only on a `blocked` run** — a story escalated and the Epic never advanced — and never on a clean advance, so an operator who walked away learns that the run stopped being able to make progress on its own.
 
-Execute may already have pinged when the gate escalated a story on its turn count, so this site is deduped against that same run-scoped marker, `{workflow.implementation_artifacts}/.on-escalation-fired-<run-id>`, **check-then-write**, at that byte-identical path — `<run-id>` is the run id minted at Stage 1, carried forward verbatim. If the marker is already present, skip silently: the other fire site already pinged for this run. If it is absent, run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_escalation`
+Execute may already have pinged when the gate escalated a story on its turn count, so this site is deduped against that same run-scoped marker, `{workflow.implementation_artifacts}/.on-escalation-fired-<run-id>`, **check-then-write**, at that byte-identical path, where `<run-id>` is this invocation's run id, minted at Stage 1 or at a resume's re-entry and carried forward verbatim. If the marker is already present, skip silently: the other fire site already pinged for this run. If it is absent, run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_escalation`
 
 When the resolved `{workflow.on_escalation}` is non-empty, follow it as an instruction (a prompt to run or a shell command), stating alongside it **the escalating story id** and the path to that story's typed `escalation-<story_id>.json` sidecar as the context it carries, and only then write the fired-marker. A resolved-empty value is a silent no-op — nothing fires and no fired-marker is written — so an empty hook can never suppress a later real one.
 

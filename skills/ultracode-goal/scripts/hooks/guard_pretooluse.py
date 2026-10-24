@@ -28,11 +28,45 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      that checklist enumerates still contains `test.skip(`. This reads the blob
      being committed, not a diff, so it also catches a story's first commit,
      where there is no prior blob to compare against.
-  6. Cross-Session Recall gate: while a UCG run is active (a .mem-state.json
-     latch is present), claude-mem stays advisory-only and fails closed — any
-     claude-mem MCP call (and any filesystem reach into .claude-mem) is denied
-     unless the latch is green (present + schema_ok + recall on). Outside a run
-     (no latch) the user's own claude-mem usage is never touched.
+  6. Cross-Session Recall, claude-mem: while a run latch (.mem-state.json) is
+     present, every claude-mem MCP call (the plugin form and both bare-server
+     forms, and an MCP resource read or listing on a claude-mem server) and
+     every reach into .claude-mem is denied, whatever the latch's version (v1
+     or v2) or colour. There is no green path: UCG no longer uses claude-mem.
+     With no latch, the user's own claude-mem usage is never touched.
+  7. Cross-Session Recall, local run store and latch file: while a run latch
+     is present, the model's tool calls may read the latch but not change it,
+     and may not reach the store the latch names.
+     - The latch file, whatever the latch holds: a Write, Edit, MultiEdit or
+       NotebookEdit call that names the latch path is denied, and so is a Bash
+       segment that names it, by path or by its file name on its own
+       (_names_file_name), and is not a plain read (_read_segment). Read,
+       Grep and Glob are left alone, since Finalize reads the latch.
+     - The store, when the latch names a usable store path: a Read, Grep,
+       Glob, Write, Edit, MultiEdit, NotebookEdit or Bash call that names that
+       path is denied.
+     A Bash segment is exempt from both only when it runs this skill's own
+     scripts/mem_recall.py or scripts/mem_observation.py, by path, as
+     `uv run <path> ...` or `python <path> ...`, with no redirection, command
+     substitution or wrapper, in a command that changes no environment or
+     command lookup. So only mem_recall.py changes the latch: `latch` writes
+     it, and `unlatch` removes it when it carries the caller's run_id.
+     Accepted residual, stated like the exec-wrapper one below: indirection
+     (for the store, a `cd` then a relative path; for both, a variable
+     holding part of the path or the name, a script that names the store or
+     the latch in its contents), commands on an ancestor directory (a search
+     of it, removing the implementation artifacts folder, a `git clean` or
+     `git stash --all`), repo-wide searches that reach a store inside the
+     workspace, the interpreter `uv` or `python` resolves to, with the
+     configuration it reads, and a pinned call itself: the exemption checks
+     the script's path, not its arguments, so a model that ignores the deny
+     note can still run `latch` or `unlatch` on its own.
+  Invariants 6 and 7 count a present latch as a live run: the guard reads no
+  clock and detects no dead run, so a latch a dead run left behind keeps
+  denying until the next Stage 1 replaces it or the user deletes it by hand.
+  Every deny a latch causes names the latch path and ends with a note for the
+  person: a latch left behind is theirs to delete by hand, and the model must
+  not try to remove it.
 
 Hook contract (reads one JSON object on stdin):
   in : {tool_name, tool_input:{command,...}, cwd, ...}
@@ -62,7 +96,13 @@ Config resolution (all optional, env wins so the conductor can inject per run):
                   case-folding. Same <impl_artifacts> and same <story_id> the
                   tests-ran marker uses, deliberately, so there is one
                   resolution path rather than two that can drift apart.
-  State latch checked: <impl_artifacts>/.mem-state.json (Cross-Session Recall)
+  State latch checked: <impl_artifacts>/.mem-state.json (Cross-Session Recall),
+                  read v1 or v2 by this file's own copy of lib/mem_common.py's
+                  read_state() and latch_view(), so both read one latch the
+                  same way (pinned by a parity test).
+  Skill root:     this file's own location, <skill-root>/scripts/hooks/, so
+                  the pinned recall scripts are <skill-root>/scripts/
+                  mem_recall.py and mem_observation.py (see _pinned_scripts).
   Checklist read: <test_artifacts>/atdd-checklist-<story_id>.md, keyed by the
                   SAME story id the tests-ran marker uses (the id resolved by
                   _current_story). A story_key/story_id drift here would make
@@ -74,12 +114,15 @@ Config resolution (all optional, env wins so the conductor can inject per run):
                   skips differently and this check would not see them.
 """
 
+import fnmatch
+import functools
 import json
 import os
 import re
 import shlex
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 from typing import NoReturn
 
@@ -771,9 +814,15 @@ def _unskip_gate(cwd: str | None, story: str | None) -> None:
 
 
 # --- Cross-Session Recall gate ----------------------------------------------
-# claude-mem stays advisory-only and fails closed *during a UCG run*. The run is
-# signalled by a machine latch written once at Stage 1 Ingest and removed at
-# Stage 6 Finalize; its presence — not any env flag — arms this gate.
+# While a UCG run is active, nothing reaches claude-mem, and only the pinned
+# recall scripts reach the local run store or change the latch. The run is
+# signalled by a machine latch written at Stage 1 Ingest and removed at every
+# terminal (Finalize, a preflight STOP, the headless envelope path) by
+# `mem_recall.py unlatch`. Its presence arms this gate, not any env flag and
+# not its colour: a present latch counts as live. The guard reads no clock and
+# detects no dead run, so a latch a dead run left behind keeps denying until
+# the next Stage 1 replaces it or the user deletes it by hand, and every deny
+# it causes names it and tells the person how to clear it.
 
 _MEM_STATE_FILENAME = ".mem-state.json"
 
@@ -788,6 +837,16 @@ _CLAUDE_MEM_TOOL = re.compile(
 )
 
 
+# The client's own MCP resource tools reach a server named in their `server`
+# input rather than in the tool name. A claude-mem server is named
+# `plugin:claude-mem:<server>` (the plugin install, which the tool-name form
+# above spells with `_` for `:`) or `claude-mem` / `claude_mem` (bare).
+_MCP_RESOURCE_TOOLS = frozenset(
+    {"ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool"}
+)
+_CLAUDE_MEM_SERVER = re.compile(r"^plugin:claude-mem:[A-Za-z0-9_-]+$|^claude[-_]mem$")
+
+
 def _mem_state_path(impl: Path | None) -> Path | None:
     return (impl / _MEM_STATE_FILENAME) if impl is not None else None
 
@@ -799,59 +858,1180 @@ def _is_claude_mem_tool(tool_name: object) -> bool:
     return _CLAUDE_MEM_TOOL.match(tool_name) is not None
 
 
-def _mem_latch_green(state_path: Path | None) -> bool:
-    """Re-read the latch every call (no memoization) and apply the predicate.
+def _claude_mem_resource_server(tool_name: object, tool_input: dict) -> str | None:
+    """The claude-mem server an MCP resource read or listing names, or None."""
+    if tool_name not in _MCP_RESOURCE_TOOLS:
+        return None
+    server = tool_input.get("server")
+    if isinstance(server, str) and _CLAUDE_MEM_SERVER.match(server):
+        return server
+    return None
 
-    Green (allow claude-mem) iff the latch parses as a v1 object with
-    claude_mem == "present" AND schema_ok is exactly True (strict bool) AND
-    recall == "on" (strict str). Anything else — absent-but-required, zero-byte,
-    malformed JSON, type mismatch, latch_version > 1 — fails closed (not green).
 
-    NOTE: an *absent* state file is handled by the caller (no active run -> allow
-    everything); this function is only consulted once a run is known to be live.
+# --- The latch, read the way lib/mem_common.py reads it ----------------------
+# This hook imports nothing from lib/ (module docstring), so it keeps its own
+# copy of mem_common.read_state() and mem_common.latch_view(). The two must
+# read one latch file the same way: the parity test in test_guard_pretooluse.py
+# drives both over one corpus of latch files, resolved store path included, so
+# a change to either side reds until it is made to both.
+
+_LATCH_V2 = 2
+_STORE_BACKEND = "jsonl"
+
+# A real latch is a few hundred bytes. The latch is opened without blocking (a
+# FIFO there would otherwise hold this read until the hook timed out) and a
+# latch past this size reads as unreadable. Only a hostile file differs from
+# mem_common.read_state() here, which would block or read on.
+_LATCH_READ_CAP = 1 << 20
+
+
+def _latch_present(state_path: Path) -> bool:
+    """True when anything sits at the latch path, or when that cannot be told.
+
+    Only a clean "no such file" reads as absent (no active run). Any other
+    failure to look may hide a latch, so it reads as present: fail closed. A
+    present latch that cannot be read or parsed still arms the claude-mem deny.
     """
-    if state_path is None or not state_path.is_file():
-        return False
     try:
-        raw = state_path.read_text(encoding="utf-8")
-    except OSError:
+        os.lstat(state_path)
+    except (FileNotFoundError, NotADirectoryError):
         return False
-    if not raw.strip():
-        return False  # zero-byte / whitespace-only
-    try:
-        state = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return False
-    if not isinstance(state, dict):
-        return False
-    if state.get("latch_version") != 1:  # missing or >1 -> fail closed
-        return False
-    # Strict type + value checks: a stringy "true" or a numeric 1 must NOT pass.
-    if state.get("claude_mem") != "present":
-        return False
-    if state.get("schema_ok") is not True:
-        return False
-    if state.get("recall") != "on":
-        return False
+    except (OSError, ValueError):
+        return True
     return True
 
 
-def _input_paths(tool_input: dict) -> list[str]:
-    """File-ish strings a Read/Grep/Glob call would touch (file_path / path)."""
-    out: list[str] = []
-    for key in ("file_path", "path"):
-        val = tool_input.get(key)
-        if isinstance(val, str) and val:
-            out.append(val)
+def _read_latch(state_path: Path) -> dict | None:
+    """mem_common.read_state(): the latch object, or None. Never raises.
+
+    Missing, unreadable, blank, unparseable and non-object latches all read as
+    None. It also swallows the errors a hostile path can raise (a NUL in the
+    path, a folder), opens the latch without blocking and reads at most
+    _LATCH_READ_CAP bytes: an exception or a hang here would end with no
+    decision at all.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(state_path, flags)
+    except (OSError, ValueError):
+        return None
+    try:
+        chunks: list[bytes] = []
+        size = 0
+        while size <= _LATCH_READ_CAP:
+            chunk = os.read(fd, _LATCH_READ_CAP + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if size > _LATCH_READ_CAP:
+        return None
+    text = b"".join(chunks).decode("utf-8", errors="replace")
+    if not text.strip():
+        return None
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _is_int(value: object) -> bool:
+    """True for a real int (bool is an int subclass and is not one here)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _latch_store_path(value: object) -> Path | None:
+    """mem_common._latch_store_path(): a latch's `store` as an absolute path.
+
+    Taken as written (the latch holds the resolved root, which may carry a
+    `$` or braces of its own); only a leading `~` is expanded. Anything that is
+    not then absolute, a string holding a NUL, or a non-string reads as None.
+    """
+    if not isinstance(value, str) or not value or "\0" in value:
+        return None
+    try:
+        path = Path(value).expanduser() if value.startswith("~") else Path(value)
+        if not path.is_absolute():
+            return None
+        return Path(os.path.abspath(path))
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _latch_view(state: object) -> dict:
+    """mem_common.latch_view(): how a latch reads, version and colour.
+
+    {"latch_version": int|None, "store_ok": bool, "store": str|None,
+     "run_id": object, "recall": object}. `store` is set for a v2 latch whose
+    `store` is an absolute path, whatever its colour; `store_ok` is green only
+    for a v2 latch with store_ok literally true, the jsonl backend, recall on
+    and a store. A v1 latch, any other version and a non-object read as red
+    with no store.
+    """
+    if not isinstance(state, dict):
+        return {
+            "latch_version": None,
+            "store_ok": False,
+            "store": None,
+            "run_id": None,
+            "recall": None,
+        }
+    version = state.get("latch_version")
+    version = version if _is_int(version) else None
+    store: Path | None = None
+    green = False
+    if version == _LATCH_V2:
+        store = _latch_store_path(state.get("store"))
+        green = (
+            state.get("store_ok") is True
+            and state.get("backend") == _STORE_BACKEND
+            and state.get("recall") == "on"
+            and store is not None
+        )
+    return {
+        "latch_version": version,
+        "store_ok": green,
+        "store": None if store is None else str(store),
+        "run_id": state.get("run_id"),
+        "recall": state.get("recall"),
+    }
+
+
+# --- Store-path rule ----------------------------------------------------------
+# A latch naming a usable store arms one more deny: a model tool call that
+# names the store path. Each file tool is read on the keys it names a path in;
+# `file_path` and `path` are read for every one of them, as the gate read them
+# before the store existed. A relative `pattern` or `glob` is taken against the
+# tool's own `path` as well as against the cwd.
+#
+# "Names" is read wide, and every widening is on the deny side: the store root
+# found anywhere inside a word (`-o<store>`, `@<store>`, `file://<store>`), a
+# word or a piece of one that resolves under it as written or with its
+# symlinks resolved, a brace expansion or a glob that can match it, and the
+# home and working-folder spellings a shell expands. The same matching finds a
+# path, glob or brace expansion that reaches claude-mem's own folder under a
+# home, beside the literal `.claude-mem` check.
+
+_PATH_KEYS = ("file_path", "path")
+_TOOL_EXTRA_KEYS = {
+    "Read": (),
+    "Write": (),
+    "Edit": (),
+    "MultiEdit": (),
+    "NotebookEdit": ("notebook_path",),
+    "Glob": ("pattern",),
+    "Grep": ("glob",),
+}
+_PATTERN_KEYS = frozenset({"pattern", "glob"})
+
+# The three separator sets _command_write_verbs splits a command under, kept
+# equal to them by a test. Each one exposes a segment the others can leave
+# inside an exempt-looking one (a newline, a lone `&`), so a segment that names
+# the store is looked for under all three.
+_STORE_SEPARATOR_SETS = (
+    r"&&|\|\||;|\|",
+    r"&&|\|\||;|\||\n|\r",
+    r"&&|\|\||;|\||&|\n|\r",
+)
+
+# $HOME, ${HOME} and %USERPROFILE%, and the same three spellings of the other
+# variable: every one is read as each home folder this process knows of, so a
+# spelling the shell expands one way is not missed for being read another. A
+# `${HOME<op>...}` form (`${HOME:-x}`, `${HOME%/}`) reads as the home too.
+_HOME_VAR = re.compile(
+    r"\$\{(?:HOME|USERPROFILE)(?:[^}A-Za-z0-9_][^}]*)?\}"
+    r"|\$(?:HOME|USERPROFILE)(?![A-Za-z0-9_])"
+    r"|%(?:HOME|USERPROFILE)%",
+    re.IGNORECASE,
+)
+
+# $PWD and ${PWD...}, read as the event's cwd, as a leading `~+` is, and the
+# `$(pwd)` and backtick `pwd` substitutions that print it.
+_PWD_VAR = re.compile(
+    r"\$\{PWD(?:[^}A-Za-z0-9_][^}]*)?\}|\$PWD(?![A-Za-z0-9_])"
+    r"|\$\(\s*pwd(?:\s+-[LP])?\s*\)|`\s*pwd(?:\s+-[LP])?\s*`"
+)
+
+# A bash extglob group, ?(...) *(...) +(...) @(...) !(...), read as a `*`
+# standing for whatever it matches: a wider match, never a narrower one.
+_EXTGLOB = re.compile(r"[?*+@!]\([^()]*\)")
+
+# Bash ANSI-C quoting, $'...', whose escapes can spell any character. Such a
+# word is read decoded as well, so `$'\x2f'` counts as `/`.
+_ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.DOTALL)
+_ANSI_C_ESCAPE = re.compile(
+    r"\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[0-7]{1,3}|c.|.)",
+    re.DOTALL,
+)
+_ANSI_C_SIMPLE = {
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "E": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+}
+
+# Quotes and backslashes, taken out before the literal `.claude-mem` check so
+# `.claude-m'e'm` and `.claude-m\em` still read as the folder.
+_QUOTING = re.compile(r"""["'\\]""")
+
+# What ends a path inside one shell word: whitespace, quotes, `=` (the
+# `--opt=<path>` and `FOO=<path>` forms), redirection and control operators,
+# and the paren, brace and comma of substitutions, brace expansion and lists.
+_PATH_BREAK = re.compile(r"""[\s=<>|&;(){},'"`]+""")
+
+# A character that, right after the store root inside a longer text, would
+# continue its last folder name (`recall2` is not `recall`). Anything else
+# there (the end, a separator, a quote, an operator, a glob or brace
+# character, `:` or `=`) ends the name, so the text names the store.
+_ROOT_CONTINUES = re.compile(r"""[^\s/\\'"`;|&<>(){}\[\],=:*?!$]""")
+
+# Glob characters, and the cap on how many words one brace expansion yields.
+# Past the cap, or in a word longer than _BRACE_WORD_CAP, a brace group is read
+# as a `*` standing for whatever it expands to: a wider match, never a
+# narrower one, and a bounded cost.
+_GLOB_CHARS = re.compile(r"[*?\[]")
+_BRACE_LIMIT = 64
+_BRACE_STEPS = 256
+_BRACE_WORD_CAP = 1024
+_BRACE_SEQUENCE = re.compile(r"^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.(-?\d+))?$")
+
+# The scripts the exemption admits, under <skill-root>/scripts/.
+_RECALL_SCRIPTS = ("mem_recall.py", "mem_observation.py")
+
+# The leading command of an exempt segment is `uv run` or python, matched on
+# the bare word: an interpreter given by path (`./python`) is not exempt.
+_EXEMPT_PYTHON = re.compile(r"^python(?:3(?:\.\d+)?)?$")
+
+# Any of these anywhere in a segment refuses the exemption. Every redirection
+# form (`>`, `>>`, `<`, `2>`, `&>`, `>|`, `&>>`, `<<<`, `>&2`, and `<(...)` and
+# `>(...)`) carries a `<` or a `>`; command substitution is `$(` or a backtick.
+_EXEMPT_REFUSED = ("<", ">", "`", "$(")
+
+# A leading assignment that changes which interpreter, which modules, which
+# libraries, which configuration or which home folder the exempt call would
+# use refuses the exemption.
+_EXEMPT_UNSAFE_ASSIGNMENT = re.compile(
+    r"^[({]*(?:PATH|VIRTUAL_ENV|CONDA_\w*|PYTHON\w*|UV_\w*|LD_\w*|DYLD_\w*"
+    r"|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_\w*|GIT_\w*)="
+)
+
+# A directory change anywhere in the command moves where a relative script
+# path lands when the command runs, so it refuses a relative operand.
+_CHDIR = re.compile(r"""(?:^|[\s;&|(){}'"`])(?:cd|pushd|popd)(?=$|[\s;&|(){}'"`])""")
+
+# What can change, for the rest of a command, what a later `uv` or `python`
+# resolves to or the environment it runs with: these builtins at the head of
+# any segment, these keywords ahead of it (a loop or coprocess variable, a
+# function), a segment of assignments only (`PATH=/x; ...`), a function
+# definition, `printf -v`, and arithmetic or a `${VAR:=...}` default, which
+# assign as well. Any one of them refuses the exemption to every segment of
+# that command; the leading assignments of an exempt segment itself are
+# checked against _EXEMPT_UNSAFE_ASSIGNMENT instead.
+_REBINDING_WORDS = frozenset(
+    {
+        ".",
+        "source",
+        "export",
+        "declare",
+        "typeset",
+        "readonly",
+        "local",
+        "unset",
+        "alias",
+        "hash",
+        "enable",
+        "eval",
+        "shopt",
+        "builtin",
+        "trap",
+        "read",
+        "mapfile",
+        "readarray",
+        "let",
+        "getopts",
+    }
+)
+_REBINDING_KEYWORDS = frozenset({"for", "select", "function", "coproc"})
+_REBINDING_TEXT = re.compile(r"\(\(|\$\[|\$\{[A-Za-z_][A-Za-z0-9_]*:?=")
+_ANY_ASSIGNMENT = re.compile(r"^[({]*[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+
+# How much of a denied segment its deny reason quotes.
+_SEGMENT_SHOWN = 160
+
+# macOS file systems ignore case and Unicode normalization by default, so on
+# macOS the deny side compares paths NFC-normalized and casefolded.
+_FOLD_CASE_AND_FORM = sys.platform == "darwin"
+
+
+def _scripts_dir() -> str:
+    """<skill-root>/scripts, from this file's own path (scripts/hooks/<this>)."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _pinned_paths() -> list[str]:
+    """The two recall scripts the exemption admits, as absolute paths.
+
+    The skill root comes from this file's location, not from an env var: the
+    guard ships in <skill-root>/scripts/hooks/ beside the scripts it pins, its
+    own path cannot be absent or set by a tool call, and an env var would mean
+    a new value on the hook command that preflight writes, which an older
+    arming lacks. Both the path this file runs from and its symlink-resolved
+    form count, so a skill reached through a symlinked folder still matches.
+    """
+    here = os.path.abspath(__file__)
+    pinned: list[str] = []
+    for hook in (here, os.path.realpath(here)):
+        scripts = os.path.dirname(os.path.dirname(hook))
+        for name in _RECALL_SCRIPTS:
+            path = os.path.join(scripts, name)
+            if path not in pinned:
+                pinned.append(path)
+    return pinned
+
+
+def _pinned_scripts() -> frozenset[str]:
+    """The pinned paths as written, folded by os.path.normcase only."""
+    return frozenset(os.path.normcase(path) for path in _pinned_paths())
+
+
+def _pinned_real_scripts() -> frozenset[str]:
+    """The files the pinned paths lead to, symlinks resolved, normcased."""
+    return frozenset(os.path.normcase(_real(path)) for path in _pinned_paths())
+
+
+def _home_dirs() -> list[str]:
+    """Every home folder a spelling can mean: HOME, USERPROFILE and `~`."""
+    homes: list[str] = []
+    for value in (
+        os.environ.get("HOME"),
+        os.environ.get("USERPROFILE"),
+        os.path.expanduser("~"),
+    ):
+        if value and not value.startswith("~") and value not in homes:
+            homes.append(value)
+    return homes
+
+
+def _fold(path: str) -> str:
+    """A path or text as the deny side compares it.
+
+    os.path.normcase (case and separators on Windows), and on macOS, whose
+    file systems ignore case and Unicode normalization by default, NFC and
+    casefolded too. Never used to grant the exemption, where a wider match
+    would let another file through.
+    """
+    folded = os.path.normcase(path)
+    if _FOLD_CASE_AND_FORM:
+        folded = unicodedata.normalize("NFC", folded).casefold()
+    return folded
+
+
+@functools.lru_cache(maxsize=None)
+def _real(path: str) -> str:
+    """os.path.realpath, memoized; the path unchanged when it cannot resolve."""
+    try:
+        return os.path.realpath(path)
+    except (OSError, ValueError, RuntimeError):
+        return path
+
+
+def _roots(path: str) -> tuple[str, ...]:
+    """A folder as written and with its symlinks resolved, both folded."""
+    try:
+        absolute = os.path.abspath(path)
+    except (TypeError, ValueError):
+        return (_fold(path),)
+    forms = (_fold(absolute), _fold(_real(absolute)))
+    return forms if forms[0] != forms[1] else forms[:1]
+
+
+def _claude_mem_roots(homes: list[str]) -> tuple[str, ...]:
+    """claude-mem's own folder under each home, written and resolved, folded."""
+    roots: list[str] = []
+    for home in homes:
+        for root in _roots(os.path.join(home, ".claude-mem")):
+            if root not in roots:
+                roots.append(root)
+    return tuple(roots)
+
+
+def _ansi_c_char(match: re.Match) -> str:
+    body = match.group(1)
+    try:
+        if body[0] in "xuU" and len(body) > 1:
+            return chr(int(body[1:], 16))
+        if body[0] in "01234567":
+            return chr(int(body, 8) & 0xFF)
+    except (ValueError, OverflowError):
+        return ""
+    if body[0] == "c" and len(body) == 2:
+        return chr(ord(body[1]) & 0x1F)
+    return _ANSI_C_SIMPLE.get(body, body)
+
+
+def _decode_ansi_c(text: str) -> str:
+    """Each $'...' word decoded and quoted again, so shlex reads it as one word."""
+    return _ANSI_C.sub(
+        lambda match: shlex.quote(_ANSI_C_ESCAPE.sub(_ansi_c_char, match.group(1))),
+        text,
+    )
+
+
+def _mentions_claude_mem(value: str) -> bool:
+    """True when `.claude-mem` sits anywhere in the value, read with its quotes
+    and backslashes taken out and its $'...' words decoded."""
+    target = _fold(".claude-mem")
+    texts = [value, _decode_ansi_c(value)] if "$'" in value else [value]
+    return any(target in _fold(_QUOTING.sub("", text)) for text in texts)
+
+
+def _spellings(text: str, homes: list[str], cwd: str) -> list[str]:
+    """The text as written, plus copies with each extglob group read as a `*`,
+    with $PWD (or `$(pwd)`) read as the cwd, and with each home variable
+    spelling read as each home folder, in every combination."""
+    out = [text]
+    if _EXTGLOB.search(text):
+        out.append(_EXTGLOB.sub("*", text))
+    if _PWD_VAR.search(text):
+        out.extend([_PWD_VAR.sub(lambda _match: cwd, variant) for variant in list(out)])
+    if _HOME_VAR.search(text):
+        for variant in list(out):
+            for home in homes:
+                out.append(_HOME_VAR.sub(lambda _match, home=home: home, variant))
     return out
+
+
+def _brace_sequence(body: str) -> list[str] | None:
+    """The words of a `{a..b}` or `{a..b..step}` sequence, or None."""
+    match = _BRACE_SEQUENCE.match(body)
+    if not match:
+        return None
+    first, last, step_text = match.groups()
+    step = abs(int(step_text)) if step_text else 1
+    step = step or 1
+    numeric = [part.lstrip("-").isdigit() for part in (first, last)]
+    if all(numeric):
+        start, end = int(first), int(last)
+        to_text = str
+    elif not any(numeric):
+        start, end = ord(first), ord(last)
+        to_text = chr
+    else:
+        return None
+    count = abs(end - start) // step + 1
+    if count > _BRACE_LIMIT:
+        return ["*"]
+    direction = 1 if end >= start else -1
+    return [to_text(start + direction * step * index) for index in range(count)]
+
+
+def _brace_group(word: str) -> tuple[int, int, list[str]] | None:
+    """The leftmost brace expansion in a word: (open, close, alternatives).
+
+    A group is a `{...}` holding a comma of its own, or a `{a..b}` sequence;
+    other braces are literal, as in bash. Quoting is not tracked, so a quoted
+    group expands too: a wider match, never a narrower one. One pass.
+    """
+    stack: list[tuple[int, list[int]]] = []
+    best: tuple[int, int, list[str]] | None = None
+    for pos, char in enumerate(word):
+        if char == "{":
+            stack.append((pos, []))
+        elif char == "," and stack:
+            stack[-1][1].append(pos)
+        elif char == "}" and stack:
+            start, commas = stack.pop()
+            if best is not None and best[0] < start:
+                continue
+            if commas:
+                edges = [start, *commas, pos]
+                alternatives = [word[a + 1 : b] for a, b in zip(edges, edges[1:])]
+            else:
+                alternatives = _brace_sequence(word[start + 1 : pos])
+            if alternatives is not None:
+                best = (start, pos, alternatives)
+    return best
+
+
+def _brace_flatten(word: str) -> str:
+    """Every outermost brace group as one `*`, in one pass."""
+    closes: dict[int, int] = {}
+    stack: list[int] = []
+    for pos, char in enumerate(word):
+        if char == "{":
+            stack.append(pos)
+        elif char == "}" and stack:
+            closes[stack.pop()] = pos
+    out: list[str] = []
+    pos = 0
+    while pos < len(word):
+        end = closes.get(pos)
+        if end is None:
+            out.append(word[pos])
+            pos += 1
+        else:
+            out.append("*")
+            pos = end + 1
+    return "".join(out)
+
+
+def _brace_variants(word: str) -> list[str]:
+    """Every word a brace expansion of `word` yields, within the caps."""
+    if "{" not in word or "}" not in word:
+        return [word]
+    if len(word) > _BRACE_WORD_CAP:
+        return [_brace_flatten(word)]
+    done: list[str] = []
+    pending = [word]
+    steps = 0
+    while pending:
+        current = pending.pop()
+        group = _brace_group(current)
+        if group is None:
+            done.append(current)
+            continue
+        steps += 1
+        start, end, alternatives = group
+        if steps > _BRACE_STEPS or len(done) + len(pending) + len(alternatives) > _BRACE_LIMIT:
+            done.append(_brace_flatten(current))
+            continue
+        pending.extend(current[:start] + alt + current[end + 1 :] for alt in alternatives)
+    return done
+
+
+def _holds_root(folded: str, root: str) -> bool:
+    """True when a root sits anywhere in the (folded) text and its last folder
+    name ends there: the `-o<store>`, `@<store>`, `file://<store>`,
+    `host:<store>`, `//<store>` and `/proc/self/root<store>` forms."""
+    if root.endswith(os.sep):  # a file-system root
+        return root in folded
+    start = folded.find(root)
+    while start != -1:
+        end = start + len(root)
+        if end == len(folded) or not _ROOT_CONTINUES.match(folded[end]):
+            return True
+        start = folded.find(root, start + 1)
+    return False
+
+
+def _components(path: str) -> list[str]:
+    return [part for part in path.split(os.sep) if part]
+
+
+def _under(path: str, root: str) -> bool:
+    """True when `path` is the root, lies under it, or is a glob that can match
+    it or a path under it (both folded). A `**` above the root's depth is a
+    search from an ancestor, the accepted residual, so it is not a match."""
+    if path == root:
+        return True
+    if path.startswith(root if root.endswith(os.sep) else root + os.sep):
+        return True
+    if not _GLOB_CHARS.search(path):
+        return False
+    pattern, names = _components(path), _components(root)
+    if len(pattern) < len(names):
+        return False
+    for part, name in zip(pattern, names):
+        if part == "**" or not fnmatch.fnmatchcase(name, part):
+            return False
+    return True
+
+
+def _pathlike(piece: str) -> bool:
+    """A piece of a word that reads as a path: `~`, `.` or a drive in front, or
+    a separator in it. A bare word is left to the whole-word check, so a word
+    of a commit message that equals a relative store name is not a path."""
+    if not piece:
+        return False
+    if piece[0] in "~." or "/" in piece or os.sep in piece:
+        return True
+    return bool(os.path.splitdrive(piece)[0])
+
+
+def _abs_forms(candidate: str, base: str, homes: list[str], cwd: str) -> list[str]:
+    """Every absolute path a candidate can mean, as written and with symlinks
+    resolved, folded.
+
+    A leading `~` is read as each home folder and `~+` as the cwd; a relative
+    candidate is taken against `base`. The resolved form also collapses the
+    POSIX `//` prefix that abspath keeps.
+    """
+    forms = [candidate]
+    if candidate.startswith("~"):
+        rest = candidate[1:]
+        if rest[:1] == "+" and (len(rest) == 1 or rest[1] in "/\\"):
+            forms = [cwd + rest[1:]]
+        elif not rest or rest[0] in "/\\":
+            forms = [home + rest for home in homes]
+        try:
+            forms.append(os.path.expanduser(candidate))
+        except (KeyError, ValueError):
+            pass
+    out: list[str] = []
+    for form in forms:
+        try:
+            path = os.path.abspath(form if os.path.isabs(form) else os.path.join(base, form))
+        except (TypeError, ValueError):
+            continue
+        out.append(_fold(path))
+        out.append(_fold(_real(path)))
+    return out
+
+
+def _names_store(
+    text: str,
+    roots: tuple[str, ...],
+    bases: list[str],
+    homes: list[str],
+    cwd: str,
+    *,
+    whole: bool,
+) -> bool:
+    """True when the text names a root: holding it anywhere, as a whole
+    (`whole`), or through any path-like piece of it, in any home or cwd
+    spelling and any brace expansion, against any base."""
+    for spelling in _spellings(text, homes, cwd):
+        for variant in _brace_variants(spelling):
+            folded = _fold(variant)
+            if any(_holds_root(folded, root) for root in roots):
+                return True
+            candidates = [variant] if whole else []
+            candidates.extend(p for p in _PATH_BREAK.split(variant) if _pathlike(p))
+            for candidate in candidates:
+                for base in bases:
+                    forms = _abs_forms(candidate, base, homes, cwd)
+                    if any(_under(path, root) for path in forms for root in roots):
+                        return True
+    return False
+
+
+@functools.lru_cache(maxsize=None)
+def _word_names(
+    word: str, roots: tuple[str, ...], cwd: str, homes: tuple[str, ...], whole: bool
+) -> bool:
+    """_names_store for one shell word or raw chunk against the cwd, memoized:
+    a long command repeats its words across segments and separator sets."""
+    return _names_store(word, roots, [cwd], list(homes), cwd, whole=whole)
+
+
+@functools.lru_cache(maxsize=None)
+def _words(text: str) -> tuple[str, ...]:
+    """The shell words of a text, or none when its quoting does not parse."""
+    try:
+        return tuple(_tokenize(text))
+    except ValueError:
+        return ()
+
+
+@functools.lru_cache(maxsize=None)
+def _bash_names(segment: str, roots: tuple[str, ...], cwd: str, homes: tuple[str, ...]) -> bool:
+    """True when one shell segment names a root.
+
+    The whole text is searched for a root; each shell word counts whole and by
+    its pieces; each whitespace-separated chunk of the raw text counts by its
+    pieces too, since it keeps what shlex drops (an unquoted Windows backslash
+    path) and still reads a segment whose quoting does not parse. A segment
+    with a $'...' word is read decoded as well.
+    """
+    texts = [segment, _decode_ansi_c(segment)] if "$'" in segment else [segment]
+    for text in texts:
+        for spelling in _spellings(text, list(homes), cwd):
+            folded = _fold(spelling)
+            if any(_holds_root(folded, root) for root in roots):
+                return True
+        if any(_word_names(word, roots, cwd, homes, True) for word in _words(text)):
+            return True
+        if any(_word_names(chunk, roots, cwd, homes, False) for chunk in text.split()):
+            return True
+    return False
+
+
+def _exempt_operand(segment: str) -> str | None:
+    """The script operand of a segment shaped like an exempt call, or None.
+
+    After the leading assignment, keyword and group-opener strip, the segment
+    must lead with `uv run` or a python and name the script right after it:
+    an option first (`uv run --with x`, `python -c ...`) is not exempt, so no
+    payload can sit ahead of the pinned path. A wrapper (`env`, `sudo`,
+    `bash -c`) leads with another word and is never exempt.
+    """
+    if any(marker in segment for marker in _EXEMPT_REFUSED):
+        return None
+    try:
+        words = _tokenize(segment)
+    except ValueError:
+        return None
+    rest = _strip_leading_noise(words)
+    if any(_EXEMPT_UNSAFE_ASSIGNMENT.match(w) for w in words[: len(words) - len(rest)]):
+        return None
+    if len(rest) >= 3 and rest[0] == "uv" and rest[1] == "run":
+        return rest[2]
+    if len(rest) >= 2 and _EXEMPT_PYTHON.match(rest[0]):
+        return rest[1]
+    return None
+
+
+@functools.lru_cache(maxsize=64)
+def _command_rebinds(command: str) -> bool:
+    """True when some segment of the command can change what a later `uv` or
+    `python` resolves to, or the environment it runs with (see
+    _REBINDING_WORDS). Read under every separator set, quote-blind like them."""
+    if _REBINDING_TEXT.search(command):
+        return True
+    for separators in _STORE_SEPARATOR_SETS:
+        for segment in re.split(separators, command):
+            try:
+                words = _tokenize(segment)
+            except ValueError:
+                words = segment.split()
+            rest = _strip_leading_noise(words)
+            prefix = words[: len(words) - len(rest)]
+            if any(w.lower().lstrip(_GROUP_OPENERS) in _REBINDING_KEYWORDS for w in prefix):
+                return True
+            if not rest:
+                if any(_ANY_ASSIGNMENT.match(w) for w in prefix):
+                    return True
+                continue
+            head = rest[0]
+            if head in _REBINDING_WORDS or _ANY_ASSIGNMENT.match(head):
+                return True
+            if "()" in head or (len(rest) > 1 and rest[1].startswith("()")):
+                return True
+            if head == "printf" and len(rest) > 1 and rest[1].startswith("-v"):
+                return True
+    return False
+
+
+def _operand_path(operand: str, cwd: str) -> str | None:
+    """The operand as an absolute path, a relative one joined to cwd, with its
+    `.` and `..` steps still in it (see _is_pinned).
+
+    No `~` or variable expansion: a script spelled that way is not exempt,
+    which fails closed (recall off), never open.
+    """
+    try:
+        return operand if os.path.isabs(operand) else os.path.join(cwd, operand)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_pinned(path: str | None) -> bool:
+    """True when the path is a pinned script as written (lexically, `.` and
+    `..` folded away) AND leads to one when walked step by step with its
+    symlinks resolved, so a `..` that leaves a symlinked folder for another
+    file of the pinned name is not exempt."""
+    if path is None:
+        return False
+    try:
+        lexical = os.path.normcase(os.path.abspath(path))
+    except (TypeError, ValueError):
+        return False
+    if lexical not in _pinned_scripts():
+        return False
+    return os.path.normcase(_real(path)) in _pinned_real_scripts()
+
+
+def _exempt_segment(segment: str, cwd: str, command: str) -> bool:
+    """True when the segment runs one of the pinned recall scripts.
+
+    Checked per segment, never on the whole command, and pinned by path, not
+    by basename.
+    """
+    operand = _exempt_operand(segment)
+    if not operand:
+        return False
+    if not os.path.isabs(operand) and _CHDIR.search(command):
+        return False
+    absolute = _operand_path(operand, cwd)
+    return _is_pinned(absolute)
+
+
+# --- Latch-path rule ----------------------------------------------------------
+# Decision 11: while a latch is present, whatever it holds, a model tool call
+# may read the latch but not change it. Only mem_recall.py changes it: `latch`
+# writes or replaces it, and `unlatch` removes it when it carries the caller's
+# run_id. The latch path is matched as the store rule matches the store, every
+# spelling, glob, brace expansion and symlink included, and the pinned script
+# exemption applies to it per segment. In a Bash segment the latch's file name
+# on its own counts too (_names_file_name), so a `cd` into its folder is no
+# way around the rule.
+#
+# The tools that write files (_LATCH_CHANGING_TOOLS) are denied on the path.
+# Read, Grep and Glob only read, so this rule does not look at them. A Bash
+# segment that names the latch counts as a change unless it can be told to
+# only read it (_read_segment, in a command _command_allows_reads accepts).
+# So rm, mv, cp, ln, tee, a redirection, sed -i, truncate and python -c are
+# examples of a change, not a list of them: anything the guard cannot tell
+# only reads the latch is denied.
+#
+# A read is led, by bare name, by a command that writes no file whatever its
+# options. `less` is not one (`less -o FILE` copies its input into FILE), nor
+# `sed` (`-i`, and its `w` command), `find` (`-delete`, `-fprint`), `sort -o`,
+# `uniq IN OUT` or `file -C`. The name is matched bare, so a `./cat` the model
+# wrote is not a read, and the command must leave command lookup alone, so a
+# function or alias named `cat` is not one either.
+_LATCH_CHANGING_TOOLS = frozenset({"Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"})
+_LATCH_READERS = frozenset(
+    {"cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "jq", "ls", "stat", "test", "[", "[["}
+)
+
+# Any of these in a segment makes it more than a read: every output
+# redirection (`>`, `>>`, `2>`, `&>`, `>|`, `<>`, `>(...)`), command
+# substitution, process substitution, which runs a command of its own, and
+# the `[[ ... =~ ... ]]` match, which hands what it matched on through
+# BASH_REMATCH (`[[ <latch> =~ .* ]] && rm "$BASH_REMATCH"`), as `$_` does.
+_READ_REFUSED = (">", "`", "$(", "<(", "=~")
+
+# Bash's `$_`, the last word of the previous command: `cat <latch>; rm "$_"`
+# hands the path on without naming it again, so in a command holding one, no
+# segment counts as a read.
+_LAST_WORD = re.compile(r"\$\{?_(?![A-Za-z0-9_])")
+
+# A pipe, `|` or `|&`, but not `||`. A read piped into another command can
+# hand the path on (`ls <latch> | xargs rm`), so in a command holding one,
+# every segment must be a read for any of them to count as one.
+_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
+
+
+def _read_segment(segment: str) -> bool:
+    """True when the segment can only read: after the leading assignment,
+    keyword and group-opener strip, it is led by one of _LATCH_READERS, by
+    bare name, with nothing of _READ_REFUSED in it and no leading assignment
+    that changes command lookup or what the command loads. A segment that
+    runs nothing (a bare `fi`, a closing brace) counts as one too."""
+    if any(marker in segment for marker in _READ_REFUSED):
+        return False
+    try:
+        words = _tokenize(segment)
+    except ValueError:
+        return False
+    rest = _strip_leading_noise(words)
+    if any(_EXEMPT_UNSAFE_ASSIGNMENT.match(w) for w in words[: len(words) - len(rest)]):
+        return False
+    return not rest or rest[0] in _LATCH_READERS
+
+
+@functools.lru_cache(maxsize=64)
+def _command_allows_reads(command: str) -> bool:
+    """True when a read segment of this command counts as a read: the command
+    changes nothing about the environment or command lookup (_command_rebinds),
+    uses no `$_`, and, when it holds a pipe, is made of reads only, under
+    every separator set."""
+    if _command_rebinds(command) or _LAST_WORD.search(command):
+        return False
+    if not _PIPE.search(command):
+        return True
+    return all(
+        _read_segment(segment)
+        for separators in _STORE_SEPARATOR_SETS
+        for segment in re.split(separators, command)
+    )
+
+
+# The latch's file name on its own, beside its path: a `cd` into the artifacts
+# folder and then `rm .mem-state.json`, a `find -name .mem-state.json -delete`,
+# a path an interpreter joins at run time (`os.path.join(dir, '.mem-state.json')`)
+# and a `**/` glob all name the file without spelling its path. The name
+# counts when nothing that could extend it (a letter, digit, `_`, `.` or `-`)
+# sits right before it and nothing that would continue it sits right after.
+_NAME_EXTENDS = re.compile(r"[A-Za-z0-9_.-]")
+
+
+def _dot_glob(word: str) -> bool:
+    """A glob that starts with a literal dot and holds a literal character
+    after it (`.m*`, `.mem-state.js?n`, `.*json`). A bare `.*`, `.??*` or
+    `.[!.]*`, which matches every dotfile, is not one: it is how a search
+    such as `find -not -path '*/.*'` skips hidden folders."""
+    if not word.startswith(".") or not _GLOB_CHARS.search(word):
+        return False
+    return bool(re.sub(r"\[[^\]]*\]|[*?]", "", word[1:]))
+
+
+@functools.lru_cache(maxsize=256)
+def _names_file_name(segment: str, name: str) -> bool:
+    """True when the segment holds the file name `name` on its own, or a word
+    piece whose last step is a _dot_glob that matches it. Read with quotes
+    taken out, backslashes taken out or read as separators, $'...' decoded,
+    each extglob group read as a `*` and each brace expansion expanded."""
+    target = _fold(name)
+    texts = [segment, _decode_ansi_c(segment)] if "$'" in segment else [segment]
+    for text in texts:
+        plains = (_QUOTING.sub("", text), re.sub(r"[\"']", "", text.replace("\\", "/")))
+        for plain in dict.fromkeys(plains):
+            for spelling in dict.fromkeys((plain, _EXTGLOB.sub("*", plain))):
+                for variant in _brace_variants(spelling):
+                    folded = _fold(variant)
+                    start = folded.find(target)
+                    while start != -1:
+                        end = start + len(target)
+                        if (start == 0 or not _NAME_EXTENDS.match(folded[start - 1])) and (
+                            end == len(folded) or not _ROOT_CONTINUES.match(folded[end])
+                        ):
+                            return True
+                        start = folded.find(target, start + 1)
+                    for piece in _PATH_BREAK.split(variant):
+                        last = _fold(piece.replace("\\", "/").rsplit("/", 1)[-1])
+                        if _dot_glob(last) and fnmatch.fnmatchcase(target, last):
+                            return True
+    return False
+
+
+def _store_segment(
+    command: str,
+    roots: tuple[str, ...],
+    cwd: str,
+    homes: list[str],
+    *,
+    exempt: bool = True,
+    reads: bool = False,
+    name: str | None = None,
+) -> str | None:
+    """The first shell segment that names a root and is not let through.
+
+    With `exempt` false (the claude-mem folder) no segment is exempt. A
+    command that can rebind `uv` or `python` (_command_rebinds) exempts none
+    of its segments either. With `reads` true (the latch), a segment that
+    only reads is let through as well, in a command that allows reads. With
+    a `name` (the latch's file name), a segment that holds that name on its
+    own (_names_file_name) counts as naming the root.
+    """
+    home_key = tuple(homes)
+    reads = reads and _command_allows_reads(command)
+    for separators in _STORE_SEPARATOR_SETS:
+        for segment in re.split(separators, command):
+            if not _bash_names(segment, roots, cwd, home_key) and not (
+                name and _names_file_name(segment, name)
+            ):
+                continue
+            if (
+                exempt
+                and not _command_rebinds(command)
+                and _exempt_segment(segment, cwd, command)
+            ):
+                continue
+            if reads and _read_segment(segment):
+                continue
+            return segment
+    return None
+
+
+def _input_names(
+    key: str,
+    value: str,
+    tool_input: dict,
+    roots: tuple[str, ...],
+    cwd: str,
+    homes: list[str],
+    *,
+    exempt: bool,
+    reads: bool = False,
+    name: str | None = None,
+) -> str | None:
+    """What in one input names a root: the Bash segment, or the file-tool
+    value; None when nothing does. `reads` lets a Bash read through and
+    `name` matches a Bash segment on the file name alone too (both for the
+    latch rule); a file tool is matched on its value alone."""
+    if key == "command":
+        return _store_segment(
+            value, roots, cwd, homes, exempt=exempt, reads=reads, name=name
+        )
+    bases = [cwd]
+    own_path = tool_input.get("path")
+    if key in _PATTERN_KEYS and isinstance(own_path, str) and own_path:
+        bases.append(os.path.join(cwd, os.path.expanduser(own_path)))
+    return value if _names_store(value, roots, bases, homes, cwd, whole=True) else None
+
+
+def _tool_inputs(tool_name: object, tool_input: dict) -> list[tuple[str, str]]:
+    """(key, value) for every non-empty string input the gate reads."""
+    if tool_name == "Bash":
+        keys: tuple[str, ...] = ("command",)
+    elif isinstance(tool_name, str) and tool_name in _TOOL_EXTRA_KEYS:
+        keys = _PATH_KEYS + _TOOL_EXTRA_KEYS[tool_name]
+    else:
+        return []
+    out: list[tuple[str, str]] = []
+    for key in keys:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            out.append((key, value))
+    return out
+
+
+def _event_cwd(event: dict) -> str:
+    cwd = event.get("cwd")
+    return cwd if isinstance(cwd, str) and cwd else os.getcwd()
+
+
+def _shown(segment: str) -> str:
+    """A denied segment as its deny reason quotes it, cut to _SEGMENT_SHOWN."""
+    text = segment.strip()
+    if len(text) > _SEGMENT_SHOWN:
+        text = text[:_SEGMENT_SHOWN] + "..."
+    return repr(text)
+
+
+def _latch_deny(state_path: Path, what: str) -> NoReturn:
+    """Deny for a reason the latch causes. The reason names the latch and ends
+    with a note for the person, not the model (AC-33): a latch a run left
+    behind is theirs to delete by hand, and the model must not try to remove
+    it, which the latch-path rule denies anyway."""
+    _deny(
+        f"Cross-Session Recall guard: {what} The run latch {state_path} is "
+        "present, and a present latch counts as a live UltraCode-Goal run, "
+        "whatever its version or colour. For the user: if no UltraCode-Goal "
+        "run is active, a run ended without removing this latch. Delete "
+        f"{state_path} by hand. The model must not try to remove it itself."
+    )
+
+
+def _latch_rule_text() -> str:
+    """The one rule a latch-path deny states: the model may read the latch,
+    never change it, and what counts as a read. It gives no recipe for
+    changing the latch: the run's own steps already carry the one call that
+    may, and a deny is no cue to make it."""
+    return (
+        "While a run latch is present, the model's tool calls may read it but "
+        "not change it, by its path or by its file name. Reading it stays "
+        "allowed: Read, Grep and Glob, or a Bash segment led by one of "
+        f"{', '.join(f'`{name}`' for name in sorted(_LATCH_READERS))}, with no "
+        "output redirection, command substitution or `=~`, piped only into "
+        "another such read (a `|` counts as a pipe even inside quotes)."
+    )
+
+
+def _store_rule_text() -> str:
+    """The one rule a store deny states: what may reach the store."""
+    return (
+        "While a run latch is present, only this skill's recall scripts reach "
+        "the store: `uv run`, `python`, `python3` or `python3.N` followed "
+        f"directly by {os.path.join(_scripts_dir(), _RECALL_SCRIPTS[0])} or "
+        f"{os.path.join(_scripts_dir(), _RECALL_SCRIPTS[1])}, as a shell segment "
+        "of its own, with no redirection, command substitution or wrapper, in a "
+        "command that changes nothing about the environment or about what `uv` "
+        "and `python` resolve to."
+    )
+
+
+_CLAUDE_MEM_REFUSED = (
+    "UltraCode-Goal no longer uses claude-mem, so while a run latch is present "
+    "every claude-mem call is denied."
+)
+
+
+def _latch_gate(event: dict, state_path: Path) -> None:
+    """The denies a present latch causes; returns when none applies."""
+    tool_name = event.get("tool_name")
+    tool_input = event.get("tool_input")
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+
+    # 1) claude-mem MCP calls, every name form, whatever the latch says, and an
+    # MCP resource read or listing on a claude-mem server.
+    if _is_claude_mem_tool(tool_name):
+        _latch_deny(
+            state_path,
+            f"refusing the claude-mem MCP call {tool_name}. {_CLAUDE_MEM_REFUSED}",
+        )
+    server = _claude_mem_resource_server(tool_name, tool_input)
+    if server is not None:
+        _latch_deny(
+            state_path,
+            f"refusing a {tool_name} call on the claude-mem MCP server {server}. "
+            f"{_CLAUDE_MEM_REFUSED}",
+        )
+
+    inputs = _tool_inputs(tool_name, tool_input)
+    cwd = _event_cwd(event)
+    homes = _home_dirs()
+
+    # 2) Reach into claude-mem's own files, through every inspected input: the
+    # folder's name anywhere, or a path, glob or brace expansion that reaches
+    # it under a home.
+    mem_roots = _claude_mem_roots(homes)
+    for key, value in inputs:
+        if _mentions_claude_mem(value) or (
+            _input_names(key, value, tool_input, mem_roots, cwd, homes, exempt=False)
+            is not None
+        ):
+            _latch_deny(
+                state_path,
+                f"refusing a {tool_name} call whose {key} reaches into "
+                "'.claude-mem'. While a run latch is present, nothing reads or "
+                "writes claude-mem's files.",
+            )
+
+    # 3) The latch-path rule (decision 11), whatever the latch holds: a call
+    # that names the latch and may change it. Read, Grep and Glob only read,
+    # so they are not looked at; a Bash segment that only reads passes.
+    if tool_name in _LATCH_CHANGING_TOOLS:
+        latch_roots = _roots(str(state_path))
+        for key, value in inputs:
+            found = _input_names(
+                key,
+                value,
+                tool_input,
+                latch_roots,
+                cwd,
+                homes,
+                exempt=True,
+                reads=True,
+                name=state_path.name,
+            )
+            if found is None:
+                continue
+            if key == "command":
+                _latch_deny(
+                    state_path,
+                    f"refusing a Bash command whose segment {_shown(found)} names "
+                    f"the run latch and may change it. {_latch_rule_text()}",
+                )
+            _latch_deny(
+                state_path,
+                f"refusing a {tool_name} call whose {key} names the run latch. "
+                f"{_latch_rule_text()}",
+            )
+
+    # 4) The store-path rule, for a latch that names a usable store. A latch
+    # with none (a v1 latch, an unset store, an unreadable latch) has no path
+    # to match, so it denies only through 1) to 3).
+    store = _latch_view(_read_latch(state_path))["store"]
+    if store is None:
+        return
+    roots = _roots(store)
+    for key, value in inputs:
+        found = _input_names(key, value, tool_input, roots, cwd, homes, exempt=True)
+        if found is None:
+            continue
+        if key == "command":
+            _latch_deny(
+                state_path,
+                f"refusing a Bash command whose segment {_shown(found)} names the "
+                f"recall store {store}. {_store_rule_text()}",
+            )
+        _latch_deny(
+            state_path,
+            f"refusing a {tool_name} call whose {key} names the recall store "
+            f"{store}. {_store_rule_text()}",
+        )
 
 
 def _mem_gate(event: dict, impl: Path | None) -> None:
     """Apply the Cross-Session Recall gate for ALL tool names.
 
-    Runs before any Bash-only git logic. Re-reads the latch per call. If no run
-    is active (latch absent), this is a no-op (returns) — the user's own
-    claude-mem usage outside a run is never broken.
+    Runs before any Bash-only git logic and re-reads the latch per call. With
+    no latch (no active run) it returns: the user's own claude-mem usage
+    outside a run is never touched.
     """
     state_path = _mem_state_path(impl)
     if state_path is None:
@@ -862,51 +2042,25 @@ def _mem_gate(event: dict, impl: Path | None) -> None:
             _deny(
                 "Cross-Session Recall guard: cannot locate impl-artifacts "
                 "(event carries no cwd and ULTRACODE_IMPL_ARTIFACTS is unset), "
-                "so the recall latch is unknowable — failing closed on this "
-                "claude-mem call. Set ULTRACODE_IMPL_ARTIFACTS on the hook "
-                "command to restore latch resolution."
+                "so whether a run latch is present cannot be told, and this "
+                "claude-mem MCP call is refused (failing closed). Set "
+                "ULTRACODE_IMPL_ARTIFACTS on the hook command to restore latch "
+                "resolution."
             )
         return
-    # No latch file -> no active UCG run -> never gate claude-mem.
-    if not state_path.is_file():
+    # No latch -> no active UCG run -> nothing to gate.
+    if not _latch_present(state_path):
         return
-
-    green = _mem_latch_green(state_path)
-    if green:
-        return  # run active but recall is on and the contract pin is good.
-
-    tool_name = event.get("tool_name")
-    tool_input = event.get("tool_input")
-    if not isinstance(tool_input, dict):
-        tool_input = {}
-
-    # 1) Direct claude-mem MCP calls.
-    if _is_claude_mem_tool(tool_name):
-        _deny(
-            "Cross-Session Recall guard: claude-mem is advisory-only and fails "
-            "closed during a UltraCode-Goal run; the .mem-state.json latch is "
-            "not green (absent/off/unverified), so this claude-mem MCP call is "
-            "blocked. Recall is voice-never-vote and stays off the gate path."
+    try:
+        _latch_gate(event, state_path)
+    except Exception as exc:  # noqa: BLE001  fail closed on the unforeseen
+        # A crash would exit non-zero, which the client reads as no decision,
+        # letting the call through. A present latch means deny instead.
+        _latch_deny(
+            state_path,
+            f"could not evaluate this {event.get('tool_name')} call against the "
+            f"run latch ({type(exc).__name__}), so it is refused (failing closed).",
         )
-
-    # 2) Filesystem reach-arounds into the claude-mem store.
-    if tool_name == "Bash":
-        command = tool_input.get("command")
-        if isinstance(command, str) and ".claude-mem" in command:
-            _deny(
-                "Cross-Session Recall guard: refusing a Bash command touching "
-                "'.claude-mem' while the run's recall latch is not green. "
-                "claude-mem must not be read around the advisory gate."
-            )
-    elif tool_name in ("Read", "Grep", "Glob"):
-        for candidate in _input_paths(tool_input):
-            if ".claude-mem" in candidate:
-                _deny(
-                    "Cross-Session Recall guard: refusing a "
-                    f"{tool_name} of a '.claude-mem' path while the run's recall "
-                    "latch is not green. claude-mem stays advisory-only."
-                )
-    # Anything else: fall through to the existing git logic.
 
 
 def main() -> None:

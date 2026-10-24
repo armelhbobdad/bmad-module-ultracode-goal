@@ -3,69 +3,63 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Cross-Session Recall read path for ultracode-goal — latch + filter.
+"""Cross-Session Recall read path for ultracode-goal: latch, filter, unlatch.
 
 Advisory-only, voice-never-vote, fail-closed, OFF by default. Nothing here ever
-touches the gate/completion path; this script only validates the claude-mem
-capability contract, writes the machine latch the hook reads, and turns a raw
-get_observations(ids) JSON array into a small, deterministic, defanged advisory
-set the skill MAY surface.
+touches the gate/completion path. This script writes the machine latch the
+PreToolUse guard reads, turns this repo's prior run records in the local run
+store (cross_session_recall_store) into a small, deterministic, defanged
+advisory set the skill MAY surface, and removes the latch when the run ends.
+It makes no MCP call and reads no stdin.
 
 Subcommands
 -----------
-latch
-    Validate the capability contract against a probe (a get_observations JSON
-    array) and write the state latch ONCE, atomically. Any uncertainty fails
-    closed (claude_mem "absent" / schema_ok false). The latch is the ONLY writer
-    of the state file; Stage 6 Finalize removes it.
-
-filter
-    Pure function over a probe array. Drops foreign / cross-schema / stale /
-    invalid records, computes recurrence from records carrying our payload
-    marker, types and defangs the survivors, and emits a byte-deterministic
-    result. Works regardless of the latch state (gating is the hook's job).
-
-selftest
-    Report whether a probe satisfies the capability pin.
-
-The local run store (cross_session_recall_store)
-------------------------------------------------
-The store UCG owns replaces claude-mem. It is reached through two new modes,
-beside the claude-mem ones above, which keep working unchanged:
-
 latch --store <value>
-    Latch v2. Sends no probe and reads no stdin. Checks the
-    cross_session_recall knob, that the store value is set, the repo
-    fingerprint, and that ``<store>/<fingerprint-dir>/runs`` can be created and
-    written (mkstemp, then unlink; a store root the probe creates gets its
-    ``.gitignore`` holding ``*``). Writes ``{latch_version: 2, run_id, backend,
-    store_ok, recall, store, fingerprint, created_at}`` to the same latch file.
-    ``--recall on`` with an unset store is red and prints
-    ``NOTE recall-store-unset`` naming the key. A run_id that fails the shared
-    check exits 2 before anything is written. Prints
-    ``{"latch": <the state written>, "notes": [...], "reason": str|null}``.
+    Latch v2, written at Stage 1. Checks the cross_session_recall knob, that
+    the store value is set, the repo fingerprint, and that
+    ``<store>/<fingerprint-dir>/runs`` can be created and written (mkstemp,
+    then unlink; a store root the probe creates gets its ``.gitignore`` holding
+    ``*``). Writes ``{latch_version: 2, run_id, backend, store_ok, recall,
+    store, fingerprint, created_at}`` to ``<impl-artifacts>/.mem-state.json``
+    atomically, replacing a latch another run left there. ``--recall on`` with
+    an unset store is red and prints ``NOTE recall-store-unset`` naming the
+    key. A run_id that fails the shared check exits 2 before anything is
+    written. Prints ``{"latch": <the state written>, "notes": [...],
+    "reason": str|null}``.
 
 filter --store <value> [--epic <id>]
     Reads this repo's ``runs/*.jsonl`` through the store module, which
     validates each record on its own (unparseable or wrong shape: invalid;
     newer schema_version: cross_schema; another fingerprint: foreign). Only the
     survivors feed recurrence and horizon immunity, stale records still
-    counting. ``--project`` is never compared for store records: the
-    fingerprint alone decides foreign, so worktrees and clones of one repo read
-    each other's records. An explicit adapter types each record (id is the
-    run_id, a title line built from epic, gate_status and verdict). Ranking:
-    this Epic first, then recurring, then created_at_epoch clamped to now
-    (descending), then run_id (ascending). Same caps and output shape as the
-    claude-mem filter.
+    counting. The fingerprint alone decides foreign, so worktrees and clones of
+    one repo read each other's records. An explicit adapter types each record
+    (id is the run_id, a title line built from epic, gate_status and verdict).
+    Ranking: this Epic first, then recurring, then created_at_epoch clamped to
+    now (descending), then run_id (ascending). It works whatever the latch
+    says: gating is the guard's job.
 
-Capability pin (NOT a version pin): the read-fields we require are id:int,
-project:str, title:str, created_at_epoch:int. UNKNOWN EXTRA FIELDS ARE
-TOLERATED. An empty array is a valid present+schema_ok response.
+unlatch --run-id <run_id>
+    Removes the latch only when its run_id is this one. Another run's latch,
+    an unreadable one and an absent one are left as they are. Prints one JSON
+    line ``{"removed": bool, "reason": str}`` and exits 0; bad arguments, a
+    malformed run_id included, exit 2 and remove nothing. Every terminal of a
+    run (Finalize, a preflight STOP, the headless envelope path) calls it, and
+    it is the only way the prose removes a latch.
 
-Determinism: total-order sort (recurring desc, epoch-clamped-to-now desc, id
-asc); future epochs are clamped to --now-epoch for ranking only (never dropped);
-byte/codepoint caps are boundary-safe; identical input yields byte-identical
-output.
+The claude-mem forms are gone: ``selftest``, the latch flags ``--probe``,
+``--claude-mem-absent`` and ``--tool-form``, a latch or filter without
+``--store``, and filter's ``--probe`` and ``--project``. Each exits 2 with one
+line on stderr naming its replacement.
+
+Recurrence: a signature recurs when it spans at least two distinct run_ids
+and its class is not "other". Horizon immunity counts the same distinct
+run_ids but not the class: a record carrying a signature that two or more
+runs recorded, of class "other" too, is immune to the horizon.
+
+Determinism: a total-order sort; future epochs are clamped to --now-epoch for
+ranking only (never dropped); byte/codepoint caps are boundary-safe; identical
+input yields byte-identical output.
 """
 
 from __future__ import annotations
@@ -74,9 +68,11 @@ import argparse
 import json
 import sys
 from collections.abc import Iterable
-from pathlib import Path
+from typing import NoReturn
 
 from lib import mem_common as mc
+
+_PROG = "mem_recall.py"
 
 
 def _force_utf8_stdio() -> None:
@@ -84,153 +80,33 @@ def _force_utf8_stdio() -> None:
 
     Windows consoles default to a legacy codepage (cp1252), which cannot
     encode the multibyte content this script legitimately emits (titles pass
-    through with ensure_ascii=False) — json output would crash with
-    UnicodeEncodeError. The probe/output contract is UTF-8 everywhere.
+    through with ensure_ascii=False), so json output would crash with
+    UnicodeEncodeError. The output contract is UTF-8 everywhere.
     """
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# Probe loading
-# ---------------------------------------------------------------------------
-
-
-def _load_probe_text(spec: str | None) -> str:
-    """Read a probe spec: '-' or None means stdin; otherwise a file path."""
-    if spec is None or spec == "-":
-        return sys.stdin.read()
-    return Path(spec).read_text(encoding="utf-8")
-
-
-def _parse_probe(spec: str | None) -> tuple[list | None, str | None]:
-    """Return (records, error). records is a list on success, else None+error."""
-    try:
-        text = _load_probe_text(spec)
-    except OSError as exc:
-        return None, f"could not read probe: {exc}"
-    if not text.strip():
-        # An explicitly empty probe is a valid empty array.
-        return [], None
-    try:
-        data = json.loads(text)
-    except ValueError as exc:
-        return None, f"probe is not valid JSON: {exc}"
-    if not isinstance(data, list):
-        return None, "probe must be a JSON array of records"
-    return data, None
+def _invalid_run_id(run_id: str) -> str:
+    return f"invalid run_id {run_id!r}: expected epic-<id>-<YYYYMMDD>T<HHMMSS>Z"
 
 
 # ---------------------------------------------------------------------------
-# Capability pin
+# Recurrence
 # ---------------------------------------------------------------------------
-
-# The read-fields we depend on, with their required Python types. bool is
-# excluded from int because in Python bool is a subclass of int and a True/False
-# id is not a real record id.
-_REQUIRED_READ_FIELDS = (
-    ("id", int),
-    ("project", str),
-    ("title", str),
-    ("created_at_epoch", int),
-)
-
-
-def _is_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
-
-
-def _record_satisfies_pin(record: object) -> bool:
-    """True iff the record carries every required read-field with the right type."""
-    if not isinstance(record, dict):
-        return False
-    for field, typ in _REQUIRED_READ_FIELDS:
-        if field not in record:
-            return False
-        value = record[field]
-        if typ is int:
-            if not _is_int(value):
-                return False
-        elif not isinstance(value, typ):
-            return False
-    return True
-
-
-def evaluate_contract(records: list) -> tuple[bool, list[str]]:
-    """Check every record against the capability pin.
-
-    Returns (contract_ok, problems). An empty list of records is contract_ok
-    (claude-mem present, schema valid, simply no observations yet). Unknown
-    extra fields never fail.
-    """
-    problems: list[str] = []
-    for index, record in enumerate(records):
-        if not isinstance(record, dict):
-            problems.append(f"record[{index}] is not an object")
-            continue
-        for field, typ in _REQUIRED_READ_FIELDS:
-            if field not in record:
-                problems.append(f"record[{index}] missing required field {field!r}")
-            else:
-                value = record[field]
-                ok = _is_int(value) if typ is int else isinstance(value, typ)
-                if not ok:
-                    problems.append(
-                        f"record[{index}] field {field!r} has wrong type "
-                        f"(expected {typ.__name__})"
-                    )
-    return (not problems), problems
-
-
-# ---------------------------------------------------------------------------
-# Embedded UCG payload parsing
-# ---------------------------------------------------------------------------
-
-
-# The parser moved to lib/mem_common.py, which mem_observation.py's legacy
-# outbox conversion shares. Only the marker in the text field proves a record
-# is ours: a title that merely starts with "UCG run" is not proof of ownership,
-# and payload extraction never scans foreign prose from position 0. The private
-# names stay for the claude-mem probe path below.
-_carries_marker = mc.carries_marker
-_extract_payload = mc.extract_payload
-
-
-def _payload_schema_version(payload: dict) -> object:
-    """Read the embedded schema_version (may be absent/garbage)."""
-    return payload.get("schema_version")
-
-
-# ---------------------------------------------------------------------------
-# Recurrence — only from OUR payloads
-# ---------------------------------------------------------------------------
-
-
-def compute_recurrence(records: list) -> tuple[dict, dict[str, int]]:
-    """Group signatures from UCG payloads; a signature recurs iff it spans >=2
-    DISTINCT run_ids AND its class != "other".
-
-    Returns (recurrence_by_sig, recurring_run_id_counts) where recurrence_by_sig
-    maps sig -> {"sig","class","count","run_ids":[sorted]} for signatures that
-    QUALIFY as recurring, and recurring_run_id_counts is the same sig -> distinct
-    run_id count for the horizon-immunity check.
-    """
-    payloads: list[dict] = []
-    for record in records:
-        if not isinstance(record, dict) or not _carries_marker(record):
-            continue
-        payload = _extract_payload(record)
-        if payload is not None:
-            payloads.append(payload)
-    return _recurrence_from_payloads(payloads)
 
 
 def _recurrence_from_payloads(payloads: Iterable[dict]) -> tuple[dict, dict[str, int]]:
-    """The recurrence rule over run-summary payloads (each carrying ``run_id``
-    and ``signatures``): the claude-mem payloads compute_recurrence extracts, or
-    the store records that survived the invalid, foreign and cross-schema drops.
-    Same return value as compute_recurrence.
+    """The recurrence rule over run records (each carrying ``run_id`` and
+    ``signatures``): the store records that survived the invalid, foreign and
+    cross-schema drops.
+
+    A signature recurs iff it spans >=2 DISTINCT run_ids AND its class !=
+    "other". Returns (recurrence_by_sig, run_id_counts): recurrence_by_sig
+    maps sig -> {"sig","class","count","run_ids":[sorted]} for the signatures
+    that qualify, and run_id_counts maps every sig to its distinct run_id
+    count, for the horizon-immunity check.
     """
     # sig -> {"class": str, "run_ids": set[str]}
     accum: dict[str, dict] = {}
@@ -269,30 +145,6 @@ def _recurrence_from_payloads(payloads: Iterable[dict]) -> tuple[dict, dict[str,
     return recurrence, run_id_counts
 
 
-def _record_signatures(record: dict) -> list[str]:
-    """Signatures declared by a record's embedded payload (empty if none)."""
-    if not _carries_marker(record):
-        return []
-    payload = _extract_payload(record)
-    if payload is None:
-        return []
-    signatures = payload.get("signatures")
-    if not isinstance(signatures, list):
-        return []
-    out: list[str] = []
-    for sig_entry in signatures:
-        if isinstance(sig_entry, dict):
-            sig = sig_entry.get("sig")
-            if isinstance(sig, str) and sig:
-                out.append(sig)
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Filtering + typing
-# ---------------------------------------------------------------------------
-
-
 def _byte_clamp(text: str, max_bytes: int) -> str:
     """Clamp a string so its UTF-8 encoding is <= max_bytes, on a codepoint
     boundary (never splitting a multibyte char)."""
@@ -302,121 +154,6 @@ def _byte_clamp(text: str, max_bytes: int) -> str:
     truncated = encoded[:max_bytes]
     # Back off to the last complete codepoint.
     return truncated.decode("utf-8", errors="ignore")
-
-
-def run_filter(records: list, args: argparse.Namespace) -> dict:
-    """Apply the full filter pipeline and return the emit structure."""
-    project = args.project
-    horizon_ms = args.horizon_days * 24 * 60 * 60 * 1000
-    now_epoch = args.now_epoch
-    fingerprint = mc.repo_fingerprint(args.cwd or ".").get("value")
-
-    # Recurrence (and per-sig distinct run_id counts) is computed across ALL
-    # records up front so horizon immunity can reference it.
-    recurrence, run_id_counts = compute_recurrence(records)
-    immune_sigs = {sig for sig, count in run_id_counts.items() if count >= 2}
-
-    dropped = {"foreign": 0, "stale": 0, "cross_schema": 0, "invalid": 0}
-    survivors: list[dict] = []
-
-    for record in records:
-        # 1. invalid — missing required read fields / not an object.
-        if not _record_satisfies_pin(record):
-            dropped["invalid"] += 1
-            continue
-
-        is_ours = _carries_marker(record)
-
-        # 2. foreign — project mismatch (when --project given); our own payloads
-        #    additionally must match this repo's fingerprint.
-        if project is not None and record["project"] != project:
-            dropped["foreign"] += 1
-            continue
-        if is_ours:
-            payload = _extract_payload(record)
-            if payload is not None:
-                payload_fp = payload.get("fingerprint")
-                if (
-                    fingerprint is not None
-                    and isinstance(payload_fp, str)
-                    and payload_fp != fingerprint
-                ):
-                    dropped["foreign"] += 1
-                    continue
-
-        # 3. cross_schema — OUR payloads whose embedded schema_version != 1.
-        if is_ours:
-            payload = _extract_payload(record)
-            if payload is not None:
-                version = _payload_schema_version(payload)
-                if version != mc.UCG_SCHEMA_VERSION:
-                    dropped["cross_schema"] += 1
-                    continue
-
-        # 4. stale — older than the horizon, UNLESS the record carries a
-        #    signature that recurs across >=2 distinct run_ids (per-signal
-        #    horizon immunity).
-        epoch = record["created_at_epoch"]
-        age = now_epoch - epoch
-        if age > horizon_ms:
-            record_sigs = _record_signatures(record)
-            if not any(sig in immune_sigs for sig in record_sigs):
-                dropped["stale"] += 1
-                continue
-
-        survivors.append(record)
-
-    typed = [
-        _type_record(record, now_epoch, recurrence, args.per_record_bytes)
-        for record in survivors
-    ]
-
-    # Total-order deterministic sort. Future epochs clamp to now for ranking.
-    def _sort_key(t: dict) -> tuple:
-        clamped = min(t["epoch"], now_epoch)
-        return (0 if t["recurring"] else 1, -clamped, t["id"])
-
-    typed.sort(key=_sort_key)
-    typed = typed[: args.max_records]
-
-    # Whole-payload byte cap (codepoint-safe is moot at the JSON level; we cap
-    # the record list deterministically by dropping lowest-ranked tails until the
-    # serialized records fit). We keep it simple and stable: serialize and, if
-    # over, trim from the end.
-    while typed and len(json.dumps(typed, ensure_ascii=False).encode("utf-8")) > args.max_bytes:
-        typed.pop()
-
-    recurrence_list = [
-        recurrence[sig] for sig in sorted(recurrence.keys())
-    ]
-
-    return {
-        "records": typed,
-        "recurrence": recurrence_list,
-        "dropped": dropped,
-        "empty": len(typed) == 0,
-    }
-
-
-def _type_record(
-    record: dict, now_epoch: int, recurrence: dict, per_record_bytes: int
-) -> dict:
-    """Project a raw record into the small typed advisory shape (defanged)."""
-    title = record.get("title")
-    title_phrase = mc.neutralize(title if isinstance(title, str) else "")
-    title_phrase = _byte_clamp(title_phrase, per_record_bytes)
-
-    record_sigs = set(_record_signatures(record))
-    recurring = any(sig in recurrence for sig in record_sigs)
-
-    return {
-        "id": record["id"],
-        "kind": record.get("type") if isinstance(record.get("type"), str) else "",
-        "epoch": record["created_at_epoch"],
-        "project": record["project"],
-        "title_noun_phrase": title_phrase,
-        "recurring": recurring,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -457,8 +194,7 @@ def _type_store_record(record: dict, recurrence: dict, per_record_bytes: int) ->
 
     id is the run_id (already checked by the store module's validator), kind
     the record's kind, epoch its created_at_epoch, and project is display only
-    (never compared). Every free-text field is defanged by _store_text. Same
-    keys as _type_record.
+    (never compared). Every free-text field is defanged by _store_text.
     """
     return {
         "id": record["run_id"],
@@ -475,8 +211,8 @@ def _store_recurrence_entry(entry: dict, per_record_bytes: int) -> dict:
 
     ``class`` is already one of the TAXONOMY classes, ``count`` an int and
     ``run_ids`` checked run_ids. Matching used the raw sig; only the printed
-    copy changes, and a signature ``build`` wrote (12 hex characters) is left
-    as it is.
+    copy changes, and a signature ``write`` computed (12 hex characters) is
+    left as it is.
     """
     return {**entry, "sig": _store_text(entry["sig"], per_record_bytes)}
 
@@ -487,9 +223,9 @@ def run_store_filter(args: argparse.Namespace) -> dict:
     The store module reads ``<store>/<fingerprint-dir>/runs/*.jsonl`` and
     validates each record on its own, so one bad file never stops the read.
     Recurrence and horizon immunity count only the survivors of the invalid,
-    foreign and cross-schema drops (stale records still count). No ``--project``
-    comparison: the fingerprint alone decides foreign. An unset store, or a cwd
-    with no fingerprint, reads nothing and returns the empty result.
+    foreign and cross-schema drops (stale records still count). The
+    fingerprint alone decides foreign. An unset store, or a cwd with no
+    fingerprint, reads nothing and returns the empty result.
     """
     horizon_ms = args.horizon_days * 24 * 60 * 60 * 1000
     now_epoch = args.now_epoch
@@ -546,11 +282,11 @@ def run_store_filter(args: argparse.Namespace) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# latch
+# latch, filter, unlatch
 # ---------------------------------------------------------------------------
 
 
-def cmd_latch_store(args: argparse.Namespace) -> int:
+def cmd_latch(args: argparse.Namespace) -> int:
     """latch --store: measure and write latch v2. No probe, no stdin, no MCP call.
 
     A run_id that fails the shared check exits 2 before anything is written
@@ -559,7 +295,7 @@ def cmd_latch_store(args: argparse.Namespace) -> int:
     the printed state, and ``reason`` says why it is red.
     """
     if not mc.valid_run_id(args.run_id):
-        print(json.dumps({"error": f"invalid run_id {args.run_id!r}: expected epic-<id>-<YYYYMMDD>T<HHMMSS>Z"}))
+        print(json.dumps({"error": _invalid_run_id(args.run_id)}))
         return 2
     measure = mc.measure_latch_v2(
         run_id=args.run_id,
@@ -578,82 +314,66 @@ def cmd_latch_store(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_latch(args: argparse.Namespace) -> int:
-    if args.store is not None:
-        return cmd_latch_store(args)
-    fingerprint = mc.repo_fingerprint(args.cwd or ".").get("value")
-
-    if args.claude_mem_absent:
-        claude_mem = "absent"
-        schema_ok = False
-    else:
-        records, error = _parse_probe(args.probe)
-        if error is not None or records is None:
-            # Any uncertainty -> fail closed.
-            claude_mem = "absent"
-            schema_ok = False
-        else:
-            contract_ok, _problems = evaluate_contract(records)
-            claude_mem = "present"
-            schema_ok = bool(contract_ok)
-
-    # recall is only meaningfully "on" when present + schema_ok + caller asked
-    # for it AND we actually have a fingerprint to pin to.
-    requested_on = args.recall == "on"
-    recall = (
-        "on"
-        if (claude_mem == "present" and schema_ok and requested_on and fingerprint)
-        else "off"
-    )
-
-    state = {
-        "latch_version": mc.LATCH_VERSION,
-        "run_id": args.run_id,
-        "claude_mem": claude_mem,
-        "schema_ok": schema_ok,
-        "recall": recall,
-        "tool_form": args.tool_form,
-        "fingerprint": fingerprint,
-        "created_at": mc.utc_now_iso(),
-    }
-
-    mc.write_state(args.impl_artifacts, state)
-    print(json.dumps(state))
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# filter
-# ---------------------------------------------------------------------------
-
-
 def cmd_filter(args: argparse.Namespace) -> int:
-    if args.store is not None:
-        result = run_store_filter(args)
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-        return 0
-    records, error = _parse_probe(args.probe)
-    if error is not None or records is None:
-        print(json.dumps({"error": error or "could not parse probe"}))
-        return 1
-    result = run_filter(records, args)
+    result = run_store_filter(args)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0
 
 
-# ---------------------------------------------------------------------------
-# selftest
-# ---------------------------------------------------------------------------
+def cmd_unlatch(args: argparse.Namespace) -> int:
+    """unlatch: remove this run's latch, and no other.
+
+    A run_id that fails the shared check exits 2 before the latch is read, so
+    a malformed value can never match, or remove, anything. Every other outcome
+    exits 0 with ``{"removed": bool, "reason": str}`` (mc.remove_own_state):
+    ``removed`` for this run's latch; ``absent``, ``foreign`` (another run_id,
+    or none) and ``unreadable`` leave the latch path as it is, and
+    ``remove-failed: <error>`` says the removal itself failed.
+    """
+    if not mc.valid_run_id(args.run_id):
+        print(json.dumps({"error": _invalid_run_id(args.run_id)}))
+        return 2
+    removed, reason = mc.remove_own_state(args.impl_artifacts, args.run_id)
+    print(json.dumps({"removed": removed, "reason": reason}, sort_keys=True))
+    return 0
 
 
-def cmd_selftest(args: argparse.Namespace) -> int:
-    records, error = _parse_probe(args.probe)
-    if error is not None or records is None:
-        print(json.dumps({"contract_ok": False, "problems": [error or "unparseable probe"]}))
-        return 1
-    contract_ok, problems = evaluate_contract(records)
-    print(json.dumps({"contract_ok": contract_ok, "problems": problems}))
-    return 0 if contract_ok else 1
+# ---------------------------------------------------------------------------
+# The removed claude-mem forms
+# ---------------------------------------------------------------------------
+
+# Subcommands the claude-mem backend needed, with what replaces each.
+_REMOVED_COMMANDS = {
+    "selftest": "use latch --store VALUE, which checks that the store can be written",
+}
+
+
+def _refuse_removed(form: str, hint: str) -> NoReturn:
+    """Exit 2 on a removed claude-mem form, with one stderr line naming its replacement."""
+    sys.stderr.write(f"{_PROG}: error: {form} was removed with the claude-mem backend; {hint}\n")
+    sys.exit(2)
+
+
+class _RemovedFlag(argparse.Action):
+    """A removed claude-mem flag: hidden from the help, refused when given.
+
+    It is still declared so that an exact match reaches it: undeclared,
+    ``--project`` would pass as an abbreviation of ``--project-root``.
+    """
+
+    def __init__(self, option_strings, dest, *, form: str, hint: str, nargs="?", **kwargs):
+        super().__init__(
+            option_strings, dest, nargs=nargs, default=argparse.SUPPRESS, help=argparse.SUPPRESS, **kwargs
+        )
+        self.form = form
+        self.hint = hint
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        _refuse_removed(self.form, self.hint)
+
+
+def _add_removed_flag(parser: argparse.ArgumentParser, flag: str, form: str, hint: str, *, nargs="?") -> None:
+    parser.add_argument(flag, action=_RemovedFlag, form=form, hint=hint, nargs=nargs)
 
 
 # ---------------------------------------------------------------------------
@@ -665,46 +385,44 @@ _STORE_HELP = (
     "cross_session_recall_store value (the local run store root): a ~ path, an "
     "absolute path or a {project-root} path. A bare --store, an empty or blank "
     "value, an unresolved {...} token, a literal $VAR or %%VAR%% and a relative "
-    "path count as unset."
+    "path count as unset. Required."
 )
 _PROJECT_ROOT_HELP = "Substituted for {project-root} in the --store value."
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Cross-Session Recall latch + filter for ultracode-goal."
+        prog=_PROG,
+        description="Cross-Session Recall latch, filter and unlatch for ultracode-goal.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_latch = sub.add_parser("latch", help="Validate the capability contract and write the state latch.")
+    p_latch = sub.add_parser("latch", help="Check the store and write the state latch (latch v2).")
     p_latch.add_argument("--impl-artifacts", required=True, dest="impl_artifacts")
     p_latch.add_argument("--run-id", required=True, dest="run_id")
     p_latch.add_argument("--recall", required=True, choices=["on", "off"])
-    group = p_latch.add_mutually_exclusive_group(required=True)
-    group.add_argument("--probe", help="get_observations JSON array (file path or '-').")
-    group.add_argument("--claude-mem-absent", action="store_true", dest="claude_mem_absent")
-    group.add_argument(
+    p_latch.add_argument(
         "--store", nargs="?", const="", default=None,
-        help=_STORE_HELP + " Writes latch v2: no probe, the store's write probe instead.",
+        help=_STORE_HELP + " The latch runs the store's write probe.",
     )
-    p_latch.add_argument("--tool-form", choices=["plugin", "bare"], default=None, dest="tool_form")
     p_latch.add_argument("--project-root", default=None, dest="project_root", help=_PROJECT_ROOT_HELP)
     p_latch.add_argument("--cwd", default=None)
-    p_latch.set_defaults(func=cmd_latch, claude_mem_absent=False)
+    _add_removed_flag(p_latch, "--probe", "latch --probe", "use latch --store VALUE, which takes no probe")
+    _add_removed_flag(
+        p_latch, "--claude-mem-absent", "latch --claude-mem-absent", "use latch --store VALUE", nargs=0,
+    )
+    _add_removed_flag(
+        p_latch, "--tool-form", "latch --tool-form", "drop it: latch --store VALUE takes no tool form",
+    )
+    p_latch.set_defaults(func=cmd_latch)
 
-    p_filter = sub.add_parser("filter", help="Filter + type a probe array deterministically.")
+    p_filter = sub.add_parser("filter", help="Read, filter and type this repo's records from the store.")
     p_filter.add_argument("--impl-artifacts", required=True, dest="impl_artifacts")
-    source = p_filter.add_mutually_exclusive_group(required=True)
-    source.add_argument("--probe", help="get_observations JSON array (file path or '-').")
-    source.add_argument(
-        "--store", nargs="?", const="", default=None,
-        help=_STORE_HELP + " Reads this repo's records from the store instead of a probe.",
-    )
-    p_filter.add_argument("--project", default=None)
     p_filter.add_argument(
-        "--epic", default=None,
-        help="--store only: the current Epic, whose records rank first.",
+        "--store", nargs="?", const="", default=None,
+        help=_STORE_HELP + " This repo's records are read from it.",
     )
+    p_filter.add_argument("--epic", default=None, help="The current Epic, whose records rank first.")
     p_filter.add_argument("--project-root", default=None, dest="project_root", help=_PROJECT_ROOT_HELP)
     p_filter.add_argument("--max-records", type=int, default=5, dest="max_records")
     p_filter.add_argument("--per-record-bytes", type=int, default=2048, dest="per_record_bytes")
@@ -712,38 +430,34 @@ def _build_parser() -> argparse.ArgumentParser:
     p_filter.add_argument("--horizon-days", type=int, default=120, dest="horizon_days")
     p_filter.add_argument("--now-epoch", type=int, default=None, dest="now_epoch")
     p_filter.add_argument("--cwd", default=None)
+    _add_removed_flag(p_filter, "--probe", "filter --probe", "use filter --store VALUE, which reads the store")
+    _add_removed_flag(
+        p_filter, "--project", "filter --project",
+        "drop it: filter --store VALUE tells this repo's records apart by fingerprint",
+    )
     p_filter.set_defaults(func=cmd_filter)
 
-    p_self = sub.add_parser("selftest", help="Report whether a probe satisfies the capability pin.")
-    p_self.add_argument("--probe", default=None, help="get_observations JSON array (file path or '-').")
-    p_self.set_defaults(func=cmd_selftest)
+    p_unlatch = sub.add_parser("unlatch", help="Remove the state latch when it is this run's.")
+    p_unlatch.add_argument("--impl-artifacts", required=True, dest="impl_artifacts")
+    p_unlatch.add_argument("--run-id", required=True, dest="run_id")
+    p_unlatch.set_defaults(func=cmd_unlatch)
     return parser
-
-
-def _refuse_mixed_modes(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    """Exit 2 (parser.error) on a flag that does not belong to the chosen mode,
-    before anything is written. The claude-mem modes keep accepting any
-    run_id, as today; latch --store checks its own (cmd_latch_store)."""
-    if args.command == "latch":
-        if args.store is None:
-            if args.project_root is not None:
-                parser.error("latch: --project-root applies only with --store")
-        elif args.tool_form is not None:
-            parser.error("latch: --tool-form belongs to the claude-mem latch, not --store")
-    elif args.command == "filter" and args.store is None:
-        if args.epic is not None or args.project_root is not None:
-            parser.error("filter: --epic and --project-root apply only with --store")
 
 
 def main(argv: list[str] | None = None) -> int:
     _force_utf8_stdio()
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    if arguments and arguments[0] in _REMOVED_COMMANDS:
+        _refuse_removed(arguments[0], _REMOVED_COMMANDS[arguments[0]])
     parser = _build_parser()
-    args = parser.parse_args(argv)
-    _refuse_mixed_modes(parser, args)
+    args = parser.parse_args(arguments)
+    if args.command in ("latch", "filter") and args.store is None:
+        # The latch and filter without --store were the claude-mem ones.
+        _refuse_removed(f"{args.command} without --store", f"use {args.command} --store VALUE")
 
     # Default now-epoch to the current wall clock (ms) when the caller did not
     # pin one. Pinning is what makes tests deterministic.
-    if getattr(args, "command", None) == "filter" and args.now_epoch is None:
+    if args.command == "filter" and args.now_epoch is None:
         import time
 
         args.now_epoch = int(time.time() * 1000)

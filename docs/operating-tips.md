@@ -32,21 +32,13 @@ Two limits to respect. An hour covers roughly one story at the rate above, so pa
 
 The tradeoff is real: a foreground drive blocks the agent for its whole duration. For a strict drive-then-verify loop that costs nothing, because there is nothing to do in between. If you want the agent working on something else while a story runs, background is still the right mechanism.
 
-### The recall latch does not repair itself between drives
+### The recall latch between drives
 
-That Stage 6 removes `.mem-state.json` at close-out is covered in [cross-session recall](./cross-session-recall.md). The resume half is not in these docs, so: a resume re-writes the latch by re-running Stage 1's latch step. (The story's baseline marker is the opposite case, re-read and never regenerated. Do not carry the latch's rule across to it.)
+Each spawn is its own run: its Stage 1 writes its own latch, `.mem-state.json`, and its Finalize removes it with `mem_recall.py unlatch` ([cross-session recall](./cross-session-recall.md) has the lifecycle). A resume writes the latch again, under a fresh run id of its own, by re-running Stage 1's latch step; it never inherits one. (The story's baseline marker is the opposite case, re-read and never regenerated. Do not carry the latch's rule across to it.)
 
-The operational addition, worth knowing before you chain drives: **observed across a multi-drive day, the spawned session's own attempt to write the latch was permission-denied, so a missing latch did not repair itself on the next spawn.** What denied it was never diagnosed, and UCG's own PreToolUse recall gate is not a candidate, since it no-ops when the latch is absent, which is exactly the state Stage 6 leaves behind. Treat this as an unexplained observation: check for the file rather than assume it.
+Worth knowing before you chain drives: **observed across a multi-drive day, a spawned session's own latch call was permission-denied.** That spawn then runs with no latch, so the guard's recall rules (claude-mem denied, the store and the latch protected) are off for it. It says so: the decision log carries `NOTE recall-read-refused` at Stage 1, and the run report `NOTE recall-latch-missing` at Finalize. Check each spawn's report for those tokens rather than assume the latch was there.
 
-Re-assert from the parent between drives with the skill's own latch writer, never by hand (a hand-written latch forges the capability check the file exists to record):
-
-```bash
-uv run <skill-root>/scripts/mem_recall.py latch \
-  --impl-artifacts <impl-artifacts> --run-id <run-id> \
-  --recall off --claude-mem-absent
-```
-
-That writes a latch recording claude-mem as absent with recall off, which restores fail-closed gating. Use the `--recall on --probe <probe.json>` form when recall is meant to be live. Otherwise accept that spawns 2..N run with recall gating silently off.
+Do not write a latch from the parent between drives. The old workaround, `latch --claude-mem-absent`, is gone, and a latch the parent writes counts as live only until the next spawn's Stage 1 replaces it. If no spawn replaces it, it keeps denying in your own session until you delete it by hand.
 
 ## Reading the driver's stop reasons
 

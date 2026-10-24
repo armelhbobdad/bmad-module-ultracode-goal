@@ -12,11 +12,10 @@ mem_observation.py (and their tests). The PreToolUse hook (guard_pretooluse.py)
 deliberately does NOT import this module — it stays self-contained so the
 gating path has zero shared surface with the advisory path.
 
-Cross-Session Recall leverages the third-party claude-mem plugin in an
-advisory-only capacity: it NEVER sits in the gate/completion path, it is
-voice-never-vote, it fails closed during a run, control flow is identical when
-absent, and it is OFF by default. Everything here is deterministic, stdlib-only,
-no network.
+Cross-Session Recall is advisory only: it NEVER sits in the gate/completion
+path, it is voice-never-vote, it fails closed during a run, control flow is
+identical when it is off, and it is OFF by default. Everything here is
+deterministic, stdlib-only, no network.
 
 Contents:
   - UCG_SCHEMA_VERSION / UCG_MARKER       payload tagging
@@ -25,7 +24,7 @@ Contents:
   - repo_fingerprint(cwd)                 stable per-repo identity
   - redact(text)                          high-precision secret scrubbing
   - neutralize(text)                      bidi/code-fence strip + 80cp clamp
-  - state_path / read_state / write_state machine latch plumbing
+  - state_path / read_state / write_state / remove_own_state   machine latch plumbing
   - carries_marker / extract_payload      legacy claude-mem payload parsing
   - valid_run_id                          the run_id check both scripts share
   - is_store_unset / resolve_store_root / store_unset_note   the cross_session_recall_store key
@@ -38,15 +37,17 @@ Contents:
   - is_legacy_payload / legacy_payload_to_record   outbox migration
   - build_latch_v2 / measure_latch_v2 / latch_view   latch v2
 
-The state file is the machine latch the hook reads to decide whether claude-mem
-MCP calls are permitted during a run. Its schema (v1) is documented at
-write_state() and shared verbatim with the hook's gating predicate.
+The state file is the machine latch the PreToolUse guard reads while a run is
+live: mem_recall.py latch writes it (v2, documented at build_latch_v2()) and
+mem_recall.py unlatch removes it only for the run that wrote it. The guard
+keeps its own reader and must read a latch the way latch_view() does.
 
 The local run store (the "Local run store" section below) is the backend that
-replaces claude-mem: ``<store>/<fingerprint-dir>/runs/<run_id>.jsonl``, one
+replaced claude-mem: ``<store>/<fingerprint-dir>/runs/<run_id>.jsonl``, one
 immutable JSON line per run, written and read only through this module by
 mem_observation.py and mem_recall.py. The v2 latch certifies that the store can
-be written; its helpers sit beside the v1 ones, which are unchanged.
+be written. The claude-mem era v1 latch and outbox payloads are only read here:
+a v1 latch reads as red, and drain converts a legacy outbox payload.
 """
 
 from __future__ import annotations
@@ -326,6 +327,9 @@ def neutralize(text: str | None) -> str:
 # State file (machine latch) plumbing
 # ---------------------------------------------------------------------------
 
+# The claude-mem era latch version, which nothing writes any more: a latch
+# left from an older release may still carry it, and latch_view() reads it as
+# red. mem_recall.py latch writes LATCH_VERSION_V2.
 LATCH_VERSION = 1
 _STATE_FILENAME = ".mem-state.json"
 
@@ -354,10 +358,13 @@ def read_state(impl_artifacts: str | os.PathLike[str]) -> dict | None:
 def write_state(impl_artifacts: str | os.PathLike[str], state: dict) -> Path:
     """Atomically write the latch (tmp file + os.replace) and return its path.
 
-    Schema v1 (exact keys), written ONCE per run by mem_recall latch:
+    mem_recall.py latch writes the v2 object build_latch_v2() returns, ONCE per
+    run, replacing a latch another run left. The claude-mem era v1 schema, which
+    a latch left from an older release may still hold, was:
       {"latch_version":1, "run_id":str, "claude_mem":"present"|"absent",
        "schema_ok":bool, "recall":"on"|"off", "tool_form":"plugin"|"bare"|null,
        "fingerprint":str|null, "created_at":ISO}
+    latch_view() reads it as red.
     """
     impl = Path(impl_artifacts)
     impl.mkdir(parents=True, exist_ok=True)
@@ -377,20 +384,61 @@ def write_state(impl_artifacts: str | os.PathLike[str], state: dict) -> Path:
     return path
 
 
-def remove_state(impl_artifacts: str | os.PathLike[str]) -> bool:
-    """Remove the latch (Stage 6 close-out). Returns True if a file was removed."""
+# remove_own_state() reasons (mem_recall.py unlatch prints them).
+UNLATCH_REMOVED = "removed"
+UNLATCH_ABSENT = "absent"
+UNLATCH_FOREIGN = "foreign"
+UNLATCH_UNREADABLE = "unreadable"
+UNLATCH_REMOVE_FAILED = "remove-failed"
+
+
+def remove_own_state(impl_artifacts: str | os.PathLike[str], run_id: str) -> tuple[bool, str]:
+    """Remove the latch only when its ``run_id`` is ``run_id`` (mem_recall.py unlatch).
+
+    Returns (removed, reason). (True, "removed") when the latch named this run
+    and is now gone. Otherwise the latch path is left exactly as it is:
+    "absent" when nothing is there; "unreadable" when it does not read as a
+    JSON object (read_state() gives None: empty, corrupt, nested past the
+    recursion limit, a directory); "foreign" when it is an object whose
+    ``run_id`` is not this one (another run's, or none); and
+    "remove-failed: <error>" when the removal itself raised. An unreadable
+    latch is never assumed to be this run's. A path that is not a regular
+    file (a FIFO, a socket, a device, a directory, a dangling symlink) is
+    "unreadable" too, and is never opened: read_state() would block on a
+    FIFO with no writer. ValueError for a run_id that fails valid_run_id(),
+    before the latch is read; never raises otherwise.
+
+    The latch is read, then removed: a run writing its own latch into the
+    same artifacts folder in between is not guarded against (two runs never
+    share one folder).
+    """
+    if not valid_run_id(run_id):
+        raise ValueError(f"invalid run_id: {run_id!r}")
     path = state_path(impl_artifacts)
+    if not os.path.lexists(path):
+        return False, UNLATCH_ABSENT
+    try:
+        regular = path.is_file()  # follows a symlink to its target
+    except (OSError, ValueError):
+        regular = False
+    if not regular:
+        return False, UNLATCH_UNREADABLE
+    state = read_state(impl_artifacts)
+    if state is None:
+        return False, UNLATCH_UNREADABLE
+    if state.get("run_id") != run_id:
+        return False, UNLATCH_FOREIGN
     try:
         path.unlink()
-        return True
     except FileNotFoundError:
-        return False
-    except OSError:
-        return False
+        return False, UNLATCH_ABSENT
+    except OSError as exc:
+        return False, f"{UNLATCH_REMOVE_FAILED}: {exc}"
+    return True, UNLATCH_REMOVED
 
 
 # ---------------------------------------------------------------------------
-# Legacy claude-mem payload parsing (shared by mem_recall and mem_observation)
+# Legacy claude-mem payload parsing (drain's outbox conversion)
 # ---------------------------------------------------------------------------
 
 
@@ -412,8 +460,7 @@ def extract_payload(record: dict) -> dict | None:
     The text field is one human line, then the marker, then a fenced json block.
     We locate the first ``{`` after the marker and JSON-decode from there using a
     raw decoder so trailing fence characters do not break parsing. Never raises;
-    returns None when nothing parseable is present. Moved here from mem_recall,
-    whose ``_extract_payload`` keeps the same behaviour for dict records.
+    returns None when nothing parseable is present.
     """
     if not isinstance(record, dict):
         return None
@@ -748,10 +795,11 @@ def iso_to_epoch_ms(stamp: object) -> int | None:
 
 
 def store_record(payload: dict, *, created_at_epoch: int, project: str) -> dict:
-    """A store record: the ``build`` payload plus ``created_at_epoch`` and ``project``.
+    """A store record: the run payload plus ``created_at_epoch`` and ``project``.
 
-    ``payload`` is the dict ``mem_observation.py build`` embeds today (without
-    the claude-mem ``{text,title,project}`` wrapper). ``created_at_epoch`` is
+    ``payload`` is the dict ``mem_observation.py write`` builds, the one the
+    removed ``build`` embedded in its claude-mem ``{text,title,project}``
+    wrapper (which drain still converts). ``created_at_epoch`` is
     integer UTC ms, stamped when the payload is built; ``project`` is display
     only ("" when unknown). Returns a new dict; ``payload`` is not modified.
     """
@@ -1190,7 +1238,7 @@ def legacy_payload_to_record(payload: object) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Latch v2 (the v1 helpers above are unchanged)
+# Latch v2
 # ---------------------------------------------------------------------------
 
 LATCH_VERSION_V2 = 2

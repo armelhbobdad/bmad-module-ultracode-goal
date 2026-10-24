@@ -13,7 +13,9 @@ subpackage exactly as the CLIs do (``from lib import mem_common``).
 Covers the load-bearing pure functions: the taxonomy mapping, git-remote
 normalization (ssh/https/scp/port collapse), high-precision secret redaction,
 untrusted-text neutralization (bidi/backtick strip + clamp), the repo
-fingerprint across its basis branches, and the state-file latch roundtrip.
+fingerprint across its basis branches, the state-file latch roundtrip, and
+remove_own_state, which removes only this run's latch (``mem_recall.py
+unlatch``).
 
 The local run store tests (the CSR-* rows of the cross-session recall test
 design whose target is this file, plus the store-module halves of the CLI rows)
@@ -35,8 +37,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -195,19 +199,18 @@ def test_state_path_is_under_impl_artifacts(tmp_path):
     assert mc.state_path(tmp_path) == tmp_path / ".mem-state.json"
 
 
-def test_state_roundtrip_write_read_remove(tmp_path):
-    state = {
-        "latch_version": mc.LATCH_VERSION,
-        "run_id": "r1",
-        "claude_mem": "present",
-        "recall": "off",
-    }
+def test_state_roundtrip_write_read_remove_own(tmp_path):
+    # Written by latch, read back unchanged, removed by unlatch with its own
+    # run_id; a second unlatch finds nothing (a close-out run twice is harmless).
+    state = mc.build_latch_v2(
+        run_id=_RUN, recall="off", store=None, store_ok=False, fingerprint=None
+    )
     path = mc.write_state(tmp_path, state)
     assert path.exists()
     assert mc.read_state(tmp_path) == state
-    # First remove succeeds, second is a no-op (idempotent close-out).
-    assert mc.remove_state(tmp_path) is True
-    assert mc.remove_state(tmp_path) is False
+    assert mc.remove_own_state(tmp_path, _RUN) == (True, "removed")
+    assert not path.exists()
+    assert mc.remove_own_state(tmp_path, _RUN) == (False, "absent")
 
 
 def test_read_state_returns_none_on_missing_and_corrupt(tmp_path):
@@ -260,7 +263,7 @@ def home(tmp_path, monkeypatch):
 
 
 def _payload(run_id: str = _RUN, fingerprint: str | None = _FP) -> dict:
-    """The dict mem_observation.py build embeds (see the drift test below)."""
+    """The run payload mem_observation.py write stores (see the drift test below)."""
     return {
         "ucg": 1,
         "schema_version": 1,
@@ -286,7 +289,7 @@ def _record(run_id: str = _RUN, fingerprint: str | None = _FP, **overrides) -> d
 
 
 def _legacy(inner: dict | str, project: object = "widget") -> dict:
-    """A claude-mem era outbox payload, shaped as build prints it today."""
+    """A claude-mem era outbox payload, shaped as the removed build printed it."""
     body = inner if isinstance(inner, str) else json.dumps(inner, sort_keys=True)
     return {
         "text": f"UCG run for epic 7: gate PASS.\n{mc.UCG_MARKER}\n```json\n{body}\n```",
@@ -301,6 +304,156 @@ def _sha(path: Path) -> str:
 
 def _jsonl(runs: Path) -> list[str]:
     return sorted(p.name for p in runs.iterdir() if p.name.endswith(".jsonl"))
+
+
+# ---------------------------------------------------------------------------
+# remove_own_state: unlatch removes this run's latch and no other (AC-31)
+# ---------------------------------------------------------------------------
+
+
+def _own_latch(**overrides) -> dict:
+    state = {
+        "latch_version": 2, "run_id": _RUN, "backend": "jsonl", "store_ok": True,
+        "recall": "on", "store": None, "fingerprint": None, "created_at": _DATE,
+    }
+    state.update(overrides)
+    return state
+
+
+def test_remove_own_state_removes_a_latch_of_any_version_naming_this_run(tmp_path):
+    # Version and colour do not matter, only the run_id: a claude-mem era v1
+    # latch this run wrote before an upgrade goes too.
+    for state in (
+        _own_latch(),
+        _own_latch(store_ok=False, recall="off"),
+        {"latch_version": 1, "run_id": _RUN, "claude_mem": "absent", "recall": "off"},
+        {"run_id": _RUN},
+    ):
+        mc.write_state(tmp_path, state)
+        assert mc.remove_own_state(tmp_path, _RUN) == (True, "removed")
+        assert not mc.state_path(tmp_path).exists()
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        _own_latch(run_id="epic-6-20260101T000000Z"),
+        _own_latch(run_id=None),
+        _own_latch(run_id=["epic-7-20260604T172512Z"]),
+        {k: v for k, v in _own_latch().items() if k != "run_id"},
+        {"latch_version": 1, "run_id": "r1", "claude_mem": "present", "recall": "on"},
+    ],
+    ids=["another-run", "null-run-id", "list-run-id", "no-run-id", "v1-old-shape"],
+)
+def test_remove_own_state_leaves_a_foreign_latch_byte_identical(state, tmp_path):
+    path = mc.write_state(tmp_path, state)
+    before = path.read_bytes()
+    assert mc.remove_own_state(tmp_path, _RUN) == (False, "foreign")
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"",
+        b"   \n",
+        b"{not json",
+        b'{"run_id": "' + _RUN.encode() + b'"',
+        b'["' + _RUN.encode() + b'"]',
+        json.dumps(_RUN).encode(),
+        b"\xff\xfe" + _RUN.encode(),
+        b'{"run_id":' * 50000 + json.dumps(_RUN).encode() + b"}" * 50000,
+    ],
+    ids=["empty", "blank", "corrupt", "truncated", "array", "string", "binary", "nested-past-the-limit"],
+)
+def test_remove_own_state_never_assumes_an_unreadable_latch_is_this_runs(content, tmp_path):
+    # Most of these hold this run's id somewhere; none is read as naming it.
+    path = mc.state_path(tmp_path)
+    path.write_bytes(content)
+    before = path.read_bytes()
+    assert mc.remove_own_state(tmp_path, _RUN) == (False, "unreadable")
+    assert path.read_bytes() == before
+
+
+def test_remove_own_state_leaves_a_directory_at_the_latch_path(tmp_path):
+    folder = mc.state_path(tmp_path)
+    folder.mkdir()
+    (folder / "inside").write_text(_RUN, encoding="utf-8")
+    assert mc.remove_own_state(tmp_path, _RUN) == (False, "unreadable")
+    assert (folder / "inside").read_text(encoding="utf-8") == _RUN
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this platform")
+def test_remove_own_state_never_opens_a_fifo_at_the_latch_path(tmp_path):
+    # Opening a FIFO with no writer for reading blocks forever, so unlatch
+    # would hang at a terminal (PR 3 latch review E). It is not a regular
+    # file, so it reads as unreadable without being opened, and stays.
+    path = mc.state_path(tmp_path)
+    os.mkfifo(path)
+    result: list = []
+    worker = threading.Thread(target=lambda: result.append(mc.remove_own_state(tmp_path, _RUN)))
+    worker.daemon = True
+    worker.start()
+    worker.join(timeout=10)
+    assert not worker.is_alive(), "remove_own_state blocked on a FIFO"
+    assert result == [(False, "unreadable")]
+    assert stat.S_ISFIFO(os.lstat(path).st_mode)
+
+
+def test_remove_own_state_follows_a_symlink_to_this_runs_latch(tmp_path):
+    # A link whose target is this run's latch reads as the latch; removing it
+    # takes the link away and leaves the file it pointed at.
+    target = tmp_path / "elsewhere.json"
+    target.write_text(json.dumps(_own_latch()), encoding="utf-8")
+    link = mc.state_path(tmp_path)
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    assert mc.remove_own_state(tmp_path, _RUN) == (True, "removed")
+    assert not os.path.lexists(link)
+    assert target.is_file()
+
+
+def test_remove_own_state_with_no_latch_creates_nothing(tmp_path):
+    impl = tmp_path / "impl"
+    assert mc.remove_own_state(impl, _RUN) == (False, "absent")
+    assert not impl.exists()
+    impl.mkdir()
+    (impl / "mem-outbox.x.jsonl").write_text("{}\n", encoding="utf-8")
+    assert mc.remove_own_state(impl, _RUN) == (False, "absent")
+    assert sorted(p.name for p in impl.iterdir()) == ["mem-outbox.x.jsonl"]
+
+
+@pytest.mark.parametrize(
+    "run_id",
+    ["r1", "", "epic-..-20260604T172512Z", "../epic-7-20260604T172512Z", "epic-7-20260604T172512Z\n", None],
+    ids=["no-pattern", "empty", "dot-dot", "parent", "newline", "none"],
+)
+def test_remove_own_state_refuses_a_bad_run_id_before_reading(run_id, tmp_path):
+    # A latch carrying that very value stays: a malformed run_id matches nothing.
+    path = mc.write_state(tmp_path, _own_latch(run_id=run_id))
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        mc.remove_own_state(tmp_path, run_id)
+    assert path.read_bytes() == before
+
+
+def test_remove_own_state_reports_a_failed_removal_and_keeps_the_latch(tmp_path, monkeypatch):
+    # A Windows reader holding the file, or a read-only folder: the latch
+    # stays (fail closed) and the reason says why.
+    path = mc.write_state(tmp_path, _own_latch())
+
+    def held(self, *args, **kwargs):
+        raise PermissionError(errno.EACCES, "held by another process", str(self))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", held)
+        removed, reason = mc.remove_own_state(tmp_path, _RUN)
+    assert removed is False
+    assert reason.startswith("remove-failed: ")
+    assert "held by another process" in reason
+    assert json.loads(path.read_text(encoding="utf-8"))["run_id"] == _RUN
 
 
 # ---------------------------------------------------------------------------
@@ -1044,33 +1197,45 @@ def test_store_record_adds_two_fields_and_leaves_the_payload_alone():
 
 
 @_needs_git
-def test_hand_built_record_matches_real_build_output(tmp_path, home):
-    # Drift guard: the fixtures above must keep the shape build really emits,
-    # and build's claude-mem era wrapper must convert as a legacy entry.
+def test_hand_built_record_matches_real_write_output(tmp_path, home):
+    # Drift guard: the fixtures above must keep the shape write really stores,
+    # and that payload, wrapped the way the removed build wrapped it for
+    # claude-mem, must convert back into the same record as a legacy entry.
     repo = tmp_path / "widget"
     _init_repo(repo)
+    store = tmp_path / "store"
     proc = subprocess.run(
         [
-            sys.executable, str(SCRIPTS / "mem_observation.py"), "build",
-            "--impl-artifacts", str(tmp_path / "impl"), "--epic", "7",
-            "--run-id", _RUN, "--gate-status", "PASS", "--verdict", "advance",
-            "--project", "widget", "--cwd", str(repo),
-            "--valid-until-date", _DATE,
+            sys.executable, str(SCRIPTS / "mem_observation.py"), "write",
+            "--impl-artifacts", str(tmp_path / "impl"), "--store", str(store),
+            "--epic", "7", "--run-id", _RUN, "--gate-status", "PASS", "--verdict", "advance",
+            "--cwd", str(repo), "--valid-until-date", _DATE,
             "--root-cause", "class=test-flake,path=tests/x.py",
             "--advisory", "sig=abc123def456,recurred=yes",
         ],
         capture_output=True, text=True, encoding="utf-8", check=True,
     )
-    wrapper = json.loads(proc.stdout)
-    inner = mc.extract_payload(wrapper)
-    assert set(inner) == set(_payload())
-    record = mc.legacy_payload_to_record(wrapper)
-    assert record is not None
+    out = json.loads(proc.stdout)
+    assert out["status"] == "written"
+    record = json.loads(Path(out["path"]).read_text(encoding="utf-8"))
     assert set(record) == set(_record())
-    assert record["created_at_epoch"] == _DATE_MS
+    fingerprint = mc.repo_fingerprint(repo)["value"]
+    inner = {k: v for k, v in record.items() if k not in ("created_at_epoch", "project")}
+    assert set(inner) == set(_payload())
+    assert inner == {
+        **_payload(fingerprint=fingerprint),
+        "signatures": [
+            {
+                "class": "test-flake",
+                "path": "tests/x.py",
+                "sig": hashlib.sha1(f"test-flake|tests/x.py|{fingerprint}".encode()).hexdigest()[:12],
+            }
+        ],
+    }
     assert record["project"] == "widget"
-    assert record["fingerprint"] == mc.repo_fingerprint(repo)["value"]
     assert mc.validate_record(record) == mc.RECORD_OK
+    converted = mc.legacy_payload_to_record(_legacy(inner))
+    assert converted == {**record, "created_at_epoch": _DATE_MS}
 
 
 # ---------------------------------------------------------------------------
@@ -1208,21 +1373,20 @@ def test_non_legacy_payload_is_not_converted():
     assert mc.legacy_payload_to_record({"text": "x", "title": "y", "project": "z"}) is None
 
 
-def test_extract_payload_matches_mem_recall(tmp_path):
-    # The parser moved here; mem_recall's private name must behave the same.
-    import mem_recall  # noqa: PLC0415  (scripts dir is on sys.path)
-
-    samples = [
-        _legacy(_payload()),
+def test_extract_payload_reads_only_what_follows_the_marker():
+    # Only the marker proves an outbox payload is ours, and only the first
+    # JSON object after it is read: never foreign prose from position 0.
+    assert mc.extract_payload(_legacy(_payload())) == _payload()
+    for sample in (
         {"text": "no marker {\"a\": 1}"},
         {"text": f"x {mc.UCG_MARKER} no brace"},
         {"text": f"x {mc.UCG_MARKER} {{not json"},
         {"text": f"x {mc.UCG_MARKER} [1, 2]"},
         {"text": None},
         {},
-    ]
-    for sample in samples:
-        assert mc.extract_payload(sample) == mem_recall._extract_payload(sample)
+        "not a dict",
+    ):
+        assert mc.extract_payload(sample) is None
     assert mc.carries_marker(_legacy(_payload())) is True
     assert mc.carries_marker({"text": "UCG run for epic 7"}) is False
     assert mc.carries_marker("text") is False
