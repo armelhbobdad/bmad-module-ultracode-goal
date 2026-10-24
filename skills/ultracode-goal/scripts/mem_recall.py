@@ -28,6 +28,36 @@ filter
 selftest
     Report whether a probe satisfies the capability pin.
 
+The local run store (cross_session_recall_store)
+------------------------------------------------
+The store UCG owns replaces claude-mem. It is reached through two new modes,
+beside the claude-mem ones above, which keep working unchanged:
+
+latch --store <value>
+    Latch v2. Sends no probe and reads no stdin. Checks the
+    cross_session_recall knob, that the store value is set, the repo
+    fingerprint, and that ``<store>/<fingerprint-dir>/runs`` can be created and
+    written (mkstemp, then unlink; a store root the probe creates gets its
+    ``.gitignore`` holding ``*``). Writes ``{latch_version: 2, run_id, backend,
+    store_ok, recall, store, fingerprint, created_at}`` to the same latch file.
+    ``--recall on`` with an unset store is red and prints
+    ``NOTE recall-store-unset`` naming the key. A run_id that fails the shared
+    check exits 2 before anything is written. Prints
+    ``{"latch": <the state written>, "notes": [...], "reason": str|null}``.
+
+filter --store <value> [--epic <id>]
+    Reads this repo's ``runs/*.jsonl`` through the store module, which
+    validates each record on its own (unparseable or wrong shape: invalid;
+    newer schema_version: cross_schema; another fingerprint: foreign). Only the
+    survivors feed recurrence and horizon immunity, stale records still
+    counting. ``--project`` is never compared for store records: the
+    fingerprint alone decides foreign, so worktrees and clones of one repo read
+    each other's records. An explicit adapter types each record (id is the
+    run_id, a title line built from epic, gate_status and verdict). Ranking:
+    this Epic first, then recurring, then created_at_epoch clamped to now
+    (descending), then run_id (ascending). Same caps and output shape as the
+    claude-mem filter.
+
 Capability pin (NOT a version pin): the read-fields we require are id:int,
 project:str, title:str, created_at_epoch:int. UNKNOWN EXTRA FIELDS ARE
 TOLERATED. An empty array is a valid present+schema_ok response.
@@ -43,6 +73,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 from lib import mem_common as mc
@@ -157,41 +188,13 @@ def evaluate_contract(records: list) -> tuple[bool, list[str]]:
 # ---------------------------------------------------------------------------
 
 
-def _carries_marker(record: dict) -> bool:
-    """True if the record IS one of OUR run-summary payloads.
-
-    Requires the marker in the text field — a title that merely starts with
-    "UCG run" is not proof of ownership (a third-party record could carry that
-    title), and treating it as ours would send payload extraction hunting for
-    arbitrary JSON in foreign prose.
-    """
-    text = record.get("text")
-    return isinstance(text, str) and mc.UCG_MARKER in text
-
-
-def _extract_payload(record: dict) -> dict | None:
-    """Pull our embedded JSON payload out of a record's text. Defensive.
-
-    The text field is one human line, then the marker, then a fenced json block.
-    We locate the first ``{`` after the marker and JSON-decode from there using a
-    raw decoder so trailing fence characters do not break parsing. Never raises;
-    returns None when nothing parseable is present.
-    """
-    text = record.get("text")
-    if not isinstance(text, str):
-        return None
-    marker_at = text.find(mc.UCG_MARKER)
-    if marker_at == -1:
-        return None  # no marker -> not our payload; never scan from position 0
-    brace_at = text.find("{", marker_at + len(mc.UCG_MARKER))
-    if brace_at == -1:
-        return None
-    decoder = json.JSONDecoder()
-    try:
-        obj, _end = decoder.raw_decode(text[brace_at:])
-    except ValueError:
-        return None
-    return obj if isinstance(obj, dict) else None
+# The parser moved to lib/mem_common.py, which mem_observation.py's legacy
+# outbox conversion shares. Only the marker in the text field proves a record
+# is ours: a title that merely starts with "UCG run" is not proof of ownership,
+# and payload extraction never scans foreign prose from position 0. The private
+# names stay for the claude-mem probe path below.
+_carries_marker = mc.carries_marker
+_extract_payload = mc.extract_payload
 
 
 def _payload_schema_version(payload: dict) -> object:
@@ -213,14 +216,25 @@ def compute_recurrence(records: list) -> tuple[dict, dict[str, int]]:
     QUALIFY as recurring, and recurring_run_id_counts is the same sig -> distinct
     run_id count for the horizon-immunity check.
     """
-    # sig -> {"class": str, "run_ids": set[str]}
-    accum: dict[str, dict] = {}
+    payloads: list[dict] = []
     for record in records:
         if not isinstance(record, dict) or not _carries_marker(record):
             continue
         payload = _extract_payload(record)
-        if payload is None:
-            continue
+        if payload is not None:
+            payloads.append(payload)
+    return _recurrence_from_payloads(payloads)
+
+
+def _recurrence_from_payloads(payloads: Iterable[dict]) -> tuple[dict, dict[str, int]]:
+    """The recurrence rule over run-summary payloads (each carrying ``run_id``
+    and ``signatures``): the claude-mem payloads compute_recurrence extracts, or
+    the store records that survived the invalid, foreign and cross-schema drops.
+    Same return value as compute_recurrence.
+    """
+    # sig -> {"class": str, "run_ids": set[str]}
+    accum: dict[str, dict] = {}
+    for payload in payloads:
         run_id = payload.get("run_id")
         if not isinstance(run_id, str) or not run_id:
             continue
@@ -406,11 +420,167 @@ def _type_record(
 
 
 # ---------------------------------------------------------------------------
+# filter --store: the local run store
+# ---------------------------------------------------------------------------
+
+
+def _store_signatures(record: dict) -> list[str]:
+    """The non-empty signatures of a validated store record."""
+    return [entry["sig"] for entry in record["signatures"] if entry["sig"]]
+
+
+def _store_text(text: str, per_record_bytes: int) -> str:
+    """Defang one free-text field of a store record before it reaches the model.
+
+    Redacted and neutralized like any untrusted text (a run file is a plain
+    file anyone can edit), then clamped to ``per_record_bytes`` on a codepoint
+    boundary.
+    """
+    return _byte_clamp(mc.neutralize(mc.redact(text)), per_record_bytes)
+
+
+def _store_title_phrase(record: dict, per_record_bytes: int) -> str:
+    """The adapter's title line, the field the per-record byte cap clamps.
+
+    Built from the record's epic, gate_status and verdict, then defanged by
+    _store_text.
+    """
+    line = (
+        f"UCG run epic {record['epic']}: gate {record['gate_status']}, "
+        f"verdict {record['verdict']}"
+    )
+    return _store_text(line, per_record_bytes)
+
+
+def _type_store_record(record: dict, recurrence: dict, per_record_bytes: int) -> dict:
+    """The explicit adapter from a store record to the filter's typed shape.
+
+    id is the run_id (already checked by the store module's validator), kind
+    the record's kind, epoch its created_at_epoch, and project is display only
+    (never compared). Every free-text field is defanged by _store_text. Same
+    keys as _type_record.
+    """
+    return {
+        "id": record["run_id"],
+        "kind": _store_text(record["kind"], per_record_bytes),
+        "epoch": record["created_at_epoch"],
+        "project": _store_text(record["project"], per_record_bytes),
+        "title_noun_phrase": _store_title_phrase(record, per_record_bytes),
+        "recurring": any(sig in recurrence for sig in _store_signatures(record)),
+    }
+
+
+def _store_recurrence_entry(entry: dict, per_record_bytes: int) -> dict:
+    """A recurrence entry for the output, its free-text ``sig`` defanged.
+
+    ``class`` is already one of the TAXONOMY classes, ``count`` an int and
+    ``run_ids`` checked run_ids. Matching used the raw sig; only the printed
+    copy changes, and a signature ``build`` wrote (12 hex characters) is left
+    as it is.
+    """
+    return {**entry, "sig": _store_text(entry["sig"], per_record_bytes)}
+
+
+def run_store_filter(args: argparse.Namespace) -> dict:
+    """filter --store: read this repo's records from the store and filter them.
+
+    The store module reads ``<store>/<fingerprint-dir>/runs/*.jsonl`` and
+    validates each record on its own, so one bad file never stops the read.
+    Recurrence and horizon immunity count only the survivors of the invalid,
+    foreign and cross-schema drops (stale records still count). No ``--project``
+    comparison: the fingerprint alone decides foreign. An unset store, or a cwd
+    with no fingerprint, reads nothing and returns the empty result.
+    """
+    horizon_ms = args.horizon_days * 24 * 60 * 60 * 1000
+    now_epoch = args.now_epoch
+    fingerprint = mc.repo_fingerprint(args.cwd or ".").get("value")
+    store = mc.resolve_store_root(args.store, project_root=args.project_root)
+    records, read_dropped = mc.read_store([store], fingerprint)
+    # run_id order, so nothing below depends on the order the files were read.
+    records.sort(key=lambda record: record["run_id"])
+
+    recurrence, run_id_counts = _recurrence_from_payloads(records)
+    immune_sigs = {sig for sig, count in run_id_counts.items() if count >= 2}
+
+    dropped = {
+        "foreign": read_dropped[mc.RECORD_FOREIGN],
+        "stale": 0,
+        "cross_schema": read_dropped[mc.RECORD_CROSS_SCHEMA],
+        "invalid": read_dropped[mc.RECORD_INVALID],
+    }
+    ranked: list[tuple[tuple, dict]] = []
+    for record in records:
+        age = now_epoch - record["created_at_epoch"]
+        if age > horizon_ms and not any(
+            sig in immune_sigs for sig in _store_signatures(record)
+        ):
+            dropped["stale"] += 1
+            continue
+        typed = _type_store_record(record, recurrence, args.per_record_bytes)
+        # Total order: this Epic first, then recurring, then created_at_epoch
+        # clamped to now (descending), then run_id (ascending). Future epochs
+        # clamp for ranking only and are never dropped.
+        key = (
+            0 if args.epic is not None and record["epic"] == args.epic else 1,
+            0 if typed["recurring"] else 1,
+            -min(typed["epoch"], now_epoch),
+            typed["id"],
+        )
+        ranked.append((key, typed))
+
+    ranked.sort(key=lambda item: item[0])
+    out = [typed for _key, typed in ranked][: args.max_records]
+    # Whole-payload byte cap, lowest-ranked records trimmed first.
+    while out and len(json.dumps(out, ensure_ascii=False).encode("utf-8")) > args.max_bytes:
+        out.pop()
+
+    return {
+        "records": out,
+        "recurrence": [
+            _store_recurrence_entry(recurrence[sig], args.per_record_bytes)
+            for sig in sorted(recurrence)
+        ],
+        "dropped": dropped,
+        "empty": len(out) == 0,
+    }
+
+
+# ---------------------------------------------------------------------------
 # latch
 # ---------------------------------------------------------------------------
 
 
+def cmd_latch_store(args: argparse.Namespace) -> int:
+    """latch --store: measure and write latch v2. No probe, no stdin, no MCP call.
+
+    A run_id that fails the shared check exits 2 before anything is written
+    (no git call, no latch, no store root), as ``mem_observation.py write``
+    does. Every other outcome writes the latch and exits 0; its colour is in
+    the printed state, and ``reason`` says why it is red.
+    """
+    if not mc.valid_run_id(args.run_id):
+        print(json.dumps({"error": f"invalid run_id {args.run_id!r}: expected epic-<id>-<YYYYMMDD>T<HHMMSS>Z"}))
+        return 2
+    measure = mc.measure_latch_v2(
+        run_id=args.run_id,
+        recall=args.recall,
+        store_value=args.store,
+        cwd=args.cwd,
+        project_root=args.project_root,
+    )
+    mc.write_state(args.impl_artifacts, measure.state)
+    print(
+        json.dumps(
+            {"latch": measure.state, "notes": measure.notes, "reason": measure.reason},
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def cmd_latch(args: argparse.Namespace) -> int:
+    if args.store is not None:
+        return cmd_latch_store(args)
     fingerprint = mc.repo_fingerprint(args.cwd or ".").get("value")
 
     if args.claude_mem_absent:
@@ -458,6 +628,10 @@ def cmd_latch(args: argparse.Namespace) -> int:
 
 
 def cmd_filter(args: argparse.Namespace) -> int:
+    if args.store is not None:
+        result = run_store_filter(args)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
     records, error = _parse_probe(args.probe)
     if error is not None or records is None:
         print(json.dumps({"error": error or "could not parse probe"}))
@@ -487,8 +661,16 @@ def cmd_selftest(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> int:
-    _force_utf8_stdio()
+_STORE_HELP = (
+    "cross_session_recall_store value (the local run store root): a ~ path, an "
+    "absolute path or a {project-root} path. A bare --store, an empty or blank "
+    "value, an unresolved {...} token, a literal $VAR or %%VAR%% and a relative "
+    "path count as unset."
+)
+_PROJECT_ROOT_HELP = "Substituted for {project-root} in the --store value."
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Cross-Session Recall latch + filter for ultracode-goal."
     )
@@ -501,14 +683,29 @@ def main(argv: list[str] | None = None) -> int:
     group = p_latch.add_mutually_exclusive_group(required=True)
     group.add_argument("--probe", help="get_observations JSON array (file path or '-').")
     group.add_argument("--claude-mem-absent", action="store_true", dest="claude_mem_absent")
+    group.add_argument(
+        "--store", nargs="?", const="", default=None,
+        help=_STORE_HELP + " Writes latch v2: no probe, the store's write probe instead.",
+    )
     p_latch.add_argument("--tool-form", choices=["plugin", "bare"], default=None, dest="tool_form")
+    p_latch.add_argument("--project-root", default=None, dest="project_root", help=_PROJECT_ROOT_HELP)
     p_latch.add_argument("--cwd", default=None)
     p_latch.set_defaults(func=cmd_latch, claude_mem_absent=False)
 
     p_filter = sub.add_parser("filter", help="Filter + type a probe array deterministically.")
     p_filter.add_argument("--impl-artifacts", required=True, dest="impl_artifacts")
-    p_filter.add_argument("--probe", required=True, help="get_observations JSON array (file path or '-').")
+    source = p_filter.add_mutually_exclusive_group(required=True)
+    source.add_argument("--probe", help="get_observations JSON array (file path or '-').")
+    source.add_argument(
+        "--store", nargs="?", const="", default=None,
+        help=_STORE_HELP + " Reads this repo's records from the store instead of a probe.",
+    )
     p_filter.add_argument("--project", default=None)
+    p_filter.add_argument(
+        "--epic", default=None,
+        help="--store only: the current Epic, whose records rank first.",
+    )
+    p_filter.add_argument("--project-root", default=None, dest="project_root", help=_PROJECT_ROOT_HELP)
     p_filter.add_argument("--max-records", type=int, default=5, dest="max_records")
     p_filter.add_argument("--per-record-bytes", type=int, default=2048, dest="per_record_bytes")
     p_filter.add_argument("--max-bytes", type=int, default=8192, dest="max_bytes")
@@ -520,8 +717,29 @@ def main(argv: list[str] | None = None) -> int:
     p_self = sub.add_parser("selftest", help="Report whether a probe satisfies the capability pin.")
     p_self.add_argument("--probe", default=None, help="get_observations JSON array (file path or '-').")
     p_self.set_defaults(func=cmd_selftest)
+    return parser
 
+
+def _refuse_mixed_modes(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Exit 2 (parser.error) on a flag that does not belong to the chosen mode,
+    before anything is written. The claude-mem modes keep accepting any
+    run_id, as today; latch --store checks its own (cmd_latch_store)."""
+    if args.command == "latch":
+        if args.store is None:
+            if args.project_root is not None:
+                parser.error("latch: --project-root applies only with --store")
+        elif args.tool_form is not None:
+            parser.error("latch: --tool-form belongs to the claude-mem latch, not --store")
+    elif args.command == "filter" and args.store is None:
+        if args.epic is not None or args.project_root is not None:
+            parser.error("filter: --epic and --project-root apply only with --store")
+
+
+def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
+    parser = _build_parser()
     args = parser.parse_args(argv)
+    _refuse_mixed_modes(parser, args)
 
     # Default now-epoch to the current wall clock (ms) when the caller did not
     # pin one. Pinning is what makes tests deterministic.

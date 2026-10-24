@@ -1772,3 +1772,77 @@ def test_an_implausibly_large_sidecar_is_not_read(tmp_path):
         json.dumps({"kind": "story-decomposed", "pad": "x" * (128 * 1024)}), encoding="utf-8"
     )
     assert drive_epic.handoff_kind(impl, STORY_A) is None
+
+
+# --- Cross-Session Recall: one run file per spawn (AC-18) --------------------
+
+
+def test_three_spawns_of_one_epic_leave_three_run_files_and_a_shared_cause_recurs(
+    git_project, monkeypatch, tmp_path
+):
+    """CSR-INT-029 (AC-18): `drive_epic.py` itself is unchanged.
+
+    Each spawn reaches Finalize as its own run with its own run_id, so the fake
+    session runs the real `mem_observation.py write` as its Finalize would. A
+    drive of three stories leaves three run files, and a root cause two of its
+    stories hit is `recurring` and horizon-immune once every record is 200 days
+    old, while the third record drops as stale. The store sits under tmp_path,
+    outside the project root, because the driver's triage reads the tree.
+    """
+    import subprocess
+
+    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    store = tmp_path / "store"
+    write_sprint_status(
+        git_project["impl"],
+        {DONE_STORY: "done", STORY_A: "ready-for-dev", STORY_B: "backlog", STORY_C: "backlog"},
+    )
+    causes = ["class=race-condition,path=src/x.py"] * 2 + ["class=test-flake,path=tests/y.py"]
+    run_ids = [f"epic-7-2026060{n}T000000Z" for n in (1, 2, 3)]
+
+    class FinalizingSession(FakeSession):
+        def __call__(self, command, cwd, timeout=None):
+            n = len(self.calls)
+            proc = subprocess.run(
+                [
+                    sys.executable, str(HERE.parent / "mem_observation.py"), "write",
+                    "--impl-artifacts", str(self.project["impl"]), "--store", str(store),
+                    "--epic", "7", "--run-id", run_ids[n], "--gate-status", "PASS",
+                    "--verdict", "advance", "--cwd", str(self.project["root"]),
+                    "--root-cause", causes[n],
+                ],
+                capture_output=True, text=True, encoding="utf-8",
+            )
+            assert proc.returncode == 0, proc.stderr
+            assert json.loads(proc.stdout)["status"] == "written", proc.stdout
+            return super().__call__(command, cwd, timeout)
+
+    fake = FinalizingSession(
+        git_project,
+        [(complete_envelope(), STORY_A), (complete_envelope(), STORY_B), (complete_envelope(), STORY_C)],
+    )
+    run_drive(git_project, monkeypatch, fake)
+    assert len(fake.calls) == 3
+    assert sorted(p.name for p in store.glob("*/runs/*.jsonl")) == [f"{r}.jsonl" for r in run_ids]
+
+    later = int(time.time() * 1000) + 200 * 24 * 60 * 60 * 1000
+    out = json.loads(
+        subprocess.run(
+            [
+                sys.executable, str(HERE.parent / "mem_recall.py"), "filter",
+                "--impl-artifacts", str(git_project["impl"]), "--store", str(store),
+                "--epic", "7", "--now-epoch", str(later), "--cwd", str(git_project["root"]),
+            ],
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        ).stdout
+    )
+    assert sorted(r["id"] for r in out["records"]) == run_ids[:2]
+    assert all(r["recurring"] for r in out["records"])
+    assert out["dropped"]["stale"] == 1
+    assert [(e["count"], e["run_ids"]) for e in out["recurrence"]] == [(2, run_ids[:2])]
+    assert _git(git_project["root"], "status", "--porcelain") == ""

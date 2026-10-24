@@ -21,7 +21,10 @@ properties that make it trustworthy rather than merely convenient:
 3. THE LATCH IS REPORTED, NEVER CERTIFIED. `certifies` is a literal null and
    the latch never moves the exit code: exit 0 must not become an
    inherited-latch claim by proxy, because re-latching from this run's own
-   measurement is a model-owned Stage 1 step on every resume.
+   measurement is a model-owned Stage 1 step on every resume. A present latch
+   also reports its `latch_version` and the derived `store_ok` colour, red for
+   a v1 latch and anything short of a green latch v2, and neither moves the
+   exit either.
 4. THE STORY ROUTE IS ARTIFACT-DERIVED AND CONSERVATIVE. `gate-owed` (skip to
    step 5) fires only when the full discriminator holds AND --trace-output
    supplied the artifact evidence; absence of evidence routes to the ordinary
@@ -38,6 +41,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 SCRIPT = SCRIPTS / "preflight_check.py"
@@ -585,6 +590,189 @@ def test_an_owned_latch_reports_true_and_still_never_certifies(tmp_path: Path) -
     code, out = _run(root, "--run-id", "epic-7-X", impl=impl)
     latch = out["checks"]["latch"]
     assert code == 0
+    assert latch["owned_by_this_run"] is True
+    assert latch["certifies"] is None
+
+
+# --- the latch: version and store_ok colour (latch v2) -------------------------
+# A present latch also reports its latch_version and the derived store_ok
+# colour, read through lib/mem_common.py's latch_view. Reporting only: neither
+# moves the exit code, adds a reason, or certifies anything.
+
+_LATCH_RUN = "epic-7-20260804T120000Z"
+
+_V1_GREEN_BY_OLD_RULES = {
+    "latch_version": 1,
+    "run_id": _LATCH_RUN,
+    "claude_mem": "present",
+    "schema_ok": True,
+    "recall": "on",
+    "tool_form": "plugin",
+    "fingerprint": "0123456789abcdef",
+    "created_at": "2026-08-04T12:00:00Z",
+}
+
+
+def _v2_latch(store_root: Path, overrides: dict | None = None) -> dict:
+    state = {
+        "latch_version": 2,
+        "run_id": _LATCH_RUN,
+        "backend": "jsonl",
+        "store_ok": True,
+        "recall": "on",
+        "store": str(store_root),
+        "fingerprint": "0123456789abcdef",
+        "created_at": "2026-08-04T12:00:00Z",
+    }
+    state.update(overrides or {})
+    return state
+
+
+def _write_latch(impl: Path, state: dict) -> None:
+    impl.mkdir(exist_ok=True)
+    (impl / ".mem-state.json").write_text(json.dumps(state), encoding="utf-8")
+
+
+def test_a_v1_latch_reports_version_1_and_reads_red(tmp_path: Path) -> None:
+    """CSR-INT-030 (AC-16): even a v1 latch that was green by the claude-mem
+    rules reads red; its own fields keep reporting as before."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    _write_latch(impl, _V1_GREEN_BY_OLD_RULES)
+    code, out = _run(root, "--run-id", _LATCH_RUN, impl=impl)
+    latch = out["checks"]["latch"]
+    assert code == 0 and out["armed"] is True and out["reasons"] == []
+    assert latch["latch_version"] == 1
+    assert latch["store_ok"] is False
+    assert latch["certifies"] is None
+    assert latch["state"] == "present"
+    assert latch["claude_mem"] == "present"
+    assert latch["recall"] == "on"
+    assert latch["run_id"] == _LATCH_RUN
+    assert latch["owned_by_this_run"] is True
+
+
+def test_a_green_v2_latch_reports_green_and_still_never_certifies(tmp_path: Path) -> None:
+    """CSR-INT-034 (AC-16): the colour is reported, never certified."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    _write_latch(impl, _v2_latch(tmp_path / "store"))
+    code, out = _run(root, "--run-id", _LATCH_RUN, impl=impl)
+    latch = out["checks"]["latch"]
+    assert code == 0 and out["armed"] is True and out["reasons"] == []
+    assert latch["latch_version"] == 2
+    assert latch["store_ok"] is True
+    assert latch["owned_by_this_run"] is True
+    assert latch["certifies"] is None
+
+
+@pytest.mark.parametrize(
+    "overrides, version",
+    [
+        ({"store_ok": False}, 2),
+        ({"store_ok": "true"}, 2),
+        ({"recall": "off"}, 2),
+        ({"backend": "claude-mem"}, 2),
+        ({"store": ""}, 2),
+        ({"store": "{workflow.cross_session_recall_store}"}, 2),
+        ({"store": None}, 2),
+        ({"store": "relative/store"}, 2),
+        ({"store": "/abs/st\0ore"}, 2),
+        ({"latch_version": 3}, 3),
+        ({"latch_version": True}, None),
+        ({"latch_version": "2"}, None),
+    ],
+    ids=[
+        "store-not-ok", "store-ok-a-string", "recall-off", "other-backend", "store-empty",
+        "store-unresolved", "store-null", "store-relative", "store-nul", "version-3",
+        "version-bool", "version-string",
+    ],
+)
+def test_a_latch_short_of_green_v2_reads_red(
+    overrides: dict, version: int | None, tmp_path: Path
+) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    _write_latch(impl, _v2_latch(tmp_path / "store", overrides))
+    code, out = _run(root, "--run-id", _LATCH_RUN, impl=impl)
+    latch = out["checks"]["latch"]
+    assert code == 0 and out["reasons"] == []
+    assert latch["latch_version"] == version
+    assert latch["store_ok"] is False
+    assert latch["certifies"] is None
+
+
+@pytest.mark.parametrize("name", ["my$proj", "{x}", "50%"])
+def test_a_green_v2_latch_under_an_odd_folder_name_reads_green(name: str, tmp_path: Path) -> None:
+    """The latch holds the resolved store, taken as written: a "$", braces or
+    "%" in a folder name never turn a green latch red."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    _write_latch(impl, _v2_latch(tmp_path / name / ".recall"))
+    code, out = _run(root, "--run-id", _LATCH_RUN, impl=impl)
+    latch = out["checks"]["latch"]
+    assert code == 0 and out["reasons"] == []
+    assert latch["latch_version"] == 2
+    assert latch["store_ok"] is True
+
+
+def test_a_versionless_latch_reads_red(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    _write_latch(impl, {"claude_mem": "present", "recall": "on", "run_id": _LATCH_RUN})
+    code, out = _run(root, impl=impl)
+    latch = out["checks"]["latch"]
+    assert code == 0
+    assert latch["latch_version"] is None
+    assert latch["store_ok"] is False
+    assert "owned_by_this_run" not in latch
+
+
+def test_a_green_v2_latch_never_flips_a_failed_arming(tmp_path: Path) -> None:
+    """The exit stays the arming verdict alone, and the latch adds no reason."""
+    root = _repo(tmp_path, branch="feature/unrelated")
+    _arm(root, matcher="Bash")
+    impl = root / "impl"
+    impl.mkdir()
+    _, without_latch = _run(root, impl=impl)
+    _write_latch(impl, _v2_latch(tmp_path / "store"))
+    code, out = _run(root, impl=impl)
+    assert code == 1 and out["armed"] is False
+    assert out["checks"]["latch"]["store_ok"] is True
+    assert out["reasons"] == without_latch["reasons"]
+
+
+def test_the_latch_mem_recall_writes_reads_green_here(tmp_path: Path) -> None:
+    """End to end: the latch `mem_recall.py latch --store` writes is the one
+    this report reads green."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    home = tmp_path / "home"
+    home.mkdir()
+    store = tmp_path / "store"
+    proc = subprocess.run(
+        [
+            sys.executable, str(SCRIPTS / "mem_recall.py"), "latch",
+            "--impl-artifacts", str(impl), "--run-id", _LATCH_RUN, "--recall", "on",
+            "--store", str(store), "--cwd", str(root),
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **_GIT_ENV, "HOME": str(home), "USERPROFILE": str(home)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["latch"]["store_ok"] is True
+    code, out = _run(root, "--run-id", _LATCH_RUN, impl=impl)
+    latch = out["checks"]["latch"]
+    assert code == 0
+    assert latch["latch_version"] == 2
+    assert latch["store_ok"] is True
     assert latch["owned_by_this_run"] is True
     assert latch["certifies"] is None
 

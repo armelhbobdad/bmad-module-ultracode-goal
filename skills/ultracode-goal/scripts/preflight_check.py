@@ -70,7 +70,9 @@ branch, both hooks with the all-tools PreToolUse matcher, the five injected
 hook env vars (accepted from the hook command strings OR the inherited process
 env, both of which preflight step 5 permits), and the BMAD story skills (a
 BMAD update between spawns can remove them), reports the recall latch WITHOUT
-certifying it (re-latching stays a model-owned Stage 1 step on every resume),
+certifying it (re-latching stays a model-owned Stage 1 step on every resume;
+a present latch also reports its `latch_version` and a derived `store_ok`
+colour, red for anything but a green latch v2),
 reports `impl_artifacts_tracked` as step 1 does (a resumed session has no
 step-1 report to read it from), and, given --story, derives the story's resume route from artifacts alone:
 story-boundary (no baseline), gate-owed (committed, green, un-gated - requires
@@ -920,6 +922,19 @@ def _assert_branch(
     }
 
 
+def _latch_view(data: dict) -> dict:
+    """lib/mem_common.py's latch_view(), so this report reads a latch the way
+    the store module (and, by its parity test, the guard) does. Imported the way
+    _story_gate_artifacts_present imports gate_eval: sibling module, path set
+    here, never at module load."""
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from lib import mem_common  # noqa: PLC0415  (sibling package, path set above)
+
+    return mem_common.latch_view(data)
+
+
 def _read_latch(impl_artifacts: Path, run_id: str | None) -> dict:
     """The on-disk recall latch, REPORTED and never certified.
 
@@ -927,6 +942,13 @@ def _read_latch(impl_artifacts: Path, run_id: str | None) -> dict:
     inherited-latch claim by proxy. Whatever this reports, the resume re-latches
     from its own measurement (Stage 1's latch step), and a latch whose run_id is
     not this run's is another run's artifact (references/execute.md, resume).
+
+    A present latch also reports `latch_version` and the derived `store_ok`
+    colour of latch v2 (the local run store): true only for a v2 latch whose
+    store_ok is true with recall on, the jsonl backend and an absolute store
+    path. A v1 latch, or any other version, reads as red. Both are reporting
+    only: they never move the exit code, never add a blocker, and `certifies`
+    stays None.
     """
     path = impl_artifacts / ".mem-state.json"
     try:
@@ -949,6 +971,9 @@ def _read_latch(impl_artifacts: Path, run_id: str | None) -> dict:
     }
     if run_id is not None:
         out["owned_by_this_run"] = latch_run == run_id
+    view = _latch_view(data)
+    out["latch_version"] = view["latch_version"]
+    out["store_ok"] = view["store_ok"]
     return out
 
 
