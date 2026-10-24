@@ -145,7 +145,7 @@ The docs are organized into three buckets: **Why** (start here), **Try** (do stu
 - **[Architecture](./docs/architecture.md)**: the conductor model, enforcement layers in depth, and `customize.toml` resolution.
 - **[Gate Model](./docs/gate-model.md)**: how `gate_eval.py` maps `gate_status` to a verdict, and the production AND-signals.
 - **[Health Check](./docs/health-check.md)**: the terminal self-improvement loop: what it sends, privacy, and how to disable it.
-- **[Cross-Session Recall](./docs/cross-session-recall.md)**: the optional claude-mem integration: touchpoints, trust model, and how to enable it.
+- **[Cross-Session Recall](./docs/cross-session-recall.md)**: the optional run history in a local store UCG owns: what a run reads and writes, the trust model, and how to enable it.
 - **[Knowledge-Graph Refresh](./docs/knowledge-graph-refresh.md)**: the optional graphify integration: preconditions, what it sends where, and what it never touches.
 - **[Operating Tips](./docs/operating-tips.md)**: field notes from real drives: the driver's stop reasons, sequencing by row order, and the verification traps.
 - **[Troubleshooting](./docs/troubleshooting.md)**: real failure modes and their remediations.

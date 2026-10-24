@@ -1,87 +1,49 @@
 ---
 title: Cross-Session Recall
-description: The optional claude-mem integration - UCG consults your past runs in this repo before it scopes an Epic and before its preflight gate, advisory only and never in the gate path. Opt-in, hook-latched, off by default.
+description: The optional run history - UCG keeps one record per run in a local store it owns, and reads this repo's past runs before it scopes an Epic and before its preflight gate. Advisory only, never in the gate path. Opt-in, hook-latched, off by default.
 ---
 
-> **Optional, opt-in, off by default.** Cross-Session Recall is an *advisory* read of your own past runs. It informs the model; it never decides anything. It is wired so it can **never** sit in the gate or completion path, it **fails closed** during a run, and when it is off, or when claude-mem is absent, the run is byte-for-byte the same as a run without it.
+> **Optional, opt-in, off by default.** Cross-Session Recall is an *advisory* read of your own past runs. It informs the model; it never decides anything. It can **never** sit in the gate or completion path, and it **fails closed** during a run. When it is off, a run reads no past runs and writes no record.
 
 ## What it does
 
-Cross-Session Recall lets UCG learn from its own history in *this* codebase instead of starting amnesiac every Epic. If you run [claude-mem](https://github.com/thedotmack/claude-mem), this executor consults your past runs in this codebase before it scopes a new Epic and before its preflight gate, so it surfaces what bit you here last time instead of starting amnesiac. You stay in the driver's seat; it informs, it doesn't auto-decide.
+Cross-Session Recall lets UCG learn from its own history in *this* codebase instead of starting amnesiac every Epic. Each run that reaches Finalize writes one small record of how it went: the Epic, the gate status, the verdict and the root causes it hit. Before the next run scopes its Epic, and again before its preflight gate, UCG reads this repo's records and surfaces what bit you here before. You stay in the driver's seat; it informs, it doesn't auto-decide.
 
 The benefit compounds: your first Epic teaches it, your third Epic consults two.
 
-## What you need
+Recall lives in a store UCG owns, on this machine. It needs nothing new to install: two scripts that ship with the skill, `mem_recall.py` and `mem_observation.py`, read and write it, with the Python and `uv` UCG already requires. There is no memory tool and no MCP call.
 
-You need [claude-mem](https://github.com/thedotmack/claude-mem) installed and the `cross_session_recall` knob set to `on`. That is the whole dependency: UCG reads and writes through claude-mem's MCP tools when they are present, and does nothing recall-related when they are not.
+> **UCG no longer uses claude-mem.** Earlier versions read and wrote your run summaries through claude-mem's MCP tools. If you used that, see [migrating from claude-mem](#migrating-from-claude-mem).
 
-> claude-mem is a third-party plugin maintained independently of this module. We don't bundle, endorse, or install it; Cross-Session Recall simply uses it when you already have it.
+## The store
 
-**Two headless caveats, both observed rather than theoretical.**
+The store is a folder you name with the `cross_session_recall_store` key.
 
-*Your harness may gate the MCP call behind a permission prompt.* An unattended run has nobody to answer it, so the tools are listed, their schemas resolve, and the one sanctioned `search` is refused at call time. UCG handles that correctly (it latches red, logs a `WARN`, and proceeds gateless, since recall is advisory and never part of the gate) but it pays one call every run to rediscover it. One project recorded that outcome on 25 consecutive runs. If that is your situation, `on` means **off in practice**: either grant the permission once, or set `cross_session_recall = "off"` and stop paying for the probe.
-
-*The latch only enforces anything if your PreToolUse hook is armed for MCP tools.* The guard denies a claude-mem call under a red latch, but Claude Code only invokes a hook group for the tools its `matcher` selects, and a group armed for `Bash` alone is never invoked for an MCP call. Preflight arms it with an all-tools matcher for exactly this reason; if you merge the hook by hand, match every tool or this gate is inert.
-
-*And claude-mem may expose reads without a write.* The latch is validated by a read-shaped probe, so `present` certifies that UCG can look, not that there is anywhere to write. On a surface with no write tool, Finalize parks its summary and says so rather than reporting a failed write.
-
-## The touchpoints
-
-Recall touches the run in exactly three places, and a machine latch (`.mem-state.json`) gates every one of them. The latch is written **once** at Ingest and removed at Finalize close-out; while it is present a `PreToolUse` hook allows claude-mem calls only when recall is green, and denies them otherwise: fail closed. The Execute and Gate stages are never touched.
-
-```mermaid
-flowchart TD
-    I["Stage 1 Ingest: write latch, advisory scope-recall read"] --> P{"Stage 2 Preflight: prior-failure recall reuses the same fetch"}
-    P -->|"advisory only, voice never vote"| X["Stage 4 Execute: untouched"]
-    X --> G["Stage 5 Gate: untouched, gate_eval.py only"]
-    G --> F["Stage 6 Finalize: one structured write, then remove latch"]
-
-    LATCH{".mem-state.json latch: present and green gates reads and writes; absent or not green denies, fail closed"}
-    LATCH -.->|"gates"| I
-    LATCH -.->|"gates"| P
-    LATCH -.->|"gates"| F
-
-    classDef gate fill:#6366F1,stroke:#4F46E5,color:#fff
-    class P,LATCH gate
-```
-
-- **Ingest (read).** Before UCG scopes the Epic, one advisory read pulls prior run summaries for this repo, sanitizes them, and surfaces what recurred.
-- **Preflight (read, reused).** The prior-failure recall reuses that same fetch, no second round-trip, so the preflight reasoning can see failures that bit you here before. It is advisory context, never a gate input.
-- **Finalize (write).** At close-out UCG records exactly one structured observation summarizing the run's outcome and signatures. The optional retrospective reuses the recurrence counts already computed during the reads.
-
-Outside a run, when the latch file is absent, the hook never touches your claude-mem usage at all. Recall is scoped strictly to an active UCG run.
-
-## The trust model
-
-The rule is **data, never directive**: recalled content is treated as facts to consider, never as instructions to follow, and it never reaches the gate.
-
-What the sanitizer **does** before any advisory is surfaced:
-
-- **Scopes to this repo.** A repository fingerprint pins recall to the same origin and root commit, so another project's history cannot leak in.
-- **Redacts secrets.** High-precision patterns (AWS keys, `ghp_`/`gho_` tokens, `sk-` keys, bearer tokens, PEM headers, `password=`/`token=`/`api_key=` values) are replaced with `[redacted]`.
-- **Neutralizes shape.** Bidi controls are stripped, backticks and code fences removed, newlines collapsed, and each surfaced title clamped to 80 codepoints, so an advisory cannot carry instruction-shaped or prompt-injection payloads.
-- **Drops the stale and the foreign.** Records past the recency horizon are dropped (signatures that recurred across two or more distinct runs earn per-signal horizon immunity), foreign-project and cross-schema records are filtered out, and malformed records are discarded.
-
-What it honestly does **not** do:
-
-- It is **not** a complete secret scrubber: redaction is high-precision pattern matching, not a guarantee that nothing sensitive ever survives.
-- It does **not** vote. Advisories carry only a mechanical `recurred` field (`yes`/`no`/`unknown`); there are no LLM self-grades, and nothing recall surfaces is ever an input to `gate_eval.py`. The gate reads TEA's `gate-decision.json` and only that. See the [gate model](./gate-model.md).
-- It does **not** keep working when claude-mem looks wrong. If the capability contract fails (a missing tool, a malformed probe, a breaking schema change) the latch records recall as absent and the hook denies claude-mem calls for the run. Fail closed, never fail open.
+- **No default.** The key ships as `""`. An empty or blank value, an unresolved `{...}` token, a literal `$VAR` or `%VAR%` and a relative path all count as unset.
+- **Accepted values.** A `~` path, expanded like `health_check_seen_cache`, such as `~/.ultracode-goal/recall`. An absolute path or a `{project-root}` path works too.
+- **Layout.** Each run gets one file, `<store>/<fingerprint-dir>/runs/<run_id>.jsonl`, holding one JSON line. The file is created once and never rewritten. `<fingerprint-dir>` comes from this repo's fingerprint (its origin and root commit), in a form that is legal on Windows; a repo with no remote gets `local-<hex>`.
+- **Per machine.** Another developer or a CI runner never sees this machine's records. Worktrees and clones of one repo on this machine share the same fingerprint, so they read each other's records. A shared store is a follow-up, tracked in [#154](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/154).
+- **It ignores itself.** When the scripts create the store folder, they write a `.gitignore` holding `*` inside it, so a store inside your workspace leaves `git status` clean. A folder that already existed gets no `.gitignore`.
+- **Give it a folder of its own.** While a run is active, the guard denies every tool call that names the store. A store set to your workspace, to a folder above it, or to a folder that holds the implementation artifacts makes nearly every command there name the store, so they are denied. [SECURITY.md](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/SECURITY.md) has the detail.
+- **Growth.** The store has no pruning yet. Each run, so each `drive_epic` spawn, adds one small file, and Ingest reads them all. The filter's 120-day horizon hides stale records at read time, except records holding a root cause that two or more runs recorded. Pruning is a follow-up, most naturally with #154.
 
 ## Turning it on
 
-Set the knob in your project's `_bmad/custom/ultracode-goal.toml`. **No installer creates that file**, so on most projects you are creating it: `_bmad/custom/` exists already, but the `config.toml` sitting in it belongs to BMAD's own configuration, and putting a UCG knob there does nothing.
+Set both keys in your project's `_bmad/custom/ultracode-goal.toml`. **No installer creates that file**, so on most projects you are creating it: `_bmad/custom/` exists already, but the `config.toml` sitting in it belongs to BMAD's own configuration, and putting a UCG knob there does nothing.
 
 ```toml
 [workflow]
-# Cross-Session Recall: consult and record prior runs of this repo via claude-mem.
-# Requires claude-mem installed; advisory only, never part of the gate. Off by default.
+# Cross-Session Recall: read and record prior runs of this repo in a local store.
+# Advisory only, never part of the gate. Off by default.
 cross_session_recall = "on"
+cross_session_recall_store = "~/.ultracode-goal/recall"
 ```
 
-The `[workflow]` table header matters: the resolver extracts the `workflow` block from the merged files, so a bare top-level `cross_session_recall` line is silently discarded and the feature stays off.
+The `[workflow]` table header matters: the resolver extracts the `workflow` block from the merged files, so a bare top-level line is silently discarded and the feature stays off.
 
-With it `on` and claude-mem installed, the next run reads at Ingest and Preflight and writes one observation at Finalize. Nothing else about the run changes.
+Both keys are needed. With `on` and the store key unset, the run's latch is red, recall stays off, and the run report carries `NOTE recall-store-unset`, naming the key. A store folder that cannot be written also turns the latch red; the run report then gives the latch's `reason`.
+
+If you ran with `cross_session_recall = "on"` before this release, recall stays off until you set the store key. That is on purpose: no run summary moves to a new place without your choice.
 
 ## Turning it off
 
@@ -92,21 +54,136 @@ Set the knob back to `off` (its default):
 cross_session_recall = "off"
 ```
 
-> **OFF-coherence disclosure.** Setting `cross_session_recall` to `off` disables **UCG's own** recall and write only. A separately-installed claude-mem still injects its session-start index into your Claude Code sessions; that is claude-mem's behavior, not UCG's. To stop that, configure or uninstall claude-mem itself.
+Off still writes the run latch at Stage 1, so while a run is active the guard still denies claude-mem calls, calls that name a set store, and changes to the latch. Only reading and writing records stops.
 
-## What happens when claude-mem is absent
+> **OFF-coherence disclosure.** UCG does not use claude-mem, whether recall is on or off. A separately installed claude-mem still captures your sessions and injects its session-start index into them; that is claude-mem's behavior, not UCG's. To stop that, configure or uninstall claude-mem itself.
 
-Nothing: the run is identical. There is no fallback to emulate, no degraded path, no warning. UCG's control flow is the same whether claude-mem is installed or not; absent claude-mem, the recall touchpoints are simply no-ops and Finalize skips the write. A run with the knob `on` and claude-mem missing behaves exactly like a run with the knob `off`.
+## What a run does
+
+Recall touches the run in three places. A machine latch, `.mem-state.json` in the implementation artifacts folder, is present for the whole run, and the `PreToolUse` guard reads it on every tool call.
+
+```mermaid
+flowchart TD
+    I["Stage 1 Ingest: write the latch, then one filtered read"] --> P{"Stage 2 Preflight: reuses the Stage 1 read"}
+    P -->|"advisory only, voice never vote"| X["Stage 4 Execute: untouched"]
+    X --> G["Stage 5 Gate: untouched, gate_eval.py only"]
+    G --> F["Stage 6 Finalize: drain, write one record, then unlatch"]
+
+    STORE[("Local run store: one file per run")]
+    I -.->|"reads"| STORE
+    F -.->|"writes"| STORE
+
+    LATCH{".mem-state.json latch: while present, the guard denies claude-mem, calls that name the store, and changes to the latch"}
+    LATCH -.->|"guards"| I
+    LATCH -.->|"guards"| P
+    LATCH -.->|"guards"| F
+
+    classDef gate fill:#6366F1,stroke:#4F46E5,color:#fff
+    class P,LATCH gate
+```
+
+| Stage | What recall does |
+| --- | --- |
+| Stage 1 Ingest | Mints the run id, then runs `mem_recall.py latch` whatever the knob says, which writes the latch. With recall `on`, the latch is green only when the store can be written. On a green latch, one `mem_recall.py filter` call reads this repo's records. An attended run shows one line per record; a headless run logs them and goes on. |
+| Stage 2 Preflight | Reuses the Stage 1 read as prior-failure hypotheses for the readiness check. It never reads the store again, and a recalled record is never a RED on its own. A preflight STOP removes the latch first. |
+| Stage 4 Execute, Stage 5 Gate | Untouched. |
+| Stage 6 Finalize | Reads the latch. Only when it is this run's and green: `mem_observation.py drain` lands records parked earlier, then `mem_observation.py write` writes this run's record. Then, on every path, `mem_recall.py unlatch` removes this run's latch. |
+
+Each recall call is attempted once and never retried. A run whose recall turned off along the way says so in its report, with the tokens under [troubleshooting](#troubleshooting).
+
+**What a record holds.** The Epic, the run id, the repo fingerprint, the gate status and verdict, the root-cause signatures (each with a class from a fixed taxonomy and an artifact path), the count of deferred items, the advisories the run consumed with whether they recurred, the time, and the project's folder name for display. Free text is redacted before it is written. A run whose gate was never evaluated writes no record; a `WAIVED` outcome is written.
+
+**When the store cannot take a record.** The record waits in `mem-outbox.<run_id>.jsonl` in the implementation artifacts folder, and the run logs `WARN mem-write-deferred`. The next run that reaches Finalize with a green latch drains it, keeping its original time. A deferred record older than 14 days is dropped, and one whose drain fails three times moves to `mem-outbox.dead.jsonl`.
+
+### One record per spawn
+
+`drive_epic.py` runs each story in its own `claude -p` session, and each spawn is its own run with its own run id: a spawn that resumes the Epic mints a fresh one and never reuses an earlier spawn's. So a drive writes **one record file per spawn**, not one per Epic. The consequence: **two stories of one drive hitting the same root cause count as recurring**, and that root cause is then exempt from the 120-day horizon, even though one drive produced both records. A spawn killed by the driver's session timeout never reaches Finalize and writes no record.
+
+## The latch and the guard
+
+The latch is how the guard knows a run is active. Only `mem_recall.py` changes it: `latch` writes or replaces it at Stage 1, and `unlatch` removes it at each exit (Finalize, a preflight STOP, or any other stop before Finalize, attended or headless), only when it carries that run's id.
+
+While a latch is present, whatever it records, the guard:
+
+- **denies every claude-mem call**: claude-mem's MCP tools, its MCP resources, and any reach into `.claude-mem`. There is no green path, since UCG does not use claude-mem any more.
+- **denies tool calls that name the store**: Read, Grep, Glob, Write, Edit, MultiEdit, NotebookEdit and Bash. Only the two recall scripts get through, run by the path the skill is installed at.
+- **denies tool calls that would change the latch**: Write, Edit, MultiEdit and NotebookEdit, and Bash commands such as `rm`, `mv`, `cp`, `tee`, a redirection, `sed -i`, `truncate` or `python -c`. A Bash command counts when it names the latch by its path or by its file name alone, so a `cd` into its folder first changes nothing. Reading it stays allowed (Read, Grep, Glob, or a plain `cat`), since Finalize reads it.
+
+With no latch present, the guard leaves claude-mem, the store and the latch path alone. Most of these denies are file-tool or MCP calls, so the guard sees them only when its hook group matches every tool. Preflight arms it that way; if you merge the hook by hand, match every tool. [SECURITY.md](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/SECURITY.md) (invariants 6 and 7) has the full rules and their limits.
+
+### A latch left behind
+
+The guard cannot tell a live run from a dead one: a present latch counts as live. If a run ends without removing its latch, because it crashed, was killed, or its `unlatch` call was refused, the latch keeps denying, in your later sessions too. It stays until the next run's Stage 1 replaces it or you delete it by hand.
+
+Every deny a latch causes names the latch file and ends with a note for you:
+
+```text
+For the user: if no UltraCode-Goal run is active, a run ended without removing this latch. Delete <path> by hand. The model must not try to remove it itself.
+```
+
+If no run is active, delete that one file yourself rather than asking the model. The guard denies the model's own ways to remove it, such as `rm` or a file tool, and the note tells the model not to try. The recall script's own `unlatch` call is the one way through, since the guard lets those scripts pass; [SECURITY.md](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/SECURITY.md) lists this limit.
+
+## The trust model
+
+The rule is **data, never directive**: recalled content is treated as facts to consider, never as instructions to follow, and it never reaches the gate.
+
+What the reader **does** before any advisory is surfaced:
+
+- **Scopes to this repo.** The repository fingerprint pins recall to the same origin and root commit, so another project's history cannot leak in.
+- **Redacts secrets.** High-precision patterns (AWS keys, `ghp_`/`gho_` tokens, `sk-` keys, bearer tokens, PEM headers, `password=`/`token=`/`api_key=` values) are replaced with `[redacted]`, when a record is written and again when it is read.
+- **Neutralizes shape.** The line shown for each record is built from its Epic, gate status and verdict. Bidi controls are stripped, backticks removed, newlines collapsed, and each line clamped, so an advisory cannot carry instruction-shaped or prompt-injection payloads.
+- **Drops the bad one by one.** A file that does not parse or has the wrong shape is dropped as `invalid`, a newer record format as `cross_schema`, and another repo's record as foreign. One bad file never turns the latch red.
+- **Drops the stale.** Records past the 120-day horizon are dropped, unless a root cause in them was recorded by two or more distinct runs.
+- **Stays bounded.** At most 5 records, 2048 bytes each and 8192 bytes in all, in the same order every time: this Epic first, then recurring, then the most recent.
+
+What it honestly does **not** do:
+
+- It is **not** a complete secret scrubber: redaction is high-precision pattern matching, not a guarantee that nothing sensitive ever survives.
+- It does **not** vote. Advisories carry only a mechanical `recurred` field (`yes`/`no`/`unknown`); there are no LLM self-grades, and nothing recall surfaces is ever an input to `gate_eval.py`. The gate reads TEA's `gate-decision.json` and only that. See the [gate model](./gate-model.md).
+- It does **not** keep going when the store looks wrong. A store that cannot be written turns the latch red, and the run goes on with recall off. Fail closed, never fail open.
+
+## Migrating from claude-mem
+
+- **Opt in again.** Set `cross_session_recall_store`. Until you do, `on` gives a red latch and `NOTE recall-store-unset`.
+- **History is not imported.** Recall starts empty. A root cause counts as recurring once two runs record it.
+- **Parked summaries are converted.** A summary an earlier version parked in `mem-outbox.<run_id>.jsonl` is turned into a store record by the next green Finalize's drain, keeping its original time, even when it is older than 14 days. One that cannot be converted moves to `mem-outbox.dead.jsonl` with `NOTE mem-legacy-unconvertible`. The run report prints the `converted` and `legacy_unconvertible` counts.
+- **The dead-letter file is kept.** The existing `mem-outbox.dead.jsonl` is never converted. It stays for you to inspect or delete.
+- **An old latch reads as red.** A latch an earlier version wrote still denies claude-mem and any change to the latch file. If no run is active, delete it by hand, or let the next Stage 1 replace it.
+- **Removed script forms.** `mem_recall.py selftest`, the `latch` flags `--probe`, `--claude-mem-absent` and `--tool-form`, a `latch` or `filter` call without `--store`, `filter --probe` and `filter --project`, and `mem_observation.py build`, `spill` and `drain` without `--store` are gone. Each exits 2 with one line naming its replacement. This matters only if you called the scripts yourself.
+- **claude-mem's own capture keeps running** where it is installed. UCG stops writing to it and depending on it; it does not stop it.
+
+## Troubleshooting
+
+Each recall problem leaves a line in `.decision-log.md` and the run report: one of these tokens, or a red latch's `reason`.
+
+| Token | When | What to do |
+| --- | --- | --- |
+| `NOTE recall-store-unset` | Stage 1: recall is `on` but the store key is unset, or is not a `~`, absolute or `{project-root}` path. | Set `cross_session_recall_store` in `[workflow]`. |
+| Red latch, `reason` `store-unwritable: <error>` | Stage 1: recall is `on` but the store folder could not be created or written. Recall is off for the run, and the run report repeats the reason. | Fix the folder (permissions, disk space, sandbox) or set the key to another folder. |
+| Red latch, `reason` `no-fingerprint` | Stage 1: the repo has no commit yet, or the session's working folder is not inside it, so its records have no folder. Recall is off for the run. | Make a first commit, or start the session from the project folder. |
+| A latch call that exits non-zero | Stage 1: the latch call failed (for example, the implementation artifacts folder cannot be written). It writes no latch, so Finalize also logs `NOTE recall-latch-missing`; the log holds what it printed. | Fix what the log names. |
+| `NOTE recall-read-refused` | Stage 1: the permission layer refused the latch or filter call. A refused latch call leaves no latch, so recall is off for the run and Finalize also logs `NOTE recall-latch-missing`. A refused filter call only skips the read: Finalize still writes the record. | Let the recall scripts' `uv run` calls through your permission mode. |
+| `NOTE recall-latch-missing` | Finalize: there was no latch, or another run's latch. No record is written. | Look earlier in the log for the cause, such as `NOTE recall-read-refused`, a latch call that failed, or another run started in the same folder. |
+| `NOTE recall-write-refused` | Finalize: the permission layer refused the drain or write call. Nothing is parked. | Let the recall scripts' `uv run` calls through your permission mode. |
+| `NOTE recall-unlatch-failed` | Any exit: removing this run's latch was refused or failed, so the latch is still there and keeps the guard denying. | Delete the latch file the NOTE names by hand. |
+| `WARN mem-write-deferred` | Finalize: the store could not take the record, so it waits in the outbox. | Fix the store folder (permissions, disk space, sandbox). The next green Finalize drains it. |
+| `NOTE mem-target-foreign` | The run's file already exists but is not this run's, or cannot be parsed. It is never touched; the record moves to `mem-outbox.dead.jsonl`. | Inspect that run file. |
+| `NOTE mem-run-id-invalid` | Drain: a parked record carries a malformed run id. It moves to `mem-outbox.dead.jsonl`; the others still land. | Inspect `mem-outbox.dead.jsonl`. |
+| `NOTE mem-legacy-unconvertible` | Drain: a summary parked by a claude-mem era run cannot be converted. It moves to `mem-outbox.dead.jsonl`. | Inspect `mem-outbox.dead.jsonl`. |
+
+A claude-mem call, a call that names the store, or a call that would change the latch, denied while no run is active, means a latch was left behind: see [a latch left behind](#a-latch-left-behind).
 
 ## Known limits: be honest
 
 Recall is deliberately bounded. Treat these as the residuals you are signing up for:
 
 - **A factual advisory still informs reasoning.** Sanitized advisories carry no instruction-shaped, stale, or foreign content and never reach the gate, but a well-formed factual advisory can still inform the model's reasoning. That is the feature, bounded; it is not a side channel into the verdict.
-- **UCG serializes only its own writes.** It writes its one observation per run safely, but it cannot control other processes writing the same claude-mem store concurrently.
-- **One structured write per run, in every mode.** UCG contributes exactly one structured observation at Finalize regardless of mode. Any *additional* auto-capture you see is claude-mem's own behavior and may differ in headless runs.
+- **The store is per machine.** Recall across Epics holds on one machine only, until [#154](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/154).
+- **The store folder follows the fingerprint.** If a repo with no remote gains one, or you work from a shallow clone, new records go to another folder and the earlier ones stop being read.
+- **A record file is plain JSON.** Anyone who can write the store folder can edit one. The reader treats every record as untrusted data and defangs it, but it cannot tell an edited record from a real one.
 - **Redaction is high-precision, not complete.** Secret redaction is pattern matching tuned for precision; it is not a complete data-loss-prevention layer.
-- **A breaking claude-mem change latches loudly absent.** If claude-mem ships a schema change that breaks the capability pin, recall latches as absent (loudly off, never silently wrong) until the pin is updated. Run the recall selftest to check the pin against your installed claude-mem.
+- **A latch left behind keeps denying.** It blocks claude-mem, the store and changes to the latch until you delete it by hand or the next run replaces it.
+- **The guard matches what a call spells.** It does not follow indirection, such as a variable holding part of a path, or a `cd` then a relative path to the store. SECURITY.md lists these limits.
 
 ## The default, and what would flip it
 

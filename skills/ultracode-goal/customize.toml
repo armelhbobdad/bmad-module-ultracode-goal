@@ -73,10 +73,12 @@ health_check_queue_path = "{project-root}/_bmad-output/ultracode-goal/improvemen
 #        deduped + seen-cache-guarded). friction/gap never auto-submit.
 health_check_autosubmit = false
 
-# --- Cross-Session Recall (optional; consults prior runs via claude-mem) ---
-# Advisory only, never gates. Requires the third-party claude-mem plugin;
-# silently inactive without it. "on" = use claude-mem when present | "off" = never touch it.
-# Its replacement backend, a local run store, is set by cross_session_recall_store below.
+# --- Cross-Session Recall (optional; consults this repo's prior runs) ---
+# Advisory only, never gates. Reads and writes the local run store that
+# cross_session_recall_store names below, on this machine only. "on" = read
+# prior runs at Ingest and write one record per run at Finalize | "off" =
+# touch no store. "on" with the store key unset leaves recall off, and the
+# run report says so (NOTE recall-store-unset).
 cross_session_recall = "off"
 # Folder of the local run store (one immutable file per run, per machine). No
 # default: "" (or blank, an unresolved {...} token, a literal $VAR or %VAR%, a

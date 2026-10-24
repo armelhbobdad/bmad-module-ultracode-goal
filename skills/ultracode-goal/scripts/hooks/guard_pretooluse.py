@@ -34,24 +34,39 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      every reach into .claude-mem is denied, whatever the latch's version (v1
      or v2) or colour. There is no green path: UCG no longer uses claude-mem.
      With no latch, the user's own claude-mem usage is never touched.
-  7. Cross-Session Recall, local run store: while a run latch naming a usable
-     store path is present, a Read, Grep, Glob, Write, Edit, MultiEdit,
-     NotebookEdit or Bash call that names that path is denied. A Bash segment
-     is exempt only when it runs this skill's own scripts/mem_recall.py or
-     scripts/mem_observation.py, by path, as `uv run <path> ...` or
-     `python <path> ...`, with no redirection, command substitution or
-     wrapper, in a command that changes no environment or command lookup.
+  7. Cross-Session Recall, local run store and latch file: while a run latch
+     is present, the model's tool calls may read the latch but not change it,
+     and may not reach the store the latch names.
+     - The latch file, whatever the latch holds: a Write, Edit, MultiEdit or
+       NotebookEdit call that names the latch path is denied, and so is a Bash
+       segment that names it, by path or by its file name on its own
+       (_names_file_name), and is not a plain read (_read_segment). Read,
+       Grep and Glob are left alone, since Finalize reads the latch.
+     - The store, when the latch names a usable store path: a Read, Grep,
+       Glob, Write, Edit, MultiEdit, NotebookEdit or Bash call that names that
+       path is denied.
+     A Bash segment is exempt from both only when it runs this skill's own
+     scripts/mem_recall.py or scripts/mem_observation.py, by path, as
+     `uv run <path> ...` or `python <path> ...`, with no redirection, command
+     substitution or wrapper, in a command that changes no environment or
+     command lookup. So only mem_recall.py changes the latch: `latch` writes
+     it, and `unlatch` removes it when it carries the caller's run_id.
      Accepted residual, stated like the exec-wrapper one below: indirection
-     (a `cd` then a relative path, a variable holding part of the path, a
-     script that names the store in its contents), searches of an ancestor
-     directory, repo-wide searches that reach a store inside the workspace,
-     and the interpreter `uv` or `python` resolves to, with the
-     configuration it reads.
+     (for the store, a `cd` then a relative path; for both, a variable
+     holding part of the path or the name, a script that names the store or
+     the latch in its contents), commands on an ancestor directory (a search
+     of it, removing the implementation artifacts folder, a `git clean` or
+     `git stash --all`), repo-wide searches that reach a store inside the
+     workspace, the interpreter `uv` or `python` resolves to, with the
+     configuration it reads, and a pinned call itself: the exemption checks
+     the script's path, not its arguments, so a model that ignores the deny
+     note can still run `latch` or `unlatch` on its own.
   Invariants 6 and 7 count a present latch as a live run: the guard reads no
   clock and detects no dead run, so a latch a dead run left behind keeps
-  denying until the next Stage 1 replaces it or the user deletes it. Every deny
-  a latch causes names the latch path and says to delete it when no run is
-  active.
+  denying until the next Stage 1 replaces it or the user deletes it by hand.
+  Every deny a latch causes names the latch path and ends with a note for the
+  person: a latch left behind is theirs to delete by hand, and the model must
+  not try to remove it.
 
 Hook contract (reads one JSON object on stdin):
   in : {tool_name, tool_input:{command,...}, cwd, ...}
@@ -799,14 +814,15 @@ def _unskip_gate(cwd: str | None, story: str | None) -> None:
 
 
 # --- Cross-Session Recall gate ----------------------------------------------
-# While a UCG run is active, nothing reaches claude-mem and only the pinned
-# recall scripts reach the local run store. The run is signalled by a machine
-# latch written at Stage 1 Ingest and removed at every terminal (Finalize, a
-# preflight STOP, the headless envelope path). Its presence arms this gate, not
-# any env flag and not its colour: a present latch counts as live. The guard
-# reads no clock and detects no dead run, so a latch a dead run left behind
-# keeps denying until the next Stage 1 replaces it or the user deletes it, and
-# every deny it causes names it and says how to clear it.
+# While a UCG run is active, nothing reaches claude-mem, and only the pinned
+# recall scripts reach the local run store or change the latch. The run is
+# signalled by a machine latch written at Stage 1 Ingest and removed at every
+# terminal (Finalize, a preflight STOP, the headless envelope path) by
+# `mem_recall.py unlatch`. Its presence arms this gate, not any env flag and
+# not its colour: a present latch counts as live. The guard reads no clock and
+# detects no dead run, so a latch a dead run left behind keeps denying until
+# the next Stage 1 replaces it or the user deletes it by hand, and every deny
+# it causes names it and tells the person how to clear it.
 
 _MEM_STATE_FILENAME = ".mem-state.json"
 
@@ -1034,8 +1050,16 @@ _HOME_VAR = re.compile(
     re.IGNORECASE,
 )
 
-# $PWD and ${PWD...}, read as the event's cwd, as a leading `~+` is.
-_PWD_VAR = re.compile(r"\$\{PWD(?:[^}A-Za-z0-9_][^}]*)?\}|\$PWD(?![A-Za-z0-9_])")
+# $PWD and ${PWD...}, read as the event's cwd, as a leading `~+` is, and the
+# `$(pwd)` and backtick `pwd` substitutions that print it.
+_PWD_VAR = re.compile(
+    r"\$\{PWD(?:[^}A-Za-z0-9_][^}]*)?\}|\$PWD(?![A-Za-z0-9_])"
+    r"|\$\(\s*pwd(?:\s+-[LP])?\s*\)|`\s*pwd(?:\s+-[LP])?\s*`"
+)
+
+# A bash extglob group, ?(...) *(...) +(...) @(...) !(...), read as a `*`
+# standing for whatever it matches: a wider match, never a narrower one.
+_EXTGLOB = re.compile(r"[?*+@!]\([^()]*\)")
 
 # Bash ANSI-C quoting, $'...', whose escapes can spell any character. Such a
 # word is read decoded as well, so `$'\x2f'` counts as `/`.
@@ -1272,11 +1296,14 @@ def _mentions_claude_mem(value: str) -> bool:
 
 
 def _spellings(text: str, homes: list[str], cwd: str) -> list[str]:
-    """The text as written, plus copies with $PWD read as the cwd and with each
-    home variable spelling read as each home folder."""
+    """The text as written, plus copies with each extglob group read as a `*`,
+    with $PWD (or `$(pwd)`) read as the cwd, and with each home variable
+    spelling read as each home folder, in every combination."""
     out = [text]
+    if _EXTGLOB.search(text):
+        out.append(_EXTGLOB.sub("*", text))
     if _PWD_VAR.search(text):
-        out.append(_PWD_VAR.sub(lambda _match: cwd, text))
+        out.extend([_PWD_VAR.sub(lambda _match: cwd, variant) for variant in list(out)])
     if _HOME_VAR.search(text):
         for variant in list(out):
             for home in homes:
@@ -1629,6 +1656,136 @@ def _exempt_segment(segment: str, cwd: str, command: str) -> bool:
     return _is_pinned(absolute)
 
 
+# --- Latch-path rule ----------------------------------------------------------
+# Decision 11: while a latch is present, whatever it holds, a model tool call
+# may read the latch but not change it. Only mem_recall.py changes it: `latch`
+# writes or replaces it, and `unlatch` removes it when it carries the caller's
+# run_id. The latch path is matched as the store rule matches the store, every
+# spelling, glob, brace expansion and symlink included, and the pinned script
+# exemption applies to it per segment. In a Bash segment the latch's file name
+# on its own counts too (_names_file_name), so a `cd` into its folder is no
+# way around the rule.
+#
+# The tools that write files (_LATCH_CHANGING_TOOLS) are denied on the path.
+# Read, Grep and Glob only read, so this rule does not look at them. A Bash
+# segment that names the latch counts as a change unless it can be told to
+# only read it (_read_segment, in a command _command_allows_reads accepts).
+# So rm, mv, cp, ln, tee, a redirection, sed -i, truncate and python -c are
+# examples of a change, not a list of them: anything the guard cannot tell
+# only reads the latch is denied.
+#
+# A read is led, by bare name, by a command that writes no file whatever its
+# options. `less` is not one (`less -o FILE` copies its input into FILE), nor
+# `sed` (`-i`, and its `w` command), `find` (`-delete`, `-fprint`), `sort -o`,
+# `uniq IN OUT` or `file -C`. The name is matched bare, so a `./cat` the model
+# wrote is not a read, and the command must leave command lookup alone, so a
+# function or alias named `cat` is not one either.
+_LATCH_CHANGING_TOOLS = frozenset({"Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"})
+_LATCH_READERS = frozenset(
+    {"cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "jq", "ls", "stat", "test", "[", "[["}
+)
+
+# Any of these in a segment makes it more than a read: every output
+# redirection (`>`, `>>`, `2>`, `&>`, `>|`, `<>`, `>(...)`), command
+# substitution, process substitution, which runs a command of its own, and
+# the `[[ ... =~ ... ]]` match, which hands what it matched on through
+# BASH_REMATCH (`[[ <latch> =~ .* ]] && rm "$BASH_REMATCH"`), as `$_` does.
+_READ_REFUSED = (">", "`", "$(", "<(", "=~")
+
+# Bash's `$_`, the last word of the previous command: `cat <latch>; rm "$_"`
+# hands the path on without naming it again, so in a command holding one, no
+# segment counts as a read.
+_LAST_WORD = re.compile(r"\$\{?_(?![A-Za-z0-9_])")
+
+# A pipe, `|` or `|&`, but not `||`. A read piped into another command can
+# hand the path on (`ls <latch> | xargs rm`), so in a command holding one,
+# every segment must be a read for any of them to count as one.
+_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
+
+
+def _read_segment(segment: str) -> bool:
+    """True when the segment can only read: after the leading assignment,
+    keyword and group-opener strip, it is led by one of _LATCH_READERS, by
+    bare name, with nothing of _READ_REFUSED in it and no leading assignment
+    that changes command lookup or what the command loads. A segment that
+    runs nothing (a bare `fi`, a closing brace) counts as one too."""
+    if any(marker in segment for marker in _READ_REFUSED):
+        return False
+    try:
+        words = _tokenize(segment)
+    except ValueError:
+        return False
+    rest = _strip_leading_noise(words)
+    if any(_EXEMPT_UNSAFE_ASSIGNMENT.match(w) for w in words[: len(words) - len(rest)]):
+        return False
+    return not rest or rest[0] in _LATCH_READERS
+
+
+@functools.lru_cache(maxsize=64)
+def _command_allows_reads(command: str) -> bool:
+    """True when a read segment of this command counts as a read: the command
+    changes nothing about the environment or command lookup (_command_rebinds),
+    uses no `$_`, and, when it holds a pipe, is made of reads only, under
+    every separator set."""
+    if _command_rebinds(command) or _LAST_WORD.search(command):
+        return False
+    if not _PIPE.search(command):
+        return True
+    return all(
+        _read_segment(segment)
+        for separators in _STORE_SEPARATOR_SETS
+        for segment in re.split(separators, command)
+    )
+
+
+# The latch's file name on its own, beside its path: a `cd` into the artifacts
+# folder and then `rm .mem-state.json`, a `find -name .mem-state.json -delete`,
+# a path an interpreter joins at run time (`os.path.join(dir, '.mem-state.json')`)
+# and a `**/` glob all name the file without spelling its path. The name
+# counts when nothing that could extend it (a letter, digit, `_`, `.` or `-`)
+# sits right before it and nothing that would continue it sits right after.
+_NAME_EXTENDS = re.compile(r"[A-Za-z0-9_.-]")
+
+
+def _dot_glob(word: str) -> bool:
+    """A glob that starts with a literal dot and holds a literal character
+    after it (`.m*`, `.mem-state.js?n`, `.*json`). A bare `.*`, `.??*` or
+    `.[!.]*`, which matches every dotfile, is not one: it is how a search
+    such as `find -not -path '*/.*'` skips hidden folders."""
+    if not word.startswith(".") or not _GLOB_CHARS.search(word):
+        return False
+    return bool(re.sub(r"\[[^\]]*\]|[*?]", "", word[1:]))
+
+
+@functools.lru_cache(maxsize=256)
+def _names_file_name(segment: str, name: str) -> bool:
+    """True when the segment holds the file name `name` on its own, or a word
+    piece whose last step is a _dot_glob that matches it. Read with quotes
+    taken out, backslashes taken out or read as separators, $'...' decoded,
+    each extglob group read as a `*` and each brace expansion expanded."""
+    target = _fold(name)
+    texts = [segment, _decode_ansi_c(segment)] if "$'" in segment else [segment]
+    for text in texts:
+        plains = (_QUOTING.sub("", text), re.sub(r"[\"']", "", text.replace("\\", "/")))
+        for plain in dict.fromkeys(plains):
+            for spelling in dict.fromkeys((plain, _EXTGLOB.sub("*", plain))):
+                for variant in _brace_variants(spelling):
+                    folded = _fold(variant)
+                    start = folded.find(target)
+                    while start != -1:
+                        end = start + len(target)
+                        if (start == 0 or not _NAME_EXTENDS.match(folded[start - 1])) and (
+                            end == len(folded) or not _ROOT_CONTINUES.match(folded[end])
+                        ):
+                            return True
+                        start = folded.find(target, start + 1)
+                    for piece in _PATH_BREAK.split(variant):
+                        last = _fold(piece.replace("\\", "/").rsplit("/", 1)[-1])
+                        if _dot_glob(last) and fnmatch.fnmatchcase(target, last):
+                            return True
+    return False
+
+
 def _store_segment(
     command: str,
     roots: tuple[str, ...],
@@ -1636,23 +1793,33 @@ def _store_segment(
     homes: list[str],
     *,
     exempt: bool = True,
+    reads: bool = False,
+    name: str | None = None,
 ) -> str | None:
-    """The first shell segment that names a root and is not exempt.
+    """The first shell segment that names a root and is not let through.
 
     With `exempt` false (the claude-mem folder) no segment is exempt. A
     command that can rebind `uv` or `python` (_command_rebinds) exempts none
-    of its segments either.
+    of its segments either. With `reads` true (the latch), a segment that
+    only reads is let through as well, in a command that allows reads. With
+    a `name` (the latch's file name), a segment that holds that name on its
+    own (_names_file_name) counts as naming the root.
     """
     home_key = tuple(homes)
+    reads = reads and _command_allows_reads(command)
     for separators in _STORE_SEPARATOR_SETS:
         for segment in re.split(separators, command):
-            if not _bash_names(segment, roots, cwd, home_key):
+            if not _bash_names(segment, roots, cwd, home_key) and not (
+                name and _names_file_name(segment, name)
+            ):
                 continue
             if (
                 exempt
                 and not _command_rebinds(command)
                 and _exempt_segment(segment, cwd, command)
             ):
+                continue
+            if reads and _read_segment(segment):
                 continue
             return segment
     return None
@@ -1667,11 +1834,17 @@ def _input_names(
     homes: list[str],
     *,
     exempt: bool,
+    reads: bool = False,
+    name: str | None = None,
 ) -> str | None:
     """What in one input names a root: the Bash segment, or the file-tool
-    value; None when nothing does."""
+    value; None when nothing does. `reads` lets a Bash read through and
+    `name` matches a Bash segment on the file name alone too (both for the
+    latch rule); a file tool is matched on its value alone."""
     if key == "command":
-        return _store_segment(value, roots, cwd, homes, exempt=exempt)
+        return _store_segment(
+            value, roots, cwd, homes, exempt=exempt, reads=reads, name=name
+        )
     bases = [cwd]
     own_path = tool_input.get("path")
     if key in _PATTERN_KEYS and isinstance(own_path, str) and own_path:
@@ -1709,13 +1882,31 @@ def _shown(segment: str) -> str:
 
 
 def _latch_deny(state_path: Path, what: str) -> NoReturn:
-    """Deny for a reason the latch causes, naming the latch and how to clear it."""
+    """Deny for a reason the latch causes. The reason names the latch and ends
+    with a note for the person, not the model (AC-33): a latch a run left
+    behind is theirs to delete by hand, and the model must not try to remove
+    it, which the latch-path rule denies anyway."""
     _deny(
         f"Cross-Session Recall guard: {what} The run latch {state_path} is "
         "present, and a present latch counts as a live UltraCode-Goal run, "
-        "whatever its version or colour. If no run is active, that latch was "
-        "left behind by a run that ended without removing it: delete "
-        f"{state_path} and retry."
+        "whatever its version or colour. For the user: if no UltraCode-Goal "
+        "run is active, a run ended without removing this latch. Delete "
+        f"{state_path} by hand. The model must not try to remove it itself."
+    )
+
+
+def _latch_rule_text() -> str:
+    """The one rule a latch-path deny states: the model may read the latch,
+    never change it, and what counts as a read. It gives no recipe for
+    changing the latch: the run's own steps already carry the one call that
+    may, and a deny is no cue to make it."""
+    return (
+        "While a run latch is present, the model's tool calls may read it but "
+        "not change it, by its path or by its file name. Reading it stays "
+        "allowed: Read, Grep and Glob, or a Bash segment led by one of "
+        f"{', '.join(f'`{name}`' for name in sorted(_LATCH_READERS))}, with no "
+        "output redirection, command substitution or `=~`, piped only into "
+        "another such read (a `|` counts as a pipe even inside quotes)."
     )
 
 
@@ -1780,9 +1971,40 @@ def _latch_gate(event: dict, state_path: Path) -> None:
                 "writes claude-mem's files.",
             )
 
-    # 3) The store-path rule, for a latch that names a usable store. A latch
+    # 3) The latch-path rule (decision 11), whatever the latch holds: a call
+    # that names the latch and may change it. Read, Grep and Glob only read,
+    # so they are not looked at; a Bash segment that only reads passes.
+    if tool_name in _LATCH_CHANGING_TOOLS:
+        latch_roots = _roots(str(state_path))
+        for key, value in inputs:
+            found = _input_names(
+                key,
+                value,
+                tool_input,
+                latch_roots,
+                cwd,
+                homes,
+                exempt=True,
+                reads=True,
+                name=state_path.name,
+            )
+            if found is None:
+                continue
+            if key == "command":
+                _latch_deny(
+                    state_path,
+                    f"refusing a Bash command whose segment {_shown(found)} names "
+                    f"the run latch and may change it. {_latch_rule_text()}",
+                )
+            _latch_deny(
+                state_path,
+                f"refusing a {tool_name} call whose {key} names the run latch. "
+                f"{_latch_rule_text()}",
+            )
+
+    # 4) The store-path rule, for a latch that names a usable store. A latch
     # with none (a v1 latch, an unset store, an unreadable latch) has no path
-    # to match, so it denies only through 1) and 2).
+    # to match, so it denies only through 1) to 3).
     store = _latch_view(_read_latch(state_path))["store"]
     if store is None:
         return

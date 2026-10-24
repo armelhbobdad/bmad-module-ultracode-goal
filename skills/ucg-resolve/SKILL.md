@@ -238,7 +238,9 @@ may skip, because the two arrive from different places:
 Either branch **re-asserts** — never rebuilds — the Epic branch, both hooks, the
 allowlist, the `.mem-state.json` recall latch, and the in-flight story's baseline marker.
 The latch belongs on that list here more than anywhere: this skill is reached from a
-blocked run, whose Stage 6 already deleted it. The baseline marker splits on whether
+blocked run, which removed its latch at its last exit (Stage 6, or preflight step 4's
+STOP) with `mem_recall.py unlatch`, so the resume writes a fresh one under its own run
+id, never the blocked run's. The baseline marker splits on whether
 `.baseline-<story_id>` exists: mid-story it is **re-read, never regenerated** — the story
 may already carry commits, and a regenerated baseline silently re-anchors its evidence
 range to a mid-story HEAD — while at a story boundary there is none to re-read and one is

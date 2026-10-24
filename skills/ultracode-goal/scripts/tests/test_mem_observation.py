@@ -3,19 +3,21 @@
 # requires-python = ">=3.11"
 # dependencies = ["pytest"]
 # ///
-"""Tests for mem_observation.py (Cross-Session Recall build / spill / drain).
+"""Tests for mem_observation.py (Cross-Session Recall write / drain).
 
 Risk-named, hermetic. The CLI is exercised via subprocess so the real
 stdin/stdout contract is tested. GIT_* env is scrubbed so repo_fingerprint()
 runs against the temp repos these tests build.
 
-The local run store tests (the CSR-* rows of the cross-session recall test
-design whose target is this file) drive ``write`` and ``drain --store`` as
-subprocesses and read the store back through lib/mem_common, the reader
-``mem_recall.py filter --store`` uses. Every store test points HOME and
-USERPROFILE at tmp_path, so nothing reaches the real home. An unwritable store
-is a store path whose parent is a regular file, which fails the same way on
-Linux and Windows.
+The tests (the CSR-* rows of the cross-session recall test design whose target
+is this file) drive ``write`` and ``drain --store`` as subprocesses and read the
+store back through lib/mem_common, the reader ``mem_recall.py filter --store``
+uses. Every store test points HOME and USERPROFILE at tmp_path, so nothing
+reaches the real home. An unwritable store is a store path whose parent is a
+regular file, which fails the same way on Linux and Windows. The claude-mem
+forms (``build``, ``spill`` and a drain without ``--store``) are gone; their
+tests retired with them, except the payload checks, which now run through
+``write``, and each removed form's exit 2.
 
 Run: uv run --with pytest pytest test_mem_observation.py -v
 """
@@ -84,414 +86,8 @@ def _run(*args: str, stdin: str | None = None):
     )
 
 
-def _payload_from_build(out_text: str) -> dict:
-    """Extract the embedded UCG JSON payload from a build() text field."""
-    assert MARKER in out_text
-    after = out_text.split(MARKER, 1)[1]
-    brace = after.index("{")
-    decoder = json.JSONDecoder()
-    obj, _ = decoder.raw_decode(after[brace:])
-    return obj
-
-
-# --- build: NOT_EVALUATED skips, WAIVED writes ------------------------------
-
-
-def test_not_evaluated_skips(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    proc = _run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "7", "--run-id", "r1", "--gate-status", "NOT_EVALUATED",
-        "--verdict", "blocked", "--project", "proj", "--cwd", str(repo),
-    )
-    assert proc.returncode == 0
-    out = json.loads(proc.stdout)
-    assert out["skip"] is True
-    assert "text" not in out
-
-
-def test_waived_writes_payload(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    proc = _run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "7", "--run-id", "r1", "--gate-status", "WAIVED",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-    )
-    assert proc.returncode == 0
-    out = json.loads(proc.stdout)
-    assert out["title"] == "UCG run — epic 7: advance"
-    assert out["project"] == "proj"
-    payload = _payload_from_build(out["text"])
-    assert payload["ucg"] == 1
-    assert payload["schema_version"] == 1
-    assert payload["kind"] == "run-summary"
-    assert payload["gate_status"] == "WAIVED"
-    assert payload["verdict"] == "advance"
-    assert payload["fingerprint"]  # a real fingerprint was pinned
-
-
-def test_build_marker_and_fenced_block_present(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "9", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-    ).stdout)
-    assert MARKER in out["text"]
-    assert "```json" in out["text"]
-
-
-# --- build: root cause taxonomy + signature --------------------------------
-
-
-def test_root_cause_unknown_maps_to_other(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "7", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-        "--root-cause", "class=not-a-real-class,path=src/x.py",
-    ).stdout)
-    payload = _payload_from_build(out["text"])
-    assert payload["signatures"][0]["class"] == "other"
-
-
-def test_root_cause_signature_is_sha1_12(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "7", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-        "--root-cause", "class=race-condition,path=src/x.py",
-    ).stdout)
-    sig = payload = _payload_from_build(out["text"])["signatures"][0]
-    assert sig["class"] == "race-condition"
-    assert len(sig["sig"]) == 12
-    assert all(c in "0123456789abcdef" for c in sig["sig"])
-
-
-# --- build: redaction -------------------------------------------------------
-
-
-def test_build_redacts_known_secrets(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    # Plant an AKIA key in a root-cause path and a ghp_ token in the verdict.
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "7", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance ghp_abcdefghijklmnopqrstuvwxyz0123456789",
-        "--project", "proj", "--cwd", str(repo),
-        "--root-cause", "class=security,path=AKIAIOSFODNN7EXAMPLE/creds.txt",
-    ).stdout)
-    text = out["text"]
-    assert "AKIAIOSFODNN7EXAMPLE" not in text
-    assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in text
-    assert "[redacted]" in text
-    payload = _payload_from_build(text)
-    assert "AKIAIOSFODNN7EXAMPLE" not in payload["signatures"][0]["path"]
-
-
-def test_build_redacts_advisory_sig(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "7", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-        "--advisory", "sig=token=supersecretvalue123,recurred=yes",
-    ).stdout)
-    payload = _payload_from_build(out["text"])
-    adv = payload["advisories"][0]
-    assert adv["recurred"] == "yes"
-    assert "supersecretvalue123" not in adv["sig"]
-
-
-def test_advisory_recurred_normalized(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "7", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-        "--advisory", "sig=abc,recurred=maybe",
-    ).stdout)
-    payload = _payload_from_build(out["text"])
-    assert payload["advisories"][0]["recurred"] == "unknown"
-
-
-# --- build: deferred_count --------------------------------------------------
-
-
-DEFERRED_LEDGER = """# Deferred Work
-
-## Epic 7 deferred
-
-- skip flaky integration test for now
-- backfill perf benchmark
-- harden the retry path
-
-## Epic 8 deferred
-
-- unrelated item
-"""
-
-
-def test_deferred_count_parses_ledger(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    ledger = tmp_path / "deferred-work.md"
-    ledger.write_text(DEFERRED_LEDGER)
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "7", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-        "--deferred", str(ledger),
-    ).stdout)
-    payload = _payload_from_build(out["text"])
-    assert payload["deferred_count"] == 3  # only Epic 7's three bullets
-
-
-PREFIX_COLLIDING_LEDGER = """# Deferred Work
-
-## Epic 1 deferred
-
-- the one item Epic 1 actually parked
-
-## Epic 11 deferred
-
-- eleven's first
-- eleven's second
-- eleven's third
-- eleven's fourth
-"""
-
-
-def test_deferred_count_does_not_match_an_epic_that_merely_starts_the_same(tmp_path):
-    """Epic `1` must not claim Epic `11`'s parked items.
-
-    The heading match was a plain substring test, so every epic was a prefix of
-    its own successors and the count reported a neighbour's backlog as this
-    run's - a number that goes into the observation an autonomous run leaves
-    behind for the next one.
-    """
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    ledger = tmp_path / "deferred-work.md"
-    ledger.write_text(PREFIX_COLLIDING_LEDGER)
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "1", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-        "--deferred", str(ledger),
-    ).stdout)
-    payload = _payload_from_build(out["text"])
-    assert payload["deferred_count"] == 1, (
-        "Epic 1 owns exactly one parked item; 5 would mean Epic 11's section was "
-        "swept in by a prefix match"
-    )
-
-
-def test_deferred_count_still_matches_the_epic_it_names(tmp_path):
-    """Twin: the boundary must not be so tight that a real heading stops matching."""
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    ledger = tmp_path / "deferred-work.md"
-    ledger.write_text(PREFIX_COLLIDING_LEDGER)
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "11", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-        "--deferred", str(ledger),
-    ).stdout)
-    payload = _payload_from_build(out["text"])
-    assert payload["deferred_count"] == 4
-
-
-def test_deferred_count_absent_file_is_zero(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "7", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-        "--deferred", str(tmp_path / "nope.md"),
-    ).stdout)
-    payload = _payload_from_build(out["text"])
-    assert payload["deferred_count"] == 0
-
-
-# --- build: valid_until -----------------------------------------------------
-
-
-def test_valid_until_sha_passed_through(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    out = json.loads(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"),
-        "--epic", "7", "--run-id", "r1", "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "proj", "--cwd", str(repo),
-        "--valid-until-sha", "abc123", "--valid-until-date", "2026-12-31T00:00:00Z",
-    ).stdout)
-    payload = _payload_from_build(out["text"])
-    assert payload["valid_until"]["sha"] == "abc123"
-    assert payload["valid_until"]["date"] == "2026-12-31T00:00:00Z"
-
-
-# --- spill: two independent JSONL lines in one run --------------------------
-
-
-def test_spill_appends_two_independent_lines(tmp_path):
-    impl = tmp_path / "impl"
-    p1 = _run("spill", "--impl-artifacts", str(impl), "--run-id", "run-X",
-              stdin=json.dumps({"text": "a", "title": "t1", "project": "p"}))
-    p2 = _run("spill", "--impl-artifacts", str(impl), "--run-id", "run-X",
-              stdin=json.dumps({"text": "b", "title": "t2", "project": "p"}))
-    assert p1.returncode == 0 and p2.returncode == 0
-    outbox = impl / "mem-outbox.run-X.jsonl"
-    lines = outbox.read_text().splitlines()
-    assert len(lines) == 2
-    e1 = json.loads(lines[0])
-    e2 = json.loads(lines[1])
-    assert e1["payload"]["title"] == "t1"
-    assert e2["payload"]["title"] == "t2"
-    assert e1["attempts"] == 0 and e2["attempts"] == 0
-    assert "spilled_at" in e1 and "spilled_at" in e2
-
-
-def test_spill_creates_impl_dir(tmp_path):
-    impl = tmp_path / "deep" / "nested" / "impl"
-    proc = _run("spill", "--impl-artifacts", str(impl), "--run-id", "r",
-                stdin=json.dumps({"x": 1}))
-    assert proc.returncode == 0
-    assert (impl / "mem-outbox.r.jsonl").is_file()
-
-
-# --- drain: TTL expiry / dead-letter / attempt increment --------------------
-
-
-def _spill_raw(impl: Path, run_id: str, payload: dict, attempts: int, spilled_at: str) -> None:
-    impl.mkdir(parents=True, exist_ok=True)
-    entry = {"payload": payload, "attempts": attempts, "spilled_at": spilled_at}
-    with (impl / f"mem-outbox.{run_id}.jsonl").open("a", encoding="utf-8") as h:
-        h.write(json.dumps(entry, sort_keys=True) + "\n")
-
-
-def _iso(dt: datetime) -> str:
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def test_drain_expires_past_ttl_with_tombstone(tmp_path):
-    impl = tmp_path / "impl"
-    now = datetime(2026, 6, 4, tzinfo=timezone.utc)
-    now_ms = int(now.timestamp() * 1000)
-    old = _iso(now - timedelta(days=30))  # older than ttl 14
-    _spill_raw(impl, "run-old", {"k": "v"}, attempts=0, spilled_at=old)
-    proc = _run("drain", "--impl-artifacts", str(impl),
-                "--ttl-days", "14", "--now-epoch", str(now_ms))
-    out = json.loads(proc.stdout)
-    assert out["tombstones"] == 1
-    assert out["replayable"] == []
-    # The expired entry is removed (file emptied -> removed).
-    assert not (impl / "mem-outbox.run-old.jsonl").exists()
-
-
-def test_drain_dead_letters_attempts_at_three(tmp_path):
-    impl = tmp_path / "impl"
-    now = datetime(2026, 6, 4, tzinfo=timezone.utc)
-    now_ms = int(now.timestamp() * 1000)
-    fresh = _iso(now - timedelta(days=1))
-    _spill_raw(impl, "run-dl", {"k": "v"}, attempts=3, spilled_at=fresh)
-    proc = _run("drain", "--impl-artifacts", str(impl),
-                "--ttl-days", "14", "--now-epoch", str(now_ms))
-    out = json.loads(proc.stdout)
-    assert out["dead_lettered"] == 1
-    assert out["replayable"] == []
-    dead = (impl / "mem-outbox.dead.jsonl").read_text().splitlines()
-    assert len(dead) == 1
-    dead_entry = json.loads(dead[0])
-    assert dead_entry["attempts"] == 3
-    assert dead_entry["spilled_at"] == fresh  # original stamp preserved verbatim
-
-
-def test_drain_replays_and_increments_attempts(tmp_path):
-    impl = tmp_path / "impl"
-    now = datetime(2026, 6, 4, tzinfo=timezone.utc)
-    now_ms = int(now.timestamp() * 1000)
-    fresh = _iso(now - timedelta(days=1))
-    _spill_raw(impl, "run-r", {"text": "payload-body"}, attempts=1, spilled_at=fresh)
-    proc = _run("drain", "--impl-artifacts", str(impl),
-                "--ttl-days", "14", "--now-epoch", str(now_ms))
-    out = json.loads(proc.stdout)
-    assert out["tombstones"] == 0
-    assert out["dead_lettered"] == 0
-    assert len(out["replayable"]) == 1
-    item = out["replayable"][0]
-    assert item["payload"] == {"text": "payload-body"}
-    assert item["line_no"] == 1
-    assert item["file"].endswith("mem-outbox.run-r.jsonl")
-    # attempts bumped 1 -> 2 in place; spilled_at preserved.
-    line = (impl / "mem-outbox.run-r.jsonl").read_text().splitlines()[0]
-    entry = json.loads(line)
-    assert entry["attempts"] == 2
-    assert entry["spilled_at"] == fresh
-    assert entry["payload"] == {"text": "payload-body"}
-
-
-def test_drain_mixed_batch(tmp_path):
-    impl = tmp_path / "impl"
-    now = datetime(2026, 6, 4, tzinfo=timezone.utc)
-    now_ms = int(now.timestamp() * 1000)
-    fresh = _iso(now - timedelta(days=1))
-    old = _iso(now - timedelta(days=40))
-    # One replayable, one expired, one dead-lettered — across two run files.
-    _spill_raw(impl, "run-a", {"id": 1}, attempts=0, spilled_at=fresh)
-    _spill_raw(impl, "run-a", {"id": 2}, attempts=0, spilled_at=old)
-    _spill_raw(impl, "run-b", {"id": 3}, attempts=5, spilled_at=fresh)
-    proc = _run("drain", "--impl-artifacts", str(impl),
-                "--ttl-days", "14", "--now-epoch", str(now_ms))
-    out = json.loads(proc.stdout)
-    assert out["tombstones"] == 1
-    assert out["dead_lettered"] == 1
-    assert len(out["replayable"]) == 1
-    assert out["replayable"][0]["payload"] == {"id": 1}
-
-
-def test_drain_empty_dir(tmp_path):
-    impl = tmp_path / "impl"
-    impl.mkdir()
-    proc = _run("drain", "--impl-artifacts", str(impl), "--now-epoch", "1780000000000")
-    out = json.loads(proc.stdout)
-    assert out == {"replayable": [], "tombstones": 0, "dead_lettered": 0}
-
-
-def test_drain_missing_dir(tmp_path):
-    proc = _run("drain", "--impl-artifacts", str(tmp_path / "nope"),
-                "--now-epoch", "1780000000000")
-    out = json.loads(proc.stdout)
-    assert out == {"replayable": [], "tombstones": 0, "dead_lettered": 0}
-
-
-def test_drain_ignores_dead_letter_file(tmp_path):
-    impl = tmp_path / "impl"
-    impl.mkdir()
-    # A pre-existing dead-letter file must not be re-scanned as an outbox.
-    (impl / "mem-outbox.dead.jsonl").write_text(
-        json.dumps({"payload": {"x": 1}, "attempts": 9, "spilled_at": "2026-06-04T00:00:00Z"}) + "\n"
-    )
-    proc = _run("drain", "--impl-artifacts", str(impl), "--now-epoch", "1780000000000")
-    out = json.loads(proc.stdout)
-    assert out["replayable"] == []
-    assert out["dead_lettered"] == 0
-
-
 # ===========================================================================
-# Local run store: write and drain --store
+# write and drain --store
 # ===========================================================================
 
 _HAS_GIT = shutil.which("git") is not None
@@ -587,6 +183,17 @@ def _blocked_store(tmp_path: Path) -> Path:
     return blocker / "store"
 
 
+def _spill_raw(impl: Path, run_id: str, payload: dict, attempts: int, spilled_at: str) -> None:
+    impl.mkdir(parents=True, exist_ok=True)
+    entry = {"payload": payload, "attempts": attempts, "spilled_at": spilled_at}
+    with (impl / f"mem-outbox.{run_id}.jsonl").open("a", encoding="utf-8") as h:
+        h.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+def _iso(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _lines(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
@@ -605,16 +212,25 @@ def _spill_via_write(tmp_path: Path, impl: Path, repo: Path, run_id: str, *extra
     return _lines(impl / f"mem-outbox.{run_id}.jsonl")[-1]
 
 
-def _legacy_wrapper(tmp_path: Path, repo: Path, run_id: str = _RUN) -> dict:
-    """A claude-mem era outbox payload, from today's real `build` output."""
-    out = _out(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl-build"),
-        "--epic", "7", "--run-id", run_id, "--gate-status", "PASS",
-        "--verdict", "advance", "--project", "widget", "--cwd", str(repo),
-        "--valid-until-date", _DATE, "--root-cause", "class=race-condition,path=src/x.py",
-    ))
-    assert MARKER in out["text"]
-    return out
+def _legacy_wrapper(repo: Path, run_id: str = _RUN) -> dict:
+    """A claude-mem era outbox payload for this repo, shaped as the removed
+    ``build`` printed it: a summary line, the marker, then the run payload as
+    fenced JSON, wrapped in ``{text,title,project}``."""
+    fingerprint = mc.repo_fingerprint(repo)["value"]
+    sig = hashlib.sha1(f"race-condition|src/x.py|{fingerprint}".encode()).hexdigest()[:12]
+    inner = _inner(
+        run_id=run_id,
+        fingerprint=fingerprint,
+        signatures=[{"class": "race-condition", "path": "src/x.py", "sig": sig}],
+    )
+    return {
+        "text": (
+            "UCG run for epic 7: gate PASS, verdict advance, 1 signature(s), 0 deferred.\n"
+            f"{MARKER}\n```json\n{json.dumps(inner, sort_keys=True)}\n```"
+        ),
+        "title": "UCG run, epic 7: advance",
+        "project": "widget",
+    }
 
 
 def _hand_legacy(body: str) -> dict:
@@ -640,11 +256,25 @@ def _inner(**overrides) -> dict:
 # --- write: the run file (AC-1, AC-2) ---------------------------------------
 
 
+def _signature(cls: str, path: str, fingerprint: str) -> str:
+    """sha1(class|path|fingerprint)[:12], the signature write computes."""
+    return hashlib.sha1(f"{cls}|{path}|{fingerprint}".encode()).hexdigest()[:12]
+
+
+def _record_of(tmp_path: Path, repo: Path, *extra: str) -> dict:
+    """The record `write` stores for _RUN in a fresh store, with ``extra`` flags
+    added (a repeated flag replaces the default _write passes)."""
+    out = _out(_write(tmp_path / "impl", tmp_path / "store", repo, _RUN, *extra))
+    assert out["status"] == "written", out
+    return json.loads(Path(out["path"]).read_text(encoding="utf-8"))
+
+
 @_needs_git
-def test_write_creates_exactly_one_run_file_holding_the_build_fields(tmp_path, home):
-    # CSR-INT-001 (AC-1): the build payload without the claude-mem wrapper, plus
-    # created_at_epoch (integer UTC ms, stamped now) and project (the main
-    # worktree's directory name).
+def test_write_creates_exactly_one_run_file_holding_the_run_payload(tmp_path, home):
+    # CSR-INT-001 (AC-1): the run payload (the fields the removed build
+    # embedded, without the claude-mem wrapper), plus created_at_epoch
+    # (integer UTC ms, stamped now) and project (the main worktree's
+    # directory name).
     repo = _repo(tmp_path)
     store = tmp_path / "store"
     extra = ("--root-cause", "class=race-condition,path=src/x.py",
@@ -661,12 +291,24 @@ def test_write_creates_exactly_one_run_file_holding_the_build_fields(tmp_path, h
     assert text.endswith("\n") and len(text.splitlines()) == 1
     record = json.loads(text)
 
-    built = _out(_run(
-        "build", "--impl-artifacts", str(tmp_path / "impl"), "--epic", "7",
-        "--run-id", _RUN, "--gate-status", "PASS", "--verdict", "advance",
-        "--project", "ignored", "--cwd", str(repo), "--valid-until-date", _DATE, *extra,
-    ))
-    payload = _payload_from_build(built["text"])
+    fingerprint = mc.repo_fingerprint(repo)["value"]
+    payload = {
+        "ucg": 1,
+        "schema_version": 1,
+        "kind": "run-summary",
+        "epic": "7",
+        "run_id": _RUN,
+        "fingerprint": fingerprint,
+        "gate_status": "PASS",
+        "verdict": "advance",
+        "valid_until": {"sha": None, "date": _DATE},
+        "signatures": [
+            {"class": "race-condition", "path": "src/x.py",
+             "sig": _signature("race-condition", "src/x.py", fingerprint)},
+        ],
+        "deferred_count": 0,
+        "advisories": [{"sig": "abc123def456", "recurred": "yes"}],
+    }
     assert {k: v for k, v in record.items() if k not in ("created_at_epoch", "project")} == payload
     assert set(record) == set(payload) | {"created_at_epoch", "project"}
     assert "text" not in record and "title" not in record
@@ -679,6 +321,127 @@ def test_write_creates_exactly_one_run_file_holding_the_build_fields(tmp_path, h
         assert not [p.name for p in runs.iterdir() if p.name.endswith(".tmp")]
     # Nothing spilled or dead-lettered on the happy path.
     assert not (tmp_path / "impl").exists()
+
+
+# --- write: the run payload (the checks the removed build carried) -----------
+
+
+@_needs_git
+def test_write_waived_gate_writes_its_record(tmp_path, home):
+    # NOT_EVALUATED is skipped (test_write_not_evaluated_gate_writes_no_record);
+    # a WAIVED outcome is a real one and is written.
+    record = _record_of(tmp_path, _repo(tmp_path), "--gate-status", "waived")
+    assert record["gate_status"] == "WAIVED"
+    assert record["verdict"] == "advance"
+    assert (record["ucg"], record["schema_version"], record["kind"]) == (1, 1, "run-summary")
+    assert record["fingerprint"]  # a real fingerprint was pinned
+
+
+@_needs_git
+def test_write_maps_an_unknown_root_cause_class_to_other(tmp_path, home):
+    record = _record_of(tmp_path, _repo(tmp_path), "--root-cause", "class=not-a-real-class,path=src/x.py")
+    assert record["signatures"][0]["class"] == "other"
+
+
+@_needs_git
+def test_write_root_cause_signature_is_sha1_12_of_class_path_and_fingerprint(tmp_path, home):
+    repo = _repo(tmp_path)
+    record = _record_of(tmp_path, repo, "--root-cause", "class=race-condition,path=src/x.py")
+    (sig,) = record["signatures"]
+    assert sig["class"] == "race-condition"
+    assert sig["sig"] == _signature("race-condition", "src/x.py", mc.repo_fingerprint(repo)["value"])
+    assert len(sig["sig"]) == 12 and all(c in "0123456789abcdef" for c in sig["sig"])
+
+
+@_needs_git
+def test_write_redacts_known_secrets(tmp_path, home):
+    # An AKIA key in a root-cause path and a ghp_ token in the verdict never
+    # reach the run file.
+    record = _record_of(
+        tmp_path, _repo(tmp_path),
+        "--verdict", "advance ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+        "--root-cause", "class=security,path=AKIAIOSFODNN7EXAMPLE/creds.txt",
+    )
+    text = json.dumps(record)
+    assert "AKIAIOSFODNN7EXAMPLE" not in text
+    assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in text
+    assert "[redacted]" in record["verdict"]
+    assert "[redacted]" in record["signatures"][0]["path"]
+
+
+@_needs_git
+def test_write_redacts_an_advisory_sig(tmp_path, home):
+    record = _record_of(tmp_path, _repo(tmp_path), "--advisory", "sig=token=supersecretvalue123,recurred=yes")
+    (advisory,) = record["advisories"]
+    assert advisory["recurred"] == "yes"
+    assert "supersecretvalue123" not in advisory["sig"]
+
+
+@_needs_git
+def test_write_normalizes_an_unknown_advisory_recurred_value(tmp_path, home):
+    record = _record_of(tmp_path, _repo(tmp_path), "--advisory", "sig=abc,recurred=maybe")
+    assert record["advisories"] == [{"sig": "abc", "recurred": "unknown"}]
+
+
+DEFERRED_LEDGER = """# Deferred Work
+
+## Epic 7 deferred
+
+- skip flaky integration test for now
+- backfill perf benchmark
+- harden the retry path
+
+## Epic 8 deferred
+
+- unrelated item
+"""
+
+PREFIX_COLLIDING_LEDGER = """# Deferred Work
+
+## Epic 1 deferred
+
+- the one item Epic 1 actually parked
+
+## Epic 11 deferred
+
+- eleven's first
+- eleven's second
+- eleven's third
+- eleven's fourth
+"""
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    "ledger, epic, expected",
+    [
+        (DEFERRED_LEDGER, "7", 3),
+        # Epic `1` must not claim Epic `11`'s parked items: a plain substring
+        # test made every epic a prefix of its own successors, and the count
+        # reported a neighbour's backlog as this run's, a number the record
+        # an autonomous run leaves behind carries to the next one.
+        (PREFIX_COLLIDING_LEDGER, "1", 1),
+        # Its twin: the boundary is not so tight that a real heading stops matching.
+        (PREFIX_COLLIDING_LEDGER, "11", 4),
+        (None, "7", 0),
+    ],
+    ids=["this-epic-only", "no-prefix-match", "own-heading-matches", "absent-ledger"],
+)
+def test_write_counts_this_epics_deferred_items(tmp_path, home, ledger, epic, expected):
+    path = tmp_path / "deferred-work.md"
+    if ledger is not None:
+        path.write_text(ledger, encoding="utf-8")
+    record = _record_of(tmp_path, _repo(tmp_path), "--epic", epic, "--deferred", str(path))
+    assert record["epic"] == epic
+    assert record["deferred_count"] == expected
+
+
+@_needs_git
+def test_write_passes_valid_until_through(tmp_path, home):
+    record = _record_of(
+        tmp_path, _repo(tmp_path), "--valid-until-sha", "abc123", "--valid-until-date", "2026-12-31T00:00:00Z",
+    )
+    assert record["valid_until"] == {"sha": "abc123", "date": "2026-12-31T00:00:00Z"}
 
 
 @_needs_git
@@ -780,9 +543,10 @@ def test_write_never_touches_a_parseable_record_of_another_run_or_repo(tmp_path,
     "r1",
 ])
 def test_write_rejects_a_bad_run_id_with_exit_2_before_touching_anything(tmp_path, home, run_id):
-    # CSR-UNIT-002 (AC-4), write half: exits 2 before any git call, so no repo
-    # is needed; no store root, no outbox, no dead-letter file. (build and
-    # spill keep today's contract until PR 3 swaps the prose.)
+    # CSR-UNIT-002 (AC-4): exits 2 before any git call, so no repo is needed;
+    # no store root, no outbox, no dead-letter file. build and spill, the
+    # other two commands that took --run-id, are removed and exit 2 before
+    # reading anything (test_removed_claude_mem_forms_exit_2_naming_their_replacement).
     store = tmp_path / "store"
     impl = tmp_path / "impl"
     proc = _write(impl, store, tmp_path, run_id)
@@ -1183,7 +947,7 @@ def test_store_drain_converts_a_30_day_old_legacy_entry_before_the_ttl(tmp_path,
     repo = _repo(tmp_path)
     impl = tmp_path / "impl"
     store = tmp_path / "store"
-    wrapper = _legacy_wrapper(tmp_path, repo)
+    wrapper = _legacy_wrapper(repo)
     _spill_raw(impl, _RUN, wrapper, attempts=0, spilled_at=_iso(_NOW - timedelta(days=30)))
 
     out = _out(_drain(impl, store, "--now-epoch", str(_NOW_MS)))
@@ -1205,7 +969,7 @@ def test_store_drain_resets_legacy_attempts_so_a_writable_store_lands_it(tmp_pat
     repo = _repo(tmp_path)
     impl = tmp_path / "impl"
     store = tmp_path / "store"
-    wrapper = _legacy_wrapper(tmp_path, repo)
+    wrapper = _legacy_wrapper(repo)
     _spill_raw(impl, _RUN, wrapper, attempts=attempts, spilled_at=_iso(_NOW - timedelta(days=30)))
     out = _out(_drain(impl, store, "--now-epoch", str(_NOW_MS)))
     assert out["converted"] == 1 and out["written"] == 1
@@ -1223,7 +987,7 @@ def test_store_drain_requeues_a_failed_legacy_conversion_so_the_next_drain_lands
     repo = _repo(tmp_path)
     impl = tmp_path / "impl"
     store = _blocked_store(tmp_path)
-    wrapper = _legacy_wrapper(tmp_path, repo)
+    wrapper = _legacy_wrapper(repo)
     _spill_raw(impl, _RUN, wrapper, attempts=2, spilled_at=_iso(_NOW - timedelta(days=30)))
 
     out = _out(_drain(impl, store, "--now-epoch", str(_NOW_MS)))
@@ -1331,51 +1095,127 @@ def test_store_drain_with_an_unset_store_leaves_the_outbox_as_it_is(tmp_path, ho
     assert not (impl / _DEAD).exists()
 
 
-@_needs_git
-def test_plain_drain_without_store_keeps_todays_contract_for_a_spilled_store_record(tmp_path, home):
-    # PR 1 is additive: drain with no --store, as main's finalize.md calls it,
-    # still reports replayable entries and bumps attempts in place.
-    repo = _repo(tmp_path)
+def test_store_drain_dead_letters_an_entry_already_at_the_attempt_cap_with_its_stamps(tmp_path, home):
+    # An entry an earlier drain left at three attempts is dead-lettered without
+    # a write, its payload and original spill stamp kept verbatim.
     impl = tmp_path / "impl"
-    entry = _spill_via_write(tmp_path, impl, repo, _RUN)
-    out = _out(_run("drain", "--impl-artifacts", str(impl)))
-    assert set(out) == {"replayable", "tombstones", "dead_lettered"}
-    assert [item["payload"] for item in out["replayable"]] == [entry["payload"]]
-    (kept,) = _lines(impl / f"mem-outbox.{_RUN}.jsonl")
-    assert kept["attempts"] == 1
+    store = tmp_path / "store"
+    record = mc.store_record(_inner(), created_at_epoch=_DATE_MS, project="widget")
+    fresh = _iso(_NOW - timedelta(days=1))
+    _spill_raw(impl, _RUN, record, attempts=3, spilled_at=fresh)
+    out = _out(_drain(impl, store, "--now-epoch", str(_NOW_MS)))
+    assert out["dead_lettered"] == 1
+    assert out["written"] == 0 and out["deferred"] == 0 and out["tombstones"] == 0
+    assert _lines(impl / _DEAD) == [{"payload": record, "attempts": 3, "spilled_at": fresh}]
+    assert not (impl / f"mem-outbox.{_RUN}.jsonl").exists()
+    assert not store.exists()
 
 
-# --- review follow-ups: spill, drain order, converted entries, the reader ----
-
-
-@pytest.mark.parametrize("run_id", [
-    "epic-7/x-20260604T172512Z",
-    "epic-7\\x-20260604T172512Z",
-    "epic-..-20260604T172512Z",
-    "x/../../escaped",
-])
-def test_spill_rejects_a_path_like_run_id_with_exit_2(tmp_path, run_id):
-    # CSR-UNIT-002, the spill half (R-08): spill names its outbox
-    # mem-outbox.<run_id>.jsonl, so a value with a separator or ".." exits 2
-    # before writing anything. The folder below would let "x/../../escaped"
-    # land outside the artifacts folder. Any other run_id keeps today's
-    # contract (the spill tests above pass "r" and "run-X").
+def test_store_drain_handles_a_mixed_batch_across_two_outboxes(tmp_path, home):
+    # One entry lands, one past the TTL tombstones, one past the attempt cap is
+    # dead-lettered; each outbox left empty is removed.
     impl = tmp_path / "impl"
-    (impl / "mem-outbox.x").mkdir(parents=True)
-    before = sorted(str(p) for p in tmp_path.rglob("*"))
-    proc = _run("spill", "--impl-artifacts", str(impl), "--run-id", run_id, stdin='{"x": 1}')
+    store = tmp_path / "store"
+    fresh = _iso(_NOW - timedelta(days=1))
+    old = _iso(_NOW - timedelta(days=40))
+    records = {
+        run_id: mc.store_record(_inner(run_id=run_id), created_at_epoch=_DATE_MS, project="widget")
+        for run_id in (_RUN, _RUN_B, _RUN_C)
+    }
+    _spill_raw(impl, _RUN, records[_RUN], attempts=0, spilled_at=fresh)
+    _spill_raw(impl, _RUN, records[_RUN_B], attempts=0, spilled_at=old)
+    _spill_raw(impl, _RUN_C, records[_RUN_C], attempts=5, spilled_at=fresh)
+    out = _out(_drain(impl, store, "--now-epoch", str(_NOW_MS)))
+    assert (out["written"], out["tombstones"], out["dead_lettered"]) == (1, 1, 1)
+    assert _jsonl_names(mc.runs_dir(store, _inner()["fingerprint"])) == [f"{_RUN}.jsonl"]
+    assert [e["payload"]["run_id"] for e in _lines(impl / _DEAD)] == [_RUN_C]
+    assert sorted(p.name for p in impl.iterdir()) == [_DEAD]
+
+
+def test_store_drain_of_an_empty_artifacts_folder_reports_zero_counts(tmp_path, home):
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    store = tmp_path / "store"
+    out = _out(_drain(impl, store, "--now-epoch", str(_NOW_MS)))
+    assert out == {**{key: 0 for key in _STORE_DRAIN_COUNTS}, "notes": [], "store": os.path.abspath(store)}
+    assert list(impl.iterdir()) == []
+    assert not store.exists()
+
+
+# --- the removed claude-mem forms (R-15) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "args, form, replacement",
+    [
+        (
+            ("build", "--impl-artifacts", "I", "--epic", "7", "--run-id", _RUN, "--gate-status", "PASS",
+             "--verdict", "advance", "--project", "widget", "--cwd", "P"),
+            "build", "write --store VALUE",
+        ),
+        # CSR-UNIT-002 (AC-4): a path-like run_id names no file either.
+        (
+            ("build", "--impl-artifacts", "I", "--epic", "7", "--run-id", "x/../../escaped",
+             "--gate-status", "PASS", "--verdict", "advance", "--project", "widget"),
+            "build", "write --store VALUE",
+        ),
+        (("spill", "--impl-artifacts", "I", "--run-id", _RUN), "spill", "write --store VALUE"),
+        (("spill", "--impl-artifacts", "I", "--run-id", "x/../../escaped"), "spill", "write --store VALUE"),
+        (("drain", "--impl-artifacts", "I"), "drain without --store", "drain --store VALUE"),
+        (
+            ("drain", "--impl-artifacts", "I", "--ttl-days", "14", "--now-epoch", str(_NOW_MS)),
+            "drain without --store", "drain --store VALUE",
+        ),
+        (("drain", "--impl-artifacts", "I", "--project-root", "P"), "drain without --store", "drain --store VALUE"),
+        (("drain", "--impl-artifacts", "I", "--cwd", "P"), "drain without --store", "drain --store VALUE"),
+        (
+            ("write", "--impl-artifacts", "I", "--store", "S", "--epic", "7", "--run-id", _RUN,
+             "--gate-status", "PASS", "--verdict", "advance", "--project", "widget", "--cwd", "P"),
+            "--project, a build flag,", "write takes project from the main worktree",
+        ),
+    ],
+    ids=[
+        "build", "build-path-like-run-id", "spill", "spill-path-like-run-id", "drain-no-store",
+        "drain-no-store-with-ttl", "drain-no-store-project-root", "drain-no-store-cwd", "write-project",
+    ],
+)
+def test_removed_claude_mem_forms_exit_2_naming_their_replacement(args, form, replacement, tmp_path, home):
+    # R-15, CSR-UNIT-002: each form the claude-mem backend needed exits 2 with
+    # one stderr line naming what replaces it, before reading stdin or touching
+    # anything: the outbox it would have drained stays byte-identical.
+    impl = tmp_path / "impl"
+    record = mc.store_record(_inner(), created_at_epoch=_DATE_MS, project="widget")
+    _spill_raw(impl, _RUN, record, attempts=1, spilled_at=_iso(_NOW - timedelta(days=1)))
+    outbox = impl / f"mem-outbox.{_RUN}.jsonl"
+    before = _sha(outbox)
+    tree = sorted(str(p) for p in tmp_path.rglob("*"))
+    values = {"I": str(impl), "S": str(tmp_path / "store"), "P": str(tmp_path)}
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), *(values.get(a, a) for a in args)],
+        capture_output=True, text=True, encoding="utf-8", cwd=str(tmp_path),
+        input='{"text": "a claude-mem payload", "title": "t", "project": "widget"}',
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+    )
     assert proc.returncode == 2
-    assert "would leave the outbox folder" in json.loads(proc.stdout)["error"]
-    assert sorted(str(p) for p in tmp_path.rglob("*")) == before
+    assert proc.stdout == ""
+    (line,) = proc.stderr.splitlines()
+    assert line.startswith("mem_observation.py: error: ")
+    assert f"{form} was removed with the claude-mem backend" in line
+    assert replacement in line
+    assert _sha(outbox) == before
+    assert sorted(str(p) for p in tmp_path.rglob("*")) == tree
 
 
-@pytest.mark.parametrize("flag", ["--project-root", "--cwd"])
-def test_plain_drain_refuses_the_store_only_flags(tmp_path, flag):
-    # Like mem_recall.py, a store-mode flag without --store exits 2.
-    impl = tmp_path / "impl"
-    proc = _run("drain", "--impl-artifacts", str(impl), flag, str(tmp_path))
-    assert proc.returncode == 2
-    assert not impl.exists()
+def test_help_lists_only_write_and_drain(tmp_path):
+    text = _run_in(tmp_path, "--help").stdout
+    assert "{write,drain}" in text
+    # A subcommand line is indented four spaces; a wrapped help line, more.
+    listed = [line.split()[0] for line in text.splitlines() if line.startswith("    ") and line[4:5].strip()]
+    assert listed == ["write", "drain"]
+    assert "--project " not in _run_in(tmp_path, "write", "--help").stdout
+
+
+# --- review follow-ups: drain order, converted entries, the reader -------------
 
 
 @_needs_git
@@ -1481,7 +1321,7 @@ def test_store_drain_never_tombstones_a_converted_legacy_entry(tmp_path, home):
     repo = _repo(tmp_path)
     impl = tmp_path / "impl"
     store = _blocked_store(tmp_path)
-    wrapper = _legacy_wrapper(tmp_path, repo)
+    wrapper = _legacy_wrapper(repo)
     _spill_raw(impl, _RUN, wrapper, attempts=0, spilled_at=_iso(_NOW - timedelta(days=30)))
     out = _out(_drain(impl, store, "--now-epoch", str(_NOW_MS)))
     assert out["converted"] == 1 and out["deferred"] == 1
@@ -1502,7 +1342,7 @@ def test_store_drain_dead_letters_a_converted_entry_at_the_attempt_cap(tmp_path,
     repo = _repo(tmp_path)
     impl = tmp_path / "impl"
     store = _blocked_store(tmp_path)
-    wrapper = _legacy_wrapper(tmp_path, repo)
+    wrapper = _legacy_wrapper(repo)
     _spill_raw(impl, _RUN, wrapper, attempts=0, spilled_at=_iso(_NOW - timedelta(days=30)))
     for days, deferred in ((0, 1), (20, 1), (40, 0)):
         clock = int((_NOW + timedelta(days=days)).timestamp()) * 1000
