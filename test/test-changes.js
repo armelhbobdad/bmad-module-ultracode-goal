@@ -7,6 +7,9 @@
  * - fragment validation, case by case;
  * - the gate matrix: every refusal, every pass, and the version each bump
  *   gives, computed as the Bump version step computes it;
+ * - the posture check: a major release, and the hand bump to one, needs the
+ *   Status line of docs/_internal/STABILITY.md to name its major, and this
+ *   repository's Status line, description and posture sentence agree;
  * - a golden render of the fixture fragments, and the insertion into the
  *   real CHANGELOG.md with every older release left byte-identical;
  * - GitHub's size limits: under them, the notes and the review are
@@ -611,6 +614,107 @@ test('evaluateGate: files in changes/ to fix are refused, and a stable release n
     changes.unreleasedProblem('# Changelog\n'),
     'CHANGELOG.md has no "## [Unreleased]" heading to insert the release under.',
   );
+});
+
+// STABILITY.md as the gate reads it: the Status line names the major it describes.
+function stabilityText(major) {
+  return [
+    '---',
+    'title: Stability and Public Contract',
+    `description: "The ${major}.x stability posture."`,
+    '---',
+    '',
+    `> **Status:** ${major}.x. The surfaces below are the public contract.`,
+    '',
+    `This is the stability posture at \`${major}.x\`.`,
+    '',
+  ].join('\n');
+}
+
+test('evaluateGate: a major release needs STABILITY.md to state its major', () => {
+  const input = {
+    next: '3.0.0',
+    bump: 'major',
+    current: '2.2.0',
+    baseTag: 'v2.2.0',
+    fragments: [breakingNamed()],
+    surfaces: { hard: [], additive: [], review: [] },
+  };
+  const stale = changes.evaluateGate({ ...input, stability: stabilityText(2) }).refusals;
+  assert.strictEqual(stale.length, 1, JSON.stringify(stale));
+  assert.match(stale[0], /3\.0\.0 is a major release, but docs\/_internal\/STABILITY\.md states the 2\.x posture/);
+  assert.match(stale[0], /restate it as 3\.x .*Status line, the posture sentence under it and the description in its front matter/);
+  assert.deepStrictEqual(changes.evaluateGate({ ...input, stability: stabilityText(3) }).refusals, []);
+  // No Status line to read is refused, not passed.
+  assert.match(
+    changes.evaluateGate({ ...input, stability: '# Stability\n' }).refusals.join('\n'),
+    /docs\/_internal\/STABILITY\.md has no "> \*\*Status:\*\* N\.x\." line/,
+  );
+  // A tree without the file (the throwaway repositories here) skips the check.
+  assert.deepStrictEqual(changes.evaluateGate({ ...input, stability: null }).refusals, []);
+  // A premajor prerelease ships the contract too.
+  const rc = { ...input, next: '3.0.0-rc.1', bump: 'rc', current: '3.0.0-rc.0' };
+  assert.match(changes.evaluateGate({ ...rc, stability: stabilityText(2) }).refusals.join('\n'), /states the 2\.x posture/);
+  assert.deepStrictEqual(changes.evaluateGate({ ...rc, stability: stabilityText(3) }).refusals, []);
+  // Only a major step is checked: a minor or patch inside the major is not refused for it.
+  const minor = { ...input, next: '2.3.0', bump: 'minor', fragments: [frag('added')] };
+  assert.deepStrictEqual(changes.evaluateGate({ ...minor, stability: stabilityText(2) }).refusals, []);
+});
+
+test('evaluateGate: the premajor hand bump names STABILITY.md when its Status names another major', () => {
+  const input = {
+    next: '2.2.1-rc.0',
+    bump: 'rc',
+    current: '2.2.0',
+    baseTag: 'v2.2.0',
+    fragments: [breakingNamed()],
+    surfaces: { hard: [], additive: [], review: [] },
+  };
+  const stale = changes.evaluateGate({ ...input, stability: stabilityText(2) }).refusals.join('\n');
+  assert.match(
+    stale,
+    /Set the version to 3\.0\.0-rc\.0 by hand in a pull request \(package\.json, package-lock\.json and \.claude-plugin\/marketplace\.json\) that also restates docs\/_internal\/STABILITY\.md as 3\.x, then dispatch rc/,
+  );
+  // The 2.2.1-rc.0 the dispatch gives is no major step, so the posture is not refused on its own.
+  assert.doesNotMatch(stale, /states the 2\.x posture/);
+  const current = changes.evaluateGate({ ...input, stability: stabilityText(3) }).refusals.join('\n');
+  assert.match(current, /\(package\.json, package-lock\.json and \.claude-plugin\/marketplace\.json\), then dispatch rc/);
+  assert.doesNotMatch(current, /STABILITY/);
+});
+
+test('gate: reads docs/_internal/STABILITY.md and refuses a major it does not state', () => {
+  const root = makeRepo();
+  write(root, {
+    'docs/_internal/STABILITY.md': stabilityText(1),
+    'changes/drop-key.yaml': 'type: breaking\nscope: ultracode-goal\nsummary: A break.\nmigration: Do the new thing.\n',
+  });
+  const stale = runTool(CHANGES_TOOL, ['gate', '--bump', 'major', '--root', root]);
+  assert.strictEqual(stale.status, 1, stale.out);
+  assert.match(stale.out, /2\.0\.0 is a major release, but docs\/_internal\/STABILITY\.md states the 1\.x posture/);
+  const preview = runTool(CHANGES_TOOL, ['preview', '--bump', 'major', '--root', root]);
+  assert.match(preview.out, /Gate: refuses this bump:[\s\S]*states the 1\.x posture/);
+  write(root, { 'docs/_internal/STABILITY.md': stabilityText(2) });
+  const restated = runTool(CHANGES_TOOL, ['gate', '--bump', 'major', '--root', root]);
+  assert.strictEqual(restated.status, 0, restated.out);
+});
+
+test('this repository: STABILITY.md states one major, the one package.json carries or the next', () => {
+  const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+  const stability = fs.readFileSync(path.join(ROOT, 'docs', '_internal', 'STABILITY.md'), 'utf8');
+  // The gate reads the Status line; the description and the posture sentence are moved with it by hand.
+  const labels = [
+    /^> \*\*Status:\*\* (\d+)\.x\./m,
+    /^description: "The (\d+)\.x stability posture/m,
+    /stability posture for `bmad-module-ultracode-goal` at `(\d+)\.x`/,
+  ].map((pattern) => (pattern.exec(stability) || [])[1]);
+  assert.ok(
+    labels.every((label) => label !== undefined && label === labels[0]),
+    `the Status line, description and posture sentence disagree: ${labels}`,
+  );
+  const major = Number(labels[0]);
+  const current = Number(version.split('.')[0]);
+  // A released version carries its own major; a tree ahead of a major release already states the next.
+  assert.ok(major === current || major === current + 1, `Status ${major}.x against package.json ${version}`);
 });
 
 test('minimumBump lists every reason, highest first', () => {

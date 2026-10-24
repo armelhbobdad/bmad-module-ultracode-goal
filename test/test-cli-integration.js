@@ -689,6 +689,133 @@ async function testSkillParityDetection() {
   console.log('');
 }
 
+/**
+ * `status` covers every skill UCG installs, not only `ultracode-goal`.
+ *
+ * Preflight refuses to launch without `ucg-create-story` or `ucg-dev-story`, so
+ * a `status` that checked one skill printed `matches source` on a project whose
+ * every run stops at preflight. Each case removes part of a real install and
+ * asserts both the data and the rendered row.
+ */
+async function testStatusCoversEverySkill() {
+  console.log(`${colors.yellow}Test Suite: Status Covers Every UCG Skill${colors.reset}\n`);
+
+  const projectDir = await makeTempDir('status-skills');
+  // eslint-disable-next-line no-control-regex -- stripping ANSI escape codes from the rendered rows
+  const strip = (text) => text.replaceAll(/\u001B\[\d+(?:;\d+)*m/g, '');
+
+  try {
+    const { Installer } = require('../tools/cli/lib/installer');
+    const { getStatus, displayStatus } = require('../tools/cli/commands/status');
+    const { UCG_SKILLS } = require('../tools/cli/lib/ide-skills');
+    const render = (status) => {
+      const lines = [];
+      const original = console.log;
+      console.log = (...args) => lines.push(strip(args.join(' ')));
+      try {
+        displayStatus(status, '0.0.0-test');
+      } finally {
+        console.log = original;
+      }
+      return lines;
+    };
+    const row = (lines, label) => lines.find((line) => line.trimStart().startsWith(`${label}:`)) || '';
+
+    const restore = suppressConsole();
+    await new Installer().install({
+      projectDir,
+      ucgFolder: '_bmad/ucg',
+      project_name: 'status-skills-test',
+      ides: ['claude-code'],
+      install_learning: false,
+      _action: 'fresh',
+    });
+    restore();
+
+    // (a) Every UCG skill is reported, in the module copy and the IDE copy.
+    let status = await getStatus(projectDir);
+    const names = (status.skills || []).map((skill) => skill.name);
+    assert(
+      JSON.stringify(names) === JSON.stringify([...UCG_SKILLS]),
+      'status reports every skill in UCG_SKILLS',
+      `got ${JSON.stringify(names)}`,
+    );
+    assert(
+      (status.skills || []).every((skill) => skill.module.installed === true && skill.module.ok === true),
+      'fresh install: every module copy is installed and matches source',
+    );
+    assert(
+      (status.skills || []).every(
+        (skill) => skill.ides.length > 0 && skill.ides.every((entry) => entry.installed === true && entry.ok === true),
+      ),
+      'fresh install: every IDE copy is installed and matches source',
+    );
+    let lines = render(status);
+    assert(/installed/.test(row(lines, 'Skills')), 'fresh install: the Skills row says installed', row(lines, 'Skills'));
+    assert(
+      /matches source/.test(row(lines, 'module copy')),
+      'fresh install: the module copy row matches source',
+      row(lines, 'module copy'),
+    );
+    assert(
+      /matches source/.test(row(lines, 'claude-code')),
+      'fresh install: the claude-code row matches source',
+      row(lines, 'claude-code'),
+    );
+    assert(!lines.some((line) => /out of sync|Refresh with/.test(line)), 'fresh install: no out-of-sync row and no refresh hint');
+
+    // (b) A story skill lost from the IDE copy: preflight's story_skills blocker.
+    await fs.remove(path.join(projectDir, '.claude/skills/ucg-dev-story'));
+    status = await getStatus(projectDir);
+    const devStory = (status.skills || []).find((skill) => skill.name === 'ucg-dev-story');
+    const devIde = devStory && devStory.ides.find((entry) => entry.ide === 'claude-code');
+    assert(devIde && devIde.present === false && devIde.installed === false, 'removed IDE story skill: reported not installed');
+    assert(devStory && devStory.module.ok === true, 'removed IDE story skill: the module copy still matches');
+    lines = render(status);
+    assert(
+      /out of sync/.test(row(lines, 'claude-code')) && !/matches source/.test(row(lines, 'claude-code')),
+      'removed IDE story skill: the claude-code row is out of sync, not matches source',
+      row(lines, 'claude-code'),
+    );
+    assert(
+      lines.some((line) => /^\s+ucg-dev-story: not installed/.test(line)),
+      'removed IDE story skill: a row names ucg-dev-story as not installed',
+      lines.join('\n'),
+    );
+    assert(/matches source/.test(row(lines, 'module copy')), 'removed IDE story skill: the module copy row still matches source');
+    assert(
+      lines.some((line) => /Refresh with: npx bmad-module-ultracode-goal update/.test(line)),
+      'removed IDE story skill: the refresh hint is shown',
+    );
+
+    // (c) A module copy without its SKILL.md is not installed, and the Skills row says which.
+    await fs.remove(path.join(projectDir, '_bmad/ucg/ucg-create-story/SKILL.md'));
+    status = await getStatus(projectDir);
+    const createStory = (status.skills || []).find((skill) => skill.name === 'ucg-create-story');
+    assert(
+      createStory && createStory.module.installed === false && createStory.module.ok === false,
+      'module story skill without SKILL.md: not installed and not ok',
+    );
+    lines = render(status);
+    assert(
+      /5 of 6 installed/.test(row(lines, 'Skills')) && /ucg-create-story/.test(row(lines, 'Skills')),
+      'module story skill without SKILL.md: the Skills row counts and names it',
+      row(lines, 'Skills'),
+    );
+    assert(/out of sync/.test(row(lines, 'module copy')), 'module story skill without SKILL.md: the module copy row is out of sync');
+
+    // (d) The ultracode-goal rows keep their shape for older readers.
+    assert(status.skillInstalled === true, 'skillInstalled still reports the ultracode-goal module copy');
+    assert(status.skillParity && status.skillParity.module.ok === true, 'skillParity still reports ultracode-goal');
+  } catch (error) {
+    assert(false, 'status covers every UCG skill without error', error.stack);
+  } finally {
+    await fs.remove(projectDir);
+  }
+
+  console.log('');
+}
+
 async function testManifestAccuracy() {
   console.log(`${colors.yellow}Test Suite 5: Manifest Accuracy${colors.reset}\n`);
 
@@ -2082,6 +2209,7 @@ async function runTests() {
   await testStep6bDeclineNoOp();
   await testReinstallAntiZombie();
   await testSkillParityDetection();
+  await testStatusCoversEverySkill();
   await testBannerGeometry();
 
   console.log(`${colors.cyan}========================================`);
