@@ -2122,12 +2122,13 @@ _SEGMENT_SPLIT = (
 _PREFIX_STRIP_TEST = (
     "    while index < len(tokens) and _ASSIGNMENT.match(tokens[index]):"
 )
-# The quote-aware reading, the fourth member of the union, which splits a
-# chained command as well: a mutant that drops the quote-blind splits drops it
-# too, or it alone keeps the chained commit denied.
+# The quote-aware readings, which split a chained command as well: a mutant
+# that drops the quote-blind splits drops them too, or they alone keep the
+# chained commit denied.
 _QUOTED_READING = (
-    "    for tokens in _quoted_segments(command):\n"
-    "        verbs |= _token_write_verbs(tokens, depth, scope) or set()\n"
+    "    for text in (command,) if lexable == command else (command, lexable):\n"
+    "        for tokens in _quoted_segments(text):\n"
+    "            verbs |= _token_write_verbs(tokens, depth, scope) or set()\n"
 )
 
 
@@ -2627,6 +2628,29 @@ def test_a_git_alias_to_commit_or_push_is_denied(
         "git --shallow-file log commit -m x",
         # A body read at the depth cap first, then more shallowly.
         "echo $(echo $(echo $(echo `sh -c 'git ci -m x'`))); echo `sh -c 'git ci -m x'`",
+        # A control operator glued to a process substitution in one shlex
+        # token, and a process substitution's body.
+        "true;>(git ci -m x)",
+        "true;>(git commit -m x)",
+        "true\n>(git ci -m x)",
+        "echo hi|>(git ci -m x)",
+        "true;<(git ci -m 'a;b')",
+        "true&&>(git ci -m x)",
+        "false||>(git ci -m x)",
+        "(true)>(git ci -m x)",
+        # Where _lexable's reading misreads, the command as it is still reads.
+        "echo ${x:- #}; git ci -m 'a;b'",
+        "x=`echo a #`; git ci -m 'a;b'",
+        """echo "$(echo " #")"; git ci -m 'a;b'""",
+        "echo $(date)#x; git ci -m 'a;b'",
+        "echo $((1<<n))\ngit ci -m 'a;b'",
+        'echo $(( 1 << bits ))\ngit ci -m "subject\n\nbody"',
+        """cat <<E"O"F\nhello\nEOF\ngit ci -m 'a;b'""",
+        "cat <<EOF-x\nhello\nEOF-x\ngit ci -m 'a;b'",
+        'cat <<END.\nhello\nEND.\ngit ci -m "subject\n\nbody"',
+        "cat <<EOF\nit's\n\tEOF\nit's\nEOF\ngit ci -m 'a;b'",
+        "echo a \\\n# see <<EOF\ngit ci -m 'a;b'",
+        "echo $$'a\\' ; git ci -m 'b;c'",
         # Past the depth cap, a git the guard cannot read deeper.
         "echo $(echo $(echo $(echo `sh -c 'git ci -m x'`)))",
         "sh -c \"sh -c 'sh -c \\\"sh -c \\\\\\\"git ci\\\\\\\"\\\"'\"",
@@ -2695,6 +2719,9 @@ def test_the_hint_quotes_only_name_shaped_subcommands(guard_module) -> None:
         "git status # it's fine",
         "git log -1 2>&1 | cat",
         "git status >/dev/null 2>&1",
+        "git log --oneline | head -5 # it's fine",
+        "git diff >| out.txt",
+        "diff <(git show HEAD:a) a",
     ],
 )
 def test_gits_own_commands_stay_reads(tmp_path: Path, command: str) -> None:

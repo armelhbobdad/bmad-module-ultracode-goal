@@ -388,7 +388,7 @@ _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 # Openers of a substitution that runs a command this tokenizer cannot see. A
 # segment carrying one takes the fail-closed path instead of being anchored.
-_SUBSTITUTION_MARKERS = ("$(", "`", "<(")
+_SUBSTITUTION_MARKERS = ("$(", "`", "<(", ">(")
 
 # Depth cap on `sh -c` recursion: a bound, not a behavior anyone should rely on.
 # Past it, a `git` the guard cannot read deeper counts as both verbs.
@@ -571,29 +571,51 @@ def _substitution_bodies(text: str) -> list[str]:
     return bodies
 
 
-# shlex's punctuation mode yields a run of these characters as one token. A
-# newline is one of them, so it ends a segment as it does in bash. A token of
-# control characters alone ends a segment (`;`, `&&`, `|&`, `;\n`, the `()` of
-# a function definition), and so does a process substitution's `<(` or `>(`;
-# a redirection such as `>&` stays in its segment, where _strip_leading_noise
-# reads it.
+# shlex's punctuation mode yields a run of these characters as one token (a
+# newline is one of them, so it ends a segment as it does in bash). The run is
+# split into bash's own operators, longest first: a control operator ends a
+# segment (`;`, `&&`, `|&`, a newline, the `()` of a function definition, a
+# process substitution's `<(` or `>(`, so `true;>(git commit)` reads its
+# body), and a redirection (`>&`, `>|`, `<<`) stays in the segment it opens,
+# where _strip_leading_noise reads it.
 _PUNCTUATION = "();<>|&\n"
-_CONTROL_CHARS = frozenset(";&|\n()")
-_SEGMENT_ENDS = frozenset({"<(", ">("})
+_OPERATORS = (
+    ";;&", "&>>", "<<<", "<<-", ";;", ";&", "&&", "||", "|&", "&>", ">>", ">&",
+    "<&", ">|", "<>", "<<", "<(", ">(", ";", "&", "|", "<", ">", "(", ")", "\n",
+)  # fmt: skip
+_CONTROL_OPERATORS = frozenset(
+    {";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")", "\n", "<(", ">("}
+)
 
-# A heredoc's start, with its delimiter, quoted or not.
-_HEREDOC_START = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+def _operators(token: str) -> list[str] | None:
+    """A run of punctuation as bash's operators, longest first; None for a word."""
+    if not token or not set(token) <= set(_PUNCTUATION):
+        return None
+    found: list[str] = []
+    index = 0
+    while index < len(token):
+        operator = next(op for op in _OPERATORS if token.startswith(op, index))
+        found.append(operator)
+        index += len(operator)
+    return found
+
+# A heredoc's start: `<<` or `<<-`, then its delimiter word, quoted or not.
+_HEREDOC_START = re.compile(r"<<(-?)[ \t]*([^\s;&|<>()]+)")
 
 
 def _lexable(command: str) -> str:
-    """The command with what shlex reads unlike bash taken out.
+    """The command with what shlex reads unlike bash taken out, for a reading
+    of its own.
 
-    A comment (a `#` that starts a word, outside quotes, up to its line's end),
-    an ANSI-C string `$'...'`, whose backslash escapes shlex does not know and
-    in which nothing is substituted (it becomes an empty word), and a heredoc's
-    body (the lines up to its delimiter, which may hold any text, apostrophes
-    included). The rest is copied as it is, quotes and escapes included, for
-    shlex to read.
+    A comment (a `#` that starts a word, outside quotes and substitutions, up
+    to its line's end), an ANSI-C string `$'...'`, whose backslash escapes
+    shlex does not know and in which nothing is substituted (it becomes an
+    empty word), and a heredoc's body (the lines up to its delimiter, which may
+    hold any text, apostrophes included). The rest is copied as it is, quotes
+    and escapes included, for shlex to read. A misread here takes out text
+    bash runs, so this text is only ever read beside the command as it is
+    (_command_write_verbs): it can add a reading, never replace one.
     """
     out: list[str] = []
     pending: list[str] = []  # heredoc delimiters whose bodies start at the next newline
@@ -603,10 +625,12 @@ def _lexable(command: str) -> str:
     while index < size:
         char = command[index]
         if char == "\\":
+            # A line continuation joins the lines, and starts no word.
+            continued = command.startswith("\\\n", index)
             out.append(command[index : index + 2])
             index += 2
-            word_start = False
-        elif command.startswith("$'", index):
+            word_start = word_start and continued
+        elif command.startswith("$'", index) and _dollar_run(command, index) % 2:
             end = index + 2
             while end < size and command[end] != "'":
                 end += 2 if command[end] == "\\" else 1
@@ -620,13 +644,19 @@ def _lexable(command: str) -> str:
             out.append(command[index : end + 1])
             index = end + 1
             word_start = False
-        elif char == "#" and word_start:
+        elif char == "#" and word_start and not _in_expansion(command, index):
             end = command.find("\n", index)
             index = size if end == -1 else end
-        elif command.startswith("<<", index) and not command.startswith("<<<", index):
+        elif (
+            command.startswith("<<", index)
+            and not command.startswith("<<<", index)
+            and not _in_arithmetic(command, index)
+        ):
             match = _HEREDOC_START.match(command, index)
             if match:
-                pending.append(match.group(2))
+                # The delimiter is the whole word, its quotes removed; `<<-`
+                # alone lets tabs lead the closing line.
+                pending.append((_unquoted(match.group(2)), match.group(1) == "-"))
                 out.append(command[index : match.end()])
                 index = match.end()
             else:
@@ -637,19 +667,52 @@ def _lexable(command: str) -> str:
             out.append("\n")
             index += 1
             word_start = True
-            for delimiter in pending:
+            for delimiter, dash in pending:
                 while index < size:
                     end = command.find("\n", index)
                     line = command[index : size if end == -1 else end]
                     index = size if end == -1 else end + 1
-                    if line.lstrip("\t") == delimiter:
+                    if (line.lstrip("\t") if dash else line) == delimiter:
                         break
             pending.clear()
         else:
             out.append(char)
             index += 1
-            word_start = char in " \t;&|()<>"
+            word_start = char in " \t;&|(<>"
     return "".join(out)
+
+
+def _dollar_run(text: str, index: int) -> int:
+    """How many `$` end at `index` (inclusive): `$'` opens an ANSI-C string only
+    when it is odd (`$$'a'` is `$$` and then `'a'`)."""
+    start = index
+    while start > 0 and text[start - 1] == "$":
+        start -= 1
+    return index - start + 1
+
+
+def _in_expansion(text: str, index: int) -> bool:
+    """Whether `index` may sit inside a substitution or expansion on its line,
+    where a `#` starts no comment of the outer command (`$(...)`, `${...}`, a
+    backtick); counted roughly, and in doubt it is (no comment is taken out)."""
+    line = text[text.rfind("\n", 0, index) + 1 : index]
+    return line.count("`") % 2 == 1 or (line.count("$(") + line.count("${")) > (
+        line.count(")") + line.count("}")
+    )
+
+
+def _in_arithmetic(text: str, index: int) -> bool:
+    """Whether `index` sits inside `((...))` on its line, where `<<` is a shift."""
+    line = text[text.rfind("\n", 0, index) + 1 : index]
+    return line.count("((") > line.count("))")
+
+
+def _unquoted(word: str) -> str:
+    """A heredoc delimiter word with its quotes removed (`E"O"F` is `EOF`)."""
+    try:
+        return "".join(shlex.split(word)) or word
+    except ValueError:
+        return word
 
 
 def _quoted_segments(command: str) -> list[list[str]]:
@@ -657,23 +720,27 @@ def _quoted_segments(command: str) -> list[list[str]]:
 
     The quote-blind splits in _command_write_verbs tear a quoted `;`, `&&` or
     `|` apart (`git ci -m 'fix: a; b'`), and each fragment then tokenizes to
-    nothing. shlex in punctuation mode keeps it inside its word, once _lexable
-    has taken out what it reads unlike bash.
+    nothing. shlex in punctuation mode keeps it inside its word.
     """
-    lexer = shlex.shlex(_lexable(command), posix=True, punctuation_chars=_PUNCTUATION)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=_PUNCTUATION)
     lexer.whitespace = " \t\r"  # a newline is punctuation, so it ends a segment
     lexer.whitespace_split = True
-    lexer.commenters = ""  # _lexable took the comments out, as bash reads them
+    lexer.commenters = ""  # shlex would start one mid-word; bash does not
     try:
         tokens = list(lexer)
     except ValueError:
         return []
     segments: list[list[str]] = [[]]
     for token in tokens:
-        if token in _SEGMENT_ENDS or (token and set(token) <= _CONTROL_CHARS):
-            segments.append([])
-        else:
+        operators = _operators(token)
+        if operators is None:
             segments[-1].append(token)
+            continue
+        for operator in operators:
+            if operator in _CONTROL_OPERATORS:
+                segments.append([])
+            else:
+                segments[-1].append(operator)
     return [segment for segment in segments if segment]
 
 
@@ -872,12 +939,17 @@ def _command_write_verbs(command: str, depth: int, scope: _CommandScope | None =
     ):
         for segment in re.split(separators, command):
             verbs |= _segment_write_verbs(segment, depth, scope)
-    # A fourth reading, quote-aware, joins the union: it keeps a quoted
-    # separator inside its word (`git ci -m 'fix: a; b'`), which the three
-    # quote-blind splits tear into fragments that classify as nothing, and
-    # like them it can only add verbs. A command it cannot read adds none.
-    for tokens in _quoted_segments(command):
-        verbs |= _token_write_verbs(tokens, depth, scope) or set()
+    # Quote-aware readings join the union: they keep a quoted separator inside
+    # its word (`git ci -m 'fix: a; b'`), which the three quote-blind splits
+    # tear into fragments that classify as nothing, and like them they can
+    # only add verbs. One reads the command as it is; the other reads it with
+    # what shlex cannot lex taken out (_lexable: a comment holding an
+    # apostrophe, `$'...'`, a heredoc body), and adds to the first, never
+    # replaces it. A text shlex cannot read adds none.
+    lexable = _lexable(command)
+    for text in (command,) if lexable == command else (command, lexable):
+        for tokens in _quoted_segments(text):
+            verbs |= _token_write_verbs(tokens, depth, scope) or set()
     return verbs
 
 
