@@ -2624,6 +2624,73 @@ def test_a_subcommand_that_runs_no_write_is_allowed(
     assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
 
 
+def test_a_shell_alias_body_inherits_the_outer_config_options(tmp_path: Path) -> None:
+    """Git hands a `!` alias's commands the outer `-c` values and runs them in
+    the `-C` repository, so the aliases in its body are not the session's."""
+    protected = _protected_repo(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q")
+    _git(other, "config", "alias.zz", "commit")
+    _git(other, "config", "alias.sh", "!git zz")
+
+    for command in (
+        "git -c alias.zz=commit -c 'alias.x=!git zz' x",
+        f"git -C {other} sh",
+    ):
+        code, out = _run_hook(_bash_event(protected, command), protected)
+        assert code == 2, command
+        assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_an_alias_with_a_substitution_in_its_arguments_is_still_checked(tmp_path: Path) -> None:
+    """A segment holding `$(` took only the matches-anywhere scan, which never
+    looks an alias up, so `git ci -m "$(date)"` cleared a real commit."""
+    protected = _protected_repo(tmp_path)
+    _git(protected, "config", "alias.ci", "commit")
+
+    code, out = _run_hook(_bash_event(protected, 'git ci -m "$(date)"'), protected)
+
+    assert code == 2
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_an_external_git_command_runs_before_an_alias_of_its_name(tmp_path: Path) -> None:
+    """Git runs `git-<name>` from its exec-path or PATH before it looks for an
+    alias, so `git frob` with a `git-frob` on PATH is that command, in a command
+    of several segments too, where an alias could not be looked up in time."""
+    protected = _protected_repo(tmp_path)
+    _git(protected, "config", "alias.frob", "commit")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "git-frob"
+    script.write_text("#!/bin/sh\necho frob\n", encoding="utf-8")
+    script.chmod(0o755)
+    (bin_dir / "git-frob.bat").write_text("@echo frob\r\n", encoding="utf-8")
+    env = {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}
+
+    for command in ("git frob", "cd . && git frob", "git frob; echo done"):
+        code, out = _run_hook(_bash_event(protected, command), protected, env)
+        assert code == 0, command
+        assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+    # A variable the command sets can move PATH, so the external proves nothing.
+    code, out = _run_hook(_bash_event(protected, "PATH=/nowhere git frob"), protected, env)
+    assert code == 2
+
+
+def test_only_a_real_assignment_makes_the_lookup_moot(guard_module, tmp_path: Path) -> None:
+    """`b=c` inside an argument after `git` sets no variable; one ahead of
+    `git`, or among `env`'s operands, does."""
+    repo = _protected_repo(tmp_path)
+    _git(repo, "config", "alias.ci", "commit")
+
+    assert guard_module._git_writes("git ci -m 'a b=c'", str(repo)) == {"commit"}
+    assert guard_module._git_writes("git ci -m b=c", str(repo)) == {"commit"}
+    assert guard_module._git_writes("FOO=1 git ci", str(repo)) == {"commit", "push"}
+    assert guard_module._git_writes("env HOME=/x git ci", str(repo)) == {"commit", "push"}
+
+
 def test_an_alias_loop_resolves_to_both_verbs(guard_module, tmp_path: Path) -> None:
     """A chain past the recursion cap is not read as harmless.
 
