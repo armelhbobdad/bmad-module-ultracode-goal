@@ -15,12 +15,16 @@ drive_epic's default mode would have it refused. This script runs under
 
 Which folders. Every `node_modules` folder in the main tree, the root's and
 the nested ones (a workspace package's), but never one inside another
-`node_modules`: linking the outer one carries it. The walk does not enter a
-folder whose name starts with `.` (`.git`, `.venv`, the gate worktrees, which
-are `.gate-worktree-*` under the implementation artifacts folder, and the
-agent worktrees under `.claude/`), `__pycache__`, `venv` or `target`, nor
-another repository or worktree nested in the tree (a folder holding a
-`.git`): none holds the project's own dependencies, and some are large.
+`node_modules`: linking the outer one carries it. The walk does not enter
+`.git`, `__pycache__`, a gate worktree (`.gate-worktree-*`, under the
+implementation artifacts folder), a repository or worktree nested in the tree
+(a folder holding a `.git`, such as an agent worktree or a submodule, whose
+files the gate's worktree does not check out), a Python virtual environment
+(a folder holding `pyvenv.cfg`) or a cache folder (one holding `CACHEDIR.TAG`,
+such as Cargo's `target`). None holds the project's own dependencies, and some
+are large. A folder is judged by what it holds, not by its name, so a
+workspace package named `target` or a JavaScript action under `.github/` is
+still walked.
 `--dir` names a folder to link instead, relative to the project root, for a
 dependency folder of another name (`vendor`); repeat it for several. Given
 any `--dir`, nothing is discovered.
@@ -51,8 +55,12 @@ import sys
 from pathlib import Path
 
 DEPENDENCY_DIR = "node_modules"
-# Folders the walk never enters, besides every name starting with `.`.
-_UNWALKED = frozenset({"__pycache__", "venv", "target"})
+_GATE_WORKTREE_PREFIX = ".gate-worktree-"
+# Folders the walk never enters, by name.
+_UNWALKED = frozenset({".git", "__pycache__"})
+# A folder holding one of these is another repository or worktree (`.git`), a
+# Python virtual environment, or a cache (the Cache Directory Tagging spec).
+_UNWALKED_MARKERS = frozenset({".git", "pyvenv.cfg", "CACHEDIR.TAG"})
 
 
 def discover(project_root: Path, worktree: Path) -> list[str]:
@@ -65,8 +73,8 @@ def discover(project_root: Path, worktree: Path) -> list[str]:
     skip = os.path.normcase(str(worktree))
     found: list[str] = []
     for current, dirs, files in os.walk(project_root):
-        if current != str(project_root) and (".git" in dirs or ".git" in files):
-            dirs[:] = []  # another repository or worktree, nested in this one
+        if current != str(project_root) and _UNWALKED_MARKERS.intersection((*dirs, *files)):
+            dirs[:] = []  # a nested repository, a virtual environment or a cache
             continue
         kept = []
         for name in dirs:
@@ -74,7 +82,9 @@ def discover(project_root: Path, worktree: Path) -> list[str]:
             if name == DEPENDENCY_DIR:
                 found.append(Path(os.path.relpath(full, project_root)).as_posix())
             elif not (
-                name.startswith(".") or name in _UNWALKED or os.path.normcase(full) == skip
+                name in _UNWALKED
+                or name.startswith(_GATE_WORKTREE_PREFIX)
+                or os.path.normcase(full) == skip
             ):
                 kept.append(name)
         dirs[:] = kept

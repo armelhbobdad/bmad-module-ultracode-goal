@@ -171,8 +171,19 @@ def test_case_is_read_from_the_filesystem_itself(repo):
     path = repo / "src" / "guard.py"
     assert cc._ignores_case(path) is _case_insensitive(repo)
     assert cc._ignores_case(repo / "src") is _case_insensitive(repo)
-    (repo / "123").mkdir()
-    assert cc._ignores_case(repo / "123") is False
+    # A segment with no letter is judged by the nearest one that has some.
+    (repo / "docs" / "2024").mkdir(parents=True)
+    assert cc._ignores_case(repo / "docs" / "2024") is _case_insensitive(repo)
+
+
+def test_a_digits_only_segment_named_in_another_case_matches(repo):
+    # `Docs/2024` names the staged `docs/2024/notes.md` where case is ignored:
+    # the probe swaps `docs`, since `2024` has no case to swap.
+    if not _case_insensitive(repo):
+        pytest.skip("needs a case-insensitive filesystem (the Windows leg runs it)")
+    (repo / "docs" / "2024").mkdir(parents=True)
+    _stage(repo, "docs/2024/notes.md")
+    assert cc.check("see `Docs/2024/`", repo)["not_in_diff"] == []
 
 
 def test_a_real_path_named_in_another_case_stays_unmatched_where_case_counts(repo):

@@ -188,18 +188,20 @@ def _project_relative(staged: list[str], prefix: str) -> list[str]:
 def _ignores_case(path: Path) -> bool:
     """Whether the filesystem holding `path`, which exists, ignores case.
 
-    True when the same path with its last segment's case swapped is the same
-    file, as on Windows and on macOS by default. A last segment with no letter
-    to swap, or a path that cannot be checked, reads as case-sensitive, which
-    keeps the exact match.
+    True when the same path with one segment's case swapped is the same file,
+    as on Windows and on macOS by default. The last segment holding a letter is
+    swapped (`docs` for `docs/2024`); a path with none, or one that cannot be
+    checked, reads as case-sensitive, which keeps the exact match.
     """
-    swapped = path.with_name(path.name.swapcase())
-    if swapped.name == path.name:
-        return False
-    try:
-        return os.path.samefile(path, swapped)
-    except (OSError, ValueError):
-        return False
+    for current in (path, *path.parents):
+        swapped = current.name.swapcase()
+        if swapped == current.name:
+            continue
+        try:
+            return os.path.samefile(current, current.with_name(swapped))
+        except (OSError, ValueError):
+            return False
+    return False
 
 
 def _matches(named: str, staged: list[str], project_root: Path, prefix: str = "") -> bool:

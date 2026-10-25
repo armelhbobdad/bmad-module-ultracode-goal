@@ -57,11 +57,22 @@ def trees(tmp_path: Path) -> tuple[Path, Path]:
     stale = main / "_bmad-output" / "implementation-artifacts" / ".gate-worktree-1-1"
     _package(stale, "node_modules")
     _package(main, ".venv/lib/node_modules")
-    _package(main, ".claude/worktrees/agent-1/node_modules")
+    (main / ".venv" / "pyvenv.cfg").write_text("home = /usr\n", encoding="utf-8")
+    agent = main / ".claude" / "worktrees" / "agent-1"
+    _package(agent, "node_modules")
+    (agent / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
     nested = main / "vendor" / "sub-repo"
     _package(nested, "node_modules")
     (nested / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
-    _package(main, "target/debug/node_modules")
+    _package(main, "rust/target/debug/node_modules")
+    (main / "rust" / "target" / "CACHEDIR.TAG").write_text(
+        "Signature: 8a477f597d28d172789f06886806bc55\n", encoding="utf-8"
+    )
+    # Walked: a JavaScript action under a dot-folder, a package named `target`.
+    _package(main, ".github/actions/deploy/node_modules")
+    _package(main, "packages/target/node_modules")
+    (worktree / ".github" / "actions" / "deploy").mkdir(parents=True)
+    (worktree / "packages" / "target").mkdir(parents=True)
     return main, worktree
 
 
@@ -71,7 +82,12 @@ def test_every_outermost_node_modules_is_linked_and_resolves(trees) -> None:
     code, out, err = _run("--project-root", str(main), "--worktree", str(worktree))
 
     assert code == 0, err
-    assert out["linked"] == ["node_modules", "packages/a/node_modules"]
+    assert out["linked"] == [
+        ".github/actions/deploy/node_modules",
+        "node_modules",
+        "packages/a/node_modules",
+        "packages/target/node_modules",
+    ]
     assert out["skipped"] == [{"path": "packages/b/node_modules", "reason": "parent-missing"}]
     assert out["failed"] == []
     for rel in out["linked"]:

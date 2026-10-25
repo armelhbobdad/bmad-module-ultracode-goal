@@ -408,6 +408,9 @@ def write_state(impl_artifacts: str | os.PathLike[str], state: dict) -> Path:
 # them (the latch committed, then a tracked deletion once unlatch removes it).
 _STATE_EXCLUDE_NAME = ".mem-state*"
 _STATE_EXCLUDE_COMMENT = "# UltraCode Goal run latch (mem_recall.py latch)"
+# The unanchored line 3.0.0-rc.1 wrote under the same comment, which hid every
+# `.mem-state*` file in the repository; exclude_state() replaces it.
+_STATE_EXCLUDE_UNANCHORED = _STATE_EXCLUDE_NAME
 # The characters an ignore pattern reads as a glob or an escape.
 _IGNORE_SPECIAL = re.compile(r"([\\*?\[])")
 
@@ -429,8 +432,9 @@ def exclude_state(impl_artifacts: str | os.PathLike[str]) -> list[str]:
     Adds state_exclude_line() to the exclude file of the repository holding
     ``impl_artifacts`` (``git rev-parse --git-path info/exclude``, so a linked
     worktree writes its main repository's file), once: a line already there
-    is left alone. A folder git does not see (no repository, or outside the
-    work tree) needs nothing and gets nothing. Exclusion cannot hide a latch
+    is left alone, and the unanchored line 3.0.0-rc.1 wrote under the same
+    comment is removed. A folder git does not see (no repository, or outside
+    the work tree) needs nothing and gets nothing. Exclusion cannot hide a latch
     git already tracks, as a run on an older release could commit it: that one
     gets ``NOTE recall-latch-visible``, since untracking it is a change to the
     repository for the person to make, from their own terminal once no run is
@@ -452,17 +456,39 @@ def exclude_state(impl_artifacts: str | os.PathLike[str]) -> list[str]:
             f"terminal of your own with `git rm --cached {latch}` and commit that "
             "(while a latch is present, the guard denies a command that names it)"
         )
-    code, prefix = _git(impl, "rev-parse", "--show-prefix")
-    if code != 0:
+    # Not _git(): its strip() would drop a leading space from the folder name.
+    try:
+        shown = subprocess.run(
+            ["git", "rev-parse", "--show-prefix"],
+            cwd=str(impl),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, ValueError):
         return notes
-    line = state_exclude_line(prefix)
+    if shown.returncode != 0:
+        return notes
+    line = state_exclude_line(shown.stdout.rstrip("\r\n"))
     code, rel = _git(impl, "rev-parse", "--git-path", "info/exclude")
     if code != 0 or not rel:
         return notes
     exclude = Path(rel) if os.path.isabs(rel) else impl / rel
     try:
         text = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
-        if line in text.splitlines():
+        lines = text.splitlines()
+        kept: list[str] = []
+        for entry in lines:
+            if entry == _STATE_EXCLUDE_UNANCHORED and kept and kept[-1] == _STATE_EXCLUDE_COMMENT:
+                kept.pop()  # 3.0.0-rc.1's line, and its comment
+                continue
+            kept.append(entry)
+        if kept != lines:
+            if line not in kept:
+                kept += [_STATE_EXCLUDE_COMMENT, line]
+            exclude.write_text("\n".join(kept) + "\n", encoding="utf-8")
+            return notes
+        if line in lines:
             return notes
         lead = "" if not text or text.endswith("\n") else "\n"
         exclude.parent.mkdir(parents=True, exist_ok=True)

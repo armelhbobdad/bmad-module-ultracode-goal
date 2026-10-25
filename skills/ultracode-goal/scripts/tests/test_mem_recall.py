@@ -555,6 +555,52 @@ def test_the_exclude_line_hides_only_the_latch_folders_files(tmp_path, home):
 
 
 @_needs_git
+def test_the_unanchored_line_a_release_candidate_wrote_is_replaced(tmp_path, home):
+    # 3.0.0-rc.1 wrote `.mem-state*` unanchored under the same comment, which
+    # hid every such file in the repository; the next latch replaces it and
+    # leaves the person's own lines alone.
+    repo = tmp_path / "widget"
+    _init_repo(repo)
+    impl = _tracked_impl(repo)
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.write_text(
+        "# mine\n*.log\n# UltraCode Goal run latch (mem_recall.py latch)\n.mem-state*\n",
+        encoding="utf-8",
+    )
+    other = repo / "src" / ".mem-state-cache.json"
+    other.parent.mkdir()
+    other.write_text("{}\n", encoding="utf-8")
+
+    _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
+
+    assert _exclude_lines(repo) == [
+        "# mine",
+        "*.log",
+        "# UltraCode Goal run latch (mem_recall.py latch)",
+        _IMPL_LINE,
+    ]
+    assert _porcelain(repo) == "?? src/\n"
+
+
+@_needs_git
+def test_a_folder_name_with_a_leading_space_keeps_it(tmp_path, home):
+    # `git rev-parse --show-prefix` is read whole: a strip() would drop the
+    # space and anchor the line to another folder.
+    repo = tmp_path / "widget"
+    _init_repo(repo)
+    impl = repo / " out" / "art"
+    impl.mkdir(parents=True)
+    (impl / "1-1-x.md").write_text("# story\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "story")
+
+    _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
+
+    assert "/ out/art/.mem-state*" in _exclude_lines(repo)
+    assert _porcelain(repo) == ""
+
+
+@_needs_git
 def test_a_folder_name_with_glob_characters_is_matched_literally(tmp_path, home):
     repo = tmp_path / "widget"
     _init_repo(repo)
