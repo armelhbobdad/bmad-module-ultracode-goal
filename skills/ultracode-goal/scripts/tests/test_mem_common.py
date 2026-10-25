@@ -648,6 +648,9 @@ def test_resolve_store_root_split_homes_follow_the_platform(tmp_path, monkeypatc
         (_FP, _FP),
         ("nul", "_nul"),
         ("CON.x", "_CON.x"),
+        ("COM0", "_COM0"),
+        ("lpt0.x", "_lpt0.x"),
+        ("COM10", "COM10"),
         ("abc. ", "abc"),
         ('a<b>c"d/e\\f|g?h*i', "a-b-c-d-e-f-g-h-i"),
     ],
@@ -664,6 +667,26 @@ def test_fingerprint_dir_refuses_values_with_no_name(fingerprint, tmp_path):
     assert mc.fingerprint_dir(fingerprint) is None
     with pytest.raises(ValueError):
         mc.runs_dir(tmp_path, fingerprint)
+
+
+def test_a_new_run_file_flushes_its_runs_folder(tmp_path, home, monkeypatch):
+    # #160 item 12: the record's bytes were fsynced but its link into the runs
+    # folder was not, so a power loss right after the write could lose it.
+    flushed = []
+    monkeypatch.setattr(mc, "_fsync_dir", flushed.append)
+    store = home / ".ultracode-goal" / "recall"
+
+    result = mc.write_run_record(store, _record())
+
+    assert result.status == mc.WRITE_WRITTEN
+    assert flushed == [result.path.parent]
+    assert mc.write_run_record(store, _record()).status == mc.WRITE_SKIPPED_EXISTING
+    assert flushed == [result.path.parent]
+
+
+def test_flushing_a_folder_never_raises(tmp_path):
+    mc._fsync_dir(tmp_path)
+    mc._fsync_dir(tmp_path / "missing")
 
 
 def test_local_fingerprint_lands_in_a_safe_folder_and_stays_raw_in_the_record(tmp_path, home):

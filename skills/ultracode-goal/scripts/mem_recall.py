@@ -292,7 +292,9 @@ def cmd_latch(args: argparse.Namespace) -> int:
     A run_id that fails the shared check exits 2 before anything is written
     (no git call, no latch, no store root), as ``mem_observation.py write``
     does. Every other outcome writes the latch and exits 0; its colour is in
-    the printed state, and ``reason`` says why it is red.
+    the printed state, and ``reason`` says why it is red. The latch is kept
+    out of git as well (mc.exclude_state), whatever its colour, and a latch git
+    can still see adds ``NOTE recall-latch-visible`` to ``notes``.
     """
     if not mc.valid_run_id(args.run_id):
         print(json.dumps({"error": _invalid_run_id(args.run_id)}))
@@ -305,9 +307,10 @@ def cmd_latch(args: argparse.Namespace) -> int:
         project_root=args.project_root,
     )
     mc.write_state(args.impl_artifacts, measure.state)
+    notes = measure.notes + mc.exclude_state(args.impl_artifacts)
     print(
         json.dumps(
-            {"latch": measure.state, "notes": measure.notes, "reason": measure.reason},
+            {"latch": measure.state, "notes": notes, "reason": measure.reason},
             sort_keys=True,
         )
     )
