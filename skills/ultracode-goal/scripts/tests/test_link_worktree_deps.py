@@ -56,6 +56,12 @@ def trees(tmp_path: Path) -> tuple[Path, Path]:
     (worktree / "packages" / "a").mkdir(parents=True)
     stale = main / "_bmad-output" / "implementation-artifacts" / ".gate-worktree-1-1"
     _package(stale, "node_modules")
+    _package(main, ".venv/lib/node_modules")
+    _package(main, ".claude/worktrees/agent-1/node_modules")
+    nested = main / "vendor" / "sub-repo"
+    _package(nested, "node_modules")
+    (nested / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    _package(main, "target/debug/node_modules")
     return main, worktree
 
 

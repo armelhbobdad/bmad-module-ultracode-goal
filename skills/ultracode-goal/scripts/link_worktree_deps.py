@@ -15,12 +15,15 @@ drive_epic's default mode would have it refused. This script runs under
 
 Which folders. Every `node_modules` folder in the main tree, the root's and
 the nested ones (a workspace package's), but never one inside another
-`node_modules`: linking the outer one carries it. The walk skips `.git`, the
-worktree itself and any other gate worktree (`.gate-worktree-*`), which live
-under the implementation artifacts folder inside the main tree. `--dir` names
-a folder to link instead, relative to the project root, for a dependency
-folder of another name (`vendor`); repeat it for several. Given any `--dir`,
-nothing is discovered.
+`node_modules`: linking the outer one carries it. The walk does not enter a
+folder whose name starts with `.` (`.git`, `.venv`, the gate worktrees, which
+are `.gate-worktree-*` under the implementation artifacts folder, and the
+agent worktrees under `.claude/`), `__pycache__`, `venv` or `target`, nor
+another repository or worktree nested in the tree (a folder holding a
+`.git`): none holds the project's own dependencies, and some are large.
+`--dir` names a folder to link instead, relative to the project root, for a
+dependency folder of another name (`vendor`); repeat it for several. Given
+any `--dir`, nothing is discovered.
 
 How each link is made. A directory symlink to the main tree's folder, at the
 same relative path in the worktree. On Windows, where a symlink needs a
@@ -48,26 +51,31 @@ import sys
 from pathlib import Path
 
 DEPENDENCY_DIR = "node_modules"
-_GATE_WORKTREE_PREFIX = ".gate-worktree-"
+# Folders the walk never enters, besides every name starting with `.`.
+_UNWALKED = frozenset({"__pycache__", "venv", "target"})
 
 
 def discover(project_root: Path, worktree: Path) -> list[str]:
-    """Every `node_modules` folder under project_root, outermost only, sorted."""
-    skip = os.path.normcase(os.path.realpath(worktree))
+    """Every `node_modules` folder under project_root, outermost only, sorted.
+
+    Paths are compared as os.walk spells them under the resolved project root,
+    so the worktree is skipped by one string comparison, with no realpath call
+    per folder.
+    """
+    skip = os.path.normcase(str(worktree))
     found: list[str] = []
-    for current, dirs, _files in os.walk(project_root):
+    for current, dirs, files in os.walk(project_root):
+        if current != str(project_root) and (".git" in dirs or ".git" in files):
+            dirs[:] = []  # another repository or worktree, nested in this one
+            continue
         kept = []
         for name in dirs:
             full = os.path.join(current, name)
             if name == DEPENDENCY_DIR:
                 found.append(Path(os.path.relpath(full, project_root)).as_posix())
-            elif (
-                name == ".git"
-                or name.startswith(_GATE_WORKTREE_PREFIX)
-                or os.path.normcase(os.path.realpath(full)) == skip
+            elif not (
+                name.startswith(".") or name in _UNWALKED or os.path.normcase(full) == skip
             ):
-                continue
-            else:
                 kept.append(name)
         dirs[:] = kept
     return sorted(found)

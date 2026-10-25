@@ -153,12 +153,26 @@ def test_a_real_path_named_in_another_case_matches_where_the_filesystem_ignores_
     assert out["not_in_diff"] == []
 
 
-def test_the_work_tree_spelling_is_read_one_segment_at_a_time(repo):
-    # Runs on every filesystem: _true_case reads directory entries, not exists().
+def test_the_index_spelling_matches_after_a_case_only_rename(repo):
+    # A case-only rename made without `git mv` leaves the index's spelling
+    # (`docs/README.md`) and the work tree's (`docs/readme.md`) apart, and a
+    # text may use either; both name the staged file.
+    if not _case_insensitive(repo):
+        pytest.skip("needs a case-insensitive filesystem (the Windows leg runs it)")
+    (repo / "docs").mkdir()
+    _stage(repo, "docs/README.md")
+    os.rename(repo / "docs" / "README.md", repo / "docs" / "readme.md")
+    for named in ("docs/readme.md", "docs/README.md"):
+        assert cc.check(f"edit `{named}`", repo)["not_in_diff"] == [], named
+
+
+def test_case_is_read_from_the_filesystem_itself(repo):
     _stage(repo, "src/guard.py")
-    assert cc._true_case("Src/Guard.py", repo) == "src/guard.py"
-    assert cc._true_case("src/guard.py", repo) == "src/guard.py"
-    assert cc._true_case("Src/missing.py", repo) == "Src/missing.py"
+    path = repo / "src" / "guard.py"
+    assert cc._ignores_case(path) is _case_insensitive(repo)
+    assert cc._ignores_case(repo / "src") is _case_insensitive(repo)
+    (repo / "123").mkdir()
+    assert cc._ignores_case(repo / "123") is False
 
 
 def test_a_real_path_named_in_another_case_stays_unmatched_where_case_counts(repo):
