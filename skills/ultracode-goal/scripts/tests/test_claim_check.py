@@ -177,6 +177,11 @@ def test_case_is_read_from_the_filesystem_itself(repo):
     # Nothing at or above the project root is probed: it can be another filesystem.
     (repo / "2025").mkdir()
     assert cc._ignores_case(repo / "2025", repo) is False
+    # Nor a path that leaves the project through `..`.
+    shared = repo.parent / "Shared"
+    shared.mkdir()
+    (shared / "x.md").write_text("x\n", encoding="utf-8")
+    assert cc._ignores_case(repo / ".." / "Shared" / "x.md", repo) is False
 
 
 def test_a_digits_only_segment_named_in_another_case_matches(repo):

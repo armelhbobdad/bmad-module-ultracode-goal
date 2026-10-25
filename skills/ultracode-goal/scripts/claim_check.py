@@ -196,8 +196,14 @@ def _ignores_case(path: Path, project_root: Path) -> bool:
     as case-sensitive, which keeps the exact match.
     """
     root = project_root.resolve()
+    try:
+        path = path.resolve()
+    except (OSError, RuntimeError):
+        return False
+    if not path.is_relative_to(root):
+        return False  # `../x` names a path outside the project
     for current in (path, *path.parents):
-        if current.resolve() == root:
+        if current == root:
             return False
         swapped = current.name.swapcase()
         if swapped == current.name:

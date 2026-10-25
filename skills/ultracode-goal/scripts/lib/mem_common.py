@@ -123,14 +123,17 @@ def _git(cwd: Path, *args: str, strip: bool = True) -> tuple[int, str]:
     """Run git in cwd, returning (returncode, stdout). Never raises.
 
     The output is stripped; with ``strip=False`` only its line ending goes, so
-    a leading space in a path it prints survives.
+    a leading space in a path it prints survives. It is read as UTF-8, as git
+    prints paths, not in the locale's encoding (a Windows code page would turn
+    `été` into another name).
     """
     try:
         proc = subprocess.run(
             ["git", *args],
             cwd=str(cwd),
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except (OSError, ValueError):

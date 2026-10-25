@@ -601,6 +601,25 @@ def test_a_folder_name_with_a_leading_space_keeps_it(tmp_path, home):
 
 
 @_needs_git
+def test_a_folder_name_outside_ascii_is_read_as_git_prints_it(tmp_path, home):
+    # git prints the prefix as UTF-8 and the exclude file is UTF-8; read in a
+    # Windows code page, `été` became another name and the line matched
+    # nothing. The Windows leg is where this bites.
+    repo = tmp_path / "widget"
+    _init_repo(repo)
+    impl = repo / "artefacts-été"
+    impl.mkdir()
+    (impl / "1-1-x.md").write_text("# story\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "story")
+
+    _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
+
+    assert "/artefacts-été/.mem-state*" in _exclude_lines(repo)
+    assert _porcelain(repo) == ""
+
+
+@_needs_git
 def test_a_folder_name_with_glob_characters_is_matched_literally(tmp_path, home):
     repo = tmp_path / "widget"
     _init_repo(repo)
