@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The gate now links the main tree's `node_modules` folders into its measurement worktree with the new `scripts/link_worktree_deps.py`, run with `uv run`, instead of `ln -s`. A bare `ln` is not among the commands Claude Code's `acceptEdits` mode runs without asking, nor on the run's allowlist, so an unattended gate under `drive_epic.py`'s default mode could have the link refused and measure a worktree with no dependencies. The script links every `node_modules` folder, the root's and each workspace package's, skips one whose parent folder the worktree's commit does not have, takes `--dir` for a dependency folder of another name, and makes a directory junction on Windows where a symlink needs a privilege.
+issues: [160]
