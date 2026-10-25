@@ -169,11 +169,14 @@ def test_the_index_spelling_matches_after_a_case_only_rename(repo):
 def test_case_is_read_from_the_filesystem_itself(repo):
     _stage(repo, "src/guard.py")
     path = repo / "src" / "guard.py"
-    assert cc._ignores_case(path) is _case_insensitive(repo)
-    assert cc._ignores_case(repo / "src") is _case_insensitive(repo)
+    assert cc._ignores_case(path, repo) is _case_insensitive(repo)
+    assert cc._ignores_case(repo / "src", repo) is _case_insensitive(repo)
     # A segment with no letter is judged by the nearest one that has some.
     (repo / "docs" / "2024").mkdir(parents=True)
-    assert cc._ignores_case(repo / "docs" / "2024") is _case_insensitive(repo)
+    assert cc._ignores_case(repo / "docs" / "2024", repo) is _case_insensitive(repo)
+    # Nothing at or above the project root is probed: it can be another filesystem.
+    (repo / "2025").mkdir()
+    assert cc._ignores_case(repo / "2025", repo) is False
 
 
 def test_a_digits_only_segment_named_in_another_case_matches(repo):

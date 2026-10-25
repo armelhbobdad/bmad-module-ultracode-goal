@@ -185,15 +185,20 @@ def _project_relative(staged: list[str], prefix: str) -> list[str]:
     return [path[len(prefix) :] for path in staged if path.startswith(prefix)]
 
 
-def _ignores_case(path: Path) -> bool:
+def _ignores_case(path: Path, project_root: Path) -> bool:
     """Whether the filesystem holding `path`, which exists, ignores case.
 
     True when the same path with one segment's case swapped is the same file,
-    as on Windows and on macOS by default. The last segment holding a letter is
-    swapped (`docs` for `docs/2024`); a path with none, or one that cannot be
-    checked, reads as case-sensitive, which keeps the exact match.
+    as on Windows and on macOS by default. The last segment below the project
+    root that holds a letter is swapped (`docs` for `docs/2024`); the root and
+    the folders above it, which can sit on another filesystem, are never
+    probed. A path with no such segment, or one that cannot be checked, reads
+    as case-sensitive, which keeps the exact match.
     """
+    root = project_root.resolve()
     for current in (path, *path.parents):
+        if current.resolve() == root:
+            return False
         swapped = current.name.swapcase()
         if swapped == current.name:
             continue
@@ -215,7 +220,7 @@ def _matches(named: str, staged: list[str], project_root: Path, prefix: str = ""
         # tree's and the index's alike (they differ after a case-only rename
         # made without `git mv`).
         full = project_root / bare
-        if not (full.exists() and _ignores_case(full)):
+        if not (full.exists() and _ignores_case(full, project_root)):
             return False
         folded = bare.casefold()
         return any(

@@ -16,10 +16,10 @@ drive_epic's default mode would have it refused. This script runs under
 Which folders. Every `node_modules` folder in the main tree, the root's and
 the nested ones (a workspace package's), but never one inside another
 `node_modules`: linking the outer one carries it. The walk does not enter
-`.git`, `__pycache__`, a gate worktree (`.gate-worktree-*`, under the
-implementation artifacts folder), a repository or worktree nested in the tree
-(a folder holding a `.git`, such as an agent worktree or a submodule, whose
-files the gate's worktree does not check out), a Python virtual environment
+`.git`, `__pycache__`, a repository or worktree nested in the tree (a folder
+holding a `.git`: the gate worktrees under the implementation artifacts
+folder, an agent worktree, a submodule, whose files the gate's worktree does
+not check out), a Python virtual environment
 (a folder holding `pyvenv.cfg`) or a cache folder (one holding `CACHEDIR.TAG`,
 such as Cargo's `target`). None holds the project's own dependencies, and some
 are large. A folder is judged by what it holds, not by its name, so a
@@ -55,7 +55,6 @@ import sys
 from pathlib import Path
 
 DEPENDENCY_DIR = "node_modules"
-_GATE_WORKTREE_PREFIX = ".gate-worktree-"
 # Folders the walk never enters, by name.
 _UNWALKED = frozenset({".git", "__pycache__"})
 # A folder holding one of these is another repository or worktree (`.git`), a
@@ -63,29 +62,24 @@ _UNWALKED = frozenset({".git", "__pycache__"})
 _UNWALKED_MARKERS = frozenset({".git", "pyvenv.cfg", "CACHEDIR.TAG"})
 
 
-def discover(project_root: Path, worktree: Path) -> list[str]:
+def discover(project_root: Path) -> list[str]:
     """Every `node_modules` folder under project_root, outermost only, sorted.
 
-    Paths are compared as os.walk spells them under the resolved project root,
-    so the worktree is skipped by one string comparison, with no realpath call
-    per folder.
+    The gate's own worktree, like every git worktree, holds a `.git` file, so
+    the marker check skips it with the other nested trees.
     """
-    skip = os.path.normcase(str(worktree))
     found: list[str] = []
     for current, dirs, files in os.walk(project_root):
-        if current != str(project_root) and _UNWALKED_MARKERS.intersection((*dirs, *files)):
-            dirs[:] = []  # a nested repository, a virtual environment or a cache
+        if current != str(project_root) and any(
+            marker in dirs or marker in files for marker in _UNWALKED_MARKERS
+        ):
+            dirs[:] = []  # a nested repository or worktree, a virtual environment, a cache
             continue
         kept = []
         for name in dirs:
-            full = os.path.join(current, name)
             if name == DEPENDENCY_DIR:
-                found.append(Path(os.path.relpath(full, project_root)).as_posix())
-            elif not (
-                name in _UNWALKED
-                or name.startswith(_GATE_WORKTREE_PREFIX)
-                or os.path.normcase(full) == skip
-            ):
+                found.append(Path(os.path.relpath(os.path.join(current, name), project_root)).as_posix())
+            elif name not in _UNWALKED:
                 kept.append(name)
         dirs[:] = kept
     return sorted(found)
@@ -170,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             rel_dirs.append(rel)
     else:
-        rel_dirs = discover(project_root, worktree)
+        rel_dirs = discover(project_root)
     result = link_all(project_root, worktree, rel_dirs)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 1 if result["failed"] else 0

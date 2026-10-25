@@ -54,8 +54,10 @@ def trees(tmp_path: Path) -> tuple[Path, Path]:
     _package(main, ".git/node_modules")
     worktree = main / "_bmad-output" / "implementation-artifacts" / ".gate-worktree-1-2"
     (worktree / "packages" / "a").mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
     stale = main / "_bmad-output" / "implementation-artifacts" / ".gate-worktree-1-1"
     _package(stale, "node_modules")
+    (stale / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
     _package(main, ".venv/lib/node_modules")
     (main / ".venv" / "pyvenv.cfg").write_text("home = /usr\n", encoding="utf-8")
     agent = main / ".claude" / "worktrees" / "agent-1"
