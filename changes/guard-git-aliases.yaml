@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The `PreToolUse` guard now treats a git alias as the command it runs, so `git ci` with `alias.ci = commit` meets the protected-branch, tests-ran, freshness, empty-index and un-skip checks a `git commit` meets, and an alias that runs `git push` meets the protected-branch check. A git subcommand that is not one of git's own commands is looked up with `git config --get alias.<name>`, through alias chains and `!` shell aliases. A subcommand the guard cannot resolve counts as both a commit and a push: an alias the same command defines (`git config alias.ci commit; git ci`, `git -c alias.ci=commit ci`), a command that sets git configuration through a `GIT_` variable, an option ahead of the subcommand (`git -C <path> ci`), and a lookup that fails.
+issues: [160]
