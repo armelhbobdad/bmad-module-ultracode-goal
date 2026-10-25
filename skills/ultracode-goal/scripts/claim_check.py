@@ -33,8 +33,7 @@ staged path exactly, or be a directory holding one: `README.md` does not match
 a staged `docs/README.md` when a root `README.md` exists, and below the top
 level it does not match the top level's `README.md` when the project root
 holds one. On a filesystem that ignores case (Windows, macOS by default), the
-match is against the path as the work tree spells it, so `Src/Guard.py` names
-a staged `src/guard.py`. A named path that exists nowhere matches by its trailing segments
+match ignores case too, so `Src/Guard.py` names a staged `src/guard.py`. A named path that exists nowhere matches by its trailing segments
 or as a directory anywhere in a staged path, so `guard.py` or `hooks/` still
 match `src/hooks/guard.py`.
 
@@ -186,30 +185,34 @@ def _project_relative(staged: list[str], prefix: str) -> list[str]:
     return [path[len(prefix) :] for path in staged if path.startswith(prefix)]
 
 
-def _true_case(bare: str, project_root: Path) -> str:
-    """`bare` spelled as the work tree spells it, one segment at a time.
+def _ignores_case(path: Path, project_root: Path) -> bool:
+    """Whether the filesystem holding `path`, which exists, ignores case.
 
-    On a case-insensitive filesystem (Windows, and macOS by default) a text
-    can name `Src/Guard.py` for the `src/guard.py` git stages, and exists()
-    says yes to both. An exact entry wins at each segment, so a case-sensitive
-    tree, where only the exact spelling exists, reads as it did. A segment with
-    no entry, or with two that differ only in case, leaves `bare` as it was.
+    True when the same path with one segment's case swapped is the same file,
+    as on Windows and on macOS by default. The last segment below the project
+    root that holds a letter is swapped (`docs` for `docs/2024`); the root and
+    the folders above it, which can sit on another filesystem, are never
+    probed. A path with no such segment, or one that cannot be checked, reads
+    as case-sensitive, which keeps the exact match.
     """
-    current = project_root
-    parts: list[str] = []
-    for part in bare.split("/"):
+    root = project_root.resolve()
+    try:
+        path = path.resolve()
+    except (OSError, RuntimeError):
+        return False
+    if not path.is_relative_to(root):
+        return False  # `../x` names a path outside the project
+    for current in (path, *path.parents):
+        if current == root:
+            return False
+        swapped = current.name.swapcase()
+        if swapped == current.name:
+            continue
         try:
-            names = os.listdir(current)
-        except OSError:
-            return bare
-        if part not in names:
-            folded = [name for name in names if name.casefold() == part.casefold()]
-            if len(folded) != 1:
-                return bare
-            part = folded[0]
-        parts.append(part)
-        current = current / part
-    return "/".join(parts)
+            return os.path.samefile(current, current.with_name(swapped))
+        except (OSError, ValueError):
+            return False
+    return False
 
 
 def _matches(named: str, staged: list[str], project_root: Path, prefix: str = "") -> bool:
@@ -218,10 +221,17 @@ def _matches(named: str, staged: list[str], project_root: Path, prefix: str = ""
     if any(path == bare or path.startswith(bare + "/") for path in local):
         return True
     if _known(bare, project_root, set(local)):
-        # It names a real path: only that path, or a file under it, will do,
-        # as the work tree spells it.
-        real = _true_case(bare, project_root)
-        return real != bare and any(path == real or path.startswith(real + "/") for path in local)
+        # It names a real path: only that path, or a file under it, will do.
+        # Where the filesystem ignores case, any spelling of it does, the work
+        # tree's and the index's alike (they differ after a case-only rename
+        # made without `git mv`).
+        full = project_root / bare
+        if not (full.exists() and _ignores_case(full, project_root)):
+            return False
+        folded = bare.casefold()
+        return any(
+            path.casefold() == folded or path.casefold().startswith(folded + "/") for path in local
+        )
     if prefix and any(path == bare or path.startswith(bare + "/") for path in staged):
         # Named from the top level (`app/src/a.py`).
         return True
