@@ -362,6 +362,10 @@ _SHELL_KEYWORDS = frozenset(
 # of their own.
 _GROUP_OPENERS = "({"
 
+# A redirection operator, with its descriptor, at the start of a word; what
+# follows it in the same word is its target.
+_REDIRECTION = re.compile(r"^\d*(?:&>>|&>|>>|>&|>\||<<<|<<-|<<|<>|<&|>|<)")
+
 # Global `git` options taking a SEPARATE value. The value must be skipped along
 # with the option, or `git -C <path> commit` would read <path> as the
 # subcommand and wave a real commit through.
@@ -376,6 +380,7 @@ _GIT_VALUE_OPTIONS = frozenset(
         "--config-env",
         "--super-prefix",
         "--attr-source",
+        "--shallow-file",
     }
 )
 
@@ -386,7 +391,9 @@ _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SUBSTITUTION_MARKERS = ("$(", "`", "<(")
 
 # Depth cap on `sh -c` recursion: a bound, not a behavior anyone should rely on.
+# Past it, a `git` the guard cannot read deeper counts as both verbs.
 _MAX_SHELL_DEPTH = 4
+_GIT_WORD = re.compile(r"\bgit\b")
 
 # A short-option cluster that carries `-c`, whose operand is the command string.
 # Matching only the bare `-c` token was a fail-open: every real combined form
@@ -467,9 +474,10 @@ class _CommandScope:
         self.moves_exec_path = bool(_EXEC_PATH_TEXT.search(command))
         # The subcommands counted as both verbs, in the order first met.
         self.unknown: dict[str, None] = {}
-        # Each substitution body's verbs, so the four readings of a command,
-        # and their own readings of a nested body, classify it once.
-        self.bodies: dict[str, set[str]] = {}
+        # Each substitution body's verbs at a depth, so the four readings of a
+        # command, and their own readings of a nested body, classify it once
+        # there (a body met at the depth cap is read more shallowly elsewhere).
+        self.bodies: dict[tuple[str, int], set[str]] = {}
 
 
 def _tokenize(segment: str) -> list[str]:
@@ -564,12 +572,84 @@ def _substitution_bodies(text: str) -> list[str]:
 
 
 # shlex's punctuation mode yields a run of these characters as one token. A
-# newline is one of them, so it ends a segment as it does in bash. A token
-# that holds a control character ends a segment (`;`, `&&`, `|&`, `;\n`, `()`
-# of a function definition, `<(`): a redirection such as `>&` splits too,
-# which only adds a segment, and adding one cannot hide a git command's head.
+# newline is one of them, so it ends a segment as it does in bash. A token of
+# control characters alone ends a segment (`;`, `&&`, `|&`, `;\n`, the `()` of
+# a function definition), and so does a process substitution's `<(` or `>(`;
+# a redirection such as `>&` stays in its segment, where _strip_leading_noise
+# reads it.
 _PUNCTUATION = "();<>|&\n"
 _CONTROL_CHARS = frozenset(";&|\n()")
+_SEGMENT_ENDS = frozenset({"<(", ">("})
+
+# A heredoc's start, with its delimiter, quoted or not.
+_HEREDOC_START = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _lexable(command: str) -> str:
+    """The command with what shlex reads unlike bash taken out.
+
+    A comment (a `#` that starts a word, outside quotes, up to its line's end),
+    an ANSI-C string `$'...'`, whose backslash escapes shlex does not know and
+    in which nothing is substituted (it becomes an empty word), and a heredoc's
+    body (the lines up to its delimiter, which may hold any text, apostrophes
+    included). The rest is copied as it is, quotes and escapes included, for
+    shlex to read.
+    """
+    out: list[str] = []
+    pending: list[str] = []  # heredoc delimiters whose bodies start at the next newline
+    index = 0
+    size = len(command)
+    word_start = True
+    while index < size:
+        char = command[index]
+        if char == "\\":
+            out.append(command[index : index + 2])
+            index += 2
+            word_start = False
+        elif command.startswith("$'", index):
+            end = index + 2
+            while end < size and command[end] != "'":
+                end += 2 if command[end] == "\\" else 1
+            out.append("''")
+            index = end + 1
+            word_start = False
+        elif char in "'\"":
+            end = index + 1
+            while end < size and command[end] != char:
+                end += 2 if char == '"' and command[end] == "\\" else 1
+            out.append(command[index : end + 1])
+            index = end + 1
+            word_start = False
+        elif char == "#" and word_start:
+            end = command.find("\n", index)
+            index = size if end == -1 else end
+        elif command.startswith("<<", index) and not command.startswith("<<<", index):
+            match = _HEREDOC_START.match(command, index)
+            if match:
+                pending.append(match.group(2))
+                out.append(command[index : match.end()])
+                index = match.end()
+            else:
+                out.append("<<")
+                index += 2
+            word_start = False
+        elif char == "\n":
+            out.append("\n")
+            index += 1
+            word_start = True
+            for delimiter in pending:
+                while index < size:
+                    end = command.find("\n", index)
+                    line = command[index : size if end == -1 else end]
+                    index = size if end == -1 else end + 1
+                    if line.lstrip("\t") == delimiter:
+                        break
+            pending.clear()
+        else:
+            out.append(char)
+            index += 1
+            word_start = char in " \t;&|()<>"
+    return "".join(out)
 
 
 def _quoted_segments(command: str) -> list[list[str]]:
@@ -577,19 +657,20 @@ def _quoted_segments(command: str) -> list[list[str]]:
 
     The quote-blind splits in _command_write_verbs tear a quoted `;`, `&&` or
     `|` apart (`git ci -m 'fix: a; b'`), and each fragment then tokenizes to
-    nothing. shlex in punctuation mode keeps it inside its word.
+    nothing. shlex in punctuation mode keeps it inside its word, once _lexable
+    has taken out what it reads unlike bash.
     """
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=_PUNCTUATION)
+    lexer = shlex.shlex(_lexable(command), posix=True, punctuation_chars=_PUNCTUATION)
     lexer.whitespace = " \t\r"  # a newline is punctuation, so it ends a segment
     lexer.whitespace_split = True
-    lexer.commenters = ""  # bash starts a comment only at a word's start
+    lexer.commenters = ""  # _lexable took the comments out, as bash reads them
     try:
         tokens = list(lexer)
     except ValueError:
         return []
     segments: list[list[str]] = [[]]
     for token in tokens:
-        if set(token) <= set(_PUNCTUATION) and not _CONTROL_CHARS.isdisjoint(token):
+        if token in _SEGMENT_ENDS or (token and set(token) <= _CONTROL_CHARS):
             segments.append([])
         else:
             segments[-1].append(token)
@@ -611,8 +692,10 @@ def _shell_payload_verbs(
     """
     if depth >= _MAX_SHELL_DEPTH:
         # The cap is a recursion bound, not a verdict: refusing to look deeper
-        # is exactly the "cannot read it" case, so it fails closed too.
-        return None
+        # is exactly the "cannot read it" case, so it fails closed too, and a
+        # `git` in what it cannot read counts as both verbs (the
+        # matches-anywhere scan knows only the literal verbs, not an alias).
+        return set(_UNRESOLVED_VERBS) if any(_GIT_WORD.search(t) for t in tokens) else None
     for index, token in enumerate(tokens):
         if _PAYLOAD_FLAG.match(token) and index + 1 < len(tokens):
             return _command_write_verbs(tokens[index + 1], depth + 1, scope)
@@ -620,23 +703,37 @@ def _shell_payload_verbs(
 
 
 def _strip_leading_noise(tokens: list[str]) -> list[str]:
-    """Drop leading `VAR=val` assignments, shell keywords and group openers.
+    """Drop leading `VAR=val` assignments, shell keywords, group openers and
+    redirections.
 
     Applied repeatedly because they nest: `if ! FOO=1 git commit …` puts three
-    different kinds of noise ahead of the verb. Every strip here can only turn
-    an unclassifiable segment into a classifiable one, so this direction is
-    fail-closed by construction.
+    different kinds of noise ahead of the verb. A name after `function`, or
+    after `coproc` ahead of a group, names the function, not a command; a
+    redirection ahead of the command (`>/dev/null git commit`, `2>&1 git
+    commit`, `> out git commit`) is no command either. Every strip here can
+    only turn an unclassifiable segment into a classifiable one, so this
+    direction is fail-closed by construction.
     """
     while True:
         stripped = _strip_assignments(tokens)
         if stripped:
             head = stripped[0]
             bare = head.lstrip(_GROUP_OPENERS)
+            redirect = _REDIRECTION.match(head)
             if bare != head:
                 # `(git commit …)` — opener glued to the command name.
                 stripped = ([bare] + stripped[1:]) if bare else stripped[1:]
+            elif head == "function" and len(stripped) > 1:
+                stripped = stripped[2:]
+            elif head == "coproc" and len(stripped) > 2 and stripped[2] in ("{", "("):
+                stripped = stripped[2:]
             elif head.lower() in _SHELL_KEYWORDS:
                 stripped = stripped[1:]
+            elif redirect:
+                # An operator alone (`>`, `2>&`) takes the next word as its target.
+                stripped = stripped[2:] if redirect.end() == len(head) else stripped[1:]
+            elif head.isdigit() and len(stripped) > 1 and _REDIRECTION.match(stripped[1]):
+                stripped = stripped[1:]  # the descriptor of `2 >&1`, split by the quote-aware reading
         if stripped == tokens:
             return stripped
         tokens = stripped
@@ -664,10 +761,12 @@ def _token_write_verbs(
     if head in _SHELL_WRAPPERS:
         return _shell_payload_verbs(tokens[1:], depth, scope)
     if head == "eval":
-        # `eval` runs its arguments, joined, as a command of its own.
+        # `eval` runs its arguments, joined, as a command of its own, after a
+        # `--` it skips.
         if depth >= _MAX_SHELL_DEPTH:
-            return None
-        return _command_write_verbs(" ".join(tokens[1:]), depth + 1, scope)
+            return set(_UNRESOLVED_VERBS) if any(_GIT_WORD.search(t) for t in tokens) else None
+        args = tokens[2:] if tokens[1:2] == ["--"] else tokens[1:]
+        return _command_write_verbs(" ".join(args), depth + 1, scope)
     if head in _EXEC_WRAPPERS:
         # Every wrapper has its own option grammar (`timeout 30 …`, `nice -n 10
         # …`, `sudo -u u …`, `stdbuf -oL …`), and modelling them one by one is
@@ -696,15 +795,18 @@ def _segment_write_verbs(segment: str, depth: int, scope: _CommandScope | None =
         # outer words too where they tokenize, so a git alias inside one
         # (`echo "$(git ci)"`) or around one (`git ci -m "$(date)"`) is seen.
         verbs = _anywhere_write_verbs(segment)
-        if depth < _MAX_SHELL_DEPTH:
+        if depth >= _MAX_SHELL_DEPTH and _GIT_WORD.search(segment):
+            verbs |= _UNRESOLVED_VERBS  # bodies too deep to read, with a git in them
+        elif depth < _MAX_SHELL_DEPTH:
             for body in _substitution_bodies(segment):
                 if scope is None:
                     verbs |= _command_write_verbs(body, depth + 1, scope)
                     continue
-                if body not in scope.bodies:
-                    scope.bodies[body] = set()  # a body that holds itself stops here
-                    scope.bodies[body] = _command_write_verbs(body, depth + 1, scope)
-                verbs |= scope.bodies[body]
+                key = (body, depth)
+                if key not in scope.bodies:
+                    scope.bodies[key] = set()  # a body that holds itself stops here
+                    scope.bodies[key] = _command_write_verbs(body, depth + 1, scope)
+                verbs |= scope.bodies[key]
         try:
             tokens = _tokenize(segment)
         except ValueError:

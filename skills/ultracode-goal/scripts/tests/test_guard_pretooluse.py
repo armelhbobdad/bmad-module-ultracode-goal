@@ -2608,6 +2608,28 @@ def test_a_git_alias_to_commit_or_push_is_denied(
         'command eval "git commit -m x"',
         'sudo -u root eval "git ci"',
         'builtin eval "git commit -m x"',
+        # What shlex reads unlike bash, taken out before the quote-aware
+        # reading: a comment holding an apostrophe, an ANSI-C string, a heredoc
+        # body holding one.
+        "git ci -m wip  # it's the fix",
+        """git ci -m "fix: a; b"  # it's staged""",
+        "git ci -m $'fix: it\\'s done'",
+        "cat <<EOF\nit's here\nEOF\ngit ci -m 'a; b'",
+        # `eval --`, a function's or coprocess's name, a leading redirection.
+        'eval -- "git commit -m x"',
+        "eval -- git ci -m x",
+        "function f { git commit -m x; }; f",
+        "coproc c { git commit -m x; }",
+        ">/dev/null git commit -m x",
+        "2>&1 git commit -m x",
+        "> out git ci",
+        # A value option the subcommand search must skip.
+        "git --shallow-file log commit -m x",
+        # A body read at the depth cap first, then more shallowly.
+        "echo $(echo $(echo $(echo `sh -c 'git ci -m x'`))); echo `sh -c 'git ci -m x'`",
+        # Past the depth cap, a git the guard cannot read deeper.
+        "echo $(echo $(echo $(echo `sh -c 'git ci -m x'`)))",
+        "sh -c \"sh -c 'sh -c \\\"sh -c \\\\\\\"git ci\\\\\\\"\\\"'\"",
     ],
 )
 def test_a_subcommand_that_is_not_gits_own_counts_as_a_write(tmp_path: Path, command: str) -> None:
@@ -2670,6 +2692,9 @@ def test_the_hint_quotes_only_name_shaped_subcommands(guard_module) -> None:
         # `--attr-source` takes a separate value, which is not the subcommand.
         "git --attr-source HEAD log -1",
         "git status # a note that names commit",
+        "git status # it's fine",
+        "git log -1 2>&1 | cat",
+        "git status >/dev/null 2>&1",
     ],
 )
 def test_gits_own_commands_stay_reads(tmp_path: Path, command: str) -> None:
