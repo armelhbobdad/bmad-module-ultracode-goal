@@ -119,8 +119,12 @@ def utc_now_iso() -> str:
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
 
 
-def _git(cwd: Path, *args: str) -> tuple[int, str]:
-    """Run git in cwd, returning (returncode, stdout-stripped). Never raises."""
+def _git(cwd: Path, *args: str, strip: bool = True) -> tuple[int, str]:
+    """Run git in cwd, returning (returncode, stdout). Never raises.
+
+    The output is stripped; with ``strip=False`` only its line ending goes, so
+    a leading space in a path it prints survives.
+    """
     try:
         proc = subprocess.run(
             ["git", *args],
@@ -131,7 +135,7 @@ def _git(cwd: Path, *args: str) -> tuple[int, str]:
         )
     except (OSError, ValueError):
         return 1, ""
-    return proc.returncode, proc.stdout.strip()
+    return proc.returncode, (proc.stdout.strip() if strip else proc.stdout.rstrip("\r\n"))
 
 
 def normalize_remote(url: str) -> str:
@@ -456,20 +460,11 @@ def exclude_state(impl_artifacts: str | os.PathLike[str]) -> list[str]:
             f"terminal of your own with `git rm --cached {latch}` and commit that "
             "(while a latch is present, the guard denies a command that names it)"
         )
-    # Not _git(): its strip() would drop a leading space from the folder name.
-    try:
-        shown = subprocess.run(
-            ["git", "rev-parse", "--show-prefix"],
-            cwd=str(impl),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except (OSError, ValueError):
+    # Unstripped: a strip() would drop a leading space from the folder name.
+    code, prefix = _git(impl, "rev-parse", "--show-prefix", strip=False)
+    if code != 0:
         return notes
-    if shown.returncode != 0:
-        return notes
-    line = state_exclude_line(shown.stdout.rstrip("\r\n"))
+    line = state_exclude_line(prefix)
     code, rel = _git(impl, "rev-parse", "--git-path", "info/exclude")
     if code != 0 or not rel:
         return notes
