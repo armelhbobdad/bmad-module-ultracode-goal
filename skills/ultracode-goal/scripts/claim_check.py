@@ -32,7 +32,9 @@ Matching. A named path that exists in the work tree or the index must match a
 staged path exactly, or be a directory holding one: `README.md` does not match
 a staged `docs/README.md` when a root `README.md` exists, and below the top
 level it does not match the top level's `README.md` when the project root
-holds one. A named path that exists nowhere matches by its trailing segments
+holds one. On a filesystem that ignores case (Windows, macOS by default), the
+match is against the path as the work tree spells it, so `Src/Guard.py` names
+a staged `src/guard.py`. A named path that exists nowhere matches by its trailing segments
 or as a directory anywhere in a staged path, so `guard.py` or `hooks/` still
 match `src/hooks/guard.py`.
 
@@ -74,6 +76,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -183,14 +186,42 @@ def _project_relative(staged: list[str], prefix: str) -> list[str]:
     return [path[len(prefix) :] for path in staged if path.startswith(prefix)]
 
 
+def _true_case(bare: str, project_root: Path) -> str:
+    """`bare` spelled as the work tree spells it, one segment at a time.
+
+    On a case-insensitive filesystem (Windows, and macOS by default) a text
+    can name `Src/Guard.py` for the `src/guard.py` git stages, and exists()
+    says yes to both. An exact entry wins at each segment, so a case-sensitive
+    tree, where only the exact spelling exists, reads as it did. A segment with
+    no entry, or with two that differ only in case, leaves `bare` as it was.
+    """
+    current = project_root
+    parts: list[str] = []
+    for part in bare.split("/"):
+        try:
+            names = os.listdir(current)
+        except OSError:
+            return bare
+        if part not in names:
+            folded = [name for name in names if name.casefold() == part.casefold()]
+            if len(folded) != 1:
+                return bare
+            part = folded[0]
+        parts.append(part)
+        current = current / part
+    return "/".join(parts)
+
+
 def _matches(named: str, staged: list[str], project_root: Path, prefix: str = "") -> bool:
     bare = named.strip("/")
     local = _project_relative(staged, prefix)
     if any(path == bare or path.startswith(bare + "/") for path in local):
         return True
     if _known(bare, project_root, set(local)):
-        # It names a real path: only that path, or a file under it, will do.
-        return False
+        # It names a real path: only that path, or a file under it, will do,
+        # as the work tree spells it.
+        real = _true_case(bare, project_root)
+        return real != bare and any(path == real or path.startswith(real + "/") for path in local)
     if prefix and any(path == bare or path.startswith(bare + "/") for path in staged):
         # Named from the top level (`app/src/a.py`).
         return True

@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `claim_check.py` now matches a named path to the staged one regardless of case on a filesystem that ignores case (Windows, and macOS by default), so a commit message naming `Src/Guard.py` while `src/guard.py` is staged no longer lists it in `not_in_diff`. On a case-sensitive filesystem the two are different paths, and case still counts.
+issues: [160]

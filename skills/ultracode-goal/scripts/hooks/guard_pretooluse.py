@@ -127,7 +127,7 @@ import subprocess
 import sys
 import unicodedata
 from pathlib import Path
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
 DEFAULT_PROTECTED = ["main", "master"]
 
@@ -287,7 +287,8 @@ def _current_story(impl: Path | None) -> str | None:
 # keeps a verb merely MENTIONED (inside an `echo`, a log line, a here-string)
 # from being read as a real commit; matching the verb by exact token equality is
 # what keeps `git commit-tree`-style near-misses out, which a trailing `\b`
-# never did (`-` is itself a word boundary).
+# never did (`-` is itself a word boundary). A subcommand that is a git alias
+# counts as what the alias runs (_alias_write_verbs).
 
 _WRITE_VERBS = frozenset({"commit", "push"})
 
@@ -395,6 +396,55 @@ _MAX_SHELL_DEPTH = 4
 _PAYLOAD_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 
 
+# --- git aliases ------------------------------------------------------------
+# `git ci` runs `git commit` when `alias.ci = commit`, so a git subcommand that
+# is not a write verb is looked up as an alias before its segment is cleared.
+# Git ignores an alias named like one of its own commands, so a name on this
+# list is never looked up. Only real git commands belong on it: a name that is
+# not one could still be an alias, and listing it would wave that alias through.
+_GIT_COMMANDS = frozenset(
+    {
+        "add", "am", "annotate", "apply", "archive", "bisect", "blame",
+        "branch", "bundle", "cat-file", "check-attr", "check-ignore",
+        "check-mailmap", "check-ref-format", "checkout", "checkout-index",
+        "cherry", "cherry-pick", "clean", "clone", "column", "commit-graph",
+        "commit-tree", "config", "count-objects", "credential", "describe",
+        "diff", "diff-files", "diff-index", "diff-tree", "difftool", "fetch",
+        "fetch-pack", "fmt-merge-msg", "for-each-ref", "format-patch", "fsck",
+        "gc", "grep", "hash-object", "help", "index-pack", "init",
+        "interpret-trailers", "log", "ls-files", "ls-remote", "ls-tree",
+        "mailinfo", "mailsplit", "merge", "merge-base", "merge-file",
+        "merge-tree", "mergetool", "mktag", "mktree", "mv", "name-rev",
+        "notes", "pack-objects", "pack-refs", "prune", "pull", "range-diff",
+        "read-tree", "rebase", "reflog", "remote", "repack", "replace",
+        "rerere", "reset", "restore", "rev-list", "rev-parse", "revert", "rm",
+        "send-pack", "shortlog", "show", "show-branch", "show-ref",
+        "sparse-checkout", "stash", "status", "stripspace", "submodule",
+        "switch", "symbolic-ref", "tag", "unpack-objects", "update-index",
+        "update-ref", "update-server-info", "var", "verify-commit",
+        "verify-pack", "verify-tag", "version", "whatchanged", "worktree",
+        "write-tree",
+    }
+)
+
+# What a git subcommand the guard cannot resolve counts as: both verbs, so the
+# commit and push gates judge it, which is where the doubt belongs.
+_UNRESOLVED_VERBS = frozenset(_WRITE_VERBS)
+
+# A command that defines an alias (`git config alias.ci commit; git ci`,
+# `git -c alias.ci=commit ci`) or sets git's configuration through the
+# environment (`GIT_CONFIG_GLOBAL=<file> git ci`) can run an alias that the
+# configuration on disk does not show when the guard looks.
+_CONFIG_IN_COMMAND = re.compile(r"(?i:alias\.)|\bGIT_[A-Z0-9_]*=")
+
+
+class _AliasScope(NamedTuple):
+    """Where a git alias is looked up, and whether the command makes that moot."""
+
+    cwd: str | None
+    unsure: bool
+
+
 def _tokenize(segment: str) -> list[str]:
     """Split one shell segment into words; raises ValueError on bad quoting.
 
@@ -427,7 +477,73 @@ def _git_subcommand(tokens: list[str]) -> str | None:
     return None
 
 
-def _shell_payload_verbs(tokens: list[str], depth: int) -> set[str] | None:
+@functools.lru_cache(maxsize=32)
+def _git_alias(name: str, cwd: str | None) -> tuple[bool, str | None]:
+    """`alias.<name>` as (answered, value); (True, None) when there is no alias.
+
+    `git config --get` exits 1 for a key that is not set (an invalid key name
+    included, which cannot be an alias either). Any other outcome, a timeout
+    or git missing among them, is not an answer, and the caller fails closed.
+    Cached because each command is classified under three separator sets.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "config", "--get", f"alias.{name}"],
+            cwd=cwd or None,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, None
+    if out.returncode == 0:
+        return True, out.stdout.rstrip("\r\n")
+    if out.returncode == 1:
+        return True, None
+    return False, None
+
+
+def _alias_write_verbs(
+    args: list[str], verb: str | None, depth: int, scope: _AliasScope | None
+) -> set[str]:
+    """The write verbs `git <args>` runs when its subcommand is an alias.
+
+    Empty for a git command of its own, and for a name that is no alias (an
+    external `git-<name>` command, or a typo git will refuse). An alias to
+    another git command is classified as that command, alias chains included;
+    a `!` alias as the shell command it runs, read both by segment and by the
+    matches-anywhere scan, since a shell alias is often a function definition
+    (`!f() { git commit "$@"; }; f`) whose segments lead with no `git`. Doubt
+    resolves to both verbs: an option ahead of the subcommand (`-C`, `-c`,
+    `--git-dir` can each change which configuration git reads), a command that
+    itself defines an alias or sets git configuration (_CONFIG_IN_COMMAND), a
+    lookup that does not answer, and a chain past the recursion cap.
+    """
+    if verb is None or verb in _GIT_COMMANDS:
+        return set()
+    scope = scope or _AliasScope(None, False)
+    if scope.unsure or args[0].lower() != verb or depth >= _MAX_SHELL_DEPTH:
+        return set(_UNRESOLVED_VERBS)
+    answered, value = _git_alias(verb, scope.cwd)
+    if not answered:
+        return set(_UNRESOLVED_VERBS)
+    if value is None:
+        return set()
+    if value.startswith("!"):
+        body = value[1:]
+        return _command_write_verbs(body, depth + 1, scope) | _anywhere_write_verbs(body)
+    try:
+        expansion = _tokenize(value)
+    except ValueError:
+        return _anywhere_write_verbs(f"git {value}")
+    verbs = _token_write_verbs(["git", *expansion, *args[1:]], depth + 1, scope)
+    return set(_UNRESOLVED_VERBS) if verbs is None else verbs
+
+
+def _shell_payload_verbs(
+    tokens: list[str], depth: int, scope: _AliasScope | None = None
+) -> set[str] | None:
     """Verbs written by the string payload of a `sh -c '…'`-style invocation.
 
     Returns ``None`` — not an empty set — when the payload cannot be located at
@@ -444,7 +560,7 @@ def _shell_payload_verbs(tokens: list[str], depth: int) -> set[str] | None:
         return None
     for index, token in enumerate(tokens):
         if _PAYLOAD_FLAG.match(token) and index + 1 < len(tokens):
-            return _command_write_verbs(tokens[index + 1], depth + 1)
+            return _command_write_verbs(tokens[index + 1], depth + 1, scope)
     return None
 
 
@@ -471,7 +587,9 @@ def _strip_leading_noise(tokens: list[str]) -> list[str]:
         tokens = stripped
 
 
-def _token_write_verbs(tokens: list[str], depth: int) -> set[str] | None:
+def _token_write_verbs(
+    tokens: list[str], depth: int, scope: _AliasScope | None = None
+) -> set[str] | None:
     """Classify one tokenized segment: which write verbs would it actually run?
 
     ``None`` propagates the "cannot honestly read this" signal up to
@@ -483,9 +601,11 @@ def _token_write_verbs(tokens: list[str], depth: int) -> set[str] | None:
     head = os.path.basename(tokens[0]).lower()
     if head == "git":
         verb = _git_subcommand(tokens[1:])
-        return {verb} if verb in _WRITE_VERBS else set()
+        if verb in _WRITE_VERBS:
+            return {verb}
+        return _alias_write_verbs(tokens[1:], verb, depth, scope)
     if head in _SHELL_WRAPPERS:
-        return _shell_payload_verbs(tokens[1:], depth)
+        return _shell_payload_verbs(tokens[1:], depth, scope)
     if head in _EXEC_WRAPPERS:
         # Every wrapper has its own option grammar (`timeout 30 …`, `nice -n 10
         # …`, `sudo -u u …`, `stdbuf -oL …`), and modelling them one by one is
@@ -496,7 +616,7 @@ def _token_write_verbs(tokens: list[str], depth: int) -> set[str] | None:
         for index in range(1, len(tokens)):
             name = os.path.basename(tokens[index]).lower()
             if name == "git" or name in _SHELL_WRAPPERS or name in _EXEC_WRAPPERS:
-                return _token_write_verbs(tokens[index:], depth)
+                return _token_write_verbs(tokens[index:], depth, scope)
     return set()
 
 
@@ -506,7 +626,7 @@ def _anywhere_write_verbs(segment: str) -> set[str]:
     return {match.group("verb").lower()} if match else set()
 
 
-def _segment_write_verbs(segment: str, depth: int) -> set[str]:
+def _segment_write_verbs(segment: str, depth: int, scope: _AliasScope | None = None) -> set[str]:
     if any(marker in segment for marker in _SUBSTITUTION_MARKERS):
         # The real command hides inside the substitution; anchoring would read
         # the outer word and allow it. Fall back rather than fail open.
@@ -519,7 +639,7 @@ def _segment_write_verbs(segment: str, depth: int) -> set[str]:
         # exception escape would exit non-zero, which is neither a clean allow
         # nor a clean deny.
         return _anywhere_write_verbs(segment)
-    verbs = _token_write_verbs(tokens, depth)
+    verbs = _token_write_verbs(tokens, depth, scope)
     if verbs is None:
         # A listed shell wrapper whose payload could not be located. Same
         # treatment as the two lanes above: scan the raw segment rather than
@@ -528,7 +648,7 @@ def _segment_write_verbs(segment: str, depth: int) -> set[str]:
     return verbs
 
 
-def _command_write_verbs(command: str, depth: int) -> set[str]:
+def _command_write_verbs(command: str, depth: int, scope: _AliasScope | None = None) -> set[str]:
     verbs: set[str] = set()
     # Classified under BOTH separator sets, unioned. Neither alone is safe:
     #
@@ -570,17 +690,19 @@ def _command_write_verbs(command: str, depth: int) -> set[str]:
         r"&&|\|\||;|\||&|\n|\r",
     ):
         for segment in re.split(separators, command):
-            verbs |= _segment_write_verbs(segment, depth)
+            verbs |= _segment_write_verbs(segment, depth, scope)
     return verbs
 
 
-def _git_writes(command: str) -> set[str]:
+def _git_writes(command: str, cwd: str | None = None) -> set[str]:
     """Return the {'commit','push'} subset the command would perform.
 
     Classifies each shell segment independently, so a chained
-    `git add && git commit` is still caught.
+    `git add && git commit` is still caught. A git alias is looked up in
+    `cwd`'s configuration (_alias_write_verbs).
     """
-    return _command_write_verbs(command, 0)
+    scope = _AliasScope(cwd, bool(_CONFIG_IN_COMMAND.search(command)))
+    return _command_write_verbs(command, 0, scope)
 
 
 # --- Marker freshness -------------------------------------------------------
@@ -2103,7 +2225,7 @@ def main() -> None:
     if not isinstance(command, str):
         _allow()
 
-    verbs = _git_writes(command)
+    verbs = _git_writes(command, cwd)
     if not verbs:
         _allow()
 

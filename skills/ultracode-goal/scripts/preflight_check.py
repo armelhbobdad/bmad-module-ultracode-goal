@@ -284,9 +284,11 @@ def _impl_artifacts_tracked(project_root: Path, impl_artifacts: Path) -> bool | 
     git at all, the same hazard as an ignored one (False). Only with no
     repository to ask is the answer unknown (None). The probe is a plain
     story-like name, since story files are what the run writes there most.
+    The probe goes to git in `/` form: exit 128 reads as untracked too, so a
+    Windows path git could not read would pass for an ignored tree unseen.
     """
     probe = impl_artifacts / "ucg-tracked-probe.md"
-    code, _ = _git(["check-ignore", "-q", "--", str(probe)], project_root)
+    code, _ = _git(["check-ignore", "-q", "--", probe.as_posix()], project_root)
     if code == 0:
         return False
     if code == 1:

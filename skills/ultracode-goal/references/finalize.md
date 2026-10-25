@@ -62,6 +62,8 @@ Read the latch, `{workflow.implementation_artifacts}/.mem-state.json`, with the 
 - **This run's latch, with `recall` `"on"` and `store_ok` not `true`** (red): write nothing, and repeat the latch's `reason` and the notes Stage 1 logged in the run report (`NOTE recall-store-unset` when the store key is unset; a `reason` alone, such as `store-unwritable: ...` or `no-fingerprint`, otherwise).
 - **This run's latch, green** (`recall` `"on"` and `store_ok` `true`): drain, then write.
 
+Whichever case applies, repeat in the run report a `NOTE recall-latch-visible` line Stage 1 logged: git can still see the latch (git tracks it, or the repository's exclude file could not be written), so it reads as a change to the tree. Untracking it, or fixing the exclude file, is the person's change to make; the run never makes it.
+
 1. **Drain the outbox**, so a record an earlier run parked when the store could not take it lands before this run's own:
 
    ```

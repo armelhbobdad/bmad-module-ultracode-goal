@@ -1123,6 +1123,25 @@ def test_a_gitignored_artifact_tree_is_reported_and_never_blocks(project, monkey
     assert report["budget"] == 0
 
 
+def test_git_reads_the_probe_path_itself_on_every_platform(project, monkeypatch, _no_host_ignores):
+    # #160 item 8: exit 128 (git could not read the path) reads as untracked,
+    # the same as exit 0 (ignored), so the ignored-tree case cannot tell a
+    # Windows path git rejected from a rule that matched. Pin git's own answer.
+    _commit_gitignore(project, "_bmad-output/\n")
+    calls = []
+    real_git = pf._git
+
+    def recording_git(args, root):
+        code, out = real_git(args, root)
+        calls.append((args, code))
+        return code, out
+
+    monkeypatch.setattr(pf, "_git", recording_git)
+    impl = project.resolve() / "_bmad-output" / "implementation-artifacts"
+    assert pf._impl_artifacts_tracked(project.resolve(), impl) is False
+    assert [code for args, code in calls if args[0] == "check-ignore"] == [0]
+
+
 def test_impl_artifacts_tracked_is_null_only_with_no_repository(tmp_path, _no_host_ignores):
     outside = tmp_path / "no-repo"
     outside.mkdir()

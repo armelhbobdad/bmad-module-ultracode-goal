@@ -399,6 +399,62 @@ def write_state(impl_artifacts: str | os.PathLike[str], state: dict) -> Path:
     return path
 
 
+# The line exclude_state() adds to the repository's .git/info/exclude. It
+# matches the latch and the temporary file write_state() renames into it, so
+# neither shows in `git status` on a tracked artifacts folder (where the latch
+# would trip preflight's git_clean blocker on every run) and a `git add -A`
+# never stages them (the latch committed, then a tracked deletion once
+# unlatch removes it).
+STATE_EXCLUDE_PATTERN = ".mem-state*"
+_STATE_EXCLUDE_COMMENT = "# UltraCode Goal run latch (mem_recall.py latch)"
+
+
+def exclude_state(impl_artifacts: str | os.PathLike[str]) -> list[str]:
+    """Keep the latch out of git; return the notes to print (none when it is out).
+
+    Adds STATE_EXCLUDE_PATTERN to the exclude file of the repository holding
+    ``impl_artifacts`` (``git rev-parse --git-path info/exclude``, so a linked
+    worktree writes its main repository's file), once: a pattern already there
+    is left alone. A folder git does not see (no repository, or outside the
+    work tree) needs nothing and gets nothing. Exclusion cannot hide a latch
+    git already tracks, as a run on an older release could commit it: that one
+    gets ``NOTE recall-latch-visible``, since untracking it is a change to the
+    repository for the person to make. An exclude file that cannot be read or
+    written gets the same note with its error. Never raises.
+    """
+    impl = Path(impl_artifacts)
+    code, inside = _git(impl, "rev-parse", "--is-inside-work-tree")
+    if code != 0 or inside != "true":
+        return []
+    notes: list[str] = []
+    latch = state_path(impl)
+    code, tracked = _git(impl, "ls-files", "--", _STATE_FILENAME)
+    if code == 0 and tracked:
+        notes.append(
+            f"{NOTE_RECALL_LATCH_VISIBLE}: git tracks the run latch {latch}, so it shows "
+            "as a change in every run; untrack it once by hand with "
+            f"`git rm --cached {latch}` and commit that"
+        )
+    code, rel = _git(impl, "rev-parse", "--git-path", "info/exclude")
+    if code != 0 or not rel:
+        return notes
+    exclude = Path(rel) if os.path.isabs(rel) else impl / rel
+    try:
+        text = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+        if STATE_EXCLUDE_PATTERN in text.splitlines():
+            return notes
+        lead = "" if not text or text.endswith("\n") else "\n"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with open(exclude, "a", encoding="utf-8") as handle:
+            handle.write(f"{lead}{_STATE_EXCLUDE_COMMENT}\n{STATE_EXCLUDE_PATTERN}\n")
+    except (OSError, ValueError) as exc:  # ValueError: not UTF-8
+        notes.append(
+            f"{NOTE_RECALL_LATCH_VISIBLE}: could not add {STATE_EXCLUDE_PATTERN} to "
+            f"{exclude} ({exc}), so git can see the run latch {latch}"
+        )
+    return notes
+
+
 # remove_own_state() reasons (mem_recall.py unlatch prints them).
 UNLATCH_REMOVED = "removed"
 UNLATCH_ABSENT = "absent"
@@ -563,6 +619,7 @@ NOTE_RECALL_STORE_UNSET = "NOTE recall-store-unset"
 NOTE_MEM_TARGET_FOREIGN = "NOTE mem-target-foreign"
 NOTE_MEM_RUN_ID_INVALID = "NOTE mem-run-id-invalid"
 NOTE_MEM_LEGACY_UNCONVERTIBLE = "NOTE mem-legacy-unconvertible"
+NOTE_RECALL_LATCH_VISIBLE = "NOTE recall-latch-visible"
 WARN_MEM_WRITE_DEFERRED = "WARN mem-write-deferred"
 WARN_MEM_WRITE_DEAD_LETTERED = "WARN mem-write-dead-lettered"
 
@@ -677,10 +734,12 @@ def resolve_store_root(
 
 # Characters a Windows path component cannot hold (plus anything non-ASCII).
 _FP_DIR_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]", re.ASCII)
+# COM0 and LPT0 are reserved too; the superscript-digit forms cannot occur,
+# since every non-ASCII character becomes "-".
 _WINDOWS_RESERVED = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
-    | {f"COM{i}" for i in range(1, 10)}
-    | {f"LPT{i}" for i in range(1, 10)}
+    | {f"COM{i}" for i in range(10)}
+    | {f"LPT{i}" for i in range(10)}
 )
 
 
@@ -1044,6 +1103,29 @@ def _link_into_place(tmp_name: str, target: Path, data: bytes) -> None:
     _create_exclusive(target, data)
 
 
+def _fsync_dir(path: Path) -> None:
+    """Flush a directory's entries to disk, where the platform can (POSIX).
+
+    A new run file's bytes are fsynced before the link, but the link itself is
+    a change to the runs directory, which a power loss right after the write
+    could otherwise lose. Best effort: Windows cannot open a directory this
+    way, and a filesystem that cannot sync one leaves it to the OS; the record
+    is written either way.
+    """
+    if os.name != "posix":
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def _existing_target_status(target: Path, run_id: str, fingerprint: str) -> str:
     """Classify a run file that already exists, without touching it.
 
@@ -1073,8 +1155,10 @@ def write_run_record(store_root: str | os.PathLike[str] | None, record: dict) ->
     store root is created through ensure_store_root() (with its ``.gitignore``).
     The record is written as one sorted-keys JSON line to a temp file in the runs
     directory (``.tmp`` suffix, outside the reader's ``*.jsonl``), fsynced, then
-    os.link-ed into place; O_EXCL is used only where links are unsupported. An
-    existing run file is never replaced, renamed or copied over. The temp is
+    os.link-ed into place; O_EXCL is used only where links are unsupported. The
+    runs directory is then fsynced too (_fsync_dir, POSIX only), so the new
+    name survives a power loss. An existing run file is never replaced, renamed
+    or copied over. The temp is
     unlinked in a ``finally`` that ignores errors (a Windows scanner can hold it).
 
     Returns WriteResult(status, path) with status:
@@ -1112,6 +1196,7 @@ def write_run_record(store_root: str | os.PathLike[str] | None, record: dict) ->
         except FileExistsError:
             # Another writer landed it between the check and the link.
             return WriteResult(_existing_target_status(target, run_id, fingerprint), target)
+        _fsync_dir(target.parent)
     finally:
         try:
             os.unlink(tmp_name)

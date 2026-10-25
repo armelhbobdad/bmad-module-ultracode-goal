@@ -474,6 +474,104 @@ def test_store_latch_creating_an_in_repo_store_root_makes_it_ignore_itself(tmp_p
     assert _porcelain(repo) == ""
 
 
+def _tracked_impl(repo: Path) -> Path:
+    """An artifacts folder git tracks: a committed story file, no ignore rule."""
+    impl = repo / "_bmad-output" / "implementation-artifacts"
+    impl.mkdir(parents=True)
+    (impl / "1-1-x.md").write_text("# story\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "story")
+    return impl
+
+
+def _exclude_lines(repo: Path) -> list[str]:
+    return (repo / ".git" / "info" / "exclude").read_text(encoding="utf-8").splitlines()
+
+
+@_needs_git
+def test_the_latch_on_a_tracked_artifacts_folder_never_reaches_git(tmp_path, home):
+    # #160 item 1: the latch is written on every run, recall off included. On
+    # a tracked artifacts folder it showed as untracked (preflight's git_clean
+    # blocker, caused by UCG's own file), a `git add -A` clearing commit took
+    # it, and unlatch then left a tracked deletion for the next run to trip on.
+    repo = tmp_path / "widget"
+    _init_repo(repo)
+    impl = _tracked_impl(repo)
+
+    out = _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
+    assert out["notes"] == []
+    assert (impl / ".mem-state.json").is_file()
+    assert _porcelain(repo) == ""
+    _git(repo, "add", "-A")
+    assert _porcelain(repo) == ""
+
+    _unlatch_out(_unlatch(impl, cwd=repo))
+    assert _porcelain(repo) == ""
+    _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
+    assert _exclude_lines(repo).count(mc.STATE_EXCLUDE_PATTERN) == 1
+
+
+@_needs_git
+def test_a_latch_git_already_tracks_is_named_in_a_note(tmp_path, home):
+    # Exclusion cannot hide a tracked file: a latch an older release's run
+    # committed keeps showing as a change, and untracking it is the person's
+    # change to make (the guard denies the run's own git call on the latch).
+    repo = tmp_path / "widget"
+    _init_repo(repo)
+    impl = _tracked_impl(repo)
+    (impl / ".mem-state.json").write_text("{}\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "an older run's latch")
+
+    out = _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
+    assert len(out["notes"]) == 1
+    assert out["notes"][0].startswith(f"{mc.NOTE_RECALL_LATCH_VISIBLE}: git tracks the run latch")
+    assert "git rm --cached" in out["notes"][0]
+    assert mc.STATE_EXCLUDE_PATTERN in _exclude_lines(repo)
+
+
+@_needs_git
+def test_a_latch_in_a_linked_worktree_is_excluded_by_its_main_repository(tmp_path, home):
+    # A linked worktree reads the main repository's info/exclude, which
+    # `git rev-parse --git-path info/exclude` names; its own .git is a file.
+    repo = tmp_path / "widget"
+    _init_repo(repo)
+    _tracked_impl(repo)
+    worktree = tmp_path / "linked"
+    _git(repo, "worktree", "add", "-q", str(worktree))
+    impl = worktree / "_bmad-output" / "implementation-artifacts"
+
+    out = _latch_out(_latch_store(impl, worktree, "--store", "", recall="off"))
+    assert out["notes"] == []
+    assert _porcelain(worktree) == ""
+    assert mc.STATE_EXCLUDE_PATTERN in _exclude_lines(repo)
+
+
+@_needs_git
+def test_an_exclude_file_that_cannot_be_written_is_named_in_a_note(tmp_path, home):
+    # The latch is still written and the run goes on: the note says git can
+    # see it, so the person knows why git_clean reads dirty.
+    repo = tmp_path / "widget"
+    _init_repo(repo)
+    impl = _tracked_impl(repo)
+    exclude = repo / ".git" / "info" / "exclude"
+    if exclude.exists():
+        exclude.unlink()
+    exclude.mkdir(parents=True)
+
+    out = _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
+    assert (impl / ".mem-state.json").is_file()
+    assert len(out["notes"]) == 1
+    assert out["notes"][0].startswith(f"{mc.NOTE_RECALL_LATCH_VISIBLE}: could not add")
+
+
+def test_a_latch_outside_any_repository_touches_no_git_file(tmp_path, home):
+    impl = tmp_path / "impl"
+    out = _latch_out(_latch_store(impl, tmp_path, "--store", "", recall="off"))
+    assert out["notes"] == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["home", "impl"]
+
+
 _OTHER_RUN = "epic-6-20260101T000000Z"
 _V1_LATCH = {
     "latch_version": 1, "run_id": _OTHER_RUN, "claude_mem": "absent", "schema_ok": False,

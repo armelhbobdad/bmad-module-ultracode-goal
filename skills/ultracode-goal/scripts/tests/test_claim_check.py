@@ -132,6 +132,44 @@ def test_a_real_path_must_match_exactly(repo):
     assert out["not_in_diff"] == ["README.md"]
 
 
+def _case_insensitive(folder: Path) -> bool:
+    probe = folder / "case-probe"
+    probe.write_text("x", encoding="utf-8")
+    try:
+        return (folder / "CASE-PROBE").exists()
+    finally:
+        probe.unlink()
+
+
+def test_a_real_path_named_in_another_case_matches_where_the_filesystem_ignores_case(repo):
+    # #160 item 7: on Windows (and macOS by default) `Src/Guard.py` and the
+    # staged `src/guard.py` are one file, and exists() says yes to both, so the
+    # exact-match rule read the named path as not in the diff.
+    if not _case_insensitive(repo):
+        pytest.skip("needs a case-insensitive filesystem (the Windows leg runs it)")
+    _stage(repo, "src/guard.py")
+    out = cc.check("edit `Src/Guard.py`", repo)
+    assert out["named"] == ["Src/Guard.py"]
+    assert out["not_in_diff"] == []
+
+
+def test_the_work_tree_spelling_is_read_one_segment_at_a_time(repo):
+    # Runs on every filesystem: _true_case reads directory entries, not exists().
+    _stage(repo, "src/guard.py")
+    assert cc._true_case("Src/Guard.py", repo) == "src/guard.py"
+    assert cc._true_case("src/guard.py", repo) == "src/guard.py"
+    assert cc._true_case("Src/missing.py", repo) == "Src/missing.py"
+
+
+def test_a_real_path_named_in_another_case_stays_unmatched_where_case_counts(repo):
+    # On a case-sensitive filesystem `Src/Guard.py` is another path, which does
+    # not exist, so it matches loosely by its segments, and case still counts.
+    if _case_insensitive(repo):
+        pytest.skip("needs a case-sensitive filesystem")
+    _stage(repo, "src/guard.py")
+    assert cc.check("edit `Src/Guard.py`", repo)["not_in_diff"] == ["Src/Guard.py"]
+
+
 def test_a_path_that_exists_nowhere_matches_loosely(repo):
     # A trailing segment or a mid-path directory names a staged file.
     _stage(repo, "src/guard.py")

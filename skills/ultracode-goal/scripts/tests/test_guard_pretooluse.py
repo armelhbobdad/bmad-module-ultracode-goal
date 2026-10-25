@@ -2117,7 +2117,7 @@ _SEGMENT_SPLIT = (
     '        r"&&|\\|\\||;|\\||&|\\n|\\r",\n'
     "    ):\n"
     "        for segment in re.split(separators, command):\n"
-    "            verbs |= _segment_write_verbs(segment, depth)"
+    "            verbs |= _segment_write_verbs(segment, depth, scope)"
 )
 _PREFIX_STRIP_TEST = (
     "    while index < len(tokens) and _ASSIGNMENT.match(tokens[index]):"
@@ -2135,7 +2135,7 @@ def test_mutant_without_segment_split_allows_chained_commit(tmp_path: Path) -> N
         tmp_path,
         "no_split",
         _SEGMENT_SPLIT,
-        "    verbs |= _segment_write_verbs(command, depth)",
+        "    verbs |= _segment_write_verbs(command, depth, scope)",
     )
     protected = _protected_repo(tmp_path)
 
@@ -2484,6 +2484,120 @@ def test_unlisted_wrapper_is_an_accepted_fail_open(guard_module, monkeypatch) ->
         "marker) and the remote's branch protection (nothing lands on a "
         "protected branch unreviewed)."
     )
+
+
+@pytest.mark.parametrize(
+    ("aliases", "command"),
+    [
+        ({"ci": "commit"}, "git ci -m x"),
+        ({"ci": "commit"}, "git CI -m x"),
+        ({"ci": "commit -v"}, "git add -A && git ci -m x"),
+        ({"pu": "push origin HEAD"}, "git pu"),
+        ({"ci": "commit", "c2": "ci"}, "git c2 -m x"),
+        ({"p": "!git push origin HEAD"}, "git p"),
+        ({"sync": '!f() { git add -A; git commit -m "$1"; }; f'}, "git sync wip"),
+        ({"ci": "-c user.name=x commit"}, "git ci -m x"),
+    ],
+)
+def test_a_git_alias_to_commit_or_push_is_denied(
+    tmp_path: Path, aliases: dict, command: str
+) -> None:
+    """`git ci` with `alias.ci = commit` is a commit, whatever the command spells.
+
+    The guard matched the subcommand word, so an alias reached `git commit` and
+    `git push` past every gate. It now looks a subcommand that is not a git
+    command up as an alias and classifies what it runs: another git command
+    (an alias chain included) or, for a `!` alias, a shell command.
+    """
+    protected = _protected_repo(tmp_path)
+    for name, value in aliases.items():
+        _git(protected, "config", f"alias.{name}", value)
+
+    code, out = _run_hook(_bash_event(protected, command), protected)
+
+    assert code == 2, command
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git config alias.ci commit; git ci -m x",
+        "git -c alias.ci=commit ci -m x",
+        "GIT_CONFIG_GLOBAL=/tmp/aliases git ci -m x",
+        "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci GIT_CONFIG_VALUE_0=commit git ci",
+        "git -C . ci -m x",
+    ],
+)
+def test_an_alias_the_guard_cannot_look_up_counts_as_a_write(
+    tmp_path: Path, command: str
+) -> None:
+    """An alias defined or redirected by the command itself fails closed.
+
+    The configuration on disk holds no `alias.ci` when the guard looks, so a
+    lookup would read `ci` as no alias at all. A command that defines an alias
+    or sets git configuration, and an option ahead of the subcommand, make the
+    lookup moot, and a subcommand that is not a git command then counts as both
+    write verbs.
+    """
+    protected = _protected_repo(tmp_path)
+
+    code, out = _run_hook(_bash_event(protected, command), protected)
+
+    assert code == 2, command
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    ("aliases", "command"),
+    [
+        ({}, "git frobnicate --help"),
+        ({"lg": "log --oneline"}, "git lg -5"),
+        ({"st": "status --short"}, "git st"),
+        ({"who": "!git log -1 --format=%an"}, "git who"),
+        # Git ignores an alias named like one of its own commands.
+        ({"status": "commit"}, "git status"),
+    ],
+)
+def test_a_subcommand_that_runs_no_write_is_allowed(
+    tmp_path: Path, aliases: dict, command: str
+) -> None:
+    """Reads stay quiet: no alias, a read-only alias, or an alias git ignores."""
+    protected = _protected_repo(tmp_path)
+    for name, value in aliases.items():
+        _git(protected, "config", f"alias.{name}", value)
+
+    code, out = _run_hook(_bash_event(protected, command), protected)
+
+    assert code == 0, command
+    assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+
+def test_an_alias_loop_resolves_to_both_verbs(guard_module, tmp_path: Path) -> None:
+    """A chain past the recursion cap is not read as harmless.
+
+    Git refuses an alias loop itself, so nothing runs; the guard only has to
+    stop recursing, and doubt there falls to the gates.
+    """
+    repo = _protected_repo(tmp_path)
+    _git(repo, "config", "alias.a", "b")
+    _git(repo, "config", "alias.b", "a")
+
+    assert guard_module._git_writes("git a", str(repo)) == {"commit", "push"}
+
+
+def test_every_listed_git_command_is_one_git_knows(guard_module) -> None:
+    """A name on _GIT_COMMANDS is never looked up as an alias.
+
+    Git ignores an alias named like one of its commands, so listing a real
+    command costs nothing. Listing a name git does not know would wave an alias
+    of that name through, so every entry must be one this git lists.
+    """
+    out = subprocess.run(
+        ["git", "--list-cmds=main"], capture_output=True, text=True, check=True
+    ).stdout.split()
+
+    assert sorted(guard_module._GIT_COMMANDS - set(out)) == []
 
 
 @pytest.mark.parametrize(
