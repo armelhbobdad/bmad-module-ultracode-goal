@@ -145,8 +145,8 @@ def _allow() -> NoReturn:
     sys.exit(0)
 
 
-def _deny(reason: str) -> NoReturn:
-    reason += _DENY_HINT
+def _deny(reason: str, hint: str = "") -> NoReturn:
+    reason += hint
     print(
         json.dumps(
             {
@@ -319,6 +319,7 @@ _EXEC_WRAPPERS = frozenset(
         "ionice",
         "doas",
         "exec",
+        "builtin",
     }
 )
 
@@ -374,6 +375,7 @@ _GIT_VALUE_OPTIONS = frozenset(
         "--exec-path",
         "--config-env",
         "--super-prefix",
+        "--attr-source",
     }
 )
 
@@ -411,7 +413,8 @@ _PAYLOAD_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 # ships as scripts in its exec-path, while the command does not mention that
 # path. Every other subcommand (an alias, an external command such as `git
 # lfs`, a typo) counts as both verbs, so the commit and push gates judge it,
-# and the deny names it (_unknown_hint). Only commands built in on every
+# and the deny names it (_unknown_hint). A built-in whose job is to run another
+# git subcommand stays off the list (`for-each-repo`). Only commands built in on every
 # supported build belong on the first list: none newer than Git 2.30, and no
 # `whatchanged`, which Git 3.0 drops. A test checks both lists on both CI legs.
 _GIT_COMMANDS = frozenset(
@@ -423,7 +426,7 @@ _GIT_COMMANDS = frozenset(
         "commit-graph", "commit-tree", "config", "count-objects", "credential",
         "describe", "diff", "diff-files", "diff-index", "diff-tree",
         "difftool", "fast-export", "fast-import", "fetch", "fetch-pack",
-        "fmt-merge-msg", "for-each-ref", "for-each-repo", "format-patch",
+        "fmt-merge-msg", "for-each-ref", "format-patch",
         "fsck", "gc", "grep", "hash-object", "help", "index-pack", "init",
         "init-db", "interpret-trailers", "log", "ls-files", "ls-remote",
         "ls-tree", "mailinfo", "mailsplit", "maintenance", "merge",
@@ -455,9 +458,6 @@ _UNRESOLVED_VERBS = frozenset(_WRITE_VERBS)
 # A subcommand the deny's hint may quote: the shape of a command or alias name,
 # so a fragment torn from a quoted argument never reaches the reason.
 _NAME_SHAPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-
-# The note the git gates' denies carry, set by main() from _classify().
-_DENY_HINT = ""
 
 
 class _CommandScope:
@@ -504,24 +504,14 @@ def _git_subcommand_index(tokens: list[str]) -> int | None:
     return None
 
 
-def _git_subcommand(tokens: list[str]) -> str | None:
-    """The subcommand `git` would run, given the tokens that follow `git`."""
-    index = _git_subcommand_index(tokens)
-    return None if index is None else tokens[index].lower()
-
-
-def _unknown_subcommand_verbs(args: list[str], scope: _CommandScope | None) -> set[str]:
-    """Both verbs for `git <args>` when its subcommand is not one of git's own.
+def _unknown_subcommand_verbs(name: str, scope: _CommandScope | None) -> set[str]:
+    """Both verbs for `git <name> ...` when `name` is not one of git's own commands.
 
     Empty for a built-in command (_GIT_COMMANDS) and, while the command does
     not mention git's exec-path, for one git ships as a script there
     (_GIT_SCRIPT_COMMANDS). Anything else counts as both verbs and is recorded
     on the scope, when it has a name's shape, for the deny's hint.
     """
-    index = _git_subcommand_index(args)
-    if index is None:
-        return set()
-    name = args[index]
     if name in _GIT_COMMANDS:
         return set()
     if name in _GIT_SCRIPT_COMMANDS and not (scope and scope.moves_exec_path):
@@ -573,9 +563,13 @@ def _substitution_bodies(text: str) -> list[str]:
     return bodies
 
 
-# The tokens shlex's punctuation mode yields for a control operator, which end
-# a segment in _quoted_segments.
-_CONTROL_TOKENS = frozenset({";", "&&", "||", "|", "&", ";;", "|&", "(", ")", "<(", ">("})
+# shlex's punctuation mode yields a run of these characters as one token. A
+# newline is one of them, so it ends a segment as it does in bash. A token
+# that holds a control character ends a segment (`;`, `&&`, `|&`, `;\n`, `()`
+# of a function definition, `<(`): a redirection such as `>&` splits too,
+# which only adds a segment, and adding one cannot hide a git command's head.
+_PUNCTUATION = "();<>|&\n"
+_CONTROL_CHARS = frozenset(";&|\n()")
 
 
 def _quoted_segments(command: str) -> list[list[str]]:
@@ -585,15 +579,17 @@ def _quoted_segments(command: str) -> list[list[str]]:
     `|` apart (`git ci -m 'fix: a; b'`), and each fragment then tokenizes to
     nothing. shlex in punctuation mode keeps it inside its word.
     """
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=_PUNCTUATION)
+    lexer.whitespace = " \t\r"  # a newline is punctuation, so it ends a segment
     lexer.whitespace_split = True
+    lexer.commenters = ""  # bash starts a comment only at a word's start
     try:
         tokens = list(lexer)
     except ValueError:
         return []
     segments: list[list[str]] = [[]]
     for token in tokens:
-        if token in _CONTROL_TOKENS:
+        if set(token) <= set(_PUNCTUATION) and not _CONTROL_CHARS.isdisjoint(token):
             segments.append([])
         else:
             segments[-1].append(token)
@@ -659,10 +655,12 @@ def _token_write_verbs(
         return set()
     head = os.path.basename(tokens[0]).lower()
     if head == "git":
-        verb = _git_subcommand(tokens[1:])
-        if verb in _WRITE_VERBS:
-            return {verb}
-        return _unknown_subcommand_verbs(tokens[1:], scope)
+        index = _git_subcommand_index(tokens[1:])
+        if index is None:
+            return set()
+        if tokens[1 + index].lower() in _WRITE_VERBS:
+            return {tokens[1 + index].lower()}
+        return _unknown_subcommand_verbs(tokens[1 + index], scope)
     if head in _SHELL_WRAPPERS:
         return _shell_payload_verbs(tokens[1:], depth, scope)
     if head == "eval":
@@ -679,7 +677,7 @@ def _token_write_verbs(
         # parsing the wrapper.
         for index in range(1, len(tokens)):
             name = os.path.basename(tokens[index]).lower()
-            if name == "git" or name in _SHELL_WRAPPERS or name in _EXEC_WRAPPERS:
+            if name in ("git", "eval") or name in _SHELL_WRAPPERS or name in _EXEC_WRAPPERS:
                 return _token_write_verbs(tokens[index:], depth, scope)
     return set()
 
@@ -783,8 +781,8 @@ def _command_write_verbs(command: str, depth: int, scope: _CommandScope | None =
 
 def _classify(command: str) -> tuple[set[str], list[str]]:
     """The {'commit','push'} subset the command would perform, and the git
-    subcommands that are not git's own it counted as both, for the deny's
-    hint (_unknown_hint)."""
+    subcommands that are not git's own it counted as both, for the git gates'
+    deny hint (_unknown_hint)."""
     scope = _CommandScope(command)
     return _command_write_verbs(command, 0, scope), list(scope.unknown)
 
@@ -2334,11 +2332,10 @@ def main() -> None:
     if not isinstance(command, str):
         _allow()
 
-    global _DENY_HINT
     verbs, unknown = _classify(command)
     if not verbs:
         _allow()
-    _DENY_HINT = _unknown_hint(unknown)
+    hint = _unknown_hint(unknown)
 
     protected = _protected_branches()
     branch = _current_branch(cwd)
@@ -2348,7 +2345,8 @@ def main() -> None:
             f"Protected-branch guard: refusing `git {'/'.join(sorted(verbs))}` "
             f"on '{branch}'. UltraCode-Goal commits one green story per commit "
             f"on an epic branch ('{os.environ.get('ULTRACODE_EPIC_BRANCH_PREFIX', 'ultracode/epic-')}<id>'), "
-            f"never on {protected}. Switch to the epic branch first."
+            f"never on {protected}. Switch to the epic branch first.",
+            hint,
         )
 
     if "commit" in verbs:
@@ -2364,7 +2362,8 @@ def main() -> None:
                 "Tests-ran guard: refusing `git commit` — no tests-ran marker "
                 f"for the current story ({story or 'unknown'}). Run the story's "
                 f"test/lint/build to green and write {target} before committing. "
-                "Commit only at a verified-green story boundary."
+                "Commit only at a verified-green story boundary.",
+                hint,
             )
         _marker_freshness_gate(marker, baseline)
         if not _staged_index_nonempty(cwd):
@@ -2376,7 +2375,8 @@ def main() -> None:
                 "distinct tool call. `git commit -a` and commit-time pathspecs "
                 "are unsupported inside a story loop: the guard evaluates the "
                 "command string before it runs, so anything they would stage "
-                "does not exist yet at that point."
+                "does not exist yet at that point.",
+                hint,
             )
         _unskip_gate(cwd, story)
 

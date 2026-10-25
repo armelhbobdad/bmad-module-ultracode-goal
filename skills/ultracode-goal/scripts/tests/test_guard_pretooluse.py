@@ -2594,6 +2594,20 @@ def test_a_git_alias_to_commit_or_push_is_denied(
         "exec git ci",
         # An external command, which may as well be an alias of its name.
         "git lfs pull",
+        # Read as bash reads them: a newline ends a segment, `#` inside a word
+        # starts no comment, and a function definition's body is a command.
+        "true\ngit ci -m 'fix: a; b'",
+        "echo issue#1; git ci -m 'fix: a; b'",
+        "f() { git commit -m x; }; f",
+        "f(){ git ci -m 'a; b'; }; f",
+        # A built-in that runs a git subcommand of its own.
+        "git -c x.repo=. for-each-repo --config=x.repo commit -m x",
+        "git for-each-repo --config=maintenance.repo ci",
+        # `eval` behind a wrapper.
+        'time eval "git commit -m x"',
+        'command eval "git commit -m x"',
+        'sudo -u root eval "git ci"',
+        'builtin eval "git commit -m x"',
     ],
 )
 def test_a_subcommand_that_is_not_gits_own_counts_as_a_write(tmp_path: Path, command: str) -> None:
@@ -2653,6 +2667,9 @@ def test_the_hint_quotes_only_name_shaped_subcommands(guard_module) -> None:
         "git submodule status",
         "echo 'run `git ci` later'",
         "git-lfs pull",
+        # `--attr-source` takes a separate value, which is not the subcommand.
+        "git --attr-source HEAD log -1",
+        "git status # a note that names commit",
     ],
 )
 def test_gits_own_commands_stay_reads(tmp_path: Path, command: str) -> None:
