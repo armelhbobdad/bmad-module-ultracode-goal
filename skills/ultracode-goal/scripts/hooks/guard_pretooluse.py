@@ -123,7 +123,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import unicodedata
@@ -147,6 +146,13 @@ def _allow() -> NoReturn:
 
 
 def _deny(reason: str) -> NoReturn:
+    if _UNKNOWN_SUBCOMMANDS:
+        names = ", ".join(f"`git {name}`" for name in dict.fromkeys(_UNKNOWN_SUBCOMMANDS))
+        reason += (
+            f" ({names}: not one of git's own commands, so this guard counts it as a "
+            "commit and a push, since it cannot tell what an alias runs. Run the git "
+            "command it stands for instead.)"
+        )
     print(
         json.dumps(
             {
@@ -288,8 +294,8 @@ def _current_story(impl: Path | None) -> str | None:
 # keeps a verb merely MENTIONED (inside an `echo`, a log line, a here-string)
 # from being read as a real commit; matching the verb by exact token equality is
 # what keeps `git commit-tree`-style near-misses out, which a trailing `\b`
-# never did (`-` is itself a word boundary). A subcommand that is a git alias
-# counts as what the alias runs (_alias_write_verbs).
+# never did (`-` is itself a word boundary). A subcommand that is not one git
+# runs before any alias counts as both verbs (_unknown_subcommand_verbs).
 
 _WRITE_VERBS = frozenset({"commit", "push"})
 
@@ -397,16 +403,21 @@ _MAX_SHELL_DEPTH = 4
 _PAYLOAD_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 
 
-# --- git aliases ------------------------------------------------------------
-# `git ci` runs `git commit` when `alias.ci = commit`, so a git subcommand that
-# is not a write verb is looked up as an alias before its segment is cleared.
-# Git ignores an alias named like one of its own commands, matching the name
-# case-sensitively (`git LOG` runs `alias.log`, since alias names are not), so
-# a subcommand spelled exactly as on this list is never looked up. Only real
-# git commands belong on it: a name that is not one could still be an alias,
-# and listing it would wave that alias through. That holds per build, so a
-# command some builds leave out stays off it (Git for Windows has no
-# `instaweb`); the test checks the list on both CI legs.
+# --- git subcommands that are not git's own --------------------------------
+# `git ci` runs `git commit` when `alias.ci = commit`, and nothing in the
+# command says what an alias runs: git reads it from configuration that the
+# command's own options, an earlier segment, a wrapper or the environment can
+# change before git starts, so a lookup at hook time can read the wrong one.
+# The guard reads none. A git subcommand counts as no write only when git runs
+# it before any alias of its name: one of git's own commands, spelled as git
+# spells it (git matches its command names case-sensitively, so `git LOG` runs
+# `alias.log`), or an external `git-<name>` command git finds in its exec-path
+# or on PATH (`git lfs`). Every other subcommand, an alias or a typo, counts as
+# both verbs, so the commit and push gates judge it, and a deny names it and
+# says to run the git command it stands for. This list is the fast path for
+# git's own commands, read with no subprocess: only real git commands belong
+# on it, per build (Git for Windows has no `instaweb`), and a test checks it
+# on both CI legs.
 _GIT_COMMANDS = frozenset(
     {
         "add", "am", "annotate", "apply", "archive", "bisect", "blame",
@@ -435,82 +446,49 @@ _GIT_COMMANDS = frozenset(
     }
 )
 
-# What a git subcommand the guard cannot resolve counts as: both verbs, so the
+# What a git subcommand that is not git's own counts as: both verbs, so the
 # commit and push gates judge it, which is where the doubt belongs.
 _UNRESOLVED_VERBS = frozenset(_WRITE_VERBS)
 
-# The global options that change which configuration git reads (the repository
-# it finds, or a value set on the command line), passed on to the alias lookup
-# so it reads what the command will. The others (`--no-pager`, `--help`, ...)
-# are left out of it.
-_GIT_CONFIG_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--config-env"})
-_GIT_CONFIG_FLAGS = frozenset({"--bare"})
-_GIT_CONFIG_JOINED = tuple(f"{option}=" for option in sorted(_GIT_CONFIG_OPTIONS) if option.startswith("--"))
-
 # The separators a command's segments run apart at, as _command_write_verbs
-# splits them: an earlier segment runs before a later one's alias does.
+# splits them.
 _ANY_SEPARATOR = re.compile(r"&&|\|\||;|\||&|\n|\r")
 
-# Commands whose operands set variables for what they run or for the shell.
-_ASSIGNING_COMMANDS = frozenset({"env", "export", "declare", "typeset", "local", "readonly"})
+# Exec wrappers that can change the PATH of what they run (`env PATH=...`,
+# `env -i`, sudo's secure_path).
+_PATH_WRAPPERS = frozenset({"env", "sudo", "doas"})
+
+# The git subcommands this hook call counted as both verbs, named in a deny.
+_UNKNOWN_SUBCOMMANDS: list[str] = []
 
 
-class _AliasScope(NamedTuple):
-    """Where a git alias is looked up, and how far the lookup can be trusted.
+class _CommandScope:
+    """What classifying a git subcommand needs to know about the whole command."""
 
-    ``unsure``: the lookup cannot see what the command will run, so a
-    subcommand that is not a git command counts as both verbs. ``assigns``: the
-    command sets a variable, which can move PATH as well as the configuration,
-    so an external `git-<name>` found on the hook's PATH proves nothing either.
-    """
+    def __init__(self, command: str = "") -> None:
+        self.command = command
 
-    cwd: str | None
-    unsure: bool
-    assigns: bool = False
+    @functools.cached_property
+    def moves_path(self) -> bool:
+        """Whether the command can change where git finds an external command.
 
-
-def _sets_a_variable(command: str) -> bool:
-    """Whether any segment sets a variable before its git, or sets one at all.
-
-    A leading `NAME=value`, or one among the operands of `env`, `export` and
-    the like, counts; `b=c` in an argument after `git` does not (`git ci -m
-    'a b=c'`). A segment that cannot be tokenized counts, since its words
-    cannot be told apart.
-    """
-    for part in _ANY_SEPARATOR.split(command):
-        try:
-            tokens = _tokenize(part)
-        except ValueError:
-            return True
-        assigning = False
-        for token in tokens:
-            name = os.path.basename(token).lower()
-            if name == "git":
-                break
-            if _ASSIGNMENT.match(token.lstrip(_GROUP_OPENERS)):
+        A variable set ahead of a `git` (`PATH=`, `GIT_EXEC_PATH=`) or a wrapper
+        that can reset PATH, in any segment; a segment that cannot be tokenized
+        counts too. Computed only when a subcommand that is not one of git's
+        own needs it, so a Bash call with no such subcommand pays nothing.
+        """
+        for part in _ANY_SEPARATOR.split(self.command):
+            try:
+                tokens = _tokenize(part)
+            except ValueError:
                 return True
-            if name in _ASSIGNING_COMMANDS:
-                assigning = True
-            elif assigning and _ASSIGNMENT.match(token):
-                return True
-    return False
-
-
-def _alias_scope(command: str, cwd: str | None) -> _AliasScope:
-    """The scope a command's aliases resolve in.
-
-    The lookup runs when the guard does, before any part of the command: a
-    command of several segments can define an alias, rewrite or include a
-    config file, or change directory before its git segment runs (`git config
-    alias.ci commit; git ci`, `cp x .git/config && git ci`, `cd other && git
-    ci`), a command substitution runs a command of its own first, and a
-    variable the command sets (`HOME=`, `XDG_CONFIG_HOME=`, a `GIT_` one) can
-    point git at another configuration. Any of them makes the lookup moot.
-    """
-    several = len([part for part in _ANY_SEPARATOR.split(command) if part.strip()]) > 1
-    substitution = any(marker in command for marker in _SUBSTITUTION_MARKERS)
-    assigns = _sets_a_variable(command)
-    return _AliasScope(cwd, several or substitution or assigns, assigns)
+            for token in tokens:
+                name = os.path.basename(token).lower()
+                if name == "git":
+                    break
+                if name in _PATH_WRAPPERS or _ASSIGNMENT.match(token.lstrip(_GROUP_OPENERS)):
+                    return True
+        return False
 
 
 def _tokenize(segment: str) -> list[str]:
@@ -551,125 +529,111 @@ def _git_subcommand(tokens: list[str]) -> str | None:
     return None if index is None else tokens[index].lower()
 
 
-def _config_options(options: list[str]) -> tuple[str, ...]:
-    """The global options among `options` that change the configuration git reads."""
-    kept: list[str] = []
-    index = 0
-    while index < len(options):
-        token = options[index]
-        if token in _GIT_CONFIG_OPTIONS:
-            kept.extend(options[index : index + 2])
-            index += 2
-            continue
-        if token in _GIT_CONFIG_FLAGS or token.startswith(_GIT_CONFIG_JOINED):
-            kept.append(token)
-        index += 2 if token in _GIT_VALUE_OPTIONS else 1
-    return tuple(kept)
-
-
 @functools.lru_cache(maxsize=1)
-def _git_exec_path() -> str | None:
-    """git's own folder of `git-<name>` commands (`git --exec-path`), or None."""
-    try:
-        out = subprocess.run(
-            ["git", "--exec-path"], capture_output=True, text=True, errors="replace", timeout=10
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    path = out.stdout.strip()
-    return path if out.returncode == 0 and path else None
+def _git_command_names() -> frozenset[str]:
+    """Every command git runs before an alias: `git --list-cmds=main,others`.
 
-
-def _external_git_command(name: str) -> bool:
-    """Whether `git <name>` runs an external `git-<name>` command.
-
-    Git tries one before an alias of the same name (an alias `lfs` never runs
-    where `git-lfs` is installed), looking in its exec-path, then on PATH.
-    """
-    command = f"git-{name}"
-    exec_path = _git_exec_path()
-    return bool((exec_path and shutil.which(command, path=exec_path)) or shutil.which(command))
-
-
-@functools.lru_cache(maxsize=32)
-def _git_alias(name: str, cwd: str | None, options: tuple[str, ...] = ()) -> tuple[bool, str | None]:
-    """`alias.<name>` as (answered, value); (True, None) when there is no alias.
-
-    Read with the command's own configuration options (_config_options), so
-    `git -C <repo> ci` and `git -c alias.ci=commit ci` are looked up where and
-    as they will run. `git config --get` exits 1 for a key that is not set (an
-    invalid key name included, which cannot be an alias either). Any other
-    outcome, a timeout or git missing among them, is not an answer, and the
-    caller fails closed. Cached because each command is classified under three
-    separator sets.
+    `main` is git's exec-path (its own commands and the external ones shipped
+    there), `others` a `git-<name>` command on PATH, which git also runs before
+    an alias of that name. Empty when git cannot say, which clears nothing.
     """
     try:
         out = subprocess.run(
-            ["git", *options, "config", "--get", f"alias.{name}"],
-            cwd=cwd or None,
+            ["git", "--list-cmds=main,others"],
             capture_output=True,
             text=True,
             errors="replace",
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
-        return False, None
-    if out.returncode == 0:
-        return True, out.stdout.rstrip("\r\n")
-    if out.returncode == 1:
-        return True, None
-    return False, None
+        return frozenset()
+    if out.returncode != 0:
+        return frozenset()
+    return frozenset(line.strip() for line in out.stdout.splitlines() if line.strip())
 
 
-def _alias_write_verbs(args: list[str], depth: int, scope: _AliasScope | None) -> set[str]:
-    """The write verbs `git <args>` runs when its subcommand is an alias.
+def _unknown_subcommand_verbs(args: list[str], scope: _CommandScope | None) -> set[str]:
+    """Both verbs for `git <args>` when its subcommand is not one git runs first.
 
-    Empty for a git command of its own, spelled as git spells it, for an
-    external `git-<name>` command, which git runs before any alias of that name
-    (unless the command sets a variable, which can move PATH), and for a name
-    that is no alias (a typo git will refuse). An alias to another git command
-    is classified as that command, alias chains included, with the global
-    options given ahead of it still in force; a `!` alias as the shell command
-    it runs, read both by segment and by the matches-anywhere scan, since a
-    shell alias is often a function definition (`!f() { git commit "$@"; };
-    f`) whose segments lead with no `git`. Git hands a `!` alias's commands the
-    outer `-c` values and runs them in the `-C` repository, which a lookup in
-    the session's directory does not see, so when the outer command gave any
-    such option, the aliases in the body are moot. Doubt resolves to both
-    verbs: a command whose lookup is moot (_alias_scope), a lookup that does
-    not answer, and a chain past the recursion cap.
+    Empty for one of git's own commands (_GIT_COMMANDS, then the exec-path),
+    and for an external `git-<name>` git finds on PATH, unless the command
+    moves where git looks (`--exec-path` ahead of the subcommand, or
+    _CommandScope.moves_path). Anything else, an alias or a typo, counts as
+    both verbs and is recorded for the deny's hint.
     """
     index = _git_subcommand_index(args)
-    if index is None or args[index] in _GIT_COMMANDS:
+    if index is None:
         return set()
-    scope = scope or _AliasScope(None, False)
-    if not scope.assigns and _external_git_command(args[index]):
+    name = args[index]
+    if name in _GIT_COMMANDS:
         return set()
-    if scope.unsure or depth >= _MAX_SHELL_DEPTH:
-        return set(_UNRESOLVED_VERBS)
-    options = args[:index]
-    config = _config_options(options)
-    answered, value = _git_alias(args[index].lower(), scope.cwd, config)
-    if not answered:
-        return set(_UNRESOLVED_VERBS)
-    if value is None:
+    exec_path_moved = any(
+        option == "--exec-path" or option.startswith("--exec-path=") for option in args[:index]
+    )
+    if not exec_path_moved and not (scope and scope.moves_path) and name in _git_command_names():
         return set()
-    if value.startswith("!"):
-        body = value[1:]
-        inner = _alias_scope(body, scope.cwd)
-        if config:
-            inner = inner._replace(unsure=True)
-        return _command_write_verbs(body, depth + 1, inner) | _anywhere_write_verbs(body)
+    _UNKNOWN_SUBCOMMANDS.append(name)
+    return set(_UNRESOLVED_VERBS)
+
+
+def _substitution_bodies(text: str) -> list[str]:
+    """The commands inside each `$(...)`, `<(...)`, `>(...)` and backtick pair.
+
+    Parentheses are counted, not parsed, and quotes are not read: a body that
+    comes out wrong is classified anyway, which can only add verbs.
+    """
+    bodies: list[str] = []
+    index = 0
+    while index < len(text):
+        if text.startswith(("$(", "<(", ">("), index):
+            start = index = index + 2
+            level = 1
+            while index < len(text) and level:
+                if text[index] == "(":
+                    level += 1
+                elif text[index] == ")":
+                    level -= 1
+                index += 1
+            bodies.append(text[start : index - 1 if level == 0 else index])
+        elif text[index] == "`":
+            end = text.find("`", index + 1)
+            end = len(text) if end == -1 else end
+            bodies.append(text[index + 1 : end])
+            index = end + 1
+        else:
+            index += 1
+    return bodies
+
+
+# The tokens shlex's punctuation mode yields for a control operator, which end
+# a segment in _quoted_segments.
+_CONTROL_TOKENS = frozenset({";", "&&", "||", "|", "&", ";;", "|&", "(", ")", "<(", ">("})
+
+
+def _quoted_segments(command: str) -> list[list[str]]:
+    """The command's segments as quote-aware tokens, or none when it cannot be read.
+
+    The quote-blind splits in _command_write_verbs tear a quoted `;`, `&&` or
+    `|` apart (`git ci -m 'fix: a; b'`), and each fragment then tokenizes to
+    nothing. shlex in punctuation mode keeps it inside its word.
+    """
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
     try:
-        expansion = _tokenize(value)
+        tokens = list(lexer)
     except ValueError:
-        return _anywhere_write_verbs(f"git {value}")
-    verbs = _token_write_verbs(["git", *options, *expansion, *args[index + 1 :]], depth + 1, scope)
-    return set(_UNRESOLVED_VERBS) if verbs is None else verbs
+        return []
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token in _CONTROL_TOKENS:
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    return [segment for segment in segments if segment]
 
 
 def _shell_payload_verbs(
-    tokens: list[str], depth: int, scope: _AliasScope | None = None
+    tokens: list[str], depth: int, scope: _CommandScope | None = None
 ) -> set[str] | None:
     """Verbs written by the string payload of a `sh -c '…'`-style invocation.
 
@@ -715,7 +679,7 @@ def _strip_leading_noise(tokens: list[str]) -> list[str]:
 
 
 def _token_write_verbs(
-    tokens: list[str], depth: int, scope: _AliasScope | None = None
+    tokens: list[str], depth: int, scope: _CommandScope | None = None
 ) -> set[str] | None:
     """Classify one tokenized segment: which write verbs would it actually run?
 
@@ -730,7 +694,7 @@ def _token_write_verbs(
         verb = _git_subcommand(tokens[1:])
         if verb in _WRITE_VERBS:
             return {verb}
-        return _alias_write_verbs(tokens[1:], depth, scope)
+        return _unknown_subcommand_verbs(tokens[1:], scope)
     if head in _SHELL_WRAPPERS:
         return _shell_payload_verbs(tokens[1:], depth, scope)
     if head in _EXEC_WRAPPERS:
@@ -753,14 +717,17 @@ def _anywhere_write_verbs(segment: str) -> set[str]:
     return {match.group("verb").lower()} if match else set()
 
 
-def _segment_write_verbs(segment: str, depth: int, scope: _AliasScope | None = None) -> set[str]:
+def _segment_write_verbs(segment: str, depth: int, scope: _CommandScope | None = None) -> set[str]:
     if any(marker in segment for marker in _SUBSTITUTION_MARKERS):
         # The real command hides inside the substitution; anchoring would read
-        # the outer word and allow it. Fall back rather than fail open. The
-        # outer words are classified too, where they tokenize, so a git alias
-        # with a substitution in its arguments (`git ci -m "$(date)"`) still
-        # reaches the alias check.
+        # the outer word and allow it. Fall back rather than fail open. Each
+        # substitution's body is classified as a command of its own, and the
+        # outer words too where they tokenize, so a git alias inside one
+        # (`echo "$(git ci)"`) or around one (`git ci -m "$(date)"`) is seen.
         verbs = _anywhere_write_verbs(segment)
+        if depth < _MAX_SHELL_DEPTH:
+            for body in _substitution_bodies(segment):
+                verbs |= _command_write_verbs(body, depth + 1, scope)
         try:
             tokens = _tokenize(segment)
         except ValueError:
@@ -783,7 +750,7 @@ def _segment_write_verbs(segment: str, depth: int, scope: _AliasScope | None = N
     return verbs
 
 
-def _command_write_verbs(command: str, depth: int, scope: _AliasScope | None = None) -> set[str]:
+def _command_write_verbs(command: str, depth: int, scope: _CommandScope | None = None) -> set[str]:
     verbs: set[str] = set()
     # Classified under BOTH separator sets, unioned. Neither alone is safe:
     #
@@ -826,17 +793,24 @@ def _command_write_verbs(command: str, depth: int, scope: _AliasScope | None = N
     ):
         for segment in re.split(separators, command):
             verbs |= _segment_write_verbs(segment, depth, scope)
+    # A fourth reading, quote-aware, joins the union: it keeps a quoted
+    # separator inside its word (`git ci -m 'fix: a; b'`), which the three
+    # quote-blind splits tear into fragments that classify as nothing, and
+    # like them it can only add verbs. A command it cannot read adds none.
+    for tokens in _quoted_segments(command):
+        verbs |= _token_write_verbs(tokens, depth, scope) or set()
     return verbs
 
 
-def _git_writes(command: str, cwd: str | None = None) -> set[str]:
+def _git_writes(command: str) -> set[str]:
     """Return the {'commit','push'} subset the command would perform.
 
     Classifies each shell segment independently, so a chained
-    `git add && git commit` is still caught. A git alias is looked up in
-    `cwd`'s configuration (_alias_write_verbs).
+    `git add && git commit` is still caught. A git subcommand that is not one
+    git runs before any alias counts as both (_unknown_subcommand_verbs).
     """
-    return _command_write_verbs(command, 0, _alias_scope(command, cwd))
+    _UNKNOWN_SUBCOMMANDS.clear()
+    return _command_write_verbs(command, 0, _CommandScope(command))
 
 
 # --- Marker freshness -------------------------------------------------------
@@ -2359,7 +2333,7 @@ def main() -> None:
     if not isinstance(command, str):
         _allow()
 
-    verbs = _git_writes(command, cwd)
+    verbs = _git_writes(command)
     if not verbs:
         _allow()
 

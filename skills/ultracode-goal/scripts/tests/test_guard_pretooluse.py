@@ -2122,6 +2122,13 @@ _SEGMENT_SPLIT = (
 _PREFIX_STRIP_TEST = (
     "    while index < len(tokens) and _ASSIGNMENT.match(tokens[index]):"
 )
+# The quote-aware reading, the fourth member of the union, which splits a
+# chained command as well: a mutant that drops the quote-blind splits drops it
+# too, or it alone keeps the chained commit denied.
+_QUOTED_READING = (
+    "    for tokens in _quoted_segments(command):\n"
+    "        verbs |= _token_write_verbs(tokens, depth, scope) or set()\n"
+)
 
 
 def test_mutant_without_segment_split_allows_chained_commit(tmp_path: Path) -> None:
@@ -2129,13 +2136,16 @@ def test_mutant_without_segment_split_allows_chained_commit(tmp_path: Path) -> N
 
     Its leading token is `git`, but the subcommand in verb position is `add`,
     so the real commit is allowed and the deny above reds. This is what makes
-    the per-segment split load-bearing rather than incidental.
+    the per-segment split load-bearing rather than incidental. The quote-aware
+    reading splits the command too, so it goes with the split.
     """
-    mutant = _write_mutant(
+    mutant = _write_mutant_multi(
         tmp_path,
         "no_split",
-        _SEGMENT_SPLIT,
-        "    verbs |= _segment_write_verbs(command, depth, scope)",
+        [
+            (_SEGMENT_SPLIT, "    verbs |= _segment_write_verbs(command, depth, scope)"),
+            (_QUOTED_READING, ""),
+        ],
     )
     protected = _protected_repo(tmp_path)
 
@@ -2145,6 +2155,22 @@ def test_mutant_without_segment_split_allows_chained_commit(tmp_path: Path) -> N
 
     assert code == 0, "the chained-commit deny assertion must red without the split"
     assert out is None
+
+
+def test_mutant_without_the_quoted_reading_allows_a_quoted_separator(tmp_path: Path) -> None:
+    """Twin: drop the quote-aware reading and `git ci -m 'fix: a; b'` is allowed,
+    since the quote-blind splits tear it into fragments that classify as
+    nothing. This is what makes that reading load-bearing."""
+    mutant = _write_mutant(tmp_path, "no_quoted_reading", _QUOTED_READING, "")
+    protected = _protected_repo(tmp_path)
+    command = "git ci -m 'fix: a; b'"
+
+    code, out = _run_mutant_hook(mutant, _bash_event(protected, command), protected)
+    assert code == 0, "without the quote-aware reading the quoted separator hides the subcommand"
+    assert out is None
+
+    code, out = _run_hook(_bash_event(protected, command), protected)
+    assert code == 2
 
 
 def test_mutant_unconditional_prefix_strip_allows_chained_commit(tmp_path: Path) -> None:
@@ -2486,11 +2512,26 @@ def test_unlisted_wrapper_is_an_accepted_fail_open(guard_module, monkeypatch) ->
     )
 
 
+def _assert_protected_deny(protected: Path, command: str, env: dict | None = None) -> str:
+    code, out = _run_hook(_bash_event(protected, command), protected, env)
+    assert code == 2, command
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Protected-branch" in reason, command
+    return reason
+
+
+def _assert_no_deny(protected: Path, command: str, env: dict | None = None) -> None:
+    code, out = _run_hook(_bash_event(protected, command), protected, env)
+    assert code == 0, command
+    assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny", command
+
+
 @pytest.mark.parametrize(
     ("aliases", "command"),
     [
         ({"ci": "commit"}, "git ci -m x"),
         ({"ci": "commit"}, "git CI -m x"),
+        ({"log": "commit -m x"}, "git LOG"),
         ({"ci": "commit -v"}, "git add -A && git ci -m x"),
         ({"pu": "push origin HEAD"}, "git pu"),
         ({"ci": "commit", "c2": "ci"}, "git c2 -m x"),
@@ -2505,203 +2546,112 @@ def test_a_git_alias_to_commit_or_push_is_denied(
     """`git ci` with `alias.ci = commit` is a commit, whatever the command spells.
 
     The guard matched the subcommand word, so an alias reached `git commit` and
-    `git push` past every gate. It now looks a subcommand that is not a git
-    command up as an alias and classifies what it runs: another git command
-    (an alias chain included) or, for a `!` alias, a shell command.
+    `git push` past every gate. It now counts any subcommand git does not run
+    before an alias as both verbs, without reading what the alias runs. Git
+    matches its own command names case-sensitively, so `git LOG` runs
+    `alias.log` and counts too.
     """
     protected = _protected_repo(tmp_path)
     for name, value in aliases.items():
         _git(protected, "config", f"alias.{name}", value)
 
-    code, out = _run_hook(_bash_event(protected, command), protected)
-
-    assert code == 2, command
-    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    _assert_protected_deny(protected, command)
 
 
 @pytest.mark.parametrize(
     "command",
     [
+        # What a lookup at hook time would have read wrong: the alias defined,
+        # included or moved before git runs, or read in another repository.
         "git config alias.ci commit; git ci -m x",
-        "printf '[alias]\\n ci = commit' >> .git/config; git ci -m x",
+        "printf '[alias]\\\\n ci = commit' >> .git/config; git ci -m x",
         "git config include.path /tmp/aliases && git ci -m x",
         "cd ../other && git ci -m x",
-        "GIT_CONFIG_GLOBAL=/tmp/aliases git ci -m x",
         "HOME=/tmp/h git ci -m x",
-        "XDG_CONFIG_HOME=/tmp/x git ci -m x",
         "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci GIT_CONFIG_VALUE_0=commit git ci",
-    ],
-)
-def test_an_alias_the_guard_cannot_look_up_counts_as_a_write(
-    tmp_path: Path, command: str
-) -> None:
-    """An alias the lookup cannot see in time fails closed.
-
-    The guard looks before any part of the command runs, and the configuration
-    on disk holds no `alias.ci` then. An earlier segment can define one by any
-    means (`git config`, a write to `.git/config`, an include) or change
-    directory, and a variable can point git at another configuration (`HOME`,
-    `XDG_CONFIG_HOME`, a `GIT_` one). So in a command of several segments, or
-    one that sets a variable, a subcommand that is not a git command counts as
-    both write verbs.
-    """
-    protected = _protected_repo(tmp_path)
-
-    code, out = _run_hook(_bash_event(protected, command), protected)
-
-    assert code == 2, command
-    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-@pytest.mark.parametrize(
-    ("alias", "command"),
-    [
-        ("log", "git LOG"),
-        ("status", "git Status"),
-        ("ci", "git CI"),
-    ],
-)
-def test_a_git_command_name_in_another_case_is_looked_up_as_an_alias(
-    tmp_path: Path, alias: str, command: str
-) -> None:
-    """Git matches its own command names case-sensitively, alias names not.
-
-    `git LOG` is no git command, so git runs `alias.log`; the guard used to
-    lowercase the name, find `log` on its list and clear a real commit.
-    """
-    protected = _protected_repo(tmp_path)
-    _git(protected, "config", f"alias.{alias}", "commit -m x")
-
-    code, out = _run_hook(_bash_event(protected, command), protected)
-
-    assert code == 2, command
-    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-def test_an_alias_is_looked_up_with_the_commands_own_options(tmp_path: Path) -> None:
-    """`-C`, `-c` and `--git-dir` change the configuration git reads, so the
-    lookup passes them on: the alias is the other repository's, and an option
-    ahead of a subcommand that is no alias stays a read."""
-    protected = _protected_repo(tmp_path)
-    other = tmp_path / "other"
-    other.mkdir()
-    _git(other, "init", "-q")
-    _git(other, "config", "alias.ci", "commit")
-
-    for command in (f"git -C {other.as_posix()} ci -m x", "git -c alias.ci=commit ci -m x"):
-        code, out = _run_hook(_bash_event(protected, command), protected)
-        assert code == 2, command
-        assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
-
-    for command in ("git -C . lfs pull", "git --no-pager maintenance run", f"git -C {other.as_posix()} frobnicate"):
-        code, out = _run_hook(_bash_event(protected, command), protected)
-        assert code == 0, command
-        assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
-
-
-@pytest.mark.parametrize(
-    ("aliases", "command"),
-    [
-        ({}, "git frobnicate --help"),
-        ({"lg": "log --oneline"}, "git lg -5"),
-        ({"st": "status --short"}, "git st"),
-        ({"who": "!git log -1 --format=%an"}, "git who"),
-        # Git ignores an alias named like one of its own commands.
-        ({"status": "commit"}, "git status"),
-    ],
-)
-def test_a_subcommand_that_runs_no_write_is_allowed(
-    tmp_path: Path, aliases: dict, command: str
-) -> None:
-    """Reads stay quiet: no alias, a read-only alias, or an alias git ignores."""
-    protected = _protected_repo(tmp_path)
-    for name, value in aliases.items():
-        _git(protected, "config", f"alias.{name}", value)
-
-    code, out = _run_hook(_bash_event(protected, command), protected)
-
-    assert code == 0, command
-    assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
-
-
-def test_a_shell_alias_body_inherits_the_outer_config_options(tmp_path: Path) -> None:
-    """Git hands a `!` alias's commands the outer `-c` values and runs them in
-    the `-C` repository, so the aliases in its body are not the session's."""
-    protected = _protected_repo(tmp_path)
-    other = tmp_path / "other"
-    other.mkdir()
-    _git(other, "init", "-q")
-    _git(other, "config", "alias.zz", "commit")
-    _git(other, "config", "alias.sh", "!git zz")
-
-    for command in (
+        "env -C ../other git ci",
+        "sudo -D ../other git ci",
+        "git -C ../other ci",
         "git -c alias.zz=commit -c 'alias.x=!git zz' x",
-        f"git -C {other.as_posix()} sh",
-    ):
-        code, out = _run_hook(_bash_event(protected, command), protected)
-        assert code == 2, command
-        assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+        # Where the classification never reached the subcommand.
+        "git ci -m 'fix: a; b'",
+        "git ci -m 'a && b'",
+        "git ci -m 'x | y'",
+        'git ci -m "$(date)"',
+        "echo $(git -C repo ci)",
+        'echo "$(git ci)"',
+        "x=`git ci`",
+        "git --attr-source HEAD commit -m x",
+    ],
+)
+def test_a_subcommand_that_is_not_gits_own_counts_as_a_write(tmp_path: Path, command: str) -> None:
+    """No configuration is read, so none can be read wrong.
 
-
-def test_an_alias_with_a_substitution_in_its_arguments_is_still_checked(tmp_path: Path) -> None:
-    """A segment holding `$(` took only the matches-anywhere scan, which never
-    looks an alias up, so `git ci -m "$(date)"` cleared a real commit."""
+    Three review rounds found a lookup at hook time reading the wrong
+    configuration (an earlier segment, `-C`/`-c`, a wrapper's directory, the
+    environment) or never reached (a quoted separator, a substitution, a value
+    option misread as the subcommand). Each of these forms now counts as both
+    verbs, with no alias defined on disk at all.
+    """
     protected = _protected_repo(tmp_path)
-    _git(protected, "config", "alias.ci", "commit")
 
-    code, out = _run_hook(_bash_event(protected, 'git ci -m "$(date)"'), protected)
+    _assert_protected_deny(protected, command)
 
-    assert code == 2
-    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+def test_a_deny_names_the_subcommand_and_says_what_to_run(tmp_path: Path) -> None:
+    """A read-only alias is gated too, so the deny says why and what to do."""
+    protected = _protected_repo(tmp_path)
+    _git(protected, "config", "alias.st", "status")
+
+    reason = _assert_protected_deny(protected, "git st")
+
+    assert "`git st`: not one of git's own commands" in reason
+    assert "Run the git command it stands for instead." in reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git status",
+        "git -C . status",
+        "git --no-pager log -1",
+        "cd sub && git status && echo ok",
+        "git maintenance run",
+        'git log --format="%h $(date)"',
+        "npm test && git status --porcelain",
+    ],
+)
+def test_gits_own_commands_stay_reads(tmp_path: Path, command: str) -> None:
+    protected = _protected_repo(tmp_path)
+    # Git ignores an alias named like one of its own commands.
+    _git(protected, "config", "alias.status", "commit")
+
+    _assert_no_deny(protected, command)
 
 
 def test_an_external_git_command_runs_before_an_alias_of_its_name(tmp_path: Path) -> None:
-    """Git runs `git-<name>` from its exec-path or PATH before it looks for an
-    alias, so `git frob` with a `git-frob` on PATH is that command, in a command
-    of several segments too, where an alias could not be looked up in time."""
+    """Git runs a `git-<name>` from its exec-path or PATH before it looks for an
+    alias, so `git frob` with a `git-frob` on PATH is that command, unless the
+    command moves where git looks."""
     protected = _protected_repo(tmp_path)
     _git(protected, "config", "alias.frob", "commit")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     script = bin_dir / "git-frob"
-    script.write_text("#!/bin/sh\necho frob\n", encoding="utf-8")
+    script.write_text("#!/bin/sh\\necho frob\\n", encoding="utf-8")
     script.chmod(0o755)
-    (bin_dir / "git-frob.bat").write_text("@echo frob\r\n", encoding="utf-8")
     env = {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}
 
-    for command in ("git frob", "cd . && git frob", "git frob; echo done"):
-        code, out = _run_hook(_bash_event(protected, command), protected, env)
-        assert code == 0, command
-        assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
+    for command in ("git frob", "git -C . frob", "cd . && git frob", "git frob -m 'a b=c'"):
+        _assert_no_deny(protected, command, env)
 
-    # A variable the command sets can move PATH, so the external proves nothing.
-    code, out = _run_hook(_bash_event(protected, "PATH=/nowhere git frob"), protected, env)
-    assert code == 2
-
-
-def test_only_a_real_assignment_makes_the_lookup_moot(guard_module, tmp_path: Path) -> None:
-    """`b=c` inside an argument after `git` sets no variable; one ahead of
-    `git`, or among `env`'s operands, does."""
-    repo = _protected_repo(tmp_path)
-    _git(repo, "config", "alias.ci", "commit")
-
-    assert guard_module._git_writes("git ci -m 'a b=c'", str(repo)) == {"commit"}
-    assert guard_module._git_writes("git ci -m b=c", str(repo)) == {"commit"}
-    assert guard_module._git_writes("FOO=1 git ci", str(repo)) == {"commit", "push"}
-    assert guard_module._git_writes("env HOME=/x git ci", str(repo)) == {"commit", "push"}
-
-
-def test_an_alias_loop_resolves_to_both_verbs(guard_module, tmp_path: Path) -> None:
-    """A chain past the recursion cap is not read as harmless.
-
-    Git refuses an alias loop itself, so nothing runs; the guard only has to
-    stop recursing, and doubt there falls to the gates.
-    """
-    repo = _protected_repo(tmp_path)
-    _git(repo, "config", "alias.a", "b")
-    _git(repo, "config", "alias.b", "a")
-
-    assert guard_module._git_writes("git a", str(repo)) == {"commit", "push"}
+    for command in (
+        "PATH=/nowhere git frob",
+        "env -i git frob",
+        "git --exec-path=/nowhere frob",
+        "GIT_EXEC_PATH=/nowhere git frob",
+    ):
+        _assert_protected_deny(protected, command, env)
 
 
 def test_every_listed_git_command_is_one_git_knows(guard_module) -> None:
@@ -3122,8 +3072,11 @@ def test_mutant_without_keyword_stripping_allows_a_compound_write(
 def test_mutant_without_the_amp_separator_allows_a_background_write(
     tmp_path: Path,
 ) -> None:
-    """Twin for the `&` set: drop it and `build & <verb>` is ALLOWED again."""
-    mutant = _write_mutant(tmp_path, "no_amp_separator", _AMP_SEPARATOR_LINE, "")
+    """Twin for the `&` set: drop it, and the quote-aware reading that also
+    splits at `&`, and `build & <verb>` is ALLOWED again."""
+    mutant = _write_mutant_multi(
+        tmp_path, "no_amp_separator", [(_AMP_SEPARATOR_LINE, ""), (_QUOTED_READING, "")]
+    )
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo, "main")
