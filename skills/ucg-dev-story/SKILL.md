@@ -60,6 +60,8 @@ Run `uv run --no-project {project-root}/_bmad/scripts/resolve_config.py --projec
 
 If that script is absent or fails, read the same keys from `{project-root}/_bmad/config.yaml` and `config.user.yaml` (the root and the `bmm` section), falling back to `{project-root}/_bmad/bmm/config.yaml`.
 
+When the invocation passes an `implementation_artifacts` folder, use it in place of the config's value, for `sprint-status.yaml` and the story files alike. An UltraCode Goal run passes its own folder, which can differ from BMAD's (a customized folder, or an isolated track), so the story it implements and the sprint-status row it moves are the ones the run reads.
+
 ### Step 5: Greet the User
 
 Greet `{user_name}`, speaking in `{communication_language}`.
