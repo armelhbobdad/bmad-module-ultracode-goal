@@ -2658,6 +2658,17 @@ def test_a_git_alias_to_commit_or_push_is_denied(
         # be lexed past, read by the _lexable reading beside it.
         "out=x; grep -q x <<<\"$out\" # it's there\ngit -c user.name='Bot; CI' commit -m m",
         "branch=main; grep -q main <<<\"$branch\" # it's the default\ngit ci -m 'fix: a; b'",
+        # An apostrophe in a trailing comment leaves a segment no tokens; it is
+        # read once more without its comments and line continuations.
+        "git ci -m m \\\n# it's",
+        "echo $$'a\\' ; git ci -m m # it's",
+        "true \\\n# it's\ngit ci -m m",
+        "echo ${x#*} ; git ci -m m # it's",
+        "echo $(( 1<<2 )) ; git ci -m m # it's",
+        # An output process substitution's body, read as a command.
+        "echo x > >(git ci -m m) # it's",
+        "echo x > >(git ci -m m) \\\n# it's",
+        "git log > >(git ci -m m)",
         # Past the depth cap, a git the guard cannot read deeper.
         "echo $(echo $(echo $(echo `sh -c 'git ci -m x'`)))",
         "sh -c \"sh -c 'sh -c \\\"sh -c \\\\\\\"git ci\\\\\\\"\\\"'\"",
@@ -2733,6 +2744,7 @@ def test_the_hint_quotes_only_name_shaped_subcommands(guard_module) -> None:
         "git log --grep=push > >(cat)",
         "git status > >(tee log.txt)  # then commit",
         "git rev-parse HEAD > >(tee last-commit.txt)",
+        "git status > >(cat) # it's fine",
     ],
 )
 def test_gits_own_commands_stay_reads(tmp_path: Path, command: str) -> None:

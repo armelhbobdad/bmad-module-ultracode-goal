@@ -877,6 +877,47 @@ def _anywhere_write_verbs(segment: str) -> set[str]:
     return {match.group("verb").lower()} if match else set()
 
 
+def _body_verbs(segment: str, depth: int, scope: _CommandScope | None) -> set[str]:
+    """The write verbs of each substitution body in the segment, each read as a
+    command of its own, once per body and depth; past the depth cap, both verbs
+    for a `git` the guard cannot read deeper."""
+    if depth >= _MAX_SHELL_DEPTH:
+        return set(_UNRESOLVED_VERBS) if _GIT_WORD.search(segment) else set()
+    verbs: set[str] = set()
+    for body in _substitution_bodies(segment):
+        if scope is None:
+            verbs |= _command_write_verbs(body, depth + 1, scope)
+            continue
+        key = (body, depth)
+        if key not in scope.bodies:
+            scope.bodies[key] = set()  # a body that holds itself stops here
+            scope.bodies[key] = _command_write_verbs(body, depth + 1, scope)
+        verbs |= scope.bodies[key]
+    return verbs
+
+
+def _without_comments(segment: str) -> str:
+    """The segment with its line continuations joined and each line's trailing
+    `#` comment, and a trailing backslash, taken out. Read quote-blind, so it
+    can cut a quoted `#` too: it is only ever an extra reading."""
+    lines = segment.replace("\\\n", " ").split("\n")
+    return "\n".join(re.sub(r"(^|\s)#.*$", r"\1", line) for line in lines).rstrip().rstrip("\\")
+
+
+def _uncommented_verbs(segment: str, depth: int, scope: _CommandScope | None) -> set[str]:
+    """The verbs of the segment read without its comments, when it does not
+    tokenize as it is: an apostrophe in a trailing comment (`git ci # it's`)
+    leaves no tokens, and the matches-anywhere scan knows no alias."""
+    stripped = _without_comments(segment)
+    if stripped == segment:
+        return set()
+    try:
+        tokens = _tokenize(stripped)
+    except ValueError:
+        return set()
+    return _token_write_verbs(tokens, depth, scope) or set()
+
+
 def _segment_write_verbs(segment: str, depth: int, scope: _CommandScope | None = None) -> set[str]:
     if any(marker in segment for marker in _SUBSTITUTION_MARKERS):
         # The real command hides inside the substitution; anchoring would read
@@ -884,39 +925,31 @@ def _segment_write_verbs(segment: str, depth: int, scope: _CommandScope | None =
         # substitution's body is classified as a command of its own, and the
         # outer words too where they tokenize, so a git alias inside one
         # (`echo "$(git ci)"`) or around one (`git ci -m "$(date)"`) is seen.
-        verbs = _anywhere_write_verbs(segment)
-        if depth >= _MAX_SHELL_DEPTH and _GIT_WORD.search(segment):
-            verbs |= _UNRESOLVED_VERBS  # bodies too deep to read, with a git in them
-        elif depth < _MAX_SHELL_DEPTH:
-            for body in _substitution_bodies(segment):
-                if scope is None:
-                    verbs |= _command_write_verbs(body, depth + 1, scope)
-                    continue
-                key = (body, depth)
-                if key not in scope.bodies:
-                    scope.bodies[key] = set()  # a body that holds itself stops here
-                    scope.bodies[key] = _command_write_verbs(body, depth + 1, scope)
-                verbs |= scope.bodies[key]
+        verbs = _anywhere_write_verbs(segment) | _body_verbs(segment, depth, scope)
         try:
             tokens = _tokenize(segment)
         except ValueError:
-            return verbs
+            return verbs | _uncommented_verbs(segment, depth, scope)
         return verbs | (_token_write_verbs(tokens, depth, scope) or set())
+    # An output process substitution's body is a command too. It is read on its
+    # own, not through the matches-anywhere scan, which would deny a read whose
+    # words name a verb (`git log --grep=push > >(cat)`).
+    verbs = _body_verbs(segment, depth, scope) if ">(" in segment else set()
     try:
         tokens = _tokenize(segment)
     except ValueError:
         # Unbalanced quotes: there are no trustworthy tokens, so fall back to
-        # the legacy scan rather than wave the segment through. Letting the
-        # exception escape would exit non-zero, which is neither a clean allow
-        # nor a clean deny.
-        return _anywhere_write_verbs(segment)
-    verbs = _token_write_verbs(tokens, depth, scope)
-    if verbs is None:
+        # the legacy scan rather than wave the segment through, and read the
+        # segment once more without its comments. Letting the exception escape
+        # would exit non-zero, which is neither a clean allow nor a clean deny.
+        return verbs | _anywhere_write_verbs(segment) | _uncommented_verbs(segment, depth, scope)
+    found = _token_write_verbs(tokens, depth, scope)
+    if found is None:
         # A listed shell wrapper whose payload could not be located. Same
         # treatment as the two lanes above: scan the raw segment rather than
         # let an unreadable invocation classify as carrying no write.
-        return _anywhere_write_verbs(segment)
-    return verbs
+        return verbs | _anywhere_write_verbs(segment)
+    return verbs | found
 
 
 def _command_write_verbs(command: str, depth: int, scope: _CommandScope | None = None) -> set[str]:
