@@ -404,7 +404,9 @@ _PAYLOAD_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 # case-sensitively (`git LOG` runs `alias.log`, since alias names are not), so
 # a subcommand spelled exactly as on this list is never looked up. Only real
 # git commands belong on it: a name that is not one could still be an alias,
-# and listing it would wave that alias through.
+# and listing it would wave that alias through. That holds per build, so a
+# command some builds leave out stays off it (Git for Windows has no
+# `instaweb`); the test checks the list on both CI legs.
 _GIT_COMMANDS = frozenset(
     {
         "add", "am", "annotate", "apply", "archive", "bisect", "blame",
@@ -416,7 +418,7 @@ _GIT_COMMANDS = frozenset(
         "difftool", "fast-export", "fast-import", "fetch", "fetch-pack",
         "filter-branch", "fmt-merge-msg", "for-each-ref", "for-each-repo",
         "format-patch", "fsck", "gc", "grep", "hash-object", "help",
-        "index-pack", "init", "init-db", "instaweb", "interpret-trailers",
+        "index-pack", "init", "init-db", "interpret-trailers",
         "log", "ls-files", "ls-remote", "ls-tree", "mailinfo", "mailsplit",
         "maintenance", "merge", "merge-base", "merge-file", "merge-index",
         "merge-tree", "mergetool", "mktag", "mktree", "multi-pack-index", "mv",

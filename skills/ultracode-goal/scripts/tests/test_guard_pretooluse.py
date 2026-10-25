@@ -2588,12 +2588,12 @@ def test_an_alias_is_looked_up_with_the_commands_own_options(tmp_path: Path) -> 
     _git(other, "init", "-q")
     _git(other, "config", "alias.ci", "commit")
 
-    for command in (f"git -C {other} ci -m x", "git -c alias.ci=commit ci -m x"):
+    for command in (f"git -C {other.as_posix()} ci -m x", "git -c alias.ci=commit ci -m x"):
         code, out = _run_hook(_bash_event(protected, command), protected)
         assert code == 2, command
         assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
-    for command in ("git -C . lfs pull", "git --no-pager maintenance run", f"git -C {other} frobnicate"):
+    for command in ("git -C . lfs pull", "git --no-pager maintenance run", f"git -C {other.as_posix()} frobnicate"):
         code, out = _run_hook(_bash_event(protected, command), protected)
         assert code == 0, command
         assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
@@ -2636,7 +2636,7 @@ def test_a_shell_alias_body_inherits_the_outer_config_options(tmp_path: Path) ->
 
     for command in (
         "git -c alias.zz=commit -c 'alias.x=!git zz' x",
-        f"git -C {other} sh",
+        f"git -C {other.as_posix()} sh",
     ):
         code, out = _run_hook(_bash_event(protected, command), protected)
         assert code == 2, command
