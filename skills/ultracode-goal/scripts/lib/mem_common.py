@@ -119,13 +119,14 @@ def utc_now_iso() -> str:
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
 
 
-def _git(cwd: Path, *args: str, strip: bool = True) -> tuple[int, str]:
+def _git(cwd: Path, *args: str, strip: bool = True, errors: str = "replace") -> tuple[int, str]:
     """Run git in cwd, returning (returncode, stdout). Never raises.
 
     The output is stripped; with ``strip=False`` only its line ending goes, so
     a leading space in a path it prints survives. It is read as UTF-8, as git
     prints paths, not in the locale's encoding (a Windows code page would turn
-    `été` into another name).
+    `été` into another name); ``errors="surrogateescape"`` keeps the bytes of
+    a name that is not UTF-8, so it can be written back as git printed it.
     """
     try:
         proc = subprocess.run(
@@ -133,7 +134,7 @@ def _git(cwd: Path, *args: str, strip: bool = True) -> tuple[int, str]:
             cwd=str(cwd),
             capture_output=True,
             encoding="utf-8",
-            errors="replace",
+            errors=errors,
             check=False,
         )
     except (OSError, ValueError):
@@ -464,7 +465,8 @@ def exclude_state(impl_artifacts: str | os.PathLike[str]) -> list[str]:
             "(while a latch is present, the guard denies a command that names it)"
         )
     # Unstripped: a strip() would drop a leading space from the folder name.
-    code, prefix = _git(impl, "rev-parse", "--show-prefix", strip=False)
+    # The folder's bytes as git printed them, even where they are not UTF-8.
+    code, prefix = _git(impl, "rev-parse", "--show-prefix", strip=False, errors="surrogateescape")
     if code != 0:
         return notes
     line = state_exclude_line(prefix)
@@ -473,7 +475,7 @@ def exclude_state(impl_artifacts: str | os.PathLike[str]) -> list[str]:
         return notes
     exclude = Path(rel) if os.path.isabs(rel) else impl / rel
     try:
-        text = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+        text = exclude.read_text(encoding="utf-8", errors="surrogateescape") if exclude.is_file() else ""
         lines = text.splitlines()
         kept: list[str] = []
         for entry in lines:
@@ -484,13 +486,13 @@ def exclude_state(impl_artifacts: str | os.PathLike[str]) -> list[str]:
         if kept != lines:
             if line not in kept:
                 kept += [_STATE_EXCLUDE_COMMENT, line]
-            exclude.write_text("\n".join(kept) + "\n", encoding="utf-8")
+            exclude.write_text("\n".join(kept) + "\n", encoding="utf-8", errors="surrogateescape")
             return notes
         if line in lines:
             return notes
         lead = "" if not text or text.endswith("\n") else "\n"
         exclude.parent.mkdir(parents=True, exist_ok=True)
-        with open(exclude, "a", encoding="utf-8") as handle:
+        with open(exclude, "a", encoding="utf-8", errors="surrogateescape") as handle:
             handle.write(f"{lead}{_STATE_EXCLUDE_COMMENT}\n{line}\n")
     except (OSError, ValueError) as exc:  # ValueError: not UTF-8
         notes.append(

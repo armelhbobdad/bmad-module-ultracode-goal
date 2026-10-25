@@ -620,6 +620,27 @@ def test_a_folder_name_outside_ascii_is_read_as_git_prints_it(tmp_path, home):
 
 
 @_needs_git
+@pytest.mark.skipif(
+    sys.platform in ("win32", "darwin"), reason="needs a filesystem that takes any bytes in a name"
+)
+def test_a_folder_name_that_is_not_utf8_is_written_back_byte_for_byte(tmp_path, home):
+    # git prints the prefix's raw bytes; decoded with errors="replace", a
+    # Latin-1 `café` became `caf\ufffd`, a line that matches nothing.
+    repo = tmp_path / "widget"
+    _init_repo(repo)
+    impl = repo / os.fsdecode(b"caf\xe9")
+    impl.mkdir()
+    (impl / "1-1-x.md").write_text("# story\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "story")
+
+    _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
+
+    assert b"/caf\xe9/.mem-state*" in (repo / ".git" / "info" / "exclude").read_bytes()
+    assert _porcelain(repo) == ""
+
+
+@_needs_git
 def test_a_folder_name_with_glob_characters_is_matched_literally(tmp_path, home):
     repo = tmp_path / "widget"
     _init_repo(repo)
