@@ -170,7 +170,7 @@ gh search issues --repo {healthCheckRepo} --state open "{fp} in:title" --json nu
 Execute the choice:
 
 - **R:** `gh api -X POST /repos/{healthCheckRepo}/issues/{N}/reactions -f content='+1'`, then record `reacted`.
-- **C:** the reaction call, then `gh issue comment {N} --body "{minimal env+delta body}"` (the Environment table plus ONE sentence on what differs; no session narrative), then record `commented`.
+- **C:** the reaction call, then write the minimal env+delta body (the Environment table plus ONE sentence on what differs; no session narrative) to a body file as §5a-ii says, and run `gh issue comment {N} --repo {healthCheckRepo} --body-file {body-file}`; then record `commented`.
 - **N:** proceed to §5a-ii.
 - **S:** record nothing.
 
@@ -198,8 +198,10 @@ The `2>/dev/null || true` keeps it idempotent — a pre-existing label is not an
 gh issue create --repo {healthCheckRepo} \
   --title "[health-check][{severity}][{fp}] {workflow}: {short description}" \
   --label "health-check,workflow-improvement,{severity},{fp}" \
-  --body "{structured body below}"
+  --body-file {body-file}
 ```
+
+**Pass every body as a file, never inline.** Write the structured body below with the Write tool to `hc-body-{fp}.md` in this run's folder (beside `.decision-log.md`), then name that file with `--body-file`. A body often quotes paths, and an inline `--body "..."` puts them in the command itself: while a recall latch is still present (Finalize's unlatch failed, so the report names the latch path), the guard denies any Bash command that names the latch, and quotes, backticks and `$` in a body break shell quoting. The guard reads the paths a Write names, not what it writes, so a body file passes, and it stays in the run folder as the record of what was sent.
 
 The `{workflow}` in the title is `ultracode-goal/{stage}`. The `{fp}` appears in both title (human-readable) and label (server-side filterable) so maintainers can query all reports for a defect via the `fp-*` label without parsing title text.
 

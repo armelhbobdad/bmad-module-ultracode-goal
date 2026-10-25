@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The health check now passes every issue and comment body to `gh` with `--body-file`, from a file it writes in the run folder, instead of an inline `--body`. A body that quoted the run latch's path, as a report of a failed unlatch does, made the whole `gh issue create` or `gh issue comment` command name the latch, which the guard denies while the latch is present; quotes, backticks and `$` in a body also broke the command's shell quoting.
+issues: [160]
