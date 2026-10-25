@@ -388,7 +388,7 @@ _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 # Openers of a substitution that runs a command this tokenizer cannot see. A
 # segment carrying one takes the fail-closed path instead of being anchored.
-_SUBSTITUTION_MARKERS = ("$(", "`", "<(", ">(")
+_SUBSTITUTION_MARKERS = ("$(", "`", "<(")
 
 # Depth cap on `sh -c` recursion: a bound, not a behavior anyone should rely on.
 # Past it, a `git` the guard cannot read deeper counts as both verbs.
@@ -588,6 +588,64 @@ _CONTROL_OPERATORS = frozenset(
 )
 
 
+# Punctuation inside quotes, or escaped, is a word's text, not an operator, but
+# shlex hands a quoted `')>'` back as `)>`, which reads as one. So it is masked
+# before lexing, with a quote scan that follows shlex's own posix rules (a
+# backslash escapes outside single quotes; single quotes take everything up to
+# the next one; double quotes take an escaped character as it is), and unmasked
+# in the tokens after.
+_MASK_BASE = 0xE000
+
+
+def _mask_quoted(text: str) -> str:
+    """`text` with each punctuation character inside quotes or escaped masked.
+
+    Unbalanced quotes leave the text as it is, for shlex to refuse.
+    """
+    out: list[str] = []
+    index = 0
+    size = len(text)
+
+    def masked(char: str) -> str:
+        return chr(_MASK_BASE + ord(char)) if char in _PUNCTUATION else char
+
+    while index < size:
+        char = text[index]
+        if char == "\\" and index + 1 < size:
+            out.append(char + masked(text[index + 1]))
+            index += 2
+        elif char == "'":
+            end = text.find("'", index + 1)
+            if end == -1:
+                return text
+            out.append("'" + "".join(masked(c) for c in text[index + 1 : end]) + "'")
+            index = end + 1
+        elif char == '"':
+            end = index + 1
+            body: list[str] = []
+            while end < size and text[end] != '"':
+                if text[end] == "\\" and end + 1 < size:
+                    body.append(text[end] + masked(text[end + 1]))
+                    end += 2
+                else:
+                    body.append(masked(text[end]))
+                    end += 1
+            if end >= size:
+                return text
+            out.append('"' + "".join(body) + '"')
+            index = end + 1
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
+
+
+def _unmask(token: str) -> str:
+    return "".join(
+        chr(ord(c) - _MASK_BASE) if _MASK_BASE <= ord(c) < _MASK_BASE + 128 else c for c in token
+    )
+
+
 def _operators(token: str) -> list[str] | None:
     """A run of punctuation as bash's operators, longest first; None for a word."""
     if not token or not set(token) <= set(_PUNCTUATION):
@@ -600,21 +658,22 @@ def _operators(token: str) -> list[str] | None:
         index += len(operator)
     return found
 
-# A heredoc's start: `<<` or `<<-`, then its delimiter word, quoted or not.
-_HEREDOC_START = re.compile(r"<<(-?)[ \t]*([^\s;&|<>()]+)")
+# A heredoc's start, with its delimiter, quoted or not.
+_HEREDOC_START = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
 def _lexable(command: str) -> str:
     """The command with what shlex reads unlike bash taken out, for a reading
     of its own.
 
-    A comment (a `#` that starts a word, outside quotes and substitutions, up
-    to its line's end), an ANSI-C string `$'...'`, whose backslash escapes
-    shlex does not know and in which nothing is substituted (it becomes an
-    empty word), and a heredoc's body (the lines up to its delimiter, which may
-    hold any text, apostrophes included). The rest is copied as it is, quotes
-    and escapes included, for shlex to read. A misread here takes out text
-    bash runs, so this text is only ever read beside the command as it is
+    A comment (a `#` that starts a word, outside quotes, up to its line's end),
+    an ANSI-C string `$'...'`, whose backslash escapes shlex does not know and
+    in which nothing is substituted (it becomes an empty word), and a heredoc's
+    body (the lines up to its delimiter, which may hold any text, apostrophes
+    included). The rest is copied as it is, quotes and escapes included, for
+    shlex to read. Its reading of comments and heredocs is rough (a `#` after
+    `$(...)`, a `<<` in arithmetic), and a misread takes out text bash runs, so
+    this text is only ever read beside the command as it is
     (_command_write_verbs): it can add a reading, never replace one.
     """
     out: list[str] = []
@@ -625,12 +684,10 @@ def _lexable(command: str) -> str:
     while index < size:
         char = command[index]
         if char == "\\":
-            # A line continuation joins the lines, and starts no word.
-            continued = command.startswith("\\\n", index)
             out.append(command[index : index + 2])
             index += 2
-            word_start = word_start and continued
-        elif command.startswith("$'", index) and _dollar_run(command, index) % 2:
+            word_start = False
+        elif command.startswith("$'", index):
             end = index + 2
             while end < size and command[end] != "'":
                 end += 2 if command[end] == "\\" else 1
@@ -644,19 +701,13 @@ def _lexable(command: str) -> str:
             out.append(command[index : end + 1])
             index = end + 1
             word_start = False
-        elif char == "#" and word_start and not _in_expansion(command, index):
+        elif char == "#" and word_start:
             end = command.find("\n", index)
             index = size if end == -1 else end
-        elif (
-            command.startswith("<<", index)
-            and not command.startswith("<<<", index)
-            and not _in_arithmetic(command, index)
-        ):
+        elif command.startswith("<<", index) and not command.startswith("<<<", index):
             match = _HEREDOC_START.match(command, index)
             if match:
-                # The delimiter is the whole word, its quotes removed; `<<-`
-                # alone lets tabs lead the closing line.
-                pending.append((_unquoted(match.group(2)), match.group(1) == "-"))
+                pending.append(match.group(2))
                 out.append(command[index : match.end()])
                 index = match.end()
             else:
@@ -667,52 +718,19 @@ def _lexable(command: str) -> str:
             out.append("\n")
             index += 1
             word_start = True
-            for delimiter, dash in pending:
+            for delimiter in pending:
                 while index < size:
                     end = command.find("\n", index)
                     line = command[index : size if end == -1 else end]
                     index = size if end == -1 else end + 1
-                    if (line.lstrip("\t") if dash else line) == delimiter:
+                    if line.lstrip("\t") == delimiter:
                         break
             pending.clear()
         else:
             out.append(char)
             index += 1
-            word_start = char in " \t;&|(<>"
+            word_start = char in " \t;&|()<>"
     return "".join(out)
-
-
-def _dollar_run(text: str, index: int) -> int:
-    """How many `$` end at `index` (inclusive): `$'` opens an ANSI-C string only
-    when it is odd (`$$'a'` is `$$` and then `'a'`)."""
-    start = index
-    while start > 0 and text[start - 1] == "$":
-        start -= 1
-    return index - start + 1
-
-
-def _in_expansion(text: str, index: int) -> bool:
-    """Whether `index` may sit inside a substitution or expansion on its line,
-    where a `#` starts no comment of the outer command (`$(...)`, `${...}`, a
-    backtick); counted roughly, and in doubt it is (no comment is taken out)."""
-    line = text[text.rfind("\n", 0, index) + 1 : index]
-    return line.count("`") % 2 == 1 or (line.count("$(") + line.count("${")) > (
-        line.count(")") + line.count("}")
-    )
-
-
-def _in_arithmetic(text: str, index: int) -> bool:
-    """Whether `index` sits inside `((...))` on its line, where `<<` is a shift."""
-    line = text[text.rfind("\n", 0, index) + 1 : index]
-    return line.count("((") > line.count("))")
-
-
-def _unquoted(word: str) -> str:
-    """A heredoc delimiter word with its quotes removed (`E"O"F` is `EOF`)."""
-    try:
-        return "".join(shlex.split(word)) or word
-    except ValueError:
-        return word
 
 
 def _quoted_segments(command: str) -> list[list[str]]:
@@ -722,7 +740,7 @@ def _quoted_segments(command: str) -> list[list[str]]:
     `|` apart (`git ci -m 'fix: a; b'`), and each fragment then tokenizes to
     nothing. shlex in punctuation mode keeps it inside its word.
     """
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=_PUNCTUATION)
+    lexer = shlex.shlex(_mask_quoted(command), posix=True, punctuation_chars=_PUNCTUATION)
     lexer.whitespace = " \t\r"  # a newline is punctuation, so it ends a segment
     lexer.whitespace_split = True
     lexer.commenters = ""  # shlex would start one mid-word; bash does not
@@ -734,7 +752,7 @@ def _quoted_segments(command: str) -> list[list[str]]:
     for token in tokens:
         operators = _operators(token)
         if operators is None:
-            segments[-1].append(token)
+            segments[-1].append(_unmask(token))
             continue
         for operator in operators:
             if operator in _CONTROL_OPERATORS:
@@ -797,8 +815,13 @@ def _strip_leading_noise(tokens: list[str]) -> list[str]:
             elif head.lower() in _SHELL_KEYWORDS:
                 stripped = stripped[1:]
             elif redirect:
-                # An operator alone (`>`, `2>&`) takes the next word as its target.
-                stripped = stripped[2:] if redirect.end() == len(head) else stripped[1:]
+                # An operator alone (`>`, `2>&`) takes the next word as its
+                # target, unless that word is `git`: a quoted punctuation word
+                # (`exec -a ')>' git ci`) reads as an operator here, and the
+                # git after it must not be taken for its target.
+                alone = redirect.end() == len(head)
+                target_is_git = alone and len(stripped) > 1 and os.path.basename(stripped[1]).lower() == "git"
+                stripped = stripped[2:] if alone and not target_is_git else stripped[1:]
             elif head.isdigit() and len(stripped) > 1 and _REDIRECTION.match(stripped[1]):
                 stripped = stripped[1:]  # the descriptor of `2 >&1`, split by the quote-aware reading
         if stripped == tokens:

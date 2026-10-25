@@ -2651,6 +2651,13 @@ def test_a_git_alias_to_commit_or_push_is_denied(
         "cat <<EOF\nit's\n\tEOF\nit's\nEOF\ngit ci -m 'a;b'",
         "echo a \\\n# see <<EOF\ngit ci -m 'a;b'",
         "echo $$'a\\' ; git ci -m 'b;c'",
+        # A quoted punctuation word is a word, not an operator.
+        "git --namespace ')>' ci -m 'a;b'",
+        "exec -a ')>' git ci -m 'a;b'",
+        # A comment or heredoc with an apostrophe the command as it is cannot
+        # be lexed past, read by the _lexable reading beside it.
+        "out=x; grep -q x <<<\"$out\" # it's there\ngit -c user.name='Bot; CI' commit -m m",
+        "branch=main; grep -q main <<<\"$branch\" # it's the default\ngit ci -m 'fix: a; b'",
         # Past the depth cap, a git the guard cannot read deeper.
         "echo $(echo $(echo $(echo `sh -c 'git ci -m x'`)))",
         "sh -c \"sh -c 'sh -c \\\"sh -c \\\\\\\"git ci\\\\\\\"\\\"'\"",
@@ -2722,6 +2729,10 @@ def test_the_hint_quotes_only_name_shaped_subcommands(guard_module) -> None:
         "git log --oneline | head -5 # it's fine",
         "git diff >| out.txt",
         "diff <(git show HEAD:a) a",
+        # A process substitution after a read, whose words name a verb.
+        "git log --grep=push > >(cat)",
+        "git status > >(tee log.txt)  # then commit",
+        "git rev-parse HEAD > >(tee last-commit.txt)",
     ],
 )
 def test_gits_own_commands_stay_reads(tmp_path: Path, command: str) -> None:
