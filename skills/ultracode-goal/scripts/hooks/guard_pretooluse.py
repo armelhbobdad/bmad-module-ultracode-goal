@@ -146,13 +146,7 @@ def _allow() -> NoReturn:
 
 
 def _deny(reason: str) -> NoReturn:
-    if _UNKNOWN_SUBCOMMANDS:
-        names = ", ".join(f"`git {name}`" for name in dict.fromkeys(_UNKNOWN_SUBCOMMANDS))
-        reason += (
-            f" ({names}: not one of git's own commands, so this guard counts it as a "
-            "commit and a push, since it cannot tell what an alias runs. Run the git "
-            "command it stands for instead.)"
-        )
+    reason += _DENY_HINT
     print(
         json.dumps(
             {
@@ -324,6 +318,7 @@ _EXEC_WRAPPERS = frozenset(
         "stdbuf",
         "ionice",
         "doas",
+        "exec",
     }
 )
 
@@ -405,19 +400,20 @@ _PAYLOAD_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 
 # --- git subcommands that are not git's own --------------------------------
 # `git ci` runs `git commit` when `alias.ci = commit`, and nothing in the
-# command says what an alias runs: git reads it from configuration that the
-# command's own options, an earlier segment, a wrapper or the environment can
-# change before git starts, so a lookup at hook time can read the wrong one.
-# The guard reads none. A git subcommand counts as no write only when git runs
-# it before any alias of its name: one of git's own commands, spelled as git
-# spells it (git matches its command names case-sensitively, so `git LOG` runs
-# `alias.log`), or an external `git-<name>` command git finds in its exec-path
-# or on PATH (`git lfs`). Every other subcommand, an alias or a typo, counts as
-# both verbs, so the commit and push gates judge it, and a deny names it and
-# says to run the git command it stands for. This list is the fast path for
-# git's own commands, read with no subprocess: only real git commands belong
-# on it, per build (Git for Windows has no `instaweb`), and a test checks it
-# on both CI legs.
+# command says what an alias runs: git reads it from configuration the command
+# can change before git starts. Whether `git <name>` is an external
+# `git-<name>` command instead depends on PATH, which can differ between this
+# hook and the shell that runs the command, or change inside it. So the guard
+# reads neither. A git subcommand counts as no write only when it is one of
+# git's built-in commands, which git runs before any alias and which nothing
+# can move or shadow, spelled as git spells it (git matches its command names
+# case-sensitively, so `git LOG` runs `alias.log`), or one of the commands git
+# ships as scripts in its exec-path, while the command does not mention that
+# path. Every other subcommand (an alias, an external command such as `git
+# lfs`, a typo) counts as both verbs, so the commit and push gates judge it,
+# and the deny names it (_unknown_hint). Only commands built in on every
+# supported build belong on the first list: none newer than Git 2.30, and no
+# `whatchanged`, which Git 3.0 drops. A test checks both lists on both CI legs.
 _GIT_COMMANDS = frozenset(
     {
         "add", "am", "annotate", "apply", "archive", "bisect", "blame",
@@ -427,68 +423,53 @@ _GIT_COMMANDS = frozenset(
         "commit-graph", "commit-tree", "config", "count-objects", "credential",
         "describe", "diff", "diff-files", "diff-index", "diff-tree",
         "difftool", "fast-export", "fast-import", "fetch", "fetch-pack",
-        "filter-branch", "fmt-merge-msg", "for-each-ref", "for-each-repo",
-        "format-patch", "fsck", "gc", "grep", "hash-object", "help",
-        "index-pack", "init", "init-db", "interpret-trailers",
-        "log", "ls-files", "ls-remote", "ls-tree", "mailinfo", "mailsplit",
-        "maintenance", "merge", "merge-base", "merge-file", "merge-index",
-        "merge-tree", "mergetool", "mktag", "mktree", "multi-pack-index", "mv",
-        "name-rev", "notes", "pack-objects", "pack-refs", "patch-id", "prune",
-        "prune-packed", "pull", "quiltimport", "range-diff", "read-tree",
-        "rebase", "receive-pack", "reflog", "remote", "repack", "replace",
-        "request-pull", "rerere", "reset", "restore", "rev-list", "rev-parse",
-        "revert", "rm", "send-pack", "shortlog", "show", "show-branch",
-        "show-index", "show-ref", "sparse-checkout", "stash", "status",
-        "stripspace", "submodule", "switch", "symbolic-ref", "tag",
-        "unpack-objects", "update-index", "update-ref", "update-server-info",
-        "upload-archive", "upload-pack", "var", "verify-commit", "verify-pack",
-        "verify-tag", "version", "whatchanged", "worktree", "write-tree",
+        "fmt-merge-msg", "for-each-ref", "for-each-repo", "format-patch",
+        "fsck", "gc", "grep", "hash-object", "help", "index-pack", "init",
+        "init-db", "interpret-trailers", "log", "ls-files", "ls-remote",
+        "ls-tree", "mailinfo", "mailsplit", "maintenance", "merge",
+        "merge-base", "merge-file", "merge-index", "merge-tree", "mktag",
+        "mktree", "multi-pack-index", "mv", "name-rev", "notes",
+        "pack-objects", "pack-refs", "patch-id", "prune", "prune-packed",
+        "pull", "range-diff", "read-tree", "rebase", "receive-pack", "reflog",
+        "remote", "repack", "replace", "rerere", "reset", "restore",
+        "rev-list", "rev-parse", "revert", "rm", "send-pack", "shortlog",
+        "show", "show-branch", "show-index", "show-ref", "sparse-checkout",
+        "stage", "stash", "status", "stripspace", "switch", "symbolic-ref",
+        "tag", "unpack-objects", "update-index", "update-ref",
+        "update-server-info", "upload-archive", "upload-pack", "var",
+        "verify-commit", "verify-pack", "verify-tag", "version", "worktree",
+        "write-tree",
     }
 )
+# Commands git ships as scripts in its exec-path, which it also runs before an
+# alias of the name, unless the command moves that path (`--exec-path`,
+# `GIT_EXEC_PATH`): a mention of it anywhere in the command, a nested shell's
+# included, makes them count as both verbs too.
+_GIT_SCRIPT_COMMANDS = frozenset({"filter-branch", "mergetool", "quiltimport", "request-pull", "submodule"})
+_EXEC_PATH_TEXT = re.compile(r"exec[-_]path", re.IGNORECASE)
 
 # What a git subcommand that is not git's own counts as: both verbs, so the
 # commit and push gates judge it, which is where the doubt belongs.
 _UNRESOLVED_VERBS = frozenset(_WRITE_VERBS)
 
-# The separators a command's segments run apart at, as _command_write_verbs
-# splits them.
-_ANY_SEPARATOR = re.compile(r"&&|\|\||;|\||&|\n|\r")
+# A subcommand the deny's hint may quote: the shape of a command or alias name,
+# so a fragment torn from a quoted argument never reaches the reason.
+_NAME_SHAPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
-# Exec wrappers that can change the PATH of what they run (`env PATH=...`,
-# `env -i`, sudo's secure_path).
-_PATH_WRAPPERS = frozenset({"env", "sudo", "doas"})
-
-# The git subcommands this hook call counted as both verbs, named in a deny.
-_UNKNOWN_SUBCOMMANDS: list[str] = []
+# The note the git gates' denies carry, set by main() from _classify().
+_DENY_HINT = ""
 
 
 class _CommandScope:
-    """What classifying a git subcommand needs to know about the whole command."""
+    """What classifying one command collects and reuses along the way."""
 
     def __init__(self, command: str = "") -> None:
-        self.command = command
-
-    @functools.cached_property
-    def moves_path(self) -> bool:
-        """Whether the command can change where git finds an external command.
-
-        A variable set ahead of a `git` (`PATH=`, `GIT_EXEC_PATH=`) or a wrapper
-        that can reset PATH, in any segment; a segment that cannot be tokenized
-        counts too. Computed only when a subcommand that is not one of git's
-        own needs it, so a Bash call with no such subcommand pays nothing.
-        """
-        for part in _ANY_SEPARATOR.split(self.command):
-            try:
-                tokens = _tokenize(part)
-            except ValueError:
-                return True
-            for token in tokens:
-                name = os.path.basename(token).lower()
-                if name == "git":
-                    break
-                if name in _PATH_WRAPPERS or _ASSIGNMENT.match(token.lstrip(_GROUP_OPENERS)):
-                    return True
-        return False
+        self.moves_exec_path = bool(_EXEC_PATH_TEXT.search(command))
+        # The subcommands counted as both verbs, in the order first met.
+        self.unknown: dict[str, None] = {}
+        # Each substitution body's verbs, so the four readings of a command,
+        # and their own readings of a nested body, classify it once.
+        self.bodies: dict[str, set[str]] = {}
 
 
 def _tokenize(segment: str) -> list[str]:
@@ -529,37 +510,13 @@ def _git_subcommand(tokens: list[str]) -> str | None:
     return None if index is None else tokens[index].lower()
 
 
-@functools.lru_cache(maxsize=1)
-def _git_command_names() -> frozenset[str]:
-    """Every command git runs before an alias: `git --list-cmds=main,others`.
-
-    `main` is git's exec-path (its own commands and the external ones shipped
-    there), `others` a `git-<name>` command on PATH, which git also runs before
-    an alias of that name. Empty when git cannot say, which clears nothing.
-    """
-    try:
-        out = subprocess.run(
-            ["git", "--list-cmds=main,others"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return frozenset()
-    if out.returncode != 0:
-        return frozenset()
-    return frozenset(line.strip() for line in out.stdout.splitlines() if line.strip())
-
-
 def _unknown_subcommand_verbs(args: list[str], scope: _CommandScope | None) -> set[str]:
-    """Both verbs for `git <args>` when its subcommand is not one git runs first.
+    """Both verbs for `git <args>` when its subcommand is not one of git's own.
 
-    Empty for one of git's own commands (_GIT_COMMANDS, then the exec-path),
-    and for an external `git-<name>` git finds on PATH, unless the command
-    moves where git looks (`--exec-path` ahead of the subcommand, or
-    _CommandScope.moves_path). Anything else, an alias or a typo, counts as
-    both verbs and is recorded for the deny's hint.
+    Empty for a built-in command (_GIT_COMMANDS) and, while the command does
+    not mention git's exec-path, for one git ships as a script there
+    (_GIT_SCRIPT_COMMANDS). Anything else counts as both verbs and is recorded
+    on the scope, when it has a name's shape, for the deny's hint.
     """
     index = _git_subcommand_index(args)
     if index is None:
@@ -567,25 +524,36 @@ def _unknown_subcommand_verbs(args: list[str], scope: _CommandScope | None) -> s
     name = args[index]
     if name in _GIT_COMMANDS:
         return set()
-    exec_path_moved = any(
-        option == "--exec-path" or option.startswith("--exec-path=") for option in args[:index]
-    )
-    if not exec_path_moved and not (scope and scope.moves_path) and name in _git_command_names():
+    if name in _GIT_SCRIPT_COMMANDS and not (scope and scope.moves_exec_path):
         return set()
-    _UNKNOWN_SUBCOMMANDS.append(name)
+    if scope is not None and _NAME_SHAPE.match(name):
+        scope.unknown.setdefault(name, None)
     return set(_UNRESOLVED_VERBS)
 
 
 def _substitution_bodies(text: str) -> list[str]:
     """The commands inside each `$(...)`, `<(...)`, `>(...)` and backtick pair.
 
-    Parentheses are counted, not parsed, and quotes are not read: a body that
-    comes out wrong is classified anyway, which can only add verbs.
+    Text in single quotes is skipped, since the shell substitutes nothing
+    there (`echo 'run `git ci` later'`), and so is a backslash-escaped
+    character; double quotes do not stop a substitution. Parentheses are
+    counted, not parsed, and a heredoc is read as plain text: a body that comes
+    out wrong is classified anyway, which can only add verbs.
     """
     bodies: list[str] = []
     index = 0
+    in_double = False
     while index < len(text):
-        if text.startswith(("$(", "<(", ">("), index):
+        char = text[index]
+        if char == "\\":
+            index += 2
+        elif char == "'" and not in_double:
+            end = text.find("'", index + 1)
+            index = len(text) if end == -1 else end + 1
+        elif char == '"':
+            in_double = not in_double
+            index += 1
+        elif text.startswith(("$(", "<(", ">("), index):
             start = index = index + 2
             level = 1
             while index < len(text) and level:
@@ -595,7 +563,7 @@ def _substitution_bodies(text: str) -> list[str]:
                     level -= 1
                 index += 1
             bodies.append(text[start : index - 1 if level == 0 else index])
-        elif text[index] == "`":
+        elif char == "`":
             end = text.find("`", index + 1)
             end = len(text) if end == -1 else end
             bodies.append(text[index + 1 : end])
@@ -697,6 +665,11 @@ def _token_write_verbs(
         return _unknown_subcommand_verbs(tokens[1:], scope)
     if head in _SHELL_WRAPPERS:
         return _shell_payload_verbs(tokens[1:], depth, scope)
+    if head == "eval":
+        # `eval` runs its arguments, joined, as a command of its own.
+        if depth >= _MAX_SHELL_DEPTH:
+            return None
+        return _command_write_verbs(" ".join(tokens[1:]), depth + 1, scope)
     if head in _EXEC_WRAPPERS:
         # Every wrapper has its own option grammar (`timeout 30 …`, `nice -n 10
         # …`, `sudo -u u …`, `stdbuf -oL …`), and modelling them one by one is
@@ -727,7 +700,13 @@ def _segment_write_verbs(segment: str, depth: int, scope: _CommandScope | None =
         verbs = _anywhere_write_verbs(segment)
         if depth < _MAX_SHELL_DEPTH:
             for body in _substitution_bodies(segment):
-                verbs |= _command_write_verbs(body, depth + 1, scope)
+                if scope is None:
+                    verbs |= _command_write_verbs(body, depth + 1, scope)
+                    continue
+                if body not in scope.bodies:
+                    scope.bodies[body] = set()  # a body that holds itself stops here
+                    scope.bodies[body] = _command_write_verbs(body, depth + 1, scope)
+                verbs |= scope.bodies[body]
         try:
             tokens = _tokenize(segment)
         except ValueError:
@@ -802,15 +781,37 @@ def _command_write_verbs(command: str, depth: int, scope: _CommandScope | None =
     return verbs
 
 
+def _classify(command: str) -> tuple[set[str], list[str]]:
+    """The {'commit','push'} subset the command would perform, and the git
+    subcommands that are not git's own it counted as both, for the deny's
+    hint (_unknown_hint)."""
+    scope = _CommandScope(command)
+    return _command_write_verbs(command, 0, scope), list(scope.unknown)
+
+
 def _git_writes(command: str) -> set[str]:
     """Return the {'commit','push'} subset the command would perform.
 
     Classifies each shell segment independently, so a chained
     `git add && git commit` is still caught. A git subcommand that is not one
-    git runs before any alias counts as both (_unknown_subcommand_verbs).
+    of git's own counts as both (_unknown_subcommand_verbs).
     """
-    _UNKNOWN_SUBCOMMANDS.clear()
-    return _command_write_verbs(command, 0, _CommandScope(command))
+    return _classify(command)[0]
+
+
+def _unknown_hint(names: list[str]) -> str:
+    """The note a git gate's deny adds when the command runs a subcommand that
+    is not git's own: it may be why the command was denied, and what to do."""
+    if not names:
+        return ""
+    shown = ", ".join(f"`git {name}`" for name in names[:3])
+    return (
+        f" Note: this command runs {shown}, which is not one of git's built-in "
+        "commands, so this guard counts it as a commit and a push: it cannot tell "
+        "what an alias runs. If that is why it was denied, run the git command an "
+        "alias stands for, or an external command by its own name (`git-lfs pull` "
+        "for `git lfs pull`)."
+    )
 
 
 # --- Marker freshness -------------------------------------------------------
@@ -2333,9 +2334,11 @@ def main() -> None:
     if not isinstance(command, str):
         _allow()
 
-    verbs = _git_writes(command)
+    global _DENY_HINT
+    verbs, unknown = _classify(command)
     if not verbs:
         _allow()
+    _DENY_HINT = _unknown_hint(unknown)
 
     protected = _protected_branches()
     branch = _current_branch(cwd)

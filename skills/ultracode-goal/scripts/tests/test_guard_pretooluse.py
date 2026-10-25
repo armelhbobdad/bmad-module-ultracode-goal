@@ -2581,7 +2581,19 @@ def test_a_git_alias_to_commit_or_push_is_denied(
         "echo $(git -C repo ci)",
         'echo "$(git ci)"',
         "x=`git ci`",
+        'echo "run `git ci` now"',
         "git --attr-source HEAD commit -m x",
+        # PATH or the exec-path moved where only a nested shell shows it, so an
+        # external or script command proves nothing; the guard asks neither.
+        "sh -c 'env PATH=/nonexistent /usr/bin/git zzfoo'",
+        'bash -c "env -i git zzfoo"',
+        "sh -c 'sudo git zzfoo'",
+        "eval 'PATH=/x git zzfoo'",
+        "git --exec-path=/x submodule status",
+        "GIT_EXEC_PATH=/x git submodule status",
+        "exec git ci",
+        # An external command, which may as well be an alias of its name.
+        "git lfs pull",
     ],
 )
 def test_a_subcommand_that_is_not_gits_own_counts_as_a_write(tmp_path: Path, command: str) -> None:
@@ -2605,8 +2617,25 @@ def test_a_deny_names_the_subcommand_and_says_what_to_run(tmp_path: Path) -> Non
 
     reason = _assert_protected_deny(protected, "git st")
 
-    assert "`git st`: not one of git's own commands" in reason
-    assert "Run the git command it stands for instead." in reason
+    assert "this command runs `git st`, which is not one of git's built-in commands" in reason
+    assert "run the git command an alias stands for" in reason
+    assert "`git-lfs pull` for `git lfs pull`" in reason
+
+
+def test_a_deny_for_a_literal_commit_carries_no_alias_hint(tmp_path: Path) -> None:
+    protected = _protected_repo(tmp_path)
+
+    reason = _assert_protected_deny(protected, "git commit -m x")
+
+    assert "Note: this command runs" not in reason
+
+
+def test_the_hint_quotes_only_name_shaped_subcommands(guard_module) -> None:
+    """A fragment torn from a quoted argument never reaches a deny's text, and a
+    name met in four readings is listed once."""
+    assert guard_module._classify("git 'x y'") == ({"commit", "push"}, [])
+    assert guard_module._classify("sh -c 'git zzfoo'") == ({"commit", "push"}, ["zzfoo"])
+    assert guard_module._classify('git zz && echo "$(git zz)" `git zz`')[1] == ["zz"]
 
 
 @pytest.mark.parametrize(
@@ -2619,6 +2648,11 @@ def test_a_deny_names_the_subcommand_and_says_what_to_run(tmp_path: Path) -> Non
         "git maintenance run",
         'git log --format="%h $(date)"',
         "npm test && git status --porcelain",
+        "GIT_PAGER=cat git log -1",
+        "LC_ALL=C git status",
+        "git submodule status",
+        "echo 'run `git ci` later'",
+        "git-lfs pull",
     ],
 )
 def test_gits_own_commands_stay_reads(tmp_path: Path, command: str) -> None:
@@ -2629,43 +2663,42 @@ def test_gits_own_commands_stay_reads(tmp_path: Path, command: str) -> None:
     _assert_no_deny(protected, command)
 
 
-def test_an_external_git_command_runs_before_an_alias_of_its_name(tmp_path: Path) -> None:
-    """Git runs a `git-<name>` from its exec-path or PATH before it looks for an
-    alias, so `git frob` with a `git-frob` on PATH is that command, unless the
-    command moves where git looks."""
+def test_an_external_git_command_counts_as_a_write_and_runs_by_its_own_name(
+    tmp_path: Path,
+) -> None:
+    """Git runs `git-<name>` before an alias of the name only when it finds it
+    on PATH, which can differ between this hook and the shell, or change inside
+    the command, so `git frob` counts as both verbs even with a `git-frob` on
+    the hook's PATH. The deny says to run it as `git-frob`, which is no git
+    subcommand at all."""
     protected = _protected_repo(tmp_path)
-    _git(protected, "config", "alias.frob", "commit")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     script = bin_dir / "git-frob"
-    script.write_text("#!/bin/sh\\necho frob\\n", encoding="utf-8")
+    script.write_text("#!/bin/sh\necho frob\n", encoding="utf-8")
     script.chmod(0o755)
     env = {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}
 
-    for command in ("git frob", "git -C . frob", "cd . && git frob", "git frob -m 'a b=c'"):
-        _assert_no_deny(protected, command, env)
+    reason = _assert_protected_deny(protected, "git frob", env)
+    assert "`git frob`" in reason and "by its own name" in reason
 
-    for command in (
-        "PATH=/nowhere git frob",
-        "env -i git frob",
-        "git --exec-path=/nowhere frob",
-        "GIT_EXEC_PATH=/nowhere git frob",
-    ):
-        _assert_protected_deny(protected, command, env)
+    _assert_no_deny(protected, "git-frob --help", env)
 
 
 def test_every_listed_git_command_is_one_git_knows(guard_module) -> None:
-    """A name on _GIT_COMMANDS is never looked up as an alias.
+    """A name on _GIT_COMMANDS is cleared with no lookup, so it must be a
+    built-in, which git runs before any alias whatever PATH says; a name on
+    _GIT_SCRIPT_COMMANDS must be one git ships in its exec-path. Listing a
+    name this git does not have would wave an alias of that name through."""
 
-    Git ignores an alias named like one of its commands, so listing a real
-    command costs nothing. Listing a name git does not know would wave an alias
-    of that name through, so every entry must be one this git lists.
-    """
-    out = subprocess.run(
-        ["git", "--list-cmds=main"], capture_output=True, text=True, check=True
-    ).stdout.split()
+    def listed(kind: str) -> set[str]:
+        out = subprocess.run(
+            ["git", f"--list-cmds={kind}"], capture_output=True, text=True, check=True
+        )
+        return set(out.stdout.split())
 
-    assert sorted(guard_module._GIT_COMMANDS - set(out)) == []
+    assert sorted(guard_module._GIT_COMMANDS - listed("builtins")) == []
+    assert sorted(guard_module._GIT_SCRIPT_COMMANDS - listed("main")) == []
 
 
 @pytest.mark.parametrize(
