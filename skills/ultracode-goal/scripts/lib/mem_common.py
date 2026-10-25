@@ -399,28 +399,44 @@ def write_state(impl_artifacts: str | os.PathLike[str], state: dict) -> Path:
     return path
 
 
-# The line exclude_state() adds to the repository's .git/info/exclude. It
-# matches the latch and the temporary file write_state() renames into it, so
-# neither shows in `git status` on a tracked artifacts folder (where the latch
-# would trip preflight's git_clean blocker on every run) and a `git add -A`
-# never stages them (the latch committed, then a tracked deletion once
-# unlatch removes it).
-STATE_EXCLUDE_PATTERN = ".mem-state*"
+# The latch's line in the repository's .git/info/exclude, which
+# exclude_state() adds: the latch's file name with a `*`, so it matches the
+# latch and the temporary file write_state() renames into it, anchored to the
+# artifacts folder so no other file of that name is hidden. Neither then shows
+# in `git status` on a tracked artifacts folder (where the latch would trip
+# preflight's git_clean blocker on every run), and a `git add -A` never stages
+# them (the latch committed, then a tracked deletion once unlatch removes it).
+_STATE_EXCLUDE_NAME = ".mem-state*"
 _STATE_EXCLUDE_COMMENT = "# UltraCode Goal run latch (mem_recall.py latch)"
+# The characters an ignore pattern reads as a glob or an escape.
+_IGNORE_SPECIAL = re.compile(r"([\\*?\[])")
+
+
+def state_exclude_line(prefix: str) -> str:
+    """The exclude line for a latch whose folder sits at ``prefix`` in the work tree.
+
+    ``prefix`` is ``git rev-parse --show-prefix`` run in the artifacts folder:
+    its path from the work tree's top, with a trailing ``/``, or ``""`` at the
+    top itself. Glob characters in it are escaped, so a folder named
+    ``art[1]`` matches only itself.
+    """
+    return "/" + _IGNORE_SPECIAL.sub(r"\\\1", prefix) + _STATE_EXCLUDE_NAME
 
 
 def exclude_state(impl_artifacts: str | os.PathLike[str]) -> list[str]:
     """Keep the latch out of git; return the notes to print (none when it is out).
 
-    Adds STATE_EXCLUDE_PATTERN to the exclude file of the repository holding
+    Adds state_exclude_line() to the exclude file of the repository holding
     ``impl_artifacts`` (``git rev-parse --git-path info/exclude``, so a linked
-    worktree writes its main repository's file), once: a pattern already there
+    worktree writes its main repository's file), once: a line already there
     is left alone. A folder git does not see (no repository, or outside the
     work tree) needs nothing and gets nothing. Exclusion cannot hide a latch
     git already tracks, as a run on an older release could commit it: that one
     gets ``NOTE recall-latch-visible``, since untracking it is a change to the
-    repository for the person to make. An exclude file that cannot be read or
-    written gets the same note with its error. Never raises.
+    repository for the person to make, from their own terminal once no run is
+    active (while a latch is present the guard denies a command that names it).
+    An exclude file that cannot be read or written gets the same note with its
+    error. Never raises.
     """
     impl = Path(impl_artifacts)
     code, inside = _git(impl, "rev-parse", "--is-inside-work-tree")
@@ -432,24 +448,29 @@ def exclude_state(impl_artifacts: str | os.PathLike[str]) -> list[str]:
     if code == 0 and tracked:
         notes.append(
             f"{NOTE_RECALL_LATCH_VISIBLE}: git tracks the run latch {latch}, so it shows "
-            "as a change in every run; untrack it once by hand with "
-            f"`git rm --cached {latch}` and commit that"
+            "as a change in every run; once no run is active, untrack it from a "
+            f"terminal of your own with `git rm --cached {latch}` and commit that "
+            "(while a latch is present, the guard denies a command that names it)"
         )
+    code, prefix = _git(impl, "rev-parse", "--show-prefix")
+    if code != 0:
+        return notes
+    line = state_exclude_line(prefix)
     code, rel = _git(impl, "rev-parse", "--git-path", "info/exclude")
     if code != 0 or not rel:
         return notes
     exclude = Path(rel) if os.path.isabs(rel) else impl / rel
     try:
         text = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
-        if STATE_EXCLUDE_PATTERN in text.splitlines():
+        if line in text.splitlines():
             return notes
         lead = "" if not text or text.endswith("\n") else "\n"
         exclude.parent.mkdir(parents=True, exist_ok=True)
         with open(exclude, "a", encoding="utf-8") as handle:
-            handle.write(f"{lead}{_STATE_EXCLUDE_COMMENT}\n{STATE_EXCLUDE_PATTERN}\n")
+            handle.write(f"{lead}{_STATE_EXCLUDE_COMMENT}\n{line}\n")
     except (OSError, ValueError) as exc:  # ValueError: not UTF-8
         notes.append(
-            f"{NOTE_RECALL_LATCH_VISIBLE}: could not add {STATE_EXCLUDE_PATTERN} to "
+            f"{NOTE_RECALL_LATCH_VISIBLE}: could not add {line} to "
             f"{exclude} ({exc}), so git can see the run latch {latch}"
         )
     return notes

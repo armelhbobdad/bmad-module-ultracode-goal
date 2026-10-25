@@ -488,6 +488,11 @@ def _exclude_lines(repo: Path) -> list[str]:
     return (repo / ".git" / "info" / "exclude").read_text(encoding="utf-8").splitlines()
 
 
+# The exclude line for _tracked_impl's folder: anchored to it, not to every
+# `.mem-state*` file in the repository.
+_IMPL_LINE = "/_bmad-output/implementation-artifacts/.mem-state*"
+
+
 @_needs_git
 def test_the_latch_on_a_tracked_artifacts_folder_never_reaches_git(tmp_path, home):
     # #160 item 1: the latch is written on every run, recall off included. On
@@ -508,7 +513,7 @@ def test_the_latch_on_a_tracked_artifacts_folder_never_reaches_git(tmp_path, hom
     _unlatch_out(_unlatch(impl, cwd=repo))
     assert _porcelain(repo) == ""
     _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
-    assert _exclude_lines(repo).count(mc.STATE_EXCLUDE_PATTERN) == 1
+    assert _exclude_lines(repo).count(_IMPL_LINE) == 1
 
 
 @_needs_git
@@ -527,7 +532,43 @@ def test_a_latch_git_already_tracks_is_named_in_a_note(tmp_path, home):
     assert len(out["notes"]) == 1
     assert out["notes"][0].startswith(f"{mc.NOTE_RECALL_LATCH_VISIBLE}: git tracks the run latch")
     assert "git rm --cached" in out["notes"][0]
-    assert mc.STATE_EXCLUDE_PATTERN in _exclude_lines(repo)
+    assert "terminal of your own" in out["notes"][0]
+    assert _IMPL_LINE in _exclude_lines(repo)
+
+
+@_needs_git
+def test_the_exclude_line_hides_only_the_latch_folders_files(tmp_path, home):
+    # The line is anchored to the artifacts folder: a project file elsewhere
+    # whose name starts with `.mem-state` stays visible and stageable.
+    repo = tmp_path / "widget"
+    _init_repo(repo)
+    impl = _tracked_impl(repo)
+    other = repo / "src" / ".mem-state-cache.json"
+    other.parent.mkdir()
+    other.write_text("{}\n", encoding="utf-8")
+
+    _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
+
+    assert _porcelain(repo) == "?? src/\n"
+    (impl / ".mem-state-x.tmp").write_text("", encoding="utf-8")
+    assert _porcelain(repo) == "?? src/\n"
+
+
+@_needs_git
+def test_a_folder_name_with_glob_characters_is_matched_literally(tmp_path, home):
+    repo = tmp_path / "widget"
+    _init_repo(repo)
+    impl = repo / "art[1]"
+    impl.mkdir()
+    (impl / "1-1-x.md").write_text("# story\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "story")
+
+    out = _latch_out(_latch_store(impl, repo, "--store", "", recall="off"))
+
+    assert out["notes"] == []
+    assert "/art\\[1]/.mem-state*" in _exclude_lines(repo)
+    assert _porcelain(repo) == ""
 
 
 @_needs_git
@@ -544,7 +585,7 @@ def test_a_latch_in_a_linked_worktree_is_excluded_by_its_main_repository(tmp_pat
     out = _latch_out(_latch_store(impl, worktree, "--store", "", recall="off"))
     assert out["notes"] == []
     assert _porcelain(worktree) == ""
-    assert mc.STATE_EXCLUDE_PATTERN in _exclude_lines(repo)
+    assert _IMPL_LINE in _exclude_lines(repo)
 
 
 @_needs_git
