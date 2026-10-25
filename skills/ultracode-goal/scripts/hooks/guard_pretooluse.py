@@ -399,31 +399,36 @@ _PAYLOAD_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
 # --- git aliases ------------------------------------------------------------
 # `git ci` runs `git commit` when `alias.ci = commit`, so a git subcommand that
 # is not a write verb is looked up as an alias before its segment is cleared.
-# Git ignores an alias named like one of its own commands, so a name on this
-# list is never looked up. Only real git commands belong on it: a name that is
-# not one could still be an alias, and listing it would wave that alias through.
+# Git ignores an alias named like one of its own commands, matching the name
+# case-sensitively (`git LOG` runs `alias.log`, since alias names are not), so
+# a subcommand spelled exactly as on this list is never looked up. Only real
+# git commands belong on it: a name that is not one could still be an alias,
+# and listing it would wave that alias through.
 _GIT_COMMANDS = frozenset(
     {
         "add", "am", "annotate", "apply", "archive", "bisect", "blame",
-        "branch", "bundle", "cat-file", "check-attr", "check-ignore",
-        "check-mailmap", "check-ref-format", "checkout", "checkout-index",
-        "cherry", "cherry-pick", "clean", "clone", "column", "commit-graph",
-        "commit-tree", "config", "count-objects", "credential", "describe",
-        "diff", "diff-files", "diff-index", "diff-tree", "difftool", "fetch",
-        "fetch-pack", "fmt-merge-msg", "for-each-ref", "format-patch", "fsck",
-        "gc", "grep", "hash-object", "help", "index-pack", "init",
-        "interpret-trailers", "log", "ls-files", "ls-remote", "ls-tree",
-        "mailinfo", "mailsplit", "merge", "merge-base", "merge-file",
-        "merge-tree", "mergetool", "mktag", "mktree", "mv", "name-rev",
-        "notes", "pack-objects", "pack-refs", "prune", "pull", "range-diff",
-        "read-tree", "rebase", "reflog", "remote", "repack", "replace",
-        "rerere", "reset", "restore", "rev-list", "rev-parse", "revert", "rm",
-        "send-pack", "shortlog", "show", "show-branch", "show-ref",
-        "sparse-checkout", "stash", "status", "stripspace", "submodule",
-        "switch", "symbolic-ref", "tag", "unpack-objects", "update-index",
-        "update-ref", "update-server-info", "var", "verify-commit",
-        "verify-pack", "verify-tag", "version", "whatchanged", "worktree",
-        "write-tree",
+        "branch", "bugreport", "bundle", "cat-file", "check-attr",
+        "check-ignore", "check-mailmap", "check-ref-format", "checkout",
+        "checkout-index", "cherry", "cherry-pick", "clean", "clone", "column",
+        "commit-graph", "commit-tree", "config", "count-objects", "credential",
+        "describe", "diff", "diff-files", "diff-index", "diff-tree",
+        "difftool", "fast-export", "fast-import", "fetch", "fetch-pack",
+        "filter-branch", "fmt-merge-msg", "for-each-ref", "for-each-repo",
+        "format-patch", "fsck", "gc", "grep", "hash-object", "help",
+        "index-pack", "init", "init-db", "instaweb", "interpret-trailers",
+        "log", "ls-files", "ls-remote", "ls-tree", "mailinfo", "mailsplit",
+        "maintenance", "merge", "merge-base", "merge-file", "merge-index",
+        "merge-tree", "mergetool", "mktag", "mktree", "multi-pack-index", "mv",
+        "name-rev", "notes", "pack-objects", "pack-refs", "patch-id", "prune",
+        "prune-packed", "pull", "quiltimport", "range-diff", "read-tree",
+        "rebase", "receive-pack", "reflog", "remote", "repack", "replace",
+        "request-pull", "rerere", "reset", "restore", "rev-list", "rev-parse",
+        "revert", "rm", "send-pack", "shortlog", "show", "show-branch",
+        "show-index", "show-ref", "sparse-checkout", "stash", "status",
+        "stripspace", "submodule", "switch", "symbolic-ref", "tag",
+        "unpack-objects", "update-index", "update-ref", "update-server-info",
+        "upload-archive", "upload-pack", "var", "verify-commit", "verify-pack",
+        "verify-tag", "version", "whatchanged", "worktree", "write-tree",
     }
 )
 
@@ -431,11 +436,21 @@ _GIT_COMMANDS = frozenset(
 # commit and push gates judge it, which is where the doubt belongs.
 _UNRESOLVED_VERBS = frozenset(_WRITE_VERBS)
 
-# A command that defines an alias (`git config alias.ci commit; git ci`,
-# `git -c alias.ci=commit ci`) or sets git's configuration through the
-# environment (`GIT_CONFIG_GLOBAL=<file> git ci`) can run an alias that the
-# configuration on disk does not show when the guard looks.
-_CONFIG_IN_COMMAND = re.compile(r"(?i:alias\.)|\bGIT_[A-Z0-9_]*=")
+# The global options that change which configuration git reads (the repository
+# it finds, or a value set on the command line), passed on to the alias lookup
+# so it reads what the command will. The others (`--no-pager`, `--help`, ...)
+# are left out of it.
+_GIT_CONFIG_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--config-env"})
+_GIT_CONFIG_FLAGS = frozenset({"--bare"})
+
+# Any variable a command sets (`HOME=`, `XDG_CONFIG_HOME=`, `GIT_CONFIG_GLOBAL=`,
+# the arguments of `env`) can move the configuration git reads, which a lookup
+# in the hook's own environment would not see.
+_ANY_ASSIGNMENT_WORD = re.compile(r"(?:^|[\s;&|(){}])[A-Za-z_][A-Za-z0-9_]*=")
+
+# The separators a command's segments run apart at, as _command_write_verbs
+# splits them: an earlier segment runs before a later one's alias does.
+_ANY_SEPARATOR = re.compile(r"&&|\|\||;|\||&|\n|\r")
 
 
 class _AliasScope(NamedTuple):
@@ -443,6 +458,20 @@ class _AliasScope(NamedTuple):
 
     cwd: str | None
     unsure: bool
+
+
+def _alias_scope(command: str, cwd: str | None) -> _AliasScope:
+    """The scope a command's aliases resolve in.
+
+    The lookup runs when the guard does, before any part of the command: a
+    command of several segments can define an alias, rewrite or include a
+    config file, or change directory before its git segment runs (`git config
+    alias.ci commit; git ci`, `cp x .git/config && git ci`, `cd other && git
+    ci`), and a variable it sets can point git at another configuration. Either
+    makes the lookup moot.
+    """
+    several = len([part for part in _ANY_SEPARATOR.split(command) if part.strip()]) > 1
+    return _AliasScope(cwd, several or bool(_ANY_ASSIGNMENT_WORD.search(command)))
 
 
 def _tokenize(segment: str) -> list[str]:
@@ -462,8 +491,8 @@ def _strip_assignments(tokens: list[str]) -> list[str]:
     return tokens[index:]
 
 
-def _git_subcommand(tokens: list[str]) -> str | None:
-    """The subcommand `git` would run, given the tokens that follow `git`."""
+def _git_subcommand_index(tokens: list[str]) -> int | None:
+    """Where the subcommand `git` would run sits among the tokens after `git`."""
     index = 0
     while index < len(tokens):
         token = tokens[index]
@@ -473,22 +502,49 @@ def _git_subcommand(tokens: list[str]) -> str | None:
         if token.startswith("-"):
             index += 1
             continue
-        return token.lower()
+        return index
     return None
 
 
+def _git_subcommand(tokens: list[str]) -> str | None:
+    """The subcommand `git` would run, given the tokens that follow `git`."""
+    index = _git_subcommand_index(tokens)
+    return None if index is None else tokens[index].lower()
+
+
+def _config_options(options: list[str]) -> tuple[str, ...]:
+    """The global options among `options` that change the configuration git reads."""
+    kept: list[str] = []
+    index = 0
+    while index < len(options):
+        token = options[index]
+        if token in _GIT_CONFIG_OPTIONS:
+            kept.extend(options[index : index + 2])
+            index += 2
+            continue
+        if token in _GIT_CONFIG_FLAGS or token.startswith(
+            tuple(f"{option}=" for option in _GIT_CONFIG_OPTIONS if option.startswith("--"))
+        ):
+            kept.append(token)
+        index += 2 if token in _GIT_VALUE_OPTIONS else 1
+    return tuple(kept)
+
+
 @functools.lru_cache(maxsize=32)
-def _git_alias(name: str, cwd: str | None) -> tuple[bool, str | None]:
+def _git_alias(name: str, cwd: str | None, options: tuple[str, ...] = ()) -> tuple[bool, str | None]:
     """`alias.<name>` as (answered, value); (True, None) when there is no alias.
 
-    `git config --get` exits 1 for a key that is not set (an invalid key name
-    included, which cannot be an alias either). Any other outcome, a timeout
-    or git missing among them, is not an answer, and the caller fails closed.
-    Cached because each command is classified under three separator sets.
+    Read with the command's own configuration options (_config_options), so
+    `git -C <repo> ci` and `git -c alias.ci=commit ci` are looked up where and
+    as they will run. `git config --get` exits 1 for a key that is not set (an
+    invalid key name included, which cannot be an alias either). Any other
+    outcome, a timeout or git missing among them, is not an answer, and the
+    caller fails closed. Cached because each command is classified under three
+    separator sets.
     """
     try:
         out = subprocess.run(
-            ["git", "config", "--get", f"alias.{name}"],
+            ["git", *options, "config", "--get", f"alias.{name}"],
             cwd=cwd or None,
             capture_output=True,
             text=True,
@@ -504,40 +560,42 @@ def _git_alias(name: str, cwd: str | None) -> tuple[bool, str | None]:
     return False, None
 
 
-def _alias_write_verbs(
-    args: list[str], verb: str | None, depth: int, scope: _AliasScope | None
-) -> set[str]:
+def _alias_write_verbs(args: list[str], depth: int, scope: _AliasScope | None) -> set[str]:
     """The write verbs `git <args>` runs when its subcommand is an alias.
 
-    Empty for a git command of its own, and for a name that is no alias (an
-    external `git-<name>` command, or a typo git will refuse). An alias to
-    another git command is classified as that command, alias chains included;
-    a `!` alias as the shell command it runs, read both by segment and by the
-    matches-anywhere scan, since a shell alias is often a function definition
-    (`!f() { git commit "$@"; }; f`) whose segments lead with no `git`. Doubt
-    resolves to both verbs: an option ahead of the subcommand (`-C`, `-c`,
-    `--git-dir` can each change which configuration git reads), a command that
-    itself defines an alias or sets git configuration (_CONFIG_IN_COMMAND), a
-    lookup that does not answer, and a chain past the recursion cap.
+    Empty for a git command of its own, spelled as git spells it, and for a
+    name that is no alias (an external `git-<name>` command, or a typo git will
+    refuse). An alias to another git command is classified as that command,
+    alias chains included, with the global options given ahead of it still in
+    force; a `!` alias as the shell command it runs, read both by segment and
+    by the matches-anywhere scan, since a shell alias is often a function
+    definition (`!f() { git commit "$@"; }; f`) whose segments lead with no
+    `git`. Doubt resolves to both verbs: a command whose lookup is moot
+    (_alias_scope), a lookup that does not answer, and a chain past the
+    recursion cap.
     """
-    if verb is None or verb in _GIT_COMMANDS:
+    index = _git_subcommand_index(args)
+    if index is None or args[index] in _GIT_COMMANDS:
         return set()
     scope = scope or _AliasScope(None, False)
-    if scope.unsure or args[0].lower() != verb or depth >= _MAX_SHELL_DEPTH:
+    if scope.unsure or depth >= _MAX_SHELL_DEPTH:
         return set(_UNRESOLVED_VERBS)
-    answered, value = _git_alias(verb, scope.cwd)
+    options = args[:index]
+    answered, value = _git_alias(args[index].lower(), scope.cwd, _config_options(options))
     if not answered:
         return set(_UNRESOLVED_VERBS)
     if value is None:
         return set()
     if value.startswith("!"):
         body = value[1:]
-        return _command_write_verbs(body, depth + 1, scope) | _anywhere_write_verbs(body)
+        inner = _alias_scope(body, scope.cwd)
+        inner = inner._replace(unsure=inner.unsure or scope.unsure)
+        return _command_write_verbs(body, depth + 1, inner) | _anywhere_write_verbs(body)
     try:
         expansion = _tokenize(value)
     except ValueError:
         return _anywhere_write_verbs(f"git {value}")
-    verbs = _token_write_verbs(["git", *expansion, *args[1:]], depth + 1, scope)
+    verbs = _token_write_verbs(["git", *options, *expansion, *args[index + 1 :]], depth + 1, scope)
     return set(_UNRESOLVED_VERBS) if verbs is None else verbs
 
 
@@ -603,7 +661,7 @@ def _token_write_verbs(
         verb = _git_subcommand(tokens[1:])
         if verb in _WRITE_VERBS:
             return {verb}
-        return _alias_write_verbs(tokens[1:], verb, depth, scope)
+        return _alias_write_verbs(tokens[1:], depth, scope)
     if head in _SHELL_WRAPPERS:
         return _shell_payload_verbs(tokens[1:], depth, scope)
     if head in _EXEC_WRAPPERS:
@@ -701,8 +759,7 @@ def _git_writes(command: str, cwd: str | None = None) -> set[str]:
     `git add && git commit` is still caught. A git alias is looked up in
     `cwd`'s configuration (_alias_write_verbs).
     """
-    scope = _AliasScope(cwd, bool(_CONFIG_IN_COMMAND.search(command)))
-    return _command_write_verbs(command, 0, scope)
+    return _command_write_verbs(command, 0, _alias_scope(command, cwd))
 
 
 # --- Marker freshness -------------------------------------------------------

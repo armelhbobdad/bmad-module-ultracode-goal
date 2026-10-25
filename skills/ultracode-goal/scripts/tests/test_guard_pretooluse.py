@@ -2523,22 +2523,27 @@ def test_a_git_alias_to_commit_or_push_is_denied(
     "command",
     [
         "git config alias.ci commit; git ci -m x",
-        "git -c alias.ci=commit ci -m x",
+        "printf '[alias]\\n ci = commit' >> .git/config; git ci -m x",
+        "git config include.path /tmp/aliases && git ci -m x",
+        "cd ../other && git ci -m x",
         "GIT_CONFIG_GLOBAL=/tmp/aliases git ci -m x",
+        "HOME=/tmp/h git ci -m x",
+        "XDG_CONFIG_HOME=/tmp/x git ci -m x",
         "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci GIT_CONFIG_VALUE_0=commit git ci",
-        "git -C . ci -m x",
     ],
 )
 def test_an_alias_the_guard_cannot_look_up_counts_as_a_write(
     tmp_path: Path, command: str
 ) -> None:
-    """An alias defined or redirected by the command itself fails closed.
+    """An alias the lookup cannot see in time fails closed.
 
-    The configuration on disk holds no `alias.ci` when the guard looks, so a
-    lookup would read `ci` as no alias at all. A command that defines an alias
-    or sets git configuration, and an option ahead of the subcommand, make the
-    lookup moot, and a subcommand that is not a git command then counts as both
-    write verbs.
+    The guard looks before any part of the command runs, and the configuration
+    on disk holds no `alias.ci` then. An earlier segment can define one by any
+    means (`git config`, a write to `.git/config`, an include) or change
+    directory, and a variable can point git at another configuration (`HOME`,
+    `XDG_CONFIG_HOME`, a `GIT_` one). So in a command of several segments, or
+    one that sets a variable, a subcommand that is not a git command counts as
+    both write verbs.
     """
     protected = _protected_repo(tmp_path)
 
@@ -2546,6 +2551,52 @@ def test_an_alias_the_guard_cannot_look_up_counts_as_a_write(
 
     assert code == 2, command
     assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    ("alias", "command"),
+    [
+        ("log", "git LOG"),
+        ("status", "git Status"),
+        ("ci", "git CI"),
+    ],
+)
+def test_a_git_command_name_in_another_case_is_looked_up_as_an_alias(
+    tmp_path: Path, alias: str, command: str
+) -> None:
+    """Git matches its own command names case-sensitively, alias names not.
+
+    `git LOG` is no git command, so git runs `alias.log`; the guard used to
+    lowercase the name, find `log` on its list and clear a real commit.
+    """
+    protected = _protected_repo(tmp_path)
+    _git(protected, "config", f"alias.{alias}", "commit -m x")
+
+    code, out = _run_hook(_bash_event(protected, command), protected)
+
+    assert code == 2, command
+    assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_an_alias_is_looked_up_with_the_commands_own_options(tmp_path: Path) -> None:
+    """`-C`, `-c` and `--git-dir` change the configuration git reads, so the
+    lookup passes them on: the alias is the other repository's, and an option
+    ahead of a subcommand that is no alias stays a read."""
+    protected = _protected_repo(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q")
+    _git(other, "config", "alias.ci", "commit")
+
+    for command in (f"git -C {other} ci -m x", "git -c alias.ci=commit ci -m x"):
+        code, out = _run_hook(_bash_event(protected, command), protected)
+        assert code == 2, command
+        assert "Protected-branch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    for command in ("git -C . lfs pull", "git --no-pager maintenance run", f"git -C {other} frobnicate"):
+        code, out = _run_hook(_bash_event(protected, command), protected)
+        assert code == 0, command
+        assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
 
 
 @pytest.mark.parametrize(
