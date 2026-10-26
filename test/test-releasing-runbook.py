@@ -553,7 +553,7 @@ def test_the_dist_tag_policy_and_its_post_publish_step():
     assert "`latest` is the only permanent dist-tag." in policy
     assert "`alpha`, `beta` and `rc` exist only while a prerelease line is open" in policy
     # The registry's stale tags are an observation with its date, not a fact.
-    assert re.search(r"On \d{4}-\d{2}-\d{2} npm still carried `alpha`", policy), policy
+    assert re.search(r"On \d{4}-\d{2}-\d{2} npm carried `latest` alone", policy), policy
     after = section("After the publish")
     assert "npm dist-tag rm bmad-module-ultracode-goal" in after
     assert '# expected: {"latest":"<version>"}' in after
