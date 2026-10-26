@@ -429,7 +429,7 @@ The npm dist-tag comes from the version, in the `Get new version and previous ta
 
 ### Dist-tag policy
 
-`latest` is the only permanent dist-tag. `alpha`, `beta` and `rc` exist only while a prerelease line is open: a line's first cut creates its tag, and the stable release that closes the line removes it in its post-publish steps ([§ After the publish](#after-the-publish)). An `npm install bmad-module-ultracode-goal@alpha` then fails when no alpha line is open, instead of installing a build older than `latest`. The release workflow cannot remove a tag: trusted publishing authenticates only `npm publish`, so `npm dist-tag rm` runs from a maintainer's npm login ([§ Preconditions](#preconditions)). On 2026-10-17 npm still carried `alpha` (`0.1.1-alpha.0`, from 2026-06-04), which predates this policy; the next stable release removes it in the same step.
+`latest` is the only permanent dist-tag. `alpha`, `beta` and `rc` exist only while a prerelease line is open: a line's first cut creates its tag, and the stable release that closes the line removes it in its post-publish steps ([§ After the publish](#after-the-publish)). An `npm install bmad-module-ultracode-goal@alpha` then fails when no alpha line is open, instead of installing a build older than `latest`. The release workflow cannot remove a tag: trusted publishing authenticates only `npm publish`, so `npm dist-tag rm` runs from a maintainer's npm login ([§ Preconditions](#preconditions)). On 2026-10-26 npm carried `latest` alone: 3.0.0's post-publish step removed `rc` (`3.0.0-rc.1`) and `alpha` (`0.1.1-alpha.0`, from 2026-06-04, which predated this policy).
 
 ### The docs site
 
