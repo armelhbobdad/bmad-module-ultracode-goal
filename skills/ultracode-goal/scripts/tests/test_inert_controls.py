@@ -622,6 +622,18 @@ def test_the_operator_doc_states_the_unit_of_record_and_the_store_rules():
         assert f"run {retired}" not in doc and f"`{retired}` to" not in doc
 
 
+def test_finalize_names_the_gate_status_for_a_run_that_evaluated_no_gate():
+    """A run that blocked before any gate had no value to pass, and the honest
+    one, NOT_EVALUATED, used to make the write skip its record."""
+    section = _recall_write_section()
+    step = section[section.index("**Write this run's record**"):section.index("**Always, on every path above**")]
+    assert "`--gate-status NOT_EVALUATED --verdict blocked`" in step
+    assert "writes that record like any other" in step
+    doc = _read(_RECALL_DOC)
+    assert "writes a record with gate status `NOT_EVALUATED` and verdict `blocked`" in doc
+    assert "never evaluated writes no record" not in doc
+
+
 def test_skill_md_names_the_store_not_claude_mem():
     text = _read(_SKILL)
     advisory = next(ln for ln in text.splitlines() if "Cross-Session Recall is advisory-only" in ln)

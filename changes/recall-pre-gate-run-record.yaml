@@ -1,0 +1,4 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  A run that blocks without a gate status (it escalates or hands off before its gate, or its gate comes back `NOT_EVALUATED`) now writes its Cross-Session Recall record: Finalize passes `--gate-status NOT_EVALUATED --verdict blocked`, and `mem_observation.py write` stores that record instead of printing `skip`. The next run's recall then shows that the run blocked, and a root cause it names counts toward recurrence. `NOT_EVALUATED` with any verdict other than `blocked` still writes no record.

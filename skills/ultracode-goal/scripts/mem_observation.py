@@ -16,10 +16,12 @@ Subcommands
 write
     Build the run payload from run facts. Every free-text fragment is redacted;
     root-cause classes are constrained to the 12-class TAXONOMY (unknown ->
-    "other"). A NOT_EVALUATED gate is SKIPPED (no record); WAIVED outcomes ARE
-    written. Add ``created_at_epoch`` (integer UTC ms, stamped now) and
-    ``project`` (the main worktree's directory name, display only), and create
-    this run's file in the local store,
+    "other"). A NOT_EVALUATED gate with verdict ``blocked`` (a run that stopped
+    before a gate ran, or on a gate it could not read) is written; with any
+    other verdict it is SKIPPED (no record). WAIVED outcomes ARE written. Add
+    ``created_at_epoch`` (integer UTC ms, stamped now) and ``project`` (the
+    main worktree's directory name, display only), and create this run's file
+    in the local store,
     ``<store>/<fingerprint-dir>/runs/<run_id>.jsonl``, through the immutable
     writer in lib/mem_common. A bad ``--run-id`` exits 2 before anything is
     touched. A byte that is not UTF-8 in a free-text argument is stored as
@@ -402,9 +404,14 @@ def cmd_write(args: argparse.Namespace) -> int:
     _replace_surrogates_in_text_args(args)
 
     gate_status = (args.gate_status or "").strip().upper()
-    if gate_status == "NOT_EVALUATED":
+    # A run that evaluated no gate (it escalated or handed off before Stage 5,
+    # or its gate could not be read) still blocked, and the next run must see
+    # it. Only an unevaluated gate with another verdict is refused, since
+    # NOT_EVALUATED never advances.
+    if gate_status == "NOT_EVALUATED" and (args.verdict or "").strip().lower() not in ("", "blocked"):
         print(json.dumps(
-            {"status": "skip", "reason": "gate NOT_EVALUATED; no record written", "notes": []},
+            {"status": "skip", "reason": "gate NOT_EVALUATED with a verdict other than blocked; no record written",
+             "notes": []},
             sort_keys=True,
         ))
         return 0
