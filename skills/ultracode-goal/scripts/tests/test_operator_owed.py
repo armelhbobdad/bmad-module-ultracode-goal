@@ -9,7 +9,7 @@ The field case: a story whose every test was green failed its gate at P1 75%,
 because one acceptance criterion carried a half only a person could measure (a
 Windows release build) as prose, TEA counted the whole AC PARTIAL, and the gate
 routed the FAIL to a re-loop no fix could ever satisfy. Define-Done now splits
-that half into its own AC tagged `**Gate-ability:** operator`, and gate.md asks
+that half into its own AC tagged `**Gate-ability:** operator-evidence`, and gate.md asks
 this script, on every FAIL, whether only such ACs are open. `owed: true`
 becomes an `operator-evidence-owed` escalation, which `drive_epic.py` reports
 as a handoff, so a wrong `true` would dress a real failure as routine. Every
@@ -20,8 +20,9 @@ closed direction is therefore pinned here:
 - the trace report is the story's own `trace-<id>.md`, and its
   `tempCoverageMatrixPath` names an absolute, PHASE_1_COMPLETE matrix whose
   counts, requirement recount and commit agree with the story's own summary;
-- every open requirement is `AC-<n>` and the story tags AC `<n>.` operator and
-  nothing else, inside its one `## Acceptance Criteria` section;
+- every open requirement is `AC-<n>` and the story tags AC `<n>.`
+  operator-evidence and nothing else, inside its one `## Acceptance Criteria`
+  section; a plain `operator` tag is work the dev agent builds, never owed;
 - a live record that failed is a finding, never owed evidence; a stale one is
   still owed;
 - anything unreadable gives false.
@@ -71,7 +72,7 @@ def story_text(tags: dict[int, str], extra: str = "") -> str:
     return f"# Story {STORY}\n\n## Acceptance Criteria\n\n{body}\n{extra}## Tasks\n\n- [ ] Task 1 (AC: 1)\n"
 
 
-SPLIT_TAGS = {n: "ci-machine" for n in range(1, 10)} | {10: "operator"}
+SPLIT_TAGS = {n: "ci-machine" for n in range(1, 10)} | {10: "operator-evidence"}
 
 
 def breakdown(reqs: list[tuple[str, str, str]], pct_key: str) -> dict:
@@ -230,7 +231,7 @@ def test_the_real_run_shape_is_not_owed(tmp_path):
     """The cycle-1 matrix of the field case, before any split: three ACs open.
 
     AC-4 was a real test gap and AC-2 needed a ruling, so the re-loop route was
-    right for this one, and no AC is tagged operator.
+    right for this one, and no AC is tagged operator-evidence.
     """
     open_ids = {"AC-2": "PARTIAL", "AC-4": "PARTIAL", "AC-9": "PARTIAL"}
     reqs = [(rid, prio, open_ids.get(rid, cov)) for rid, prio, cov in CLEAN if rid != "AC-10"]
@@ -257,18 +258,22 @@ def test_a_fail_with_no_open_criterion_is_not_owed(tmp_path):
     "story",
     [
         pytest.param(story_text(SPLIT_TAGS | {10: "partly-operator"}), id="unsplit-partly-operator"),
-        pytest.param(story_text(SPLIT_TAGS | {10: "Operator"}), id="tag-not-exactly-operator"),
+        pytest.param(story_text(SPLIT_TAGS | {10: "operator"}), id="plain-operator"),
+        pytest.param(story_text(SPLIT_TAGS | {10: "Operator-evidence"}), id="tag-not-exactly-operator-evidence"),
         pytest.param(
-            story_text(SPLIT_TAGS).replace("**Gate-ability:** operator.", "**Gate-ability:** operator.\n   **Gate-ability:** ci-machine."),
+            story_text(SPLIT_TAGS).replace(
+                "**Gate-ability:** operator-evidence.",
+                "**Gate-ability:** operator-evidence.\n   **Gate-ability:** ci-machine.",
+            ),
             id="mixed-tags",
         ),
         pytest.param(
             story_text({n: t for n, t in SPLIT_TAGS.items() if n != 10})
-            + "\n10. **Operator half.**\n   **Gate-ability:** operator.\n",
+            + "\n10. **Operator half.**\n   **Gate-ability:** operator-evidence.\n",
             id="tag-outside-the-ac-section",
         ),
         pytest.param(
-            story_text(SPLIT_TAGS, extra="10. **A second AC 10.**\n   **Gate-ability:** operator.\n\n"),
+            story_text(SPLIT_TAGS, extra="10. **A second AC 10.**\n   **Gate-ability:** operator-evidence.\n\n"),
             id="ac-numbered-twice",
         ),
         pytest.param(
@@ -282,7 +287,7 @@ def test_a_fail_with_no_open_criterion_is_not_owed(tmp_path):
         ),
     ],
 )
-def test_an_ac_the_story_does_not_tag_operator_alone_is_not_owed(project, story):
+def test_an_ac_the_story_does_not_tag_operator_evidence_alone_is_not_owed(project, story):
     project.story = story
     project.write()
     result = run(project.argv())
@@ -301,7 +306,80 @@ def test_an_open_id_that_is_not_an_ac_is_not_owed(tmp_path):
 def test_operator_acs_reads_only_the_ac_section():
     text = story_text(SPLIT_TAGS)
     assert owed_mod.operator_acs(text) == {10}
-    assert owed_mod.operator_acs(text.replace("operator.", "ci-machine.")) == set()
+    assert owed_mod.operator_acs(text.replace("operator-evidence.", "ci-machine.")) == set()
+    assert owed_mod.operator_acs(text.replace("operator-evidence.", "operator.")) == set()
+
+
+# --- a plain `operator` tag is built work, never owed evidence --------------------
+
+# GMC 96-0-j's shape. Six ACs carry the older plain `operator` tag, for work the
+# dev agent builds and a person or a script verifies (doc fixes, a CLAUDE.md pin,
+# ledger closures, a checklist run on a real build). AC 7 is the pin, and its own
+# verification is a machine check. Priorities as its test design set them.
+J_PRIORITY = {n: "P0" for n in (1, 2, 3, 4, 10, 11, 12)} | {5: "P1", 13: "P1"} | {n: "P2" for n in (6, 7, 8, 9)}
+J_TAGS = {n: "ci-machine" for n in (1, 2, 3, 4, 5, 11, 13)} | {n: "operator" for n in (6, 7, 8, 9, 10, 12)}
+J_AC7 = """7. **The pin lands where the next session will read it.**
+   **Verification:** `bun run check:claude-size` green; `check:no-emdash` green.
+   **Gate-ability:** {tag}.
+"""
+
+
+def j_story(tags: dict[int, str]) -> str:
+    text = story_text(tags)
+    generic = AC_TEMPLATE.format(n=7, tag=tags[7])
+    assert generic in text
+    return text.replace(generic, J_AC7.format(tag=tags[7]))
+
+
+def j_reqs(open_ids: dict[str, str]) -> list[tuple[str, str, str]]:
+    return [(f"AC-{n}", J_PRIORITY[n], open_ids.get(f"AC-{n}", "FULL")) for n in sorted(J_PRIORITY)]
+
+
+def test_a_plain_operator_ac_is_never_owed(tmp_path):
+    """The review's run: four plain-operator ACs open, AC 7's gap a missing pin a script checks.
+
+    Read as owed evidence, the story would stop for a person to record a result
+    for work a re-loop builds. The plain tag keeps the re-loop for every one.
+    """
+    reqs = j_reqs({"AC-6": "PARTIAL", "AC-7": "NONE", "AC-10": "NONE", "AC-12": "NONE"})
+    project = Project(tmp_path, reqs=reqs, tags=J_TAGS)
+    project.story = j_story(J_TAGS)
+    project.write()
+    assert "`bun run check:claude-size` green" in project.story_file.read_text(encoding="utf-8")
+    result = run(project.argv(profile="light"))
+    assert result["owed"] is False
+    assert result["open"] == ["AC-6", "AC-7", "AC-10", "AC-12"]
+    assert result["operator"] == []
+    assert result["assessed_commit"] is None
+    for rid in result["open"]:
+        assert any(
+            r.startswith(f"{rid} is open") and "operator-evidence, so a re-loop can change it" in r
+            for r in result["reasons"]
+        ), (rid, result["reasons"])
+
+
+def test_a_plain_operator_ac_open_beside_operator_evidence_ones_keeps_the_reloop(tmp_path):
+    """Define-Done retags the two real live-result ACs; the pin stays plain and stays built work.
+
+    While the pin is open the re-loop stands; once it is built, only the
+    operator-evidence ACs are open and they are owed.
+    """
+    tags = J_TAGS | {10: "operator-evidence", 12: "operator-evidence"}
+    project = Project(tmp_path, reqs=j_reqs({"AC-7": "NONE", "AC-10": "NONE", "AC-12": "NONE"}), tags=tags)
+    project.story = j_story(tags)
+    project.write()
+    result = run(project.argv(profile="light"))
+    assert result["owed"] is False
+    assert result["open"] == ["AC-7", "AC-10", "AC-12"]
+    assert result["operator"] == ["AC-10", "AC-12"]
+    assert any(r.startswith("AC-7 is open") for r in result["reasons"]), result["reasons"]
+
+    built = Project(tmp_path / "built", reqs=j_reqs({"AC-10": "NONE", "AC-12": "NONE"}), tags=tags)
+    built.story = j_story(tags)
+    built.write()
+    result = run(built.argv(profile="light"))
+    assert result["owed"] is True, result["reasons"]
+    assert result["open"] == result["operator"] == ["AC-10", "AC-12"]
 
 
 # --- live records -------------------------------------------------------------

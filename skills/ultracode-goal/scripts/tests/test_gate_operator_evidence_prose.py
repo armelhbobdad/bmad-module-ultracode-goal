@@ -12,11 +12,13 @@ instruction, which no script test reaches, so this file pins it where a run
 reads it:
 
   - define-done.md splits the operator half into its own AC tagged
-    `**Gate-ability:** operator` and scaffolds every other AC only;
+    `**Gate-ability:** operator-evidence` and scaffolds every other AC only;
+  - every surface keys the owed class on `operator-evidence`, and the plain
+    `operator` tag keeps its meaning, work the dev agent builds;
   - gate.md names the live results file trace reads, asks `operator_owed.py`
     on every FAIL BEFORE the re-loop route, escalates with kind
     `operator-evidence-owed` on `owed: true`, and parks an owed AC on advance
-    or defer;
+    or defer without claiming a P2 or P3 one cannot fail the gate;
   - execute.md names the kind as a live one, keeps it off ucg-dev-story's
     plate, and says to get an AC narrowed before pinning a stated bound;
   - ucg-resolve closes the escalation only with the records on disk;
@@ -42,6 +44,13 @@ DEFINE_DONE = (_REFS / "define-done.md").read_text(encoding="utf-8")
 EXECUTE = (_REFS / "execute.md").read_text(encoding="utf-8")
 FINALIZE = (_REFS / "finalize.md").read_text(encoding="utf-8")
 RESOLVE = (_SKILL_ROOT.parent / "ucg-resolve" / "SKILL.md").read_text(encoding="utf-8")
+_REPO_ROOT = _SKILL_ROOT.parents[1]
+GATE_MODEL = (_REPO_ROOT / "docs" / "gate-model.md").read_text(encoding="utf-8")
+HOW_IT_WORKS = (_REPO_ROOT / "docs" / "how-it-works.md").read_text(encoding="utf-8")
+FRAGMENT = (_REPO_ROOT / "changes" / "gate-operator-evidence-owed.yaml").read_text(encoding="utf-8")
+
+_EVIDENCE_TAG = "`**Gate-ability:** operator-evidence`"
+_PLAIN_TAG = "`**Gate-ability:** operator`"
 
 _ROUTE_BULLET = "- **A FAIL only operator evidence can change is not a re-loop.**"
 
@@ -132,10 +141,27 @@ def test_the_backfill_section_names_the_live_results_input():
 
 def test_an_owed_ac_is_parked_on_advance_and_defer():
     defer = next(ln for ln in GATE.splitlines() if ln.startswith("- **`defer`**"))
-    assert "**On `advance` or `defer`, an operator AC still owed its evidence is parked too**" in defer
+    assert "**On `advance` or `defer`, an operator-evidence AC still owed its evidence is parked too**" in defer
     assert "`source` `gate`" in defer
     advance = next(ln for ln in GATE.splitlines() if ln.startswith("- **`advance`**"))
-    assert "an operator AC still owed its evidence is parked on the ledger first" in advance
+    assert "an operator-evidence AC still owed its evidence is parked on the ledger first" in advance
+
+
+def test_parking_never_claims_a_p2_or_p3_criterion_cannot_fail_the_gate():
+    """TEA fails a gate whose overall coverage is under 80%, and that counts P2 and P3.
+
+    A split story with three covered ci-machine ACs and one uncovered P2
+    operator-evidence AC is at 75%, a FAIL: the parking sentence may say such
+    a criterion can leave the gate at PASS or CONCERNS, never that it cannot
+    fail it, and a FAIL goes to the operator check, not to the ledger.
+    """
+    defer = _norm(next(ln for ln in GATE.splitlines() if ln.startswith("- **`defer`**")))
+    assert "does not fail the gate over an uncovered P2 or P3" not in defer
+    assert "an uncovered P2 or P3 criterion may leave the gate at PASS or CONCERNS" in defer
+    assert "It still counts toward TEA's overall coverage, so it can also FAIL the gate" in defer
+    assert "a FAIL goes to `operator_owed.py` (the next bullet), never to this ledger" in defer
+    assert "does not fail the gate, at P2 or P3" not in _norm(FRAGMENT)
+    assert "It still counts toward TEA's overall coverage, so it can also fail the gate" in _norm(FRAGMENT)
 
 
 # --- define-done.md ---------------------------------------------------------------
@@ -144,13 +170,13 @@ def test_an_owed_ac_is_parked_on_advance_and_defer():
 def test_define_done_splits_the_operator_half_and_scaffolds_the_rest():
     step1 = DEFINE_DONE[DEFINE_DONE.index("1. **`ucg-create-story`**") : DEFINE_DONE.index("2. **`bmad-testarch-atdd`**")]
     assert "**A criterion with an operator half is split here.**" in step1
-    assert "`**Gate-ability:** operator`" in step1
+    assert _EVIDENCE_TAG in step1
     assert "recorded rather than gated" in step1, "the prose shape that held the field AC at PARTIAL is named"
     step2 = DEFINE_DONE[DEFINE_DONE.index("2. **`bmad-testarch-atdd`**") : DEFINE_DONE.index("**In `--light`:**")]
-    assert "**An operator AC gets no red-phase scaffold**" in step2
-    assert "scaffold every AC except the ones tagged `**Gate-ability:** operator`" in step2
+    assert "**An operator-evidence AC gets no red-phase scaffold**" in step2
+    assert "scaffold every AC except the ones tagged `**Gate-ability:** operator-evidence`," in step2
     exit_condition = _section(DEFINE_DONE, "## Exit condition")
-    assert "An operator AC needs no scaffold" in exit_condition
+    assert "An operator-evidence AC needs no scaffold" in exit_condition
 
 
 # --- execute.md, finalize.md, ucg-resolve -------------------------------------------
@@ -160,7 +186,10 @@ def test_execute_names_the_kind_and_the_two_story_loop_rules():
     sidecar = _section(EXECUTE, "### Escalation sidecar")
     assert "`operator-evidence-owed` is a live `kind` too" in sidecar
     loop = EXECUTE[EXECUTE.index("### The story loop") : EXECUTE.index("\n2. Run the tests")]
-    assert "**An operator AC is not `ucg-dev-story`'s to satisfy.**" in loop
+    assert "**An operator-evidence AC is not `ucg-dev-story`'s to satisfy.**" in loop
+    rule = loop[loop.index("**An operator-evidence AC is not") :].split("\n\n")[0]
+    assert f"When the story carries an AC tagged {_EVIDENCE_TAG}" in rule
+    assert f"An AC tagged plain {_PLAIN_TAG} is not one: it is work `ucg-dev-story` builds" in rule
     stated = "**Get an AC narrowed in writing before committing a case that pins behaviour it forbids.**"
     assert stated in loop
     paragraph = loop[loop.index(stated) :].split("\n\n")[0]
@@ -179,5 +208,40 @@ def test_ucg_resolve_closes_it_only_with_the_records_on_disk():
     text = _norm(close.group(0))
     assert "**Closing an `operator-evidence-owed` escalation needs the evidence on disk.**" in text
     assert "confirm a `status` `pass` record for every AC it lists, made at the commit it names" in text
+    assert "Those are the story's `**Gate-ability:** operator-evidence` ACs" in text
+    assert "a plain `operator` tag is work the dev agent builds, never evidence this close waits on" in text
     assert "If one is missing, say which and record `defer`" in text
     assert "This surface never writes a record itself" in text
+
+
+# --- the owed class's tag ------------------------------------------------------------
+
+
+_SENTENCE = re.compile(r"(?<=[.:;])\s+(?=[A-Z*`(])")
+
+
+def test_every_surface_keys_the_owed_class_on_operator_evidence():
+    """Stories UCG already wrote tag built work `operator` (GMC 96-0-j: code-comment fixes, a
+    CLAUDE.md pin a script checks, ledger closures). A rule keyed on that tag would tell
+    ucg-dev-story to build nothing for them and route their gaps to a person. So every
+    surface that names the owed class names `operator-evidence`, and the plain tag appears
+    only in a sentence that says it is work the dev agent builds.
+    """
+    surfaces = {
+        "gate.md": GATE,
+        "define-done.md": DEFINE_DONE,
+        "execute.md": EXECUTE,
+        "ucg-resolve": RESOLVE,
+        "docs/gate-model.md": GATE_MODEL,
+        "docs/how-it-works.md": HOW_IT_WORKS,
+        "changes fragment": FRAGMENT,
+    }
+    for name, text in surfaces.items():
+        flat = _norm(text)
+        assert _EVIDENCE_TAG in flat, name
+        for sentence in _SENTENCE.split(flat):
+            if _PLAIN_TAG in sentence:
+                assert "builds" in sentence, (name, sentence)
+    # Twin: the old wording, which keyed the class on the plain tag, fails the check.
+    old = "An AC tagged `**Gate-ability:** operator` is proven only through TEA's live verification results."
+    assert any(_PLAIN_TAG in s and "builds" not in s for s in _SENTENCE.split(old))

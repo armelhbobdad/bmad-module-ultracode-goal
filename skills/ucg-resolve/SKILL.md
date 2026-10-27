@@ -207,7 +207,9 @@ The two dispositions are genuinely different things, not two names for one:
   recorded the exhausted one has no claim on the resumed run.
   **Closing an `operator-evidence-owed` escalation needs the evidence on disk.** Read the
   live results file its `decision_needed` names and confirm a `status` `pass` record for
-  every AC it lists, made at the commit it names. If one is missing, say which and record
+  every AC it lists, made at the commit it names. Those are the story's
+  `**Gate-ability:** operator-evidence` ACs; a plain `operator` tag is work the dev agent
+  builds, never evidence this close waits on. If one is missing, say which and record
   `defer`. This surface never writes a record itself: the operator is its producer
   (`{ucg-root}/references/gate.md`, "Operator evidence is a recorded live result"). A
   ruling that narrows or moves the AC is the operator's story edit: record it, then close.

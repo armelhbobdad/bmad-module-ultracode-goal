@@ -7,7 +7,7 @@
 
 An acceptance criterion whose proof is a measurement only a person can make (a
 release build CI cannot run, a judgment no test can decide) is split by
-Define-Done into its own AC tagged `**Gate-ability:** operator`, proven by a
+Define-Done into its own AC tagged `**Gate-ability:** operator-evidence`, proven by a
 record in TEA's live verification results file. Until that record exists, TEA's
 trace counts the AC as uncovered, and at P0 or P1 the gate reads FAIL. gate_eval
 maps that FAIL to `reloop`, and no re-loop can produce the record: a real run
@@ -36,7 +36,7 @@ script cannot read gives false, which leaves the re-loop route as it was:
     recounts to those numbers, and its `source_sha`, when it has one, names the
     summary's commit;
   - every requirement below FULL is `AC-<n>`, and AC `<n>.` under the story
-    file's `## Acceptance Criteria` carries `**Gate-ability:** operator` and no
+    file's `## Acceptance Criteria` carries `**Gate-ability:** operator-evidence` and no
     other tag;
   - none of those ACs has a live record TEA classified `fail` or
     `contradicted`: a failed measurement is a finding, not owed evidence;
@@ -115,12 +115,13 @@ def _same_commit(a: str, b: str) -> bool:
 
 
 def operator_acs(story_text: str) -> set[int]:
-    """The AC numbers the story's `## Acceptance Criteria` section tags operator.
+    """The AC numbers the story's `## Acceptance Criteria` section tags operator-evidence.
 
     An AC counts only when its number starts exactly one top-level list item in
     the one such section, and every `**Gate-ability:**` tag inside it reads
-    `operator`. A second section, a repeated number, an untagged AC or a mixed
-    tag leaves the AC out, which keeps the re-loop route.
+    `operator-evidence`. A second section, a repeated number, an untagged AC, a
+    plain `operator` tag or a mixed tag leaves the AC out, which keeps the
+    re-loop route.
     """
     sections = _AC_SECTION.findall(story_text)
     if len(sections) != 1:
@@ -137,7 +138,7 @@ def operator_acs(story_text: str) -> set[int]:
             continue
         for tag in _TAG.findall(line):
             tags.setdefault(current, set()).add(tag)
-    return {n for n, found in tags.items() if found == {"operator"} and starts.get(n) == 1}
+    return {n for n, found in tags.items() if found == {"operator-evidence"} and starts.get(n) == 1}
 
 
 def _gate_reads_owed(args: argparse.Namespace, reasons: list[str]) -> bool:
@@ -257,7 +258,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         if not number or int(number.group(1)) not in tagged:
             reasons.append(
                 f"{rid} is open ({requirement.get('coverage')}) and is not an AC the story "
-                "tags **Gate-ability:** operator, so a re-loop can change it"
+                "tags **Gate-ability:** operator-evidence, so a re-loop can change it"
             )
             continue
         found = dispositions.get(rid, [])
