@@ -2075,41 +2075,176 @@ def test_unskip_listed_files_leave_input_documents_unread(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize(
-    "value",
+    ("value", "expected"),
     [
-        pytest.param(f"\n  - '{_ACCEPTANCE_REL}'", id="block-single-quoted"),
-        pytest.param(f'\n  - "{_ACCEPTANCE_REL}"', id="block-double-quoted"),
-        pytest.param(f"\n  - {_ACCEPTANCE_REL}", id="block-plain"),
-        pytest.param(f"\n- '{_ACCEPTANCE_REL}'", id="block-indentless"),
+        pytest.param(f"\n  - '{_ACCEPTANCE_REL}'", [_ACCEPTANCE_REL], id="block-single-quoted"),
+        pytest.param(f'\n  - "{_ACCEPTANCE_REL}"', [_ACCEPTANCE_REL], id="block-double-quoted"),
+        pytest.param(f"\n  - {_ACCEPTANCE_REL}", [_ACCEPTANCE_REL], id="block-plain"),
+        pytest.param(f"\n- '{_ACCEPTANCE_REL}'", [_ACCEPTANCE_REL], id="block-indentless"),
         pytest.param(
             f" # scaffolded\n  # API first\n  - '{_ACCEPTANCE_REL}' # red phase",
+            [_ACCEPTANCE_REL],
             id="comments",
         ),
-        pytest.param(f" ['{_ACCEPTANCE_REL}'] # one file", id="flow-trailing-comment"),
-        pytest.param(f" ['{_ACCEPTANCE_REL}']", id="flow-one-line"),
-        pytest.param(f"\n  [\n    '{_ACCEPTANCE_REL}',\n  ]", id="flow-multi-line"),
-        pytest.param(f" [\n  '{_ACCEPTANCE_REL}',\n]", id="flow-closed-at-column-0"),
-        pytest.param(f"\n  - '{_ACCEPTANCE_REL} (cases appended)'", id="with-note"),
-        pytest.param(f"\n  - '{{project-root}}/{_ACCEPTANCE_REL}'", id="project-root"),
+        pytest.param(
+            f" ['{_ACCEPTANCE_REL}'] # one file", [_ACCEPTANCE_REL], id="flow-trailing-comment"
+        ),
+        pytest.param(f" ['{_ACCEPTANCE_REL}']", [_ACCEPTANCE_REL], id="flow-one-line"),
+        pytest.param(
+            f"\n  [\n    '{_ACCEPTANCE_REL}',\n  ]", [_ACCEPTANCE_REL], id="flow-multi-line"
+        ),
+        pytest.param(
+            f" [\n  '{_ACCEPTANCE_REL}',\n]", [_ACCEPTANCE_REL], id="flow-closed-at-column-0"
+        ),
+        pytest.param(
+            f" ['{_ACCEPTANCE_REL} (AC #3)']", [_ACCEPTANCE_REL], id="flow-hash-in-note"
+        ),
+        pytest.param(
+            f"\n  - '{_ACCEPTANCE_REL} (cases appended)'", [_ACCEPTANCE_REL], id="with-note"
+        ),
+        pytest.param(
+            f"\n  - '{{project-root}}/{_ACCEPTANCE_REL}'",
+            [f"{{project-root}}/{_ACCEPTANCE_REL}"],
+            id="project-root",
+        ),
         pytest.param(
             f"\n  - 'src/sync/mod.rs (#[cfg(test)] mod tests)'\n  - '{_ACCEPTANCE_REL}'",
+            [_ACCEPTANCE_REL],
             id="non-js-entry-beside",
         ),
     ],
 )
-def test_unskip_listed_file_shapes_are_read(tmp_path: Path, value: str) -> None:
-    # A deny naming the file is what proves the reader found it: an allow could
-    # also mean it read nothing.
+def test_unskip_listed_file_shapes_are_read(
+    tmp_path: Path, guard_module, value: str, expected: list[str]
+) -> None:
+    # The reader's own result is what proves it parsed the shape: the body names
+    # no path, but a reader that read nothing would fall back to scanning the
+    # whole text, find the path in the frontmatter and deny all the same.
+    checklist = _listed_checklist(value, body="No paths in the body.\n")
+    assert guard_module._listed_test_files(checklist) == expected
     repo, impl, tests_root = _production_repo(
         tmp_path,
         staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
-        checklist=_listed_checklist(value, body="No paths in the body.\n"),
+        checklist=checklist,
     )
 
     code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
 
     assert code == 2
     assert _ACCEPTANCE_REL in _reason(out)
+
+
+# More listed files, for the lists whose second entry shares a line with a
+# first entry whose note holds a `#`.
+_SESSION_REL = "tests/acceptance/session.spec.ts"
+_LOGOUT_REL = "tests/acceptance/logout.spec.ts"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(
+            f" ['{_ACCEPTANCE_REL} (AC #3 cases appended)', '{_SESSION_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="flow-one-line",
+        ),
+        pytest.param(
+            f"\n  [\n    '{_ACCEPTANCE_REL} (AC #3)', '{_SESSION_REL}',\n  ]",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="flow-multi-line",
+        ),
+        pytest.param(
+            f" ['{_ACCEPTANCE_REL} (AC #3 cases appended)', '{_SESSION_REL}',\n"
+            f"    '{_LOGOUT_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL, _LOGOUT_REL],
+            id="flow-wrapped",
+        ),
+    ],
+)
+def test_unskip_listed_entry_after_a_hash_note_denies(
+    tmp_path: Path, guard_module, value: str, expected: list[str]
+) -> None:
+    # A `#` inside a quoted note starts no comment, so the entry after it on the
+    # same line is still listed. Here that entry is the one left skipped.
+    checklist = _listed_checklist(value, body="No paths in the body.\n")
+    assert guard_module._listed_test_files(checklist) == expected
+    staged = {rel: _CLEAN_ACCEPTANCE for rel in expected}
+    staged[_SESSION_REL] = _SKIPPED_ACCEPTANCE
+    repo, impl, tests_root = _production_repo(tmp_path, staged=staged, checklist=checklist)
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    assert f"the staged content of {_SESSION_REL} still contains" in _reason(out)
+
+
+def test_unskip_listed_hash_note_with_every_file_clean_is_allowed(
+    tmp_path: Path, guard_module
+) -> None:
+    # The one-line list Prettier keeps for a short value is valid YAML, so it is
+    # read, not denied as an unclosed `[` list.
+    checklist = _listed_checklist(
+        f" ['{_ACCEPTANCE_REL} (AC #3 cases appended)', '{_SESSION_REL}']",
+        body="No paths in the body.\n",
+    )
+    assert guard_module._listed_test_files(checklist) == [_ACCEPTANCE_REL, _SESSION_REL]
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE, _SESSION_REL: _CLEAN_ACCEPTANCE},
+        checklist=checklist,
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 0, "a valid list whose files are all staged clean must not deny"
+    assert out is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(
+            f" ['{_ACCEPTANCE_REL} (the ''smoke'' cases #3)', '{_SESSION_REL}',\n"
+            f"    '{_LOGOUT_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL, _LOGOUT_REL],
+            id="single-quote-escaped",
+        ),
+        pytest.param(
+            f' ["{_ACCEPTANCE_REL} (say \\" #3)", \'{_SESSION_REL}\',\n'
+            f"    '{_LOGOUT_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL, _LOGOUT_REL],
+            id="double-quote-escaped",
+        ),
+        pytest.param(
+            f" ['{_ACCEPTANCE_REL} (note\n    #3)', '{_SESSION_REL}',\n    '{_LOGOUT_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL, _LOGOUT_REL],
+            id="quoted-over-two-lines",
+        ),
+        pytest.param(
+            f" [{_ACCEPTANCE_REL} (it's appended), '{_SESSION_REL} (AC #3)', '{_LOGOUT_REL}',\n"
+            "  ]",
+            [_ACCEPTANCE_REL, _SESSION_REL, _LOGOUT_REL],
+            id="plain-apostrophe",
+        ),
+        pytest.param(
+            f" ['{_ACCEPTANCE_REL}', # was {_LOGOUT_REL}\n    '{_SESSION_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="flow-comment-between-entries",
+        ),
+        pytest.param(
+            f"\n  - '{_ACCEPTANCE_REL}' # was {_LOGOUT_REL}\n  - '{_SESSION_REL}'",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="block-trailing-comment",
+        ),
+    ],
+)
+def test_unskip_listed_reader_strips_only_comments(
+    guard_module, value: str, expected: list[str]
+) -> None:
+    # A `#` starts a comment only after whitespace and outside a quoted scalar,
+    # whatever quote escapes, line breaks or plain apostrophes come before it.
+    # PyYAML reads each of these values as the expected entries.
+    assert guard_module._listed_test_files(_listed_checklist(value)) == expected
 
 
 @pytest.mark.parametrize(
@@ -2156,14 +2291,17 @@ def test_unskip_malformed_listed_files_denies(
     ],
 )
 def test_unskip_listed_files_naming_no_test_file_fall_back_to_scan(
-    tmp_path: Path, value: str
+    tmp_path: Path, guard_module, value: str
 ) -> None:
     # TEA starts the list as `[]`; a run that stopped before filling it, or a
-    # stack whose tests are not JS, must not turn the clause off.
+    # stack whose tests are not JS, must not turn the clause off. The reader
+    # reads the list as empty, not as absent.
+    checklist = _listed_checklist(value, body=f"- `{_ACCEPTANCE_REL}`\n")
+    assert guard_module._listed_test_files(checklist) == []
     repo, impl, tests_root = _production_repo(
         tmp_path,
         staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
-        checklist=_listed_checklist(value, body=f"- `{_ACCEPTANCE_REL}`\n"),
+        checklist=checklist,
     )
 
     code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))

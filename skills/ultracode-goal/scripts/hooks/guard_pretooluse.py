@@ -1179,7 +1179,41 @@ def _checklist_test_files(text: str) -> list[str]:
 # checklist with no such list (hand-written, or older) is scanned whole, as is
 # one whose list names no JS/TS test file (TEA starts it as `[]`).
 _LISTED_KEY = re.compile(r"generatedTestFiles\s*:(.*)$")
-_COMMENT = re.compile(r"(?:^|\s)#.*$")  # a YAML comment, whole-line or trailing
+
+
+def _strip_comment(line: str, quote: str = "") -> tuple[str, str]:
+    """`line` up to its YAML comment, and the quote still open at its end.
+
+    A `#` starts a comment at the start of the line or after whitespace, and
+    only outside a single- or double-quoted scalar, so the `#3` of
+    `['a.spec.ts (AC #3)', 'b.spec.ts']` cuts off neither the rest of its
+    entry nor the entry after it. A quote opens a scalar only where one may
+    start: at the start of the line, after `[`, `{` or `,`, or after a `- `,
+    `? ` or `: ` indicator, so the `'` of a plain `it's` opens nothing.
+    `quote` is the one the line before left open, since a quoted scalar may
+    run over lines.
+    """
+    start = not quote  # whether a scalar may start here
+    i = 0
+    while i < len(line):
+        char = line[i]
+        if quote:
+            if char == "\\" and quote == '"':
+                i += 1  # an escaped character, such as \"
+            elif char == quote == "'" and line[i + 1:i + 2] == "'":
+                i += 1  # '' is a quote inside a single-quoted scalar
+            elif char == quote:
+                quote = ""
+        elif char == "#" and (i == 0 or line[i - 1].isspace()):
+            return line[:i], ""
+        elif char in "'\"" and start:
+            quote, start = char, False
+        elif not char.isspace():
+            spaced = i + 1 == len(line) or line[i + 1].isspace()
+            indicator = spaced and (char == ":" or (start and char in "-?"))
+            start = char in "[{," or indicator
+        i += 1
+    return line, quote
 
 
 def _listed_test_files(text: str) -> list[str] | None:
@@ -1188,9 +1222,11 @@ def _listed_test_files(text: str) -> list[str] | None:
     None when the checklist has no frontmatter or its frontmatter has no such
     key. Raises ValueError, saying what is wrong, when the key is there but its
     value is not a list this reader can take apart: `- ` items on the lines
-    under it, or a `[...]` list on one line or several. Entries go through
-    _TEST_FILE, so a listed source file, a Rust test or a note in parentheses
-    after a path is not read as an acceptance-test file.
+    under it, or a `[...]` list on one line or several. Comments are cut off
+    as _strip_comment reads them, so a `#` in a quoted note keeps the rest of
+    its line. Entries go through _TEST_FILE, so a listed source file, a Rust
+    test or a note in parentheses after a path is not read as an
+    acceptance-test file.
     """
     lines = text.lstrip("\ufeff").splitlines()
     if not lines or lines[0].rstrip() != "---":
@@ -1207,10 +1243,12 @@ def _listed_test_files(text: str) -> list[str] | None:
         return None
     if len(keys) > 1:
         raise ValueError("the key appears more than once")
-    inline = _COMMENT.sub("", _LISTED_KEY.match(block[keys[0]]).group(1)).strip()
+    key_line, quote = _strip_comment(block[keys[0]])
+    inline = _LISTED_KEY.match(key_line).group(1).strip()
     items: list[str] = []
     for line in block[keys[0] + 1:]:
-        item = _COMMENT.sub("", line).strip()
+        item, quote = _strip_comment(line, quote)
+        item = item.strip()
         if not item:
             continue
         if not line[0].isspace() and not item.startswith(("-", "]")):
