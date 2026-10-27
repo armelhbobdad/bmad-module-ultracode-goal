@@ -12,20 +12,25 @@ instruction, which no script test reaches, so this file pins it where a run
 reads it:
 
   - define-done.md splits the operator half into its own AC tagged
-    `**Gate-ability:** operator-evidence` and scaffolds every other AC only;
+    `**Gate-ability:** operator-evidence`, retags in place only an AC that asks
+    for nothing to be built or changed, and scaffolds every other AC only;
   - every surface keys the owed class on `operator-evidence`, and the plain
     `operator` tag keeps its meaning, work the dev agent builds;
   - gate.md names the live results file trace reads, asks `operator_owed.py`
     on every FAIL BEFORE the re-loop route, escalates with kind
-    `operator-evidence-owed` on `owed: true`, sends an AC whose counted record
-    TEA still holds below FULL to the re-loop, parks an owed AC on advance or
-    defer without claiming a P2 or P3 one cannot fail the gate, and deletes the
-    re-gate marker once a verdict is logged;
+    `operator-evidence-owed` on `owed: true`, keeps an AC whose counted record
+    TEA still holds below FULL with the operator, naming the records counted,
+    parks an owed AC on advance or defer without claiming a P2 or P3 one
+    cannot fail the gate, and deletes the re-gate marker once a verdict is
+    logged;
   - execute.md names the kind as a live one, keeps it off ucg-dev-story's
     plate, says to get an AC narrowed before pinning a stated bound, and
-    re-gates (never re-drives) a story whose escalation /ucg-resolve closed;
-  - ucg-resolve closes the escalation only with the records on disk, and that
-    close writes `.regate-<story_id>` and resets the story's turn counter;
+    re-gates (never re-drives) a story whose escalation /ucg-resolve closed,
+    taking step 5's red route when the re-measure is red;
+  - ucg-resolve closes the escalation only with the records on disk, a partly
+    recorded AC only on a record it does not already name or a written
+    narrowing, and that close writes `.regate-<story_id>` and resets the
+    story's turn counter;
   - finalize.md files it under the escalated route.
 
 test_operator_owed.py pins the script; this pins the routing. The documented
@@ -151,6 +156,18 @@ def test_an_owed_ac_is_parked_on_advance_and_defer():
     assert "an operator-evidence AC still owed its evidence is parked on the ledger first" in advance
 
 
+def test_a_partly_recorded_ac_is_owed_on_advance_and_defer_too():
+    """The FAIL route calls an AC TEA holds below FULL on counted records still
+    owed. A PASS or CONCERNS gate that leaves such a P2 or P3 AC open must park
+    its unrecorded part on the ledger, not read the counted record as enough."""
+    defer = _norm(next(ln for ln in GATE.splitlines() if ln.startswith("- **`defer`**")))
+    assert "or while TEA holds it below FULL with only the records it counted there" in defer
+    assert "for a partly recorded AC, the ids of the records TEA counted and the part still owed" in defer
+    # Twin: the test as first written read any counted `pass` record as enough.
+    old = defer.replace(", or while TEA holds it below FULL with only the records it counted there", "")
+    assert "or while TEA holds it below FULL" not in old
+
+
 def test_parking_never_claims_a_p2_or_p3_criterion_cannot_fail_the_gate():
     """TEA fails a gate whose overall coverage is under 80%, and that counts P2 and P3.
 
@@ -181,6 +198,57 @@ def test_define_done_splits_the_operator_half_and_scaffolds_the_rest():
     assert "scaffold every AC except the ones tagged `**Gate-ability:** operator-evidence`," in step2
     exit_condition = _section(DEFINE_DONE, "## Exit condition")
     assert "An operator-evidence AC needs no scaffold" in exit_condition
+
+
+_RETAG_CHECKS = {
+    "retags only an AC that builds or changes nothing": lambda s: (
+        "only when it asks the dev agent to build or change nothing: its whole content is a "
+        "measurement, run or observation a person makes and records" in s
+    ),
+    "tests for a change, not for who checks it": lambda s: (
+        "The test is whether the AC asks for anything to be built or changed, not who can check it" in s
+    ),
+    "an AC asking for a change keeps its tag": lambda s: (
+        "an AC that asks for a change (code, a comment, a doc, a ledger edit) keeps its tag "
+        "even when only a person's read can check it" in s
+    ),
+}
+
+
+def test_define_done_retags_in_place_only_an_ac_that_asks_for_no_change():
+    """Who can check an AC does not decide its tag; whether it asks for a change does.
+
+    GMC 96-0-j AC 6 asks for comment fixes that only a reviewer's read can
+    check. Retagged `operator-evidence`, Execute would have ucg-dev-story build
+    nothing for it and the gate would route the unbuilt fixes to a person. It
+    keeps its plain tag. AC 10, a checklist a person runs on a real build and
+    records, asks for nothing to be built, and is the AC the retag is for.
+    """
+    step1 = _norm(
+        DEFINE_DONE[DEFINE_DONE.index("1. **`ucg-create-story`**") : DEFINE_DONE.index("2. **`bmad-testarch-atdd`**")]
+    )
+    unmet = sorted(name for name, check in _RETAG_CHECKS.items() if not check(step1))
+    assert unmet == []
+    broad = (
+        "is not split: retag it in place, keeping its number, with `**Gate-ability:** operator-evidence`, "
+        "whatever tag it carried."
+    )
+    assert broad not in step1
+    # Twin: the broad wording, which retagged by who can check the AC, meets none of the checks.
+    old = (
+        "An AC whose split names only such a part, with nothing a script or test can decide, " + broad
+    )
+    assert sorted(name for name, check in _RETAG_CHECKS.items() if not check(old)) == sorted(_RETAG_CHECKS)
+    fragment = _norm(FRAGMENT)
+    assert "A criterion that is wholly operator evidence is retagged" not in fragment
+    assert (
+        "A criterion that asks for nothing to be built or changed, whose whole content is a measurement, "
+        "run or observation a person makes and records, is retagged `operator-evidence` in place." in fragment
+    )
+    assert (
+        "A criterion that asks for a change (code, a comment, a doc, a ledger edit) keeps its tag even when "
+        "only a person's read can check it." in fragment
+    )
 
 
 # --- execute.md, finalize.md, ucg-resolve -------------------------------------------
@@ -293,6 +361,24 @@ def test_execute_resume_rule_re_gates_a_closed_operator_evidence_story():
     assert "the re-gate a closed `operator-evidence-owed` escalation owes" in sweep
 
 
+def test_the_fourth_case_takes_step_5s_red_route_on_a_red_re_measure():
+    """Step 5's red route is a remediation commit, so "commit nothing" holds only
+    while the re-measure is green. On a red, the commit makes the records stale,
+    and the re-gate at the new HEAD escalates again rather than counting them."""
+    paragraph = _norm(EXECUTE[EXECUTE.index(_FOURTH_CASE) :].split("\n\n")[0])
+    assert "Commit nothing before that gate while step 5's re-measure is green" in paragraph
+    red = paragraph[paragraph.index("On a red, take step 5's red route") :]
+    for token in (
+        "remediate, write a fresh `.tests-ran-<story_id>` marker, re-commit",
+        "moves `HEAD` past the assessed commit, so the records no longer count",
+        "the `.regate-<story_id>` marker is stale",
+        "the re-gate at the new `HEAD` escalates `operator-evidence-owed` again at the new commit",
+    ):
+        assert token in red, token
+    step5 = next(ln for ln in EXECUTE.splitlines() if ln.startswith("5. **Re-verify on the committed HEAD.**"))
+    assert "A red means the story is **not** done: remediate, write a fresh `.tests-ran-<story_id>` marker" in step5
+
+
 def test_the_gate_deletes_the_regate_marker_once_the_verdict_is_logged():
     """Left on disk, a marker still naming HEAD would route the next resume to
     another re-gate of a story whose verdict already stands."""
@@ -306,7 +392,35 @@ def test_the_gate_deletes_the_regate_marker_once_the_verdict_is_logged():
     assert "the resume re-gates that commit rather than re-driving the story" in _norm(_operator_route())
 
 
-def test_a_counted_record_trace_holds_partial_takes_the_reloop():
+def test_a_counted_record_trace_holds_partial_stays_with_the_operator():
+    """A record TEA counted that covers only part of the AC leaves the rest to
+    the operator: no re-loop can record it, and narrowing the AC is the
+    operator's written decision (execute.md: "no re-loop changes the AC")."""
     route = _norm(_operator_route())
-    assert "already holds a `pass` record TEA counted at the assessed commit is not owed" in route
-    assert "the run takes the re-loop, and its `bmad-correct-course` narrows the AC" in route
+    assert "already holds a `pass` record TEA counted at the assessed commit is still owed" in route
+    assert (
+        "For each AC in `partial`, `decision_needed` names the record ids TEA already counted, says they "
+        "cover only part of the criterion, and asks the operator to record the rest or to narrow or move "
+        "the AC in writing" in route
+    )
+    assert "the run takes the re-loop" not in route
+    script = (_SKILL_ROOT / "scripts" / "operator_owed.py").read_text(encoding="utf-8")
+    for name, text in {
+        "gate.md": GATE,
+        "docs/gate-model.md": GATE_MODEL,
+        "changes fragment": FRAGMENT,
+        "operator_owed.py": script,
+    }.items():
+        assert not re.search(r"correct-course`? narrows", _norm(text)), name
+    assert "narrow the criterion through correct-course" not in _norm(script)
+    for name, text in {"docs/gate-model.md": GATE_MODEL, "changes fragment": FRAGMENT}.items():
+        assert "counted `pass` record" in text, name
+        assert "is still owed: the record covers only part of" in _norm(text), name
+    close = re.search(r"- \*\*`close`\*\*.*?(?=\n- \*\*`|\n\n)", RESOLVE, re.DOTALL)
+    assert close is not None
+    text = _norm(close.group(0))
+    assert (
+        "closes only on a `pass` record at that commit whose `id` is not among the ones the escalation "
+        "names, or on the operator's written narrowing or move of the AC" in text
+    )
+    assert "the records already counted are not enough, since re-gating them changes nothing" in text

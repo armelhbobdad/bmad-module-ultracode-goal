@@ -25,7 +25,8 @@ closed direction is therefore pinned here:
   section; a plain `operator` tag is work the dev agent builds, never owed;
 - a live record that failed is a finding, never owed evidence; a stale one is
   still owed; a counted one TEA still holds below FULL covers only part of the
-  criterion, which a re-loop's correct-course narrows, so it is not owed;
+  criterion, and only the operator can record the rest or narrow the AC, so it
+  is still owed, with `partial` naming the records TEA counted;
 - anything unreadable gives false.
 
 Run: uv run --with pytest pytest skills/ultracode-goal/scripts/tests/test_operator_owed.py -v
@@ -176,7 +177,8 @@ def test_only_an_open_operator_ac_is_owed(project):
     assert result["open"] == result["operator"] == ["AC-10"]
     assert result["assessed_commit"] == SHA
     assert result["evidence"] == {"AC-10": "none"}
-    assert set(result) == {"owed", "open", "operator", "evidence", "assessed_commit", "reasons"}
+    assert result["partial"] == {}
+    assert set(result) == {"owed", "open", "operator", "evidence", "partial", "assessed_commit", "reasons"}
     assert _tree(project.root) == before, "the check must read, never write"
 
 
@@ -402,34 +404,51 @@ def test_a_failed_record_is_a_finding_and_a_stale_one_is_still_owed(tmp_path, di
         assert any(disposition in r for r in result["reasons"])
 
 
-def test_a_counted_record_trace_still_holds_partial_is_not_owed(tmp_path):
-    """The record is already there at the assessed commit, and TEA held the AC
-    PARTIAL anyway, since the record exercises only part of the criterion. An
-    escalation would ask for a record that exists, /ucg-resolve's close would
-    change nothing, and the re-gate would FAIL the same way: the re-loop's
-    correct-course narrows the criterion instead."""
+def test_a_counted_record_trace_still_holds_partial_stays_with_the_operator(tmp_path):
+    """The records are already there at the assessed commit, and TEA held the AC
+    PARTIAL anyway, since they exercise only part of the criterion (a cold start
+    recorded on Windows, owed on macOS too). No re-loop can record the rest or
+    narrow the AC, so it stays owed, and `partial` names the records TEA already
+    counted: the escalation asks for the rest, and /ucg-resolve's close does not
+    take those same records as the rest."""
     reqs = [(rid, prio, "PARTIAL" if rid == "AC-10" else cov) for rid, prio, cov in CLEAN]
-    live = [
-        {
-            "id": f"{STORY}-LIVE-001",
+
+    def record(n: int, disposition: str, status: str = "pass") -> dict:
+        return {
+            "id": f"{STORY}-LIVE-00{n}",
             "requirement_id": "AC-10",
-            "status": "pass",
-            "disposition": "counted",
+            "status": status,
+            "disposition": disposition,
             "recorded_source_sha": SHA,
         }
-    ]
+
+    live = [record(2, "counted"), record(1, "counted")]
     project = Project(tmp_path, reqs=reqs, live=live).write()
     result = run(project.argv())
-    assert result["owed"] is False
-    assert result["open"] == ["AC-10"]
-    assert result["operator"] == [] and result["assessed_commit"] is None
+    assert result["owed"] is True, result["reasons"]
+    assert result["open"] == result["operator"] == ["AC-10"]
+    assert result["assessed_commit"] == SHA
+    assert result["evidence"] == {"AC-10": "counted"}
+    assert result["partial"] == {"AC-10": [f"{STORY}-LIVE-001", f"{STORY}-LIVE-002"]}
     reason = next(r for r in result["reasons"] if r.startswith("AC-10"))
-    assert "covers only part of the criterion" in reason
-    assert "narrow the criterion through correct-course, or record fuller evidence" in reason
-    # Twin: the same AC with its record made at another commit is still owed.
-    project.matrix["live_records"][0]["disposition"] = "stale"
+    assert "cover only part of the criterion" in reason
+    assert "the operator records the rest, or narrows or moves the AC in writing" in reason
+    assert not any("correct-course" in r for r in result["reasons"])
+    # Twin: a failed record beside the counted ones is a finding, and keeps the re-loop.
+    project.matrix["live_records"] = live + [record(3, "fail", "fail")]
     project.write()
-    assert run(project.argv())["owed"] is True
+    failed = run(project.argv())
+    assert failed["owed"] is False and failed["operator"] == [] and failed["partial"] == {}
+    # Twin: a counted record with no id cannot be named, so the check fails closed.
+    project.matrix["live_records"] = [record(1, "counted"), {**record(2, "counted"), "id": None}]
+    project.write()
+    nameless = run(project.argv())
+    assert nameless["owed"] is False and nameless["operator"] == [] and nameless["partial"] == {}
+    # Twin: the same AC with its record made at another commit is owed, with nothing counted.
+    project.matrix["live_records"] = [record(1, "stale")]
+    project.write()
+    stale = run(project.argv())
+    assert stale["owed"] is True and stale["partial"] == {}
 
 
 # --- the gate must be the full instrument, failing on coverage alone -------------

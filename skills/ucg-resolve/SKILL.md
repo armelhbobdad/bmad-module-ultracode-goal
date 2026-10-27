@@ -216,7 +216,11 @@ The two dispositions are genuinely different things, not two names for one:
   every AC it lists, made at the commit it names. Those are the story's
   `**Gate-ability:** operator-evidence` ACs; a plain `operator` tag is work the dev agent
   builds, never evidence this close waits on. If one is missing, say which and record
-  `defer`. This surface never writes a record itself: the operator is its producer
+  `defer`. An AC the escalation names as partly recorded, with the ids of the records TEA
+  already counted for it, closes only on a `pass` record at that commit whose `id` is not
+  among the ones the escalation names, or on the operator's written narrowing or move of
+  the AC: the records already counted are not enough, since re-gating them changes
+  nothing. This surface never writes a record itself: the operator is its producer
   (`{ucg-root}/references/gate.md`, "Operator evidence is a recorded live result"). A
   ruling that narrows or moves the AC is the operator's story edit: record it, then close.
   **That close also writes the story's re-gate marker and resets its turn counter.** Write

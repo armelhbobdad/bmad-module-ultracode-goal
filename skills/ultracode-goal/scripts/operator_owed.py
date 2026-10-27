@@ -40,13 +40,16 @@ script cannot read gives false, which leaves the re-loop route as it was:
     other tag;
   - none of those ACs has a live record TEA classified `fail` or
     `contradicted`: a failed measurement is a finding, not owed evidence;
-  - none of those ACs has a live record TEA classified `counted`: a pass at
-    the traced commit that TEA still holds below FULL covers only part of the
-    criterion, and recording it again changes nothing, so the re-loop's
-    correct-course narrows the criterion (or the operator records fuller
-    evidence);
+  - every live record TEA classified `counted` for those ACs carries an `id`;
   - the summary names the commit it measured (`source_sha`), which is the
     commit the record must be made at.
+
+An open AC with a live record TEA classified `counted` (a pass at the traced
+commit that TEA still holds below FULL) is still owed: the record covers only
+part of the criterion, and no re-loop can record the rest or narrow the AC,
+since both are the operator's. `partial` names the records TEA already counted
+for it, so the escalation can ask for the rest; re-gating those alone changes
+nothing.
 
 TEA's own per-criterion classification is trusted as given, the same trust the
 gate places in gate_status. The cross-checks catch a stale or foreign matrix,
@@ -54,8 +57,9 @@ not a criterion TEA classified wrongly.
 
 Prints one JSON object and exits 0: `owed`, `open` (the requirement ids below
 FULL), `operator` (the open ones owed operator evidence), `evidence` (each of
-those ACs' live record dispositions, or `none`), `assessed_commit` and
-`reasons`. An argument error exits 2.
+those ACs' live record dispositions, or `none`), `partial` (each of those ACs
+with a `counted` record, mapped to the sorted ids of the records TEA counted
+for it), `assessed_commit` and `reasons`. An argument error exits 2.
 
     uv run operator_owed.py --trace-output DIR --story 11-6 \\
         --story-file STORY.md --profile production --nfr NFR.md \\
@@ -86,7 +90,7 @@ _TAG = re.compile(r"\*\*Gate-ability:\*\*\s*`?([A-Za-z][A-Za-z-]*)`?")
 # Live record dispositions that say the measurement was made and failed.
 _REFUTED = ("fail", "contradicted")
 # The disposition TEA gives a `pass` record made at the commit it traced. An
-# open AC that holds one is not owed a record: TEA held it below FULL because
+# open AC that holds one is still owed the rest: TEA held it below FULL because
 # the record exercises only part of the criterion.
 _COUNTED = "counted"
 
@@ -182,6 +186,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         "open": [],
         "operator": [],
         "evidence": {},
+        "partial": {},
         "assessed_commit": None,
         "reasons": reasons,
     }
@@ -255,9 +260,13 @@ def evaluate(args: argparse.Namespace) -> dict:
 
     tagged = operator_acs(story_text)
     dispositions: dict[str, list[str]] = {}
+    counted_ids: dict[str, list[object]] = {}
     for record in live_records:
         if isinstance(record, dict) and isinstance(record.get("requirement_id"), str):
-            dispositions.setdefault(record["requirement_id"], []).append(str(record.get("disposition")))
+            disposition = str(record.get("disposition"))
+            dispositions.setdefault(record["requirement_id"], []).append(disposition)
+            if disposition == _COUNTED:
+                counted_ids.setdefault(record["requirement_id"], []).append(record.get("id"))
     for requirement in requirements:
         if requirement.get("coverage") == "FULL":
             continue
@@ -277,13 +286,17 @@ def evaluate(args: argparse.Namespace) -> dict:
                 f"{rid}: its recorded evidence is {', '.join(refuted)}; that is a finding, not owed evidence"
             )
             continue
-        if _COUNTED in found:
+        counted = counted_ids.get(rid, [])
+        if counted:
+            if not all(isinstance(i, str) and i.strip() for i in counted):
+                reasons.append(f"{rid}: a record TEA counted for it carries no id, so it cannot be named")
+                continue
+            out["partial"][rid] = sorted(set(counted))
             reasons.append(
-                f"{rid} is open ({requirement.get('coverage')}) with a pass record TEA counted at the "
-                "assessed commit, so the recorded evidence covers only part of the criterion: narrow "
-                "the criterion through correct-course, or record fuller evidence"
+                f"{rid} is open ({requirement.get('coverage')}) with pass records TEA counted at the "
+                f"assessed commit ({', '.join(out['partial'][rid])}), which cover only part of the "
+                "criterion: the operator records the rest, or narrows or moves the AC in writing"
             )
-            continue
         out["operator"].append(rid)
         out["evidence"][rid] = ", ".join(sorted(set(found))) or "none"
 
