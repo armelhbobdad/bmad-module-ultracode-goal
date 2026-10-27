@@ -1968,6 +1968,291 @@ def test_mutant_deny_on_empty_test_file_list_reds_doc_only_commit(tmp_path: Path
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+# --- Un-skip proof: the checklist's `generatedTestFiles` list -----------------
+# TEA's ATDD lists the test files it scaffolded in the checklist frontmatter, and
+# cites cases in its tables as `file::case`, often by bare file name. When that
+# list names a test file it is the whole set the clause reads; the body is
+# scanned only when the list is absent or names none. A list that is there but
+# cannot be read as a list denies.
+
+_LISTED_TABLE = (
+    "| Test (file::case) | Primary |\n"
+    "| --- | --- |\n"
+    "| `login.spec.ts::logs the user in` | **yes** |\n"
+)
+
+
+def _listed_checklist(value: str, body: str = _LISTED_TABLE, extra: str = "") -> str:
+    """A checklist in the shape TEA's ATDD writes: frontmatter whose
+    `generatedTestFiles` is `value` (the text after the key, newlines kept),
+    then a body citing cases by bare `file::case`."""
+    return (
+        "---\n"
+        "stepsCompleted: ['step-04c-aggregate']\n"
+        "storyKey: 'STORY-1'\n"
+        f"generatedTestFiles:{value}\n"
+        f"{extra}"
+        "---\n\n# ATDD Checklist - STORY-1\n\n" + body
+    )
+
+
+_LISTED_BLOCK = f"\n  - '{_ACCEPTANCE_REL}'"
+
+
+def test_unskip_listed_files_ignore_bare_file_case_references(tmp_path: Path) -> None:
+    # The reported defect: every listed file is staged clean, and the body cites
+    # a case by bare file name, which `git show :` cannot read.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        checklist=_listed_checklist(_LISTED_BLOCK),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 0, "a bare file::case reference must not deny a listed, clean file"
+    assert out is None
+
+    # Control: the same body with no frontmatter is scanned whole, and the
+    # bare name is exactly what the scan hands `git show :`.
+    (tests_root / _CHECKLIST_NAME).write_text(f"- `{_ACCEPTANCE_REL}`\n" + _LISTED_TABLE)
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+    assert code == 2
+    assert "git show :login.spec.ts" in _reason(out)
+
+
+def test_unskip_listed_file_still_skipped_denies(tmp_path: Path) -> None:
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
+        checklist=_listed_checklist(_LISTED_BLOCK),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    reason = _reason(out)
+    assert "Un-skip proof" in reason and _ACCEPTANCE_REL in reason
+    assert "still contains `test.skip(`" in reason
+
+
+def test_unskip_listed_file_not_staged_denies_naming_the_list(tmp_path: Path) -> None:
+    missing = "tests/acceptance/missing.spec.ts"
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={"story.txt": "story work"},
+        checklist=_listed_checklist(f"\n  - '{missing}'"),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    reason = _reason(out)
+    assert f"git show :{missing}" in reason
+    assert f"generatedTestFiles list of {_CHECKLIST_NAME}" in reason
+    assert "Empty-index guard" not in reason
+
+
+def test_unskip_listed_files_leave_input_documents_unread(tmp_path: Path) -> None:
+    # A test the story only read (listed in inputDocuments, cited in the body)
+    # may be skipped for reasons of its own, such as a later story's scaffold.
+    other = "tests/acceptance/later-story.spec.ts"
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        committed={other: _SKIPPED_ACCEPTANCE},
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        checklist=_listed_checklist(
+            _LISTED_BLOCK,
+            body=_LISTED_TABLE + f"\nSee also `{other}`.\n",
+            extra=f"inputDocuments:\n  - '{other}'\n",
+        ),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 0, "only the listed files are the story's acceptance tests"
+    assert out is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(f"\n  - '{_ACCEPTANCE_REL}'", id="block-single-quoted"),
+        pytest.param(f'\n  - "{_ACCEPTANCE_REL}"', id="block-double-quoted"),
+        pytest.param(f"\n  - {_ACCEPTANCE_REL}", id="block-plain"),
+        pytest.param(f"\n- '{_ACCEPTANCE_REL}'", id="block-indentless"),
+        pytest.param(
+            f" # scaffolded\n  # API first\n  - '{_ACCEPTANCE_REL}' # red phase",
+            id="comments",
+        ),
+        pytest.param(f" ['{_ACCEPTANCE_REL}'] # one file", id="flow-trailing-comment"),
+        pytest.param(f" ['{_ACCEPTANCE_REL}']", id="flow-one-line"),
+        pytest.param(f"\n  [\n    '{_ACCEPTANCE_REL}',\n  ]", id="flow-multi-line"),
+        pytest.param(f" [\n  '{_ACCEPTANCE_REL}',\n]", id="flow-closed-at-column-0"),
+        pytest.param(f"\n  - '{_ACCEPTANCE_REL} (cases appended)'", id="with-note"),
+        pytest.param(f"\n  - '{{project-root}}/{_ACCEPTANCE_REL}'", id="project-root"),
+        pytest.param(
+            f"\n  - 'src/sync/mod.rs (#[cfg(test)] mod tests)'\n  - '{_ACCEPTANCE_REL}'",
+            id="non-js-entry-beside",
+        ),
+    ],
+)
+def test_unskip_listed_file_shapes_are_read(tmp_path: Path, value: str) -> None:
+    # A deny naming the file is what proves the reader found it: an allow could
+    # also mean it read nothing.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
+        checklist=_listed_checklist(value, body="No paths in the body.\n"),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    assert _ACCEPTANCE_REL in _reason(out)
+
+
+@pytest.mark.parametrize(
+    ("value", "extra", "problem"),
+    [
+        pytest.param(f" '{_ACCEPTANCE_REL}'", "", "its value is not a list", id="scalar"),
+        pytest.param(
+            f"\n  [\n    '{_ACCEPTANCE_REL}',\n", "", "not closed by `]`", id="unclosed-flow"
+        ),
+        pytest.param(
+            f"\n  - '{_ACCEPTANCE_REL}'\n  {_ACCEPTANCE_REL}", "", "not a `- ` item",
+            id="stray-line",
+        ),
+        pytest.param(
+            _LISTED_BLOCK, f"generatedTestFiles:{_LISTED_BLOCK}\n", "more than once",
+            id="duplicate-key",
+        ),
+    ],
+)
+def test_unskip_malformed_listed_files_denies(
+    tmp_path: Path, value: str, extra: str, problem: str
+) -> None:
+    # The staged blob is clean and the body names it in full, so a scan of the
+    # body would allow this commit: the deny can only come from the list.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        checklist=_listed_checklist(value, body=f"`{_ACCEPTANCE_REL}`\n", extra=extra),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    reason = _reason(out)
+    assert "Un-skip proof" in reason and "generatedTestFiles" in reason
+    assert "cannot be read" in reason and problem in reason
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(" []", id="empty"),
+        pytest.param("\n  - 'src/sync/mod.rs (#[cfg(test)] mod tests)'", id="no-js-test"),
+    ],
+)
+def test_unskip_listed_files_naming_no_test_file_fall_back_to_scan(
+    tmp_path: Path, value: str
+) -> None:
+    # TEA starts the list as `[]`; a run that stopped before filling it, or a
+    # stack whose tests are not JS, must not turn the clause off.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
+        checklist=_listed_checklist(value, body=f"- `{_ACCEPTANCE_REL}`\n"),
+    )
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    assert _ACCEPTANCE_REL in _reason(out)
+
+
+def test_unskip_listed_reader_returns_none_without_frontmatter_key(guard_module) -> None:
+    read = guard_module._listed_test_files
+    assert read(_checklist_body(_ACCEPTANCE_REL)) is None  # no frontmatter
+    assert read("---\nstoryKey: 'STORY-1'\n---\n`a.spec.ts`\n") is None  # no key
+    assert read(f"---\ngeneratedTestFiles:{_LISTED_BLOCK}\n") is None  # never closed
+    assert read(f"---\ngeneratedTestFiles:{_LISTED_BLOCK}\n---\n") == [_ACCEPTANCE_REL]
+
+
+# --- Executed mutants of the generatedTestFiles reading ----------------------
+
+_UNSKIP_ENTRIES = "    entries = listed or _checklist_test_files(text)"
+_UNSKIP_MALFORMED = "    except ValueError as problem:\n        _deny(\n"
+
+
+def test_mutant_scan_only_reds_bare_reference_commit(tmp_path: Path) -> None:
+    """Twin: ignore the list and scan the whole text, as 3.0.0 did. The bare
+    `file::case` reference then denies the clean commit."""
+    mutant = _write_mutant(
+        tmp_path, "scan_only", _UNSKIP_ENTRIES, "    entries = _checklist_test_files(text)"
+    )
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        checklist=_listed_checklist(_LISTED_BLOCK),
+    )
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, _production_env(impl, tests_root)
+    )
+
+    assert code == 2, "the bare-reference allow assertion must red"
+    assert "git show :login.spec.ts" in _reason(out)
+
+
+def test_mutant_malformed_list_falls_back_allows_commit(tmp_path: Path) -> None:
+    """Twin: read a malformed list as an absent one. The body scan then allows
+    the commit, and the malformed-list deny assertion reds."""
+    mutant = _write_mutant(
+        tmp_path,
+        "malformed_fallback",
+        _UNSKIP_MALFORMED,
+        "    except ValueError as problem:\n        listed = None\n        if False:\n"
+        "            _deny(\n",
+    )
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        checklist=_listed_checklist(f" '{_ACCEPTANCE_REL}'", body=f"`{_ACCEPTANCE_REL}`\n"),
+    )
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, _production_env(impl, tests_root)
+    )
+
+    assert code == 0, "the malformed-list deny assertion must red"
+    assert out is None
+
+
+def test_mutant_empty_list_authoritative_allows_skipped_commit(tmp_path: Path) -> None:
+    """Twin: take an empty list as the whole set instead of falling back. The
+    body's skipped file is then never read and the commit is allowed."""
+    mutant = _write_mutant(
+        tmp_path,
+        "empty_authoritative",
+        _UNSKIP_ENTRIES,
+        "    entries = listed if listed is not None else _checklist_test_files(text)",
+    )
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _SKIPPED_ACCEPTANCE},
+        checklist=_listed_checklist(" []", body=f"- `{_ACCEPTANCE_REL}`\n"),
+    )
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, _production_env(impl, tests_root)
+    )
+
+    assert code == 0, "the empty-list fallback assertion must red"
+    assert out is None
+
+
 # ---------------------------------------------------------------------------
 # Verb anchoring: `git` must be the segment's LEADING token.
 #

@@ -25,9 +25,12 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      work), or while the staged-index probe cannot answer (fail closed).
   5. Un-skip proof: in production (an atdd-checklist for the current story is on
      disk), no `git commit` while the STAGED CONTENT of any acceptance-test file
-     that checklist enumerates still contains `test.skip(`. This reads the blob
-     being committed, not a diff, so it also catches a story's first commit,
-     where there is no prior blob to compare against.
+     that checklist enumerates still contains `test.skip(`. The files are the
+     ones its `generatedTestFiles` frontmatter lists; only a checklist with no
+     such list, or one naming no JS/TS test file, is scanned whole for
+     test-file paths. A list that cannot be read as a list denies. This reads
+     the blob being committed, not a diff, so it also catches a story's first
+     commit, where there is no prior blob to compare against.
   6. Cross-Session Recall, claude-mem: while a run latch (.mem-state.json) is
      present, every claude-mem MCP call (the plugin form and both bare-server
      forms, an MCP resource read or listing on a claude-mem server, and a
@@ -110,7 +113,9 @@ Config resolution (all optional, env wins so the conductor can inject per run):
                   SAME story id the tests-ran marker uses (the id resolved by
                   _current_story). A story_key/story_id drift here would make
                   the un-skip proof silently inert, the worst failure mode a
-                  deny guard has.
+                  deny guard has. The paths come from its `generatedTestFiles`
+                  frontmatter, the list TEA's ATDD writes of the test files it
+                  scaffolded (see _listed_test_files).
   Skip token matched: the literal `test.skip(`. That token is JS/Vitest-specific
                   (the Playwright/Vitest form TEA's ATDD generates, which is
                   web/JS-only today); a pytest or Go acceptance suite marks
@@ -1166,6 +1171,63 @@ def _checklist_test_files(text: str) -> list[str]:
     return found
 
 
+# TEA's ATDD writes the test files it scaffolded to the checklist's
+# `generatedTestFiles` frontmatter (step-04c sets it, step-05 keeps it). Its
+# prose and tables also cite files the story only read (`inputDocuments`), bare
+# `file::case` references, globs and partial paths, none of which `git show :`
+# can read, so when that list names a test file it is the whole set. A
+# checklist with no such list (hand-written, or older) is scanned whole, as is
+# one whose list names no JS/TS test file (TEA starts it as `[]`).
+_LISTED_KEY = re.compile(r"generatedTestFiles\s*:(.*)$")
+_COMMENT = re.compile(r"(?:^|\s)#.*$")  # a YAML comment, whole-line or trailing
+
+
+def _listed_test_files(text: str) -> list[str] | None:
+    """The acceptance-test paths the checklist's `generatedTestFiles` lists.
+
+    None when the checklist has no frontmatter or its frontmatter has no such
+    key. Raises ValueError, saying what is wrong, when the key is there but its
+    value is not a list this reader can take apart: `- ` items on the lines
+    under it, or a `[...]` list on one line or several. Entries go through
+    _TEST_FILE, so a listed source file, a Rust test or a note in parentheses
+    after a path is not read as an acceptance-test file.
+    """
+    lines = text.lstrip("\ufeff").splitlines()
+    if not lines or lines[0].rstrip() != "---":
+        return None
+    end = next(
+        (i for i in range(1, len(lines)) if lines[i].rstrip() in ("---", "...")),
+        None,
+    )
+    if end is None:
+        return None
+    block = lines[1:end]
+    keys = [i for i, line in enumerate(block) if _LISTED_KEY.match(line)]
+    if not keys:
+        return None
+    if len(keys) > 1:
+        raise ValueError("the key appears more than once")
+    inline = _COMMENT.sub("", _LISTED_KEY.match(block[keys[0]]).group(1)).strip()
+    items: list[str] = []
+    for line in block[keys[0] + 1:]:
+        item = _COMMENT.sub("", line).strip()
+        if not item:
+            continue
+        if not line[0].isspace() and not item.startswith(("-", "]")):
+            break  # the next key; a `- ` item or a list's `]` may sit at column 0
+        items.append(item)
+    if inline or (items and items[0].startswith("[")):
+        flow = " ".join([inline, *items]).strip()
+        if not flow.startswith("["):
+            raise ValueError("its value is not a list")
+        if not flow.endswith("]"):
+            raise ValueError("its `[` list is not closed by `]`")
+        return _checklist_test_files(flow[1:-1])
+    if any(not item.startswith("-") for item in items):
+        raise ValueError("a line under it is not a `- ` item")
+    return _checklist_test_files("\n".join(item[1:] for item in items))
+
+
 def _repo_relative(raw: str, cwd: str | None) -> str:
     """Normalize a checklist entry to the repo-relative form `git show :` needs.
 
@@ -1217,8 +1279,11 @@ def _unskip_gate(cwd: str | None, story: str | None) -> None:
       - no checklist for this story -> inert. That is the `--light` profile,
         where acceptance tests are not generated at all.
       - checklist present but unreadable -> deny (in scope, cannot verify).
+      - `generatedTestFiles` present but not readable as a list -> deny.
       - checklist naming no acceptance-test file -> inert. Doc-only and refactor
         stories are legitimate and must not be blocked.
+    The files are the JS/TS test paths `generatedTestFiles` lists, or, when it
+    is absent or lists none, every such path the checklist's text names.
     Every enumerated file is read from the index whether or not this commit
     touched it: the checklist, not the diff, says what the story must deliver.
     """
@@ -1247,7 +1312,21 @@ def _unskip_gate(cwd: str | None, story: str | None) -> None:
             "Repair or regenerate the checklist, then commit."
         )
 
-    files = [_repo_relative(entry, cwd) for entry in _checklist_test_files(text)]
+    try:
+        listed = _listed_test_files(text)
+    except ValueError as problem:
+        _deny(
+            "Un-skip proof: refusing `git commit` because the `generatedTestFiles` "
+            f"list in the frontmatter of {checklist} cannot be read ({problem}), "
+            "so the story's acceptance-test files cannot be enumerated. Failing "
+            "closed. Rewrite it as a YAML list, one repo-relative path per "
+            "`- '<path>'` line, in a prior, SEPARATE tool call, then commit."
+        )
+    source = (
+        f"the generatedTestFiles list of {checklist.name}" if listed else checklist.name
+    )
+    entries = listed or _checklist_test_files(text)
+    files = [_repo_relative(entry, cwd) for entry in entries]
     if not files:
         return  # checklist names no acceptance-test file (doc-only story)
 
@@ -1258,7 +1337,7 @@ def _unskip_gate(cwd: str | None, story: str | None) -> None:
             _deny(
                 "Un-skip proof: refusing `git commit` — `git show :"
                 f"{rel}` failed, so the staged content of an acceptance-test "
-                f"file named by {checklist.name} could not be read. Failing "
+                f"file named by {source} could not be read. Failing "
                 "closed. Stage that file (`git add <path>`) in a prior, "
                 "SEPARATE tool call, or fix the path the checklist names."
             )
