@@ -1181,19 +1181,25 @@ def _checklist_test_files(text: str) -> list[str]:
 _LISTED_KEY = re.compile(r"generatedTestFiles\s*:(.*)$")
 
 
-def _strip_comment(line: str, quote: str = "") -> tuple[str, str]:
-    """`line` up to its YAML comment, and the quote still open at its end.
+def _strip_comment(
+    line: str, quote: str = "", depth: int = 0, start: bool = True
+) -> tuple[str, str, int, bool]:
+    """`line` up to its YAML comment, the quote still open at its end, and how
+    many `[` or `{` collections are still open there.
 
     A `#` starts a comment at the start of the line or after whitespace, and
     only outside a single- or double-quoted scalar, so the `#3` of
     `['a.spec.ts (AC #3)', 'b.spec.ts']` cuts off neither the rest of its
     entry nor the entry after it. A quote opens a scalar only where one may
-    start: at the start of the line, after `[`, `{` or `,`, or after a `- `,
-    `? ` or `: ` indicator, so the `'` of a plain `it's` opens nothing.
-    `quote` is the one the line before left open, since a quoted scalar may
-    run over lines.
+    start: at the start of the line, after a `- `, `? ` or `: ` indicator, or
+    inside a `[` or `{` collection after its opening bracket or a `,`. So the
+    `'` of a plain `it's`, or of a plain block entry's `(AC 2, 'til done)`,
+    opens nothing. `quote` and `depth` are what the line before left open,
+    since a quoted scalar or a collection may run over lines.
     """
-    start = not quote  # whether a scalar may start here
+    # whether a scalar may start here; inside a flow collection a line break
+    # is only whitespace, so the line before decides it
+    start = not quote and (start or depth == 0)
     i = 0
     while i < len(line):
         char = line[i]
@@ -1205,15 +1211,23 @@ def _strip_comment(line: str, quote: str = "") -> tuple[str, str]:
             elif char == quote:
                 quote = ""
         elif char == "#" and (i == 0 or line[i - 1].isspace()):
-            return line[:i], ""
+            return line[:i], "", depth, start
         elif char in "'\"" and start:
             quote, start = char, False
+        elif char in "&!" and start:
+            while i + 1 < len(line) and not line[i + 1].isspace():
+                i += 1  # a node property: a node may still start after it
         elif not char.isspace():
             spaced = i + 1 == len(line) or line[i + 1].isspace()
             indicator = spaced and (char == ":" or (start and char in "-?"))
-            start = char in "[{," or indicator
+            opens = char in "[{" and (start or depth > 0)
+            if opens:
+                depth += 1
+            elif char in "]}" and depth:
+                depth -= 1
+            start = opens or (char == "," and depth > 0) or indicator
         i += 1
-    return line, quote
+    return line, quote, depth, start
 
 
 def _listed_test_files(text: str) -> list[str] | None:
@@ -1224,7 +1238,8 @@ def _listed_test_files(text: str) -> list[str] | None:
     value is not a list this reader can take apart: `- ` items on the lines
     under it, or a `[...]` list on one line or several. Comments are cut off
     as _strip_comment reads them, so a `#` in a quoted note keeps the rest of
-    its line. Entries go through _TEST_FILE, so a listed source file, a Rust
+    its line, and a line a quoted entry or an open `[` list runs onto, even at
+    column 0, continues it. Entries go through _TEST_FILE, so a listed source file, a Rust
     test or a note in parentheses after a path is not read as an
     acceptance-test file.
     """
@@ -1243,16 +1258,20 @@ def _listed_test_files(text: str) -> list[str] | None:
         return None
     if len(keys) > 1:
         raise ValueError("the key appears more than once")
-    key_line, quote = _strip_comment(block[keys[0]])
+    key_line, quote, depth, start = _strip_comment(block[keys[0]])
     inline = _LISTED_KEY.match(key_line).group(1).strip()
     items: list[str] = []
     for line in block[keys[0] + 1:]:
-        item, quote = _strip_comment(line, quote)
+        carried, nested = quote, depth
+        item, quote, depth, start = _strip_comment(line, quote, depth, start)
         item = item.strip()
         if not item:
             continue
-        if not line[0].isspace() and not item.startswith(("-", "]")):
-            break  # the next key; a `- ` item or a list's `]` may sit at column 0
+        if carried and items:
+            items[-1] += " " + item  # the quoted entry the line before left open
+            continue
+        if not line[0].isspace() and not nested and not item.startswith(("-", "]")):
+            break  # the next key; a `- ` item, a `]` or a line in an open list may sit at column 0
         items.append(item)
     if inline or (items and items[0].startswith("[")):
         flow = " ".join([inline, *items]).strip()

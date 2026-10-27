@@ -2159,13 +2159,35 @@ _LOGOUT_REL = "tests/acceptance/logout.spec.ts"
             [_ACCEPTANCE_REL, _SESSION_REL, _LOGOUT_REL],
             id="flow-wrapped",
         ),
+        pytest.param(
+            f"\n- '{_ACCEPTANCE_REL} (AC\n#3)'\n- '{_SESSION_REL}'",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="block-quoted-over-two-lines-at-column-0",
+        ),
+        pytest.param(
+            f"\n- {_ACCEPTANCE_REL} (AC 2, 'til done)\n# - {_LOGOUT_REL}\n- '{_SESSION_REL}'",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="block-plain-apostrophe-then-comment-at-column-0",
+        ),
+        pytest.param(
+            f"\n  - &files ['{_ACCEPTANCE_REL} (AC #3)', '{_SESSION_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="anchor-before-nested-flow",
+        ),
+        pytest.param(
+            f" ['{_ACCEPTANCE_REL} (note ]\n#3)', '{_SESSION_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="key-line-flow-quoted-over-two-lines-at-column-0",
+        ),
     ],
 )
 def test_unskip_listed_entry_after_a_hash_note_denies(
     tmp_path: Path, guard_module, value: str, expected: list[str]
 ) -> None:
-    # A `#` inside a quoted note starts no comment, so the entry after it on the
-    # same line is still listed. Here that entry is the one left skipped.
+    # A `#` inside a quoted note starts no comment, on the note's own line or the
+    # line it runs onto, and an apostrophe in a plain note opens no quote that
+    # would keep the comment after it. So the entry after the note is still
+    # listed. Here that entry is the one left skipped.
     checklist = _listed_checklist(value, body="No paths in the body.\n")
     assert guard_module._listed_test_files(checklist) == expected
     staged = {rel: _CLEAN_ACCEPTANCE for rel in expected}
@@ -2236,15 +2258,82 @@ def test_unskip_listed_hash_note_with_every_file_clean_is_allowed(
             [_ACCEPTANCE_REL, _SESSION_REL],
             id="block-trailing-comment",
         ),
+        pytest.param(
+            f"\n- '{_ACCEPTANCE_REL} (AC\n#3)'\n- '{_SESSION_REL}'",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="block-quoted-over-two-lines-at-column-0",
+        ),
+        pytest.param(
+            # What yaml.dump(width=53) writes for this list.
+            f"\n- '{_ACCEPTANCE_REL} (cases appended for AC\n  #3)'\n- {_SESSION_REL}",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="block-quoted-over-two-lines",
+        ),
+        pytest.param(
+            f"\n- '{_ACCEPTANCE_REL} (AC\n3)'\n- '{_SESSION_REL}'",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="block-quoted-over-two-lines-no-hash-at-column-0",
+        ),
+        pytest.param(
+            f"\n- '{_ACCEPTANCE_REL} (cases appended for\n  AC 3)'\n- {_SESSION_REL}",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="block-quoted-over-two-lines-no-hash",
+        ),
+        pytest.param(
+            f"\n- {_ACCEPTANCE_REL} (AC 2, 'til done)\n# - {_LOGOUT_REL}\n- '{_SESSION_REL}'",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="block-plain-apostrophe-then-comment-at-column-0",
+        ),
+        pytest.param(
+            f"\n  - {_ACCEPTANCE_REL} (AC 2, 'til done)\n  # - '{_LOGOUT_REL}'\n"
+            f"  - '{_SESSION_REL}'",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="block-plain-apostrophe-then-comment",
+        ),
+        pytest.param(
+            f"\n  - {_ACCEPTANCE_REL} (AC 2, 'til done) # was {_LOGOUT_REL}\n"
+            f"  - '{_SESSION_REL}'",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="block-plain-apostrophe-then-trailing-comment",
+        ),
+        pytest.param(
+            f"\n  - &files ['{_ACCEPTANCE_REL} (AC #3)', '{_SESSION_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="anchor-before-nested-flow",
+        ),
+        pytest.param(
+            f" ['{_ACCEPTANCE_REL} (note ]\n#3)', '{_SESSION_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="key-line-flow-quoted-over-two-lines-at-column-0",
+        ),
+        pytest.param(
+            f" ['{_ACCEPTANCE_REL}',\n'{_SESSION_REL}']",
+            [_ACCEPTANCE_REL, _SESSION_REL],
+            id="flow-entry-at-column-0",
+        ),
     ],
 )
 def test_unskip_listed_reader_strips_only_comments(
     guard_module, value: str, expected: list[str]
 ) -> None:
     # A `#` starts a comment only after whitespace and outside a quoted scalar,
-    # whatever quote escapes, line breaks or plain apostrophes come before it.
-    # PyYAML reads each of these values as the expected entries.
+    # whatever quote escapes, line breaks or plain apostrophes come before it,
+    # and a line a quoted entry or an open `[` list runs onto, even at column
+    # 0, continues it. PyYAML reads each of these values as the expected entries.
     assert guard_module._listed_test_files(_listed_checklist(value)) == expected
+
+
+def test_unskip_listed_reader_stops_at_the_next_key_after_a_wrapped_flow_entry(
+    guard_module,
+) -> None:
+    # Inside a `[` list a line break is only whitespace, so the `'` that starts
+    # the line a plain entry wraps onto opens no quote, and the key after the
+    # list still ends it. PyYAML reads the two entries and a separate key.
+    checklist = _listed_checklist(
+        f" [{_ACCEPTANCE_REL} (AC\n  'til done), {_SESSION_REL}]",
+        extra="inputDocuments:\n  - 'docs/prd.md'\n",
+    )
+    assert guard_module._listed_test_files(checklist) == [_ACCEPTANCE_REL, _SESSION_REL]
 
 
 @pytest.mark.parametrize(
