@@ -634,6 +634,33 @@ def test_finalize_names_the_gate_status_for_a_run_that_evaluated_no_gate():
     assert "never evaluated writes no record" not in doc
 
 
+_DECISION_PENDING_NO_CAUSE = (
+    "Name none either for a run that stopped on `decision-pending` (a resume that found the re-entry story's "
+    "escalation still open, per `references/execute.md`): the run that raised that escalation recorded its "
+    "root cause, and naming it again would make recall count one failure as recurring."
+)
+
+
+def _names_no_root_cause_on_decision_pending(step: str) -> bool:
+    return _DECISION_PENDING_NO_CAUSE in step
+
+
+def test_finalize_names_no_root_cause_for_a_decision_pending_stop():
+    """A resume that stops on `decision-pending` writes a NOT_EVALUATED blocked
+    record too. Naming the open escalation's root cause there gave every such
+    stop the same signature as the run that raised it, so recall reported one
+    unanswered decision as a recurring failure."""
+    section = _recall_write_section()
+    step = section[section.index("**Write this run's record**"):section.index("**Always, on every path above**")]
+    assert _names_no_root_cause_on_decision_pending(step)
+    # Twin: the step as first written, which named a root cause for every
+    # escalation and said nothing of `decision-pending`, fails the check.
+    pre_fix = step.replace(" " + _DECISION_PENDING_NO_CAUSE, "")
+    assert pre_fix != step
+    assert "Name a root cause for an escalation as for any blocked run, and none for a handoff." in pre_fix
+    assert not _names_no_root_cause_on_decision_pending(pre_fix)
+
+
 def test_skill_md_names_the_store_not_claude_mem():
     text = _read(_SKILL)
     advisory = next(ln for ln in text.splitlines() if "Cross-Session Recall is advisory-only" in ln)
