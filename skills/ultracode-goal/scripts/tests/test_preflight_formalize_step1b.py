@@ -102,6 +102,38 @@ def test_step1b_is_invocation_only():
         assert forbidden not in block, f"step-1b must not contain {forbidden!r} (sibling-owned)"
 
 
+def test_an_operator_scoped_run_names_its_stories():
+    block = re.sub(r"\s+", " ", _step1b_block(_text()))
+    assert "When Stage 1 recorded an operator-scoped subset" in block
+    assert "append one `--story <key>` per story in it" in block
+    assert "as its `sprint-status.yaml` row spells it" in block
+    # A mistyped or done key fails closed instead of narrowing the read.
+    assert "is a gap with `remediable: false` (`story_not_in_scope`)" in block
+    # Every later re-run carries the same flags.
+    assert "\"step 1b's command\", it means this command with those `--story` flags, unchanged" in block
+    # The default stays the whole not-done set, and headless never narrows it.
+    assert "Otherwise pass no `--story`" in block
+    assert "a headless run never narrows it" in block
+    inv_line = next(line for line in _text().splitlines() if _QUALIFIED_INVOCATION in line)
+    assert "--story" not in inv_line
+
+
+def test_step2_swaps_a_parent_set_done_for_its_children_on_a_scoped_run():
+    text = _text()
+    start = text.index(_STEP2_HEADING)
+    block = re.sub(r"\s+", " ", text[start : text.index("## 3.", start)])
+    assert (
+        "On an operator-scoped run, also take its key off step 1b's `--story` list "
+        "and add its child rows' keys, both before the closing re-run"
+    ) in block
+
+
+def test_stage1_records_the_operator_scoped_subset_by_key():
+    text = re.sub(r"\s+", " ", (_SKILL_ROOT / "references" / "ingest-and-scope.md").read_text(encoding="utf-8"))
+    assert "**An operator-scoped subset is recorded by key.**" in text
+    assert "Stage 2 passes each to the readiness check as `--story <key>`" in text
+
+
 def test_one_kernel_two_entry_points():
     if not _UCG_FORMALIZE_SKILL.exists():
         pytest.skip("ucg-formalize SKILL.md not present")

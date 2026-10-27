@@ -34,8 +34,9 @@ is armed.
     turns recall off in every run, and nothing short of a headless rehearsal
     would see it.
 
-  - THE RESUME THAT COULD NEVER LAUNCH. formalize_check.py is epic-scoped by
-    construction, so on a long Epic it reads blocked on gaps belonging to
+  - THE RESUME THAT COULD NEVER LAUNCH. formalize_check.py covers the run's
+    whole in-scope set by construction, never only the stories one invocation
+    drives, so on a long Epic it reads blocked on gaps belonging to
     undrafted stories (41 mechanical gaps and 20 judgment candidates on one real
     Epic, essentially none in the story being driven). A conductor applying the
     launch non-negotiable literally on every resume blocks a healthy run forever.
@@ -902,8 +903,8 @@ def test_skill_scopes_the_formalize_gate_to_the_stage_2_entry():
     assert re.search(
         r"resume routed into Execute does NOT re-run the Stage-2 formalize gate", text
     )
-    assert re.search(r"epic-scoped by construction", text), "the mechanism, not just the rule"
-    assert re.search(r"takes no `--story`", text)
+    assert re.search(r"whole in-scope set by construction", text), "the mechanism, not just the rule"
+    assert re.search(r"never only the stories one invocation drives", text)
     assert re.search(r"block a healthy run forever", text), "the consequence of reading it literally"
 
 

@@ -1,0 +1,4 @@
+type: added
+scope: ultracode-goal
+summary: |
+  `formalize_check.py` takes an optional, repeatable `--story <key>` naming the in-scope stories, and preflight passes one per story when Stage 1 recorded an operator-scoped subset. The readiness check then reads only those stories, and `story_keys_uncovered` counts only those keys, so a run that does not drive the whole Epic can now reach `ready` at the hard gate. A key that names no not-`done` story row of the Epic is a `story_not_in_scope` gap that cannot be remediated, so the gate fails rather than reading fewer stories. Without `--story` the check reads every not-`done` story of the Epic.

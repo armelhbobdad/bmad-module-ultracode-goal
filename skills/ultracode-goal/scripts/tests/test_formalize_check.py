@@ -1492,3 +1492,173 @@ def test_define_done_renames_a_story_file_the_kernel_read_as_a_parent():
     assert "in one `mv <that file> <its folder>/<key>.md` call" in paragraph
     assert "no other key in the list names the same file" in paragraph
     assert "A file two listed keys name is a parent's, so rename it for neither." in paragraph
+
+
+# --- the in-scope stories only ------------------------------------------------
+#
+# The per-story and per-AC checks read every `<epic>-*` file whatever its row's
+# status, so a `done` story's criteria raised remediable gaps that kept the
+# verdict off `ready` and judgment candidates that stayed owed, although `done`
+# stories are out of scope (ingest-and-scope.md Stage 1 rule 3). And the kernel
+# took no story filter, so an operator-scoped run could never tell it which
+# stories it drives. Coverage and the declared ids still read every file.
+
+# No named verification, no twin, and an unsourced threshold: two mechanical
+# gaps and one invented_nfr_threshold judgment candidate.
+_FLAWED_BODY = "# Story {key}\n\n## Acceptance Criteria\n\n1. The page answers within 300 ms.\n"
+
+
+def _scoped_project(tmp_path: Path, rows: dict[str, str], bodies: dict[str, str]) -> Path:
+    """An Epic-7 project with the given rows; `bodies` maps a key to its story text."""
+    root = tmp_path / "scoped"
+    planning = root / "planning-artifacts"
+    impl = root / "impl-artifacts"
+    planning.mkdir(parents=True)
+    impl.mkdir(parents=True)
+    (planning / "prd-fixture.md").write_text("# PRD\n", encoding="utf-8")
+    (planning / "architecture-fixture.md").write_text("# Architecture\n", encoding="utf-8")
+    (impl / "sprint-status.yaml").write_text(
+        "generated: fixture\ndevelopment_status:\n  epic-7: in-progress\n"
+        + "".join(f"  {key}: {status}\n" for key, status in rows.items()),
+        encoding="utf-8",
+    )
+    for key, body in bodies.items():
+        (impl / f"{key}.md").write_text(body.format(key=key), encoding="utf-8")
+    return root
+
+
+def _run_scoped(root: Path, *extra: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            sys.executable, str(SCRIPT),
+            "--epic", "7",
+            "--project-root", str(root),
+            "--planning-artifacts", str(root / "planning-artifacts"),
+            "--impl-artifacts", str(root / "impl-artifacts"),
+            "--tea-config", str(root / "tea" / "config.yaml"),
+            *extra,
+        ],
+        capture_output=True, text=True,
+    )
+
+
+def _scoped_verdict(root: Path, *extra: str) -> dict:
+    proc = _run_scoped(root, *extra)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _finding_files(out: dict) -> set[str]:
+    """The files every gap and every candidate points into."""
+    return {g["source"].split(":")[0] for g in out["mechanical_gaps"]} | {
+        c["source"].split(":")[0] for c in out["judgment_candidates"]
+    }
+
+
+def test_a_done_storys_acceptance_criteria_raise_no_gap(tmp_path):
+    rows = {"7-1-shipped": "done", "7-2-next": "backlog"}
+    root = _scoped_project(tmp_path, rows, {"7-1-shipped": _FLAWED_BODY, "7-2-next": _story_body("7-2-next")})
+    out = _scoped_verdict(root)
+    assert out["verdict"] == "ready", out
+    assert "impl-artifacts/7-1-shipped.md" not in _finding_files(out)
+    assert out["checks"]["stories_with_ac"] == 1
+    # Every file of the Epic is still read once.
+    assert out["timing"]["artifact_count"] == 5
+
+
+def test_the_same_story_not_done_still_raises_its_gaps(tmp_path):
+    # The twin: the filter keys on the row's status, not on the file.
+    rows = {"7-1-shipped": "review", "7-2-next": "backlog"}
+    root = _scoped_project(tmp_path, rows, {"7-1-shipped": _FLAWED_BODY, "7-2-next": _story_body("7-2-next")})
+    out = _scoped_verdict(root)
+    assert out["verdict"] == "blocked"
+    kinds = {g["kind"] for g in out["mechanical_gaps"]}
+    assert {"ac_missing_named_verification", "ac_missing_anti_vacuous_twin"} <= kinds
+    assert [c["kind"] for c in out["judgment_candidates"]] == ["invented_nfr_threshold"]
+    assert out["checks"]["stories_with_ac"] == 2
+
+
+def test_a_done_parents_file_is_still_read_for_its_child(tmp_path):
+    # Not loosened: a decomposed child's criteria live in its done parent's file.
+    rows = {"7-1-a-i-child": "backlog", "7-1-a-umbrella": "done"}
+    out = _scoped_verdict(_scoped_project(tmp_path, rows, {"7-1-a-umbrella": _FLAWED_BODY}))
+    assert "impl-artifacts/7-1-a-umbrella.md" in _finding_files(out)
+    assert out["verdict"] == "blocked"
+
+
+def test_a_citation_to_a_done_story_still_resolves(tmp_path):
+    rows = {"7-1-shipped": "done", "7-2-next": "backlog"}
+    bodies = {
+        "7-1-shipped": _story_body("7-1-shipped"),
+        "7-2-next": _story_body("7-2-next") + "   traces: 7-1-shipped\n",
+    }
+    out = _scoped_verdict(_scoped_project(tmp_path, rows, bodies))
+    assert out["checks"]["orphaned_indices"] == 0
+    assert out["verdict"] == "ready", out
+
+
+def test_an_all_done_epic_still_reads_every_file(tmp_path):
+    # No in-scope key: every file of the Epic is read, as before.
+    out = _scoped_verdict(_scoped_project(tmp_path, {"7-1-shipped": "done"}, {"7-1-shipped": _FLAWED_BODY}))
+    assert "impl-artifacts/7-1-shipped.md" in _finding_files(out)
+
+
+_SCOPE_ROWS = {"7-1-kernel": "backlog", "7-2-adapter": "backlog", "7-3-renderer": "backlog"}
+
+
+def _scope_bodies() -> dict[str, str]:
+    """7-1 sound, 7-2 flawed, 7-3 with no story file."""
+    return {"7-1-kernel": _story_body("7-1-kernel"), "7-2-adapter": _FLAWED_BODY}
+
+
+def test_story_scopes_the_files_and_the_coverage(tmp_path):
+    root = _scoped_project(tmp_path, _SCOPE_ROWS, _scope_bodies())
+    whole = _scoped_verdict(root)
+    assert any(g["kind"] == "story_keys_uncovered" for g in whole["mechanical_gaps"])
+    assert "impl-artifacts/7-2-adapter.md" in _finding_files(whole)
+    scoped = _scoped_verdict(root, "--story", "7-1-kernel")
+    assert scoped["verdict"] == "ready", scoped
+    assert scoped["mechanical_gaps"] == [] and scoped["judgment_candidates"] == []
+
+
+def test_story_keeps_an_in_scope_storys_gaps_and_uncovered_key(tmp_path):
+    root = _scoped_project(tmp_path, _SCOPE_ROWS, _scope_bodies())
+    out = _scoped_verdict(root, "--story", "7-2-adapter", "--story", "7-3-renderer")
+    gaps = {g["kind"]: g for g in out["mechanical_gaps"]}
+    assert "1 of 2" in gaps["story_keys_uncovered"]["detail"]
+    assert "Unresolved: 7-3-renderer" in gaps["story_keys_uncovered"]["detail"]
+    assert "ac_missing_named_verification" in gaps
+    assert [c["kind"] for c in out["judgment_candidates"]] == ["invented_nfr_threshold"]
+    assert "impl-artifacts/7-1-kernel.md" not in _finding_files(out)
+
+
+def test_story_naming_a_done_or_unknown_row_blocks(tmp_path):
+    rows = dict(_SCOPE_ROWS, **{"7-0-shipped": "done"})
+    root = _scoped_project(tmp_path, rows, dict(_scope_bodies(), **{"7-0-shipped": _story_body("7-0-shipped")}))
+    for bad in ("7-0-shipped", "7-9-typo", "8-1-other-epic"):
+        out = _scoped_verdict(root, "--story", "7-1-kernel", "--story", bad)
+        gaps = [g for g in out["mechanical_gaps"] if g["kind"] == "story_not_in_scope"]
+        assert len(gaps) == 1 and bad in gaps[0]["detail"], out["mechanical_gaps"]
+        assert gaps[0]["remediable"] is False
+        assert out["verdict"] == "blocked"
+    # The twin: the same run naming only a not-done row reads ready.
+    assert _scoped_verdict(root, "--story", "7-1-kernel")["verdict"] == "ready"
+
+
+def test_a_blank_story_is_an_invocation_error(tmp_path):
+    proc = _run_scoped(_scoped_project(tmp_path, _SCOPE_ROWS, _scope_bodies()), "--story", " ")
+    assert proc.returncode == 2
+    # The required-flag lane names it, as it names a blank --epic.
+    assert "required and non-empty: --story" in proc.stderr
+
+
+def test_story_reaches_ready_once_its_candidates_are_answered(tmp_path):
+    bodies = dict(_scope_bodies(), **{"7-1-kernel": _story_body("7-1-kernel") + "   Renders within 300 ms.\n"})
+    root = _scoped_project(tmp_path, _SCOPE_ROWS, bodies)
+    first = _scoped_verdict(root, "--story", "7-1-kernel")
+    assert first["verdict"] == "blocked" and len(first["judgment_candidates"]) == 1, first
+    scan = tmp_path / "scan.json"
+    concerns = [{"candidate": c["id"], "source": c["source"]} for c in first["judgment_candidates"]]
+    scan.write_text(json.dumps({"reds": [], "concerns": concerns}), encoding="utf-8")
+    out = _scoped_verdict(root, "--story", "7-1-kernel", "--scan", str(scan))
+    assert out["verdict"] == "ready", out
