@@ -159,6 +159,19 @@ def test_the_handoff_kinds_agree_with_the_driver():
     assert "`operator-evidence-owed`" in _GATE.read_text(encoding="utf-8")
 
 
+def test_a_resume_stops_on_every_open_sidecar_but_the_two_handoffs():
+    """The resume manifest routes the two handoffs whose work the next
+    invocation picks up (`story-decomposed`, `defined-not-driven`) as `handoff`,
+    and every other open sidecar as `decision-pending`. `operator-evidence-owed`
+    is a handoff to the driver, but not to a resume: re-driving the story cannot
+    record the evidence an operator owes, so the resume stops until
+    `/ucg-resolve` closes it."""
+    manifest = _PREFLIGHT_CHECK.read_text(encoding="utf-8")
+    exempt = set(re.findall(r'"(story-decomposed|defined-not-driven|operator-evidence-owed)"', manifest))
+    assert exempt == {"story-decomposed", "defined-not-driven"}
+    assert exempt < _driver_handoff_kinds()
+
+
 def test_finalize_names_the_handoff_as_a_terminal_route():
     text = _FINALIZE.read_text(encoding="utf-8")
     assert re.search(r"advanced \*\*no row at all\*\*", text)

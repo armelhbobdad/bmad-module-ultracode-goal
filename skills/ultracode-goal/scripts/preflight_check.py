@@ -1173,7 +1173,10 @@ def _story_gate_artifacts_present(trace_output: Path, story: str) -> bool | None
 
 # Typed escalation sidecar kinds that hand work to the next invocation rather
 # than ask a human for a decision (references/execute.md, "durable work and
-# advanced no row"). Kept equal to drive_epic.HANDOFF_KINDS by a test.
+# advanced no row"). A subset of drive_epic.HANDOFF_KINDS, pinned by a test:
+# `operator-evidence-owed` is a handoff to the driver but not to a resume,
+# which stops on it until /ucg-resolve closes it, since re-driving the story
+# cannot record the evidence an operator owes.
 _HANDOFF_KINDS = frozenset({"story-decomposed", "defined-not-driven"})
 # A legitimate sidecar is four short strings (drive_epic reads it the same way).
 _SIDECAR_MAX_BYTES = 64 * 1024
