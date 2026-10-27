@@ -205,6 +205,13 @@ The two dispositions are genuinely different things, not two names for one:
   the close would apply in name only. Answering a budget overrun by re-scoping, splitting,
   or handing off the story *is* the operator granting it a fresh budget, so the counter that
   recorded the exhausted one has no claim on the resumed run.
+  **Closing an `operator-evidence-owed` escalation needs the evidence on disk.** Read the
+  live results file its `decision_needed` names and confirm a `status` `pass` record for
+  every AC it lists, made at the commit it names. If one is missing, say which and record
+  `defer`. This surface never writes a record itself: the operator is its producer
+  (`{ucg-root}/references/gate.md`, "Operator evidence is a recorded live result"). A
+  ruling that narrows or moves the AC is the operator's story edit: record it, then close.
+  There is no counter reset.
 - **`defer`** — the decision is not made yet. Record the entry **without clearing
   anything**. The artifact stays exactly where it is, the item stays pending, and the next
   preflight still blocks on it.

@@ -52,6 +52,8 @@ The gate status maps to a verdict (`GATE_VERDICT` in the script):
 
 Any unrecognized status escalates (the script's `GATE_VERDICT.get(gate_status, "escalate")` default), with a `reasons` entry noting it.
 
+One `FAIL` takes a different route. When the only criteria TEA's coverage matrix holds open are acceptance criteria tagged `**Gate-ability:** operator`, whose proof is a live result a person records, no re-loop can change the gate. The skill checks that with `scripts/operator_owed.py`, which fails closed, and escalates with kind `operator-evidence-owed` instead of re-looping. `gate_eval.py` still prints `reloop`: the route changes, not the verdict.
+
 ## The production AND
 
 Under `--profile production`, an otherwise-`advance` verdict is additionally ANDed against two TEA signals, and any failure downgrades it to `reloop`. The downgrade floor is `reloop`. A `defer`/`reloop`/`escalate` is unchanged; only an `advance` moves:

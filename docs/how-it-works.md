@@ -44,7 +44,7 @@ flowchart TD
     S5 -->|"advance or defer"| S6
     S5 -->|"reloop: gate FAIL within budget"| Correct
     Correct --> S4
-    S5 -->|"escalate: NOT_EVALUATED or budget exhausted"| S6
+    S5 -->|"escalate: NOT_EVALUATED, budget exhausted, or operator evidence owed"| S6
 
     classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
     classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
@@ -54,7 +54,7 @@ flowchart TD
     class NotBmad,Blocked stop
 ```
 
-A `defer` verdict appends non-blocking items to the ledger and advances anyway; an `escalate` ends the run as `blocked` at Stage 6 rather than `complete`. The reloop edge re-runs the story only while turn budget remains (`max_turns_per_story`); once exhausted, a FAIL becomes an escalate.
+A `defer` verdict appends non-blocking items to the ledger and advances anyway; an `escalate` ends the run as `blocked` at Stage 6 rather than `complete`. The reloop edge re-runs the story only while turn budget remains (`max_turns_per_story`); once exhausted, a FAIL becomes an escalate. A FAIL that only evidence a person records can change (an acceptance criterion tagged `**Gate-ability:** operator` with no recorded live result) escalates at once with kind `operator-evidence-owed`, since no re-loop can produce that evidence.
 
 ### Stage 1: Ingest & Scope
 
