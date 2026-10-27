@@ -1549,10 +1549,12 @@ def _scoped_verdict(root: Path, *extra: str) -> dict:
 
 
 def _finding_files(out: dict) -> set[str]:
-    """The files every gap and every candidate points into."""
-    return {g["source"].split(":")[0] for g in out["mechanical_gaps"]} | {
-        c["source"].split(":")[0] for c in out["judgment_candidates"]
-    }
+    """The files every gap and every candidate points into, with `/` between
+    parts: the kernel prints the platform's own separator."""
+    sources = [g["source"] for g in out["mechanical_gaps"]] + [
+        c["source"] for c in out["judgment_candidates"]
+    ]
+    return {source.split(":")[0].replace("\\", "/") for source in sources}
 
 
 def test_a_done_storys_acceptance_criteria_raise_no_gap(tmp_path):
