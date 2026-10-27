@@ -62,7 +62,8 @@ operator-scoped subset Stage 1 recorded. The per-story and per-AC checks read
 only those stories' files, plus the done parent's file a decomposed child's
 criteria come from, and `story_keys_uncovered` counts only those keys. A
 `--story` key that names no not-`done` story row of the Epic is a
-non-remediable gap.
+non-remediable gap, and when no `--story` key names one those checks read no
+story file.
 """
 
 from __future__ import annotations
@@ -437,7 +438,9 @@ def _in_scope_story_files(
     in-scope decomposed child's criteria come from (`children`). A `done`
     story's file is out of scope (ingest-and-scope.md Stage 1 rule 3), so its
     acceptance criteria raise no gap here. With no in-scope key at all (every
-    row `done`, or no rollup to read), every file, as before.
+    row `done`, or no rollup to read), every file, as before. The caller never
+    asks for that fallback when `--story` was given: a `--story` list that
+    names no not-done row reads no file.
     """
     if not scope_keys:
         return list(story_paths)
@@ -1270,8 +1273,14 @@ def build_verdict(
             }
         )
 
-    # The files the per-story checks below read: in-scope stories only.
-    scan_paths = _in_scope_story_files(story_paths, scope_keys, coverage.children)
+    # The files the per-story checks below read: in-scope stories only. A
+    # `--story` list that names no not-done row reads none: its
+    # `story_not_in_scope` gaps already block, and falling back to every file
+    # would bring back the done stories' gaps and candidates.
+    if scope_keys or stories is None:
+        scan_paths = _in_scope_story_files(story_paths, scope_keys, coverage.children)
+    else:
+        scan_paths = []
 
     stories_with_ac = 0
     ac_total = 0

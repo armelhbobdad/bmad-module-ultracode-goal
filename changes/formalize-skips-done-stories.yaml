@@ -1,5 +1,5 @@
 type: fixed
 scope: ultracode-goal, ucg-formalize
 summary: |
-  The readiness check (`formalize_check.py`) no longer reads the acceptance criteria of a `done` story, so its gaps no longer count toward `mechanical_budget` and its judgment candidates are no longer owed, and preflight step 2 and `/ucg-formalize` no longer ask to rewrite delivered stories. It still reads a `done` parent's story file when an in-scope decomposed child takes its criteria from it, a `done` story still declares the ids an in-scope story cites, and an Epic whose stories are all `done` is read whole, as before.
+  The readiness check (`formalize_check.py`) no longer reads the acceptance criteria of a `done` story, so its gaps no longer count toward `mechanical_budget` and its judgment candidates are no longer owed, and preflight step 2 and `/ucg-formalize` no longer ask to rewrite delivered stories. It still reads a `done` parent's story file when an in-scope decomposed child takes its criteria from it, a `done` story still declares the ids an in-scope story cites, and an Epic whose stories are all `done` is read whole when no `--story` is given, as before.
 issues: [171]

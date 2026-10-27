@@ -1645,6 +1645,42 @@ def test_story_naming_a_done_or_unknown_row_blocks(tmp_path):
     assert _scoped_verdict(root, "--story", "7-1-kernel")["verdict"] == "ready"
 
 
+def test_story_naming_no_not_done_row_reads_no_story_file(tmp_path):
+    # Not the all-done fallback: with every --story key invalid, reading every
+    # file brought back the done story's gaps and candidates.
+    rows = dict(_SCOPE_ROWS, **{"7-0-shipped": "done"})
+    root = _scoped_project(tmp_path, rows, dict(_scope_bodies(), **{"7-0-shipped": _FLAWED_BODY}))
+    for bad in (["7-0-shipped"], ["7-9-typo"], ["7-0"], ["8-1-other-epic"], ["7-9-typo", "7-0-shipped"]):
+        out = _scoped_verdict(root, *(arg for key in bad for arg in ("--story", key)))
+        assert [g["kind"] for g in out["mechanical_gaps"]] == ["story_not_in_scope"] * len(bad), out
+        assert out["judgment_candidates"] == []
+        assert _finding_files(out) == {"impl-artifacts/sprint-status.yaml"}
+        assert out["checks"]["stories_with_ac"] == 0
+        assert out["verdict"] == "blocked"
+
+
+def test_story_naming_a_parent_set_done_reads_no_story_file(tmp_path):
+    # A closing re-run that kept the key of a parent step 2 set done.
+    rows = {"7-0-shipped": "done", "7-1-a-i-child": "backlog", "7-1-a-umbrella": "done", "7-2-next": "backlog"}
+    bodies = {"7-0-shipped": _FLAWED_BODY, "7-1-a-umbrella": _story_body("7-1-a-umbrella"), "7-2-next": _story_body("7-2-next")}
+    root = _scoped_project(tmp_path, rows, bodies)
+    out = _scoped_verdict(root, "--story", "7-1-a-umbrella")
+    assert [g["kind"] for g in out["mechanical_gaps"]] == ["story_not_in_scope"], out
+    assert out["judgment_candidates"] == []
+    # The twin: the swapped flags read the parent's file through its child.
+    assert _scoped_verdict(root, "--story", "7-1-a-i-child")["verdict"] == "ready"
+
+
+def test_story_on_an_all_done_epic_reads_no_story_file(tmp_path):
+    # The every-file fallback is for a run with no --story only.
+    root = _scoped_project(tmp_path, {"7-1-shipped": "done"}, {"7-1-shipped": _FLAWED_BODY})
+    out = _scoped_verdict(root, "--story", "7-1-shipped")
+    assert [g["kind"] for g in out["mechanical_gaps"]] == ["story_not_in_scope"], out
+    assert "impl-artifacts/7-1-shipped.md" not in _finding_files(out)
+    # The twin: no --story still reads the whole Epic.
+    assert "impl-artifacts/7-1-shipped.md" in _finding_files(_scoped_verdict(root))
+
+
 def test_a_blank_story_is_an_invocation_error(tmp_path):
     proc = _run_scoped(_scoped_project(tmp_path, _SCOPE_ROWS, _scope_bodies()), "--story", " ")
     assert proc.returncode == 2

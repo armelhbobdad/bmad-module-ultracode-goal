@@ -109,8 +109,12 @@ def test_an_operator_scoped_run_names_its_stories():
     assert "as its `sprint-status.yaml` row spells it" in block
     # A mistyped or done key fails closed instead of narrowing the read.
     assert "is a gap with `remediable: false` (`story_not_in_scope`)" in block
-    # Every later re-run carries the same flags.
-    assert "\"step 1b's command\", it means this command with those `--story` flags, unchanged" in block
+    # Every later re-run carries the same flags, but for step 2's swap of a
+    # parent it set done for its child rows, so the two paragraphs agree.
+    assert (
+        "\"step 1b's command\", it means this command with those `--story` flags, "
+        "unchanged except where step 2 replaces a parent it set `done` with its child rows."
+    ) in block
     # The default stays the whole not-done set, and headless never narrows it.
     assert "Otherwise pass no `--story`" in block
     assert "a headless run never narrows it" in block
