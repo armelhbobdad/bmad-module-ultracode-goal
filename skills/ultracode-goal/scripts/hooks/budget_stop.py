@@ -34,6 +34,15 @@ written, so the hook never leaves a stray .budget-unknown.json in the tree.
 An empty or unreadable marker still counts against "unknown", because a
 story may be in flight behind it.
 
+Every other Stop counts, including one that ends a response that only
+acknowledged a background task's notification. The Stop input carries the
+response's final text and the tasks still in flight, not its tool calls, and
+the transcript may not hold the final message yet, so the hook cannot tell
+waiting from work and does not try: skipping a Stop on a guess would let a
+story that keeps a task running spend responses the ceiling never sees.
+Execute keeps waits few instead (references/execute.md, "Waiting spends
+turns").
+
 Hook contract (reads one JSON object on stdin):
   in : {session_id, cwd, hook_event_name:"Stop", ...}
   out: exit 0. We never set decision:"block" (we WANT the stop to proceed);

@@ -317,3 +317,34 @@ def test_story_token_budget_deprecated_in_place() -> None:
     assert any(
         "story_token_budget" in s and "max_turns_per_story" in s for s in sections
     ), "no Deprecated section names story_token_budget with its replacement"
+
+
+def test_a_stop_waiting_on_background_work_still_counts(tmp_path: Path) -> None:
+    """The count is responses: a Stop that ends a wait counts like any other.
+
+    The hook cannot tell an acknowledgement from work (its input has no tool
+    calls), so it must not skip a Stop because work is still in flight or the
+    final text is short: that would let a story that keeps a task running spend
+    responses the ceiling never sees."""
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(tmp_path), "ULTRACODE_STORY_ID": "s1", "ULTRACODE_MAX_TURNS": "25"}
+    waiting = {
+        "hook_event_name": "Stop",
+        "cwd": str(tmp_path),
+        "stop_hook_active": False,
+        "last_assistant_message": "The sweep is still running.",
+        "background_tasks": [{"id": "t1", "type": "shell", "status": "running", "description": "full sweep"}],
+        "session_crons": [],
+    }
+    for n, event in enumerate(
+        (waiting, {**waiting, "last_assistant_message": ""}, {**waiting, "background_tasks": []}), start=1
+    ):
+        code, out = _run(event, tmp_path, env)
+        assert code == 0 and out is None
+        assert json.loads((tmp_path / ".budget-s1.json").read_text())["turns"] == n
+
+
+def test_hook_docstring_says_why_a_waiting_stop_counts() -> None:
+    doc = ast.get_docstring(ast.parse(HOOK.read_text(encoding="utf-8"))) or ""
+    lower = " ".join(doc.lower().split())
+    assert "only acknowledged a background task's notification" in lower
+    assert "cannot tell waiting from work" in lower
