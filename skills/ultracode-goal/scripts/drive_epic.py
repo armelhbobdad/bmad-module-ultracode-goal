@@ -776,9 +776,13 @@ def render_triage(triage: dict) -> list[str]:
 
 
 # Sidecar `kind` values that mean "durable work, no row advanced" rather than
-# "something went wrong". Open vocabulary by design (`references/execute.md`),
-# so an unrecognised kind is simply not a handoff - never an error.
-HANDOFF_KINDS = frozenset({"story-decomposed", "defined-not-driven"})
+# "something went wrong": a split, a definition authored but not driven, or a
+# story delivered and gated except the evidence only a person can record
+# (`operator-evidence-owed`, which `references/gate.md` writes only on
+# `operator_owed.py`'s fail-closed `owed: true`). Open vocabulary by design
+# (`references/execute.md`), so an unrecognised kind is simply not a handoff -
+# never an error.
+HANDOFF_KINDS = frozenset({"story-decomposed", "defined-not-driven", "operator-evidence-owed"})
 
 
 # A sidecar is only THIS spawn's if it was written after the spawn started. A
@@ -1125,7 +1129,9 @@ def drive(
             # operator exactly like a crash unless it is named. It is not a
             # crash; the next invocation picks the work up. Say so, keep the
             # non-zero exit, and do not continue: a human should see a split
-            # before the drive runs on.
+            # before the drive runs on. A story stopped on evidence only a
+            # person can record is the same shape: the person records it, and
+            # only then does the drive run on.
             kind = handoff_kind(impl_artifacts, target, spawn_started)
             if kind:
                 say(f"handoff: {target} did durable work and advanced no row ({kind})")

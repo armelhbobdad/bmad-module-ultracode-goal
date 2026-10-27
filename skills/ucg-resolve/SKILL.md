@@ -110,6 +110,12 @@ at four fields and cannot carry one, so its id is derived rather than read:
 uv run {ucg-root}/scripts/red_ids.py --mint-one <kind> <artifact path> <decision_needed>
 ```
 
+For a sidecar the three arguments are its own `kind`, `source` and `decision_needed`
+fields, each passed verbatim: `<artifact path>` is the sidecar's `source` field, its
+`:line` suffix and all (the id layer strips it), never the path of the sidecar file
+itself. The resume also reads a close keyed by the sidecar file's own path as closed,
+since earlier passes keyed some that way, but never mint a new id from that path.
+
 It prints the id and touches nothing. **A ledger `decision:` row is keyed by the same
 call** — kind `decision`, the ledger path, and the row's reason — because the row's own
 `id` column is unique only within its Epic heading, so `d1` under one Epic and `d1` under
@@ -205,6 +211,29 @@ The two dispositions are genuinely different things, not two names for one:
   the close would apply in name only. Answering a budget overrun by re-scoping, splitting,
   or handing off the story *is* the operator granting it a fresh budget, so the counter that
   recorded the exhausted one has no claim on the resumed run.
+  **Closing an `operator-evidence-owed` escalation needs the evidence on disk.** Read the
+  live results file its `decision_needed` names and confirm a `status` `pass` record for
+  every AC it lists, made at the commit it names. Those are the story's
+  `**Gate-ability:** operator-evidence` ACs; a plain `operator` tag is work the dev agent
+  builds, never evidence this close waits on. If one is missing, say which and record
+  `defer`. An AC the escalation names as partly recorded, with the ids of the records TEA
+  already counted for it, closes only on a `pass` record at that commit whose `id` is not
+  among the ones the escalation names, or on the operator's written narrowing or move of
+  the AC: the records already counted are not enough, since re-gating them changes
+  nothing. This surface never writes a record itself: the operator is its producer
+  (`{ucg-root}/references/gate.md`, "Operator evidence is a recorded live result"). A
+  ruling that narrows or moves the AC is the operator's story edit: record it, then close.
+  **That close also writes the story's re-gate marker and resets its turn counter.** Write
+  `{workflow.implementation_artifacts}/.regate-<story_id>` as two lines, `sha=` the
+  assessed commit the sidecar names (in full, as `git rev-parse` prints it) and
+  `decision=` the id you closed, then delete the sidecar as for any close, and delete
+  `{workflow.implementation_artifacts}/.budget-<story_id>.json`: waiting for operator
+  evidence is not the story's work. The marker is the re-gate entry. While its `sha=`
+  names `HEAD`, the resume's `--assert-armed` call routes the story `gate-owed`, so it
+  re-enters at Stage 5 to re-gate that commit, and is never re-driven from step 0, where
+  the turn-ceiling read could escalate it and a commit past the assessed one would make
+  the records stale (`{ucg-root}/references/execute.md`, the resume rule). The gate
+  deletes the marker once the re-gate's verdict is logged.
 - **`defer`** — the decision is not made yet. Record the entry **without clearing
   anything**. The artifact stays exactly where it is, the item stays pending, and the next
   preflight still blocks on it.

@@ -34,8 +34,9 @@ is armed.
     turns recall off in every run, and nothing short of a headless rehearsal
     would see it.
 
-  - THE RESUME THAT COULD NEVER LAUNCH. formalize_check.py is epic-scoped by
-    construction, so on a long Epic it reads blocked on gaps belonging to
+  - THE RESUME THAT COULD NEVER LAUNCH. formalize_check.py covers the run's
+    whole in-scope set by construction, never only the stories one invocation
+    drives, so on a long Epic it reads blocked on gaps belonging to
     undrafted stories (41 mechanical gaps and 20 judgment candidates on one real
     Epic, essentially none in the story being driven). A conductor applying the
     launch non-negotiable literally on every resume blocks a healthy run forever.
@@ -621,6 +622,45 @@ def test_the_operator_doc_states_the_unit_of_record_and_the_store_rules():
         assert f"run {retired}" not in doc and f"`{retired}` to" not in doc
 
 
+def test_finalize_names_the_gate_status_for_a_run_that_evaluated_no_gate():
+    """A run that blocked before any gate had no value to pass, and the honest
+    one, NOT_EVALUATED, used to make the write skip its record."""
+    section = _recall_write_section()
+    step = section[section.index("**Write this run's record**"):section.index("**Always, on every path above**")]
+    assert "`--gate-status NOT_EVALUATED --verdict blocked`" in step
+    assert "writes that record like any other" in step
+    doc = _read(_RECALL_DOC)
+    assert "writes a record with gate status `NOT_EVALUATED` and verdict `blocked`" in doc
+    assert "never evaluated writes no record" not in doc
+
+
+_DECISION_PENDING_NO_CAUSE = (
+    "Name none either for a run that stopped on `decision-pending` (a resume that found the re-entry story's "
+    "escalation still open, per `references/execute.md`): the run that raised that escalation recorded its "
+    "root cause, and naming it again would make recall count one failure as recurring."
+)
+
+
+def _names_no_root_cause_on_decision_pending(step: str) -> bool:
+    return _DECISION_PENDING_NO_CAUSE in step
+
+
+def test_finalize_names_no_root_cause_for_a_decision_pending_stop():
+    """A resume that stops on `decision-pending` writes a NOT_EVALUATED blocked
+    record too. Naming the open escalation's root cause there gave every such
+    stop the same signature as the run that raised it, so recall reported one
+    unanswered decision as a recurring failure."""
+    section = _recall_write_section()
+    step = section[section.index("**Write this run's record**"):section.index("**Always, on every path above**")]
+    assert _names_no_root_cause_on_decision_pending(step)
+    # Twin: the step as first written, which named a root cause for every
+    # escalation and said nothing of `decision-pending`, fails the check.
+    pre_fix = step.replace(" " + _DECISION_PENDING_NO_CAUSE, "")
+    assert pre_fix != step
+    assert "Name a root cause for an escalation as for any blocked run, and none for a handoff." in pre_fix
+    assert not _names_no_root_cause_on_decision_pending(pre_fix)
+
+
 def test_skill_md_names_the_store_not_claude_mem():
     text = _read(_SKILL)
     advisory = next(ln for ln in text.splitlines() if "Cross-Session Recall is advisory-only" in ln)
@@ -902,8 +942,8 @@ def test_skill_scopes_the_formalize_gate_to_the_stage_2_entry():
     assert re.search(
         r"resume routed into Execute does NOT re-run the Stage-2 formalize gate", text
     )
-    assert re.search(r"epic-scoped by construction", text), "the mechanism, not just the rule"
-    assert re.search(r"takes no `--story`", text)
+    assert re.search(r"whole in-scope set by construction", text), "the mechanism, not just the rule"
+    assert re.search(r"never only the stories one invocation drives", text)
     assert re.search(r"block a healthy run forever", text), "the consequence of reading it literally"
 
 

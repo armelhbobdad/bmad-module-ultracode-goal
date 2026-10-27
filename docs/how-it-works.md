@@ -44,7 +44,7 @@ flowchart TD
     S5 -->|"advance or defer"| S6
     S5 -->|"reloop: gate FAIL within budget"| Correct
     Correct --> S4
-    S5 -->|"escalate: NOT_EVALUATED or budget exhausted"| S6
+    S5 -->|"escalate: NOT_EVALUATED, budget exhausted, or operator evidence owed"| S6
 
     classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
     classDef verdict fill:#4F46E5,stroke:#3730A3,color:#fff
@@ -54,7 +54,7 @@ flowchart TD
     class NotBmad,Blocked stop
 ```
 
-A `defer` verdict appends non-blocking items to the ledger and advances anyway; an `escalate` ends the run as `blocked` at Stage 6 rather than `complete`. The reloop edge re-runs the story only while turn budget remains (`max_turns_per_story`); once exhausted, a FAIL becomes an escalate.
+A `defer` verdict appends non-blocking items to the ledger and advances anyway; an `escalate` ends the run as `blocked` at Stage 6 rather than `complete`. The reloop edge re-runs the story only while turn budget remains (`max_turns_per_story`); once exhausted, a FAIL becomes an escalate. A FAIL that only evidence a person records can change (an acceptance criterion tagged `**Gate-ability:** operator-evidence` with no recorded live result, or one that covers only part of it) escalates at once with kind `operator-evidence-owed`, since no re-loop can produce that evidence.
 
 ### Stage 1: Ingest & Scope
 
@@ -117,7 +117,7 @@ The **production** profile wires the full TEA chain as gates: test-design, atdd,
 
 ## The decision log
 
-The run's `.decision-log.md`, held in the skill's run folder, is canonical memory. Compaction can drop everything else; the log recovers full state. It records scope, the preflight verdict, every gate outcome, every deferral, and (in headless) every assumption. **Resume** reads it: on a resumed run, Execute re-enters at the first story whose last logged gate verdict is not `advance`; advanced stories are not re-run, and the Epic branch, hooks, and allowlist are re-asserted (not rebuilt) before continuing.
+The run's `.decision-log.md`, held in the skill's run folder, is canonical memory. Compaction can drop everything else; the log recovers full state. It records scope, the preflight verdict, every gate outcome, every deferral, and (in headless) every assumption. **Resume** reads it: on a resumed run, Execute re-enters at the first story whose last logged gate verdict is not `advance`; advanced stories are not re-run, and the Epic branch, hooks, and allowlist are re-asserted (not rebuilt) before continuing. A re-entry story that still carries an open escalation is not re-entered: the run stops and points at `/ucg-resolve`.
 
 ## The run report, the gate trail, and the deferred-work ledger
 

@@ -241,3 +241,133 @@ def test_run_report_predicate_rejects_the_pre_edit_line():
     text = pre_edit.read_text(encoding="utf-8")
     assert "Turns consumed vs" in text
     assert not _RUN_REPORT_COUNT.search(text)
+
+
+# A real run reached the ceiling on waiting: of the seven Stops a comments-only
+# re-loop spent, four were wake-ups from separately reporting background agents
+# (one for another story) while a sweep ran. The count is responses, so
+# execute.md says how a story's waits are kept few, inside the story loop where
+# the conductor reads it, and the docs say what the count includes.
+_TROUBLESHOOTING = _REPO / "docs" / "troubleshooting.md"
+_PRE_WAITS_EXECUTE = Path(__file__).resolve().parent / "fixtures" / "execute_pre_verification_axes.md"
+
+_WAIT_CLAUSES = (
+    r"\*\*Waiting spends turns\.\*\* The Stop hook counts one turn per response, whatever the response did\.",
+    r"that lands while the session is idle starts a response of its own",
+    r"\*\*Make each wait report once\.\*\*",
+    r"concurrent commands as one subagent the session waits for, which runs each as its own simple command "
+    r"and reports every exit status in its one reply",
+    r"One compound shell command that starts them together and collects their exit statuses "
+    r"\(`&`, `wait`, `\$!`, `\$\?`\) is not an option: under `scripts/drive_epic\.py`'s default spawn mode, "
+    r"`acceptEdits`, with the default allowlist, Claude Code refuses it before it runs",
+    r"\*\*Watch for completion, not progress\.\*\*",
+    r"The hook books every Stop to the story `\.current-story` names",
+    r"Start such work in that story's own loop, once its step 0 has made it current\.",
+)
+
+# The bullet once offered concurrent commands as one background command that
+# starts them together and prints each exit status. Under drive_epic.py's
+# default acceptEdits with the default allowlist, Claude Code refused every
+# shell form of it (`&` with `$!`, subshells with `wait`, `$?` after a `;`, a
+# bare `wait`), while each command alone ran. The offer must not come back.
+_RETIRED_WAIT_FORM = "one background command that starts them together"
+_PRE_FIX_COMMANDS_CLAUSE = (
+    "concurrent commands as one background command that starts them together, waits for each and prints "
+    "each one's exit status (a bare `wait` returns 0 even when a job failed)"
+)
+
+
+def _story_loop(text: str) -> str:
+    start = text.index("### The story loop")
+    return text[start : text.index("### The per-invocation work bound", start)]
+
+
+def _states_that_waits_spend_turns(text: str) -> bool:
+    try:
+        loop = _story_loop(text)
+    except ValueError:
+        return False
+    if _RETIRED_WAIT_FORM in loop:
+        return False
+    return all(re.search(c, loop) for c in _WAIT_CLAUSES) and bool(
+        re.search(
+            r"It counts responses, not work: a response that only acknowledges a background task's "
+            r"notification counts the same as one that edits code",
+            text,
+        )
+    )
+
+
+def test_execute_says_waiting_spends_turns():
+    assert _states_that_waits_spend_turns(_execute())
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "whatever the response did.",
+        "that lands while the session is idle starts a response of its own",
+        "**Make each wait report once.**",
+        "which runs each as its own simple command and reports every exit status in its one reply",
+        "(`&`, `wait`, `$!`, `$?`) is not an option",
+        "Claude Code refuses it before it runs",
+        "**Watch for completion, not progress.**",
+        "The hook books every Stop to the story `.current-story` names",
+        "in that story's own loop, once its step 0 has made it current.",
+        "It counts responses, not work: ",
+    ],
+)
+def test_waits_predicate_rejects_a_single_dropped_clause(clause):
+    mutant = _execute().replace(clause, "")
+    assert mutant != _execute(), "the mutant must actually change the text"
+    assert not _states_that_waits_spend_turns(mutant)
+
+
+def test_waits_predicate_rejects_the_paragraph_outside_the_story_loop():
+    live = _execute()
+    start = live.index("**Waiting spends turns.**")
+    end = live.index("\n### The per-invocation work bound", start)
+    moved = live[:start] + live[end:] + "\n" + live[start:end]
+    assert not _states_that_waits_spend_turns(moved)
+
+
+def test_waits_predicate_rejects_an_execute_without_it():
+    """Twin: an older shipped execute.md, captured before this edit, fails it."""
+    assert not _states_that_waits_spend_turns(_PRE_WAITS_EXECUTE.read_text(encoding="utf-8"))
+
+
+def test_waits_predicate_rejects_the_compound_command_offer():
+    """Twin: the bullet as first written, offering the one background command
+    the default spawn mode refuses, fails it, and so does that offer added back
+    beside the subagent form."""
+    live = _execute()
+    new_clause = (
+        "concurrent commands as one subagent the session waits for, which runs each as its own simple command "
+        "and reports every exit status in its one reply"
+    )
+    assert new_clause in live
+    assert not _states_that_waits_spend_turns(live.replace(new_clause, _PRE_FIX_COMMANDS_CLAUSE))
+    both = live.replace(new_clause, new_clause + ", or " + _PRE_FIX_COMMANDS_CLAUSE)
+    assert not _states_that_waits_spend_turns(both)
+
+
+_TROUBLE_WAITS = re.compile(
+    r"It counts responses, not work: a background task's notification that lands while the session is idle "
+    r"starts a response of its own, which counts the same as one that edits code"
+)
+
+
+def _budget_section(text: str) -> str:
+    start = text.index("## Budget exhausted mid-story")
+    return text[start : text.index("\n## ", start + 1)]
+
+
+def test_troubleshooting_says_waits_spend_the_count():
+    assert _TROUBLE_WAITS.search(_budget_section(_TROUBLESHOOTING.read_text(encoding="utf-8")))
+
+
+def test_troubleshooting_predicate_rejects_the_section_without_it():
+    section = _budget_section(_TROUBLESHOOTING.read_text(encoding="utf-8"))
+    start = section.index(" It counts responses, not work:")
+    end = section.index("while a story is current.", start) + len("while a story is current.")
+    assert not _TROUBLE_WAITS.search(section[:start] + section[end:])

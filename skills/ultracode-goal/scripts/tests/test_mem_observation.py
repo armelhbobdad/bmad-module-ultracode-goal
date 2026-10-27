@@ -328,7 +328,8 @@ def test_write_creates_exactly_one_run_file_holding_the_run_payload(tmp_path, ho
 
 @_needs_git
 def test_write_waived_gate_writes_its_record(tmp_path, home):
-    # NOT_EVALUATED is skipped (test_write_not_evaluated_gate_writes_no_record);
+    # NOT_EVALUATED is written only with verdict blocked
+    # (test_write_a_run_that_blocked_with_no_gate_evaluated_writes_its_record);
     # a WAIVED outcome is a real one and is written.
     record = _record_of(tmp_path, _repo(tmp_path), "--gate-status", "waived")
     assert record["gate_status"] == "WAIVED"
@@ -666,16 +667,52 @@ def test_write_in_a_repo_with_zero_commits_creates_no_run_file_and_no_none_folde
 
 
 @_needs_git
-def test_write_not_evaluated_gate_writes_no_record(tmp_path, home):
+@pytest.mark.parametrize("gate", ["NOT_EVALUATED", " not_evaluated "])
+def test_write_a_run_that_blocked_with_no_gate_evaluated_writes_its_record(tmp_path, home, gate):
+    # A run that escalated or handed off before Stage 5, or whose gate could
+    # not be read, still blocked: the next run's recall must see it.
+    record = _record_of(tmp_path, _repo(tmp_path), "--gate-status", gate, "--verdict", "blocked")
+    assert (record["gate_status"], record["verdict"]) == ("NOT_EVALUATED", "blocked")
+    assert mc.validate_record(record) == mc.RECORD_OK
+
+
+@_needs_git
+@pytest.mark.parametrize("verdict", ["advance", " Advance "])
+def test_write_not_evaluated_gate_with_any_other_verdict_writes_no_record(tmp_path, home, verdict):
+    # NOT_EVALUATED never advances (gate_eval maps it to escalate), so that
+    # pair would store a false outcome.
     repo = _repo(tmp_path)
     store = tmp_path / "store"
     proc = _run(
         "write", "--impl-artifacts", str(tmp_path / "impl"), "--store", str(store),
         "--epic", "7", "--run-id", _RUN, "--gate-status", "NOT_EVALUATED",
-        "--verdict", "blocked", "--cwd", str(repo),
+        "--verdict", verdict, "--cwd", str(repo),
     )
     assert _out(proc)["status"] == "skip"
     assert not store.exists()
+    assert not (tmp_path / "impl").exists()
+
+
+@_needs_git
+def test_a_pre_gate_blocked_record_reaches_the_reader_and_counts_toward_recurrence(tmp_path, home):
+    # A pre-gate escalation that recurs used to read as a first occurrence,
+    # since the run that blocked before its gate left no record.
+    repo = _repo(tmp_path)
+    impl = tmp_path / "impl"
+    store = tmp_path / "store"
+    cause = "class=environment-config,path=_bmad-output/x.md"
+    _out(_write(impl, store, repo, _RUN, "--gate-status", "FAIL", "--verdict", "blocked", "--root-cause", cause))
+    _out(_write(impl, store, repo, _RUN_B, "--gate-status", "NOT_EVALUATED", "--verdict", "blocked", "--root-cause", cause))
+    _out(_write(impl, store, repo, _RUN_C, "--gate-status", "NOT_EVALUATED", "--verdict", "blocked"))
+    out = _out(_recall_filter(impl, store, repo, "--epic", "7"))
+    assert out["dropped"]["invalid"] == 0
+    by_id = {r["id"]: r for r in out["records"]}
+    assert by_id[_RUN_B]["title_noun_phrase"] == "UCG run epic 7: gate NOT_EVALUATED, verdict blocked"
+    assert by_id[_RUN_B]["recurring"] is True
+    # A record with no root cause adds nothing to recurrence.
+    assert by_id[_RUN_C]["recurring"] is False
+    (entry,) = out["recurrence"]
+    assert (entry["class"], entry["count"], entry["run_ids"]) == ("environment-config", 2, [_RUN, _RUN_B])
 
 
 # --- write: deferral, then a drain lands it (AC-5) ---------------------------

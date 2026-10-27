@@ -52,6 +52,10 @@ The gate status maps to a verdict (`GATE_VERDICT` in the script):
 
 Any unrecognized status escalates (the script's `GATE_VERDICT.get(gate_status, "escalate")` default), with a `reasons` entry noting it.
 
+One `FAIL` takes a different route. When the only criteria TEA's coverage matrix holds open are acceptance criteria tagged `**Gate-ability:** operator-evidence`, whose proof is a live result a person records, no re-loop can change the gate. A plain `**Gate-ability:** operator` tag is not read this way: it marks work the dev agent builds, so an open criterion carrying it keeps the re-loop. The skill checks that with `scripts/operator_owed.py`, which fails closed, and escalates with kind `operator-evidence-owed` instead of re-looping. `gate_eval.py` still prints `reloop`: the route changes, not the verdict.
+
+Once `/ucg-resolve` closes that escalation, with the person's records on disk at the commit the gate measured, the resume re-gates that same commit instead of re-driving the story. An `operator-evidence` criterion that already has a counted `pass` record, and that TEA still holds below `FULL`, is still owed: the record covers only part of the criterion, so the escalation names the records already counted and asks the operator to record the rest or to narrow or move the criterion in writing. Re-gating the records already counted changes nothing, so `/ucg-resolve` closes it only on a new `pass` record or on that written change.
+
 ## The production AND
 
 Under `--profile production`, an otherwise-`advance` verdict is additionally ANDed against two TEA signals, and any failure downgrades it to `reloop`. The downgrade floor is `reloop`. A `defer`/`reloop`/`escalate` is unchanged; only an `advance` moves:

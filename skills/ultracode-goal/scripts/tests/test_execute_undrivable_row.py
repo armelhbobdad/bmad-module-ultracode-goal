@@ -14,13 +14,16 @@ because a run reads this file, not the driver.
 Stdlib + pytest only.
 """
 
+import ast
 import re
 from pathlib import Path
 
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _EXECUTE = _SKILL_ROOT / "references" / "execute.md"
 _FINALIZE = _SKILL_ROOT / "references" / "finalize.md"
+_GATE = _SKILL_ROOT / "references" / "gate.md"
 _DRIVER = _SKILL_ROOT / "scripts" / "drive_epic.py"
+_PREFLIGHT_CHECK = _SKILL_ROOT / "scripts" / "preflight_check.py"
 
 
 def _sizing_section() -> str:
@@ -128,13 +131,45 @@ def test_the_terminal_is_representable_and_named():
     assert re.search(r"indistinguishable in the envelope from a run that drove", text, re.I)
 
 
-def test_the_two_handoff_kinds_agree_with_the_driver():
+def _driver_handoff_kinds() -> set[str]:
+    """The driver's `HANDOFF_KINDS`, read from its source rather than from a list here.
+
+    A list written in this file passed while the driver gained a kind the doc
+    never named: the regex only looked for the kinds it already knew.
+    """
+    tree = ast.parse(_DRIVER.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "HANDOFF_KINDS" for t in node.targets
+        ):
+            call = node.value
+            assert isinstance(call, ast.Call) and call.func.id == "frozenset"
+            return set(ast.literal_eval(call.args[0]))
+    raise AssertionError("drive_epic.py defines no HANDOFF_KINDS")
+
+
+def test_the_handoff_kinds_agree_with_the_driver():
     """The doc and the driver must name the SAME kinds, or the branch never fires."""
     text = _EXECUTE.read_text(encoding="utf-8")
-    driver = _DRIVER.read_text(encoding="utf-8")
-    documented = {k for k in ("story-decomposed", "defined-not-driven") if f'"{k}"' in text}
-    in_driver = set(re.findall(r'"(story-decomposed|defined-not-driven)"', driver))
-    assert documented == in_driver == {"story-decomposed", "defined-not-driven"}
+    in_driver = _driver_handoff_kinds()
+    assert in_driver == {"story-decomposed", "defined-not-driven", "operator-evidence-owed"}
+    undocumented = sorted(k for k in in_driver if not re.search(rf"[`\"]{re.escape(k)}[`\"]", text))
+    assert undocumented == [], f"execute.md does not name the handoff kind(s) {undocumented}"
+    # The gate writes the third kind, so the gate names it too.
+    assert "`operator-evidence-owed`" in _GATE.read_text(encoding="utf-8")
+
+
+def test_a_resume_stops_on_every_open_sidecar_but_the_two_handoffs():
+    """The resume manifest routes the two handoffs whose work the next
+    invocation picks up (`story-decomposed`, `defined-not-driven`) as `handoff`,
+    and every other open sidecar as `decision-pending`. `operator-evidence-owed`
+    is a handoff to the driver, but not to a resume: re-driving the story cannot
+    record the evidence an operator owes, so the resume stops until
+    `/ucg-resolve` closes it."""
+    manifest = _PREFLIGHT_CHECK.read_text(encoding="utf-8")
+    exempt = set(re.findall(r'"(story-decomposed|defined-not-driven|operator-evidence-owed)"', manifest))
+    assert exempt == {"story-decomposed", "defined-not-driven"}
+    assert exempt < _driver_handoff_kinds()
 
 
 def test_finalize_names_the_handoff_as_a_terminal_route():

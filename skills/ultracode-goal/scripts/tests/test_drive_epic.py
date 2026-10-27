@@ -1623,7 +1623,7 @@ def _sidecar(project: dict, story: str, kind: str) -> None:
     )
 
 
-@pytest.mark.parametrize("kind", ["story-decomposed", "defined-not-driven"])
+@pytest.mark.parametrize("kind", ["story-decomposed", "defined-not-driven", "operator-evidence-owed"])
 def test_a_blocked_stop_carrying_a_handoff_kind_is_named_as_one(project, monkeypatch, capsys, kind):
     """An invocation that decomposed a row reads exactly like a crash otherwise.
 
@@ -1762,6 +1762,28 @@ def test_the_clock_slack_is_wide_enough_for_a_real_write(tmp_path):
         assert drive_epic.handoff_kind(impl, STORY_A, started) == "story-decomposed", (
             "a sidecar written after the spawn began was rejected as residue"
         )
+
+
+def test_operator_evidence_owed_is_a_handoff_only_when_this_spawn_wrote_it(tmp_path):
+    """A story stopped on evidence only a person can record is named as a handoff.
+
+    `references/gate.md` writes the kind only on `operator_owed.py`'s
+    fail-closed `owed: true`, so the label is earned there. It still has to be
+    run-scoped like every other kind: a stale one would dress a later, real
+    failure as a scheduled handoff. A budget overrun is not a handoff.
+    """
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    sidecar = impl / f"escalation-{STORY_A}.json"
+    started = time.time()
+    sidecar.write_text(json.dumps({"kind": "operator-evidence-owed"}), encoding="utf-8")
+    assert drive_epic.handoff_kind(impl, STORY_A, started) == "operator-evidence-owed"
+    os.utime(sidecar, (started - 3600, started - 3600))
+    assert drive_epic.handoff_kind(impl, STORY_A, started) is None, (
+        "a sidecar an earlier invocation left was read as this spawn's handoff"
+    )
+    sidecar.write_text(json.dumps({"kind": "budget-overrun"}), encoding="utf-8")
+    assert drive_epic.handoff_kind(impl, STORY_A, time.time() - 1) is None
 
 
 def test_an_implausibly_large_sidecar_is_not_read(tmp_path):

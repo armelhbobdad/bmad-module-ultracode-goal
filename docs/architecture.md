@@ -56,6 +56,7 @@ skills/ultracode-goal/
 ├── scripts/                       # Deterministic truth (run via `uv`)
 │   ├── preflight_check.py         #   mechanical preflight facts + blocker budget
 │   ├── gate_eval.py               #   gate status -> verdict (the completion authority)
+│   ├── operator_owed.py           #   is a gate FAIL owed only operator-evidence ACs' records? (fail-closed)
 │   ├── mutate_check.py            #   mutation harness: attributable-red proof for the story's guards
 │   ├── gate_trail.py              #   per-story evidence trail (gate-trail.md) at finalize
 │   ├── formalize_check.py         #   readiness kernel behind the /ucg-formalize gate

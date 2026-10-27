@@ -54,7 +54,16 @@ run over.
 
     uv run formalize_check.py --epic <id> --project-root <p> \
         --planning-artifacts <p> --impl-artifacts <p> --tea-config <p> \
-        [--scan <the step-3 scan object, or - for stdin>]
+        [--story <key> ...] [--scan <the step-3 scan object, or - for stdin>]
+
+The in-scope stories are the Epic's not-`done` rows (ingest-and-scope.md Stage 1
+rule 3), or, with `--story` (repeatable), the named ones among them: the
+operator-scoped subset Stage 1 recorded. The per-story and per-AC checks read
+only those stories' files, plus the done parent's file a decomposed child's
+criteria come from, and `story_keys_uncovered` counts only those keys. A
+`--story` key that names no not-`done` story row of the Epic is a
+non-remediable gap, and when no `--story` key names one those checks read no
+story file.
 """
 
 from __future__ import annotations
@@ -345,11 +354,13 @@ def _present_and_readable(path: Path | None) -> bool:
 
 
 def _story_files(impl_artifacts: Path, epic: str, story_keys: list[str]) -> list[Path]:
-    """Story files under impl-artifacts whose name shares the Epic prefix.
+    """Every story file of the Epic under impl-artifacts, `done` ones included.
 
-    Stories for an Epic share its number prefix (ingest-and-scope.md:16). Sorted
-    for determinism. When the rollup named not-done keys, prefer files matching
-    one of those keys; otherwise fall back to the Epic-prefix glob.
+    Stories for an Epic share its number prefix (ingest-and-scope.md:16), and a
+    file starting with one of `story_keys` counts too. Sorted for determinism.
+    The coverage check reads all of them, since a done parent's file covers its
+    decomposed children, and so does the declared-id set. Which of them the
+    per-story checks read is `_in_scope_story_files`'s call.
     """
     if not impl_artifacts.is_dir():
         return []
@@ -415,6 +426,34 @@ def _parent_stem(stem: str) -> str | None:
         return "-".join(parts[:-1])
     lettered = re.match(r"^(\d+)[a-z]+$", parts[1])
     return "%s-%s" % (parts[0], lettered.group(1)) if lettered else None
+
+
+def _in_scope_story_files(
+    story_paths: list[Path], scope_keys: list[str], children: list[tuple[str, Path, str | None]]
+) -> list[Path]:
+    """The story files the per-story and per-AC checks read, in `story_paths` order.
+
+    Each in-scope key's own file, matched on the id stem as `_story_coverage`
+    matches it (the whole key for an alpha-keyed one), and the parent file each
+    in-scope decomposed child's criteria come from (`children`). A `done`
+    story's file is out of scope (ingest-and-scope.md Stage 1 rule 3), so its
+    acceptance criteria raise no gap here. With no in-scope key at all (every
+    row `done`, or no rollup to read), every file, as before. The caller never
+    asks for that fallback when `--story` was given: a `--story` list that
+    names no not-done row reads no file.
+    """
+    if not scope_keys:
+        return list(story_paths)
+    stems = {_story_stem(key) for key in scope_keys} - {None}
+    alpha = [key.lower() for key in scope_keys if _story_stem(key) is None]
+    parents = {parent for _, parent, _ in children}
+    return [
+        path
+        for path in story_paths
+        if path in parents
+        or _story_stem(path.name) in stems
+        or any(path.name.lower().startswith(key) for key in alpha)
+    ]
 
 
 def _uncovered_story_keys(
@@ -1039,6 +1078,7 @@ def build_verdict(
     impl_artifacts: Path,
     tea_config: Path,
     scan: str | None = None,
+    stories: list[str] | None = None,
 ) -> dict:
     mechanical_gaps: list[dict] = []
     judgment_candidates: list[dict] = []
@@ -1140,6 +1180,31 @@ def build_verdict(
             if _epic_id_of(key) == str(epic)
         }
 
+    # The in-scope keys: every not-done story row, or the operator-scoped
+    # subset `--story` names. A named key that is not a not-done story row of
+    # this Epic (a typo, another Epic's row, a done row) is not silently
+    # dropped: the verdict would then cover less than the run drives.
+    scope_keys = story_keys
+    if stories is not None:
+        requested = list(dict.fromkeys(key.strip() for key in stories))
+        scope_keys = [key for key in story_keys if key in requested]
+        for key in requested:
+            if key in story_keys:
+                continue
+            mechanical_gaps.append(
+                {
+                    "id": "story_not_in_scope:%s" % key,
+                    "kind": "story_not_in_scope",
+                    "severity": "high",
+                    "detail": "--story %s names no not-done story row of Epic %s in sprint-status.yaml: %s"
+                    % (key, epic, _rel(impl_artifacts / "sprint-status.yaml", project_root)),
+                    # The invocation names the scope; only the caller can
+                    # correct it.
+                    "remediable": False,
+                    "source": _rel(impl_artifacts / "sprint-status.yaml", project_root),
+                }
+            )
+
     # --- per-story / per-AC scan ---
     story_paths = _story_files(impl_artifacts, epic, story_keys)
 
@@ -1176,13 +1241,13 @@ def build_verdict(
     # zero case is already the gap above) and only when the rollup actually named
     # keys (with no keys there is nothing to compare against, and inventing a gap
     # from an unknown denominator would block legitimate runs).
-    coverage = _story_coverage(story_paths, story_keys, rows)
+    coverage = _story_coverage(story_paths, scope_keys, rows)
     uncovered = coverage.uncovered
     if story_paths and uncovered:
         detail = "Epic %s is partially seeded: %d of %d in-scope stories resolve no story file under impl-artifacts: %s. Unresolved: %s" % (
             epic,
             len(uncovered),
-            len(story_keys),
+            len(scope_keys),
             _rel(impl_artifacts, project_root),
             ", ".join(uncovered),
         )
@@ -1207,6 +1272,15 @@ def build_verdict(
                 "source": _rel(impl_artifacts, project_root),
             }
         )
+
+    # The files the per-story checks below read: in-scope stories only. A
+    # `--story` list that names no not-done row reads none: its
+    # `story_not_in_scope` gaps already block, and falling back to every file
+    # would bring back the done stories' gaps and candidates.
+    if scope_keys or stories is None:
+        scan_paths = _in_scope_story_files(story_paths, scope_keys, coverage.children)
+    else:
+        scan_paths = []
 
     stories_with_ac = 0
     ac_total = 0
@@ -1236,7 +1310,7 @@ def build_verdict(
     prd_text = _safe_read_text(prd_path) if prd_path is not None else None
     declared_ids = _collect_declared_ids(story_bodies, story_keys, prd_text)
 
-    for story_path in story_paths:
+    for story_path in scan_paths:
         body = story_reads[story_path]
         rel = _rel(story_path, project_root)
         if body is not None:
@@ -1417,7 +1491,7 @@ def build_verdict(
                     )
 
     # --- whole-story-level catch-all + gate-tag absence (reporting + judgment) ---
-    for story_path in story_paths:
+    for story_path in scan_paths:
         body = story_reads[story_path]
         if body is None:
             continue
@@ -1507,7 +1581,7 @@ def build_verdict(
         (ac_machine_checkable / ac_total) if ac_total else 0.0
     )
     gate_ability_tag_coverage = (
-        (stories_with_gate_tag / len(story_paths)) if story_paths else 0.0
+        (stories_with_gate_tag / len(scan_paths)) if scan_paths else 0.0
     )
 
     checks = {
@@ -1620,6 +1694,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "setting judgment_required; an unreadable scan, or one red_ids.py refuses, "
         "judges nothing.",
     )
+    parser.add_argument(
+        "--story",
+        action="append",
+        help="An in-scope story key, as its sprint-status row spells it (repeatable): "
+        "the operator-scoped subset. Without it every not-done story of the Epic is in "
+        "scope. A key that names no not-done story row of the Epic is a non-remediable gap.",
+    )
     args = parser.parse_args(argv)
 
     # Invocation-error lane (exit 2): any required flag missing OR empty. argparse
@@ -1632,6 +1713,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ("--tea-config", args.tea_config),
     )
     missing = [name for name, value in required if value is None or value.strip() == ""]
+    if args.story is not None and any(value.strip() == "" for value in args.story):
+        missing.append("--story")
     if missing:
         parser.error("the following arguments are required and non-empty: %s" % ", ".join(missing))
     return args
@@ -1660,6 +1743,7 @@ def main(argv: list[str] | None = None) -> int:
         impl_artifacts=impl_artifacts,
         tea_config=tea_config,
         scan=args.scan if args.scan in (None, "-") else str(_resolve(args.scan, project_root)),
+        stories=args.story,
     )
     print(json.dumps(verdict, sort_keys=True, indent=2))
     return 0
