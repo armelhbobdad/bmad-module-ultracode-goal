@@ -255,10 +255,25 @@ _WAIT_CLAUSES = (
     r"\*\*Waiting spends turns\.\*\* The Stop hook counts one turn per response, whatever the response did\.",
     r"that lands while the session is idle starts a response of its own",
     r"\*\*Make each wait report once\.\*\*",
-    r"waits for each and prints each one's exit status \(a bare `wait` returns 0 even when a job failed\)",
+    r"concurrent commands as one subagent the session waits for, which runs each as its own simple command "
+    r"and reports every exit status in its one reply",
+    r"One compound shell command that starts them together and collects their exit statuses "
+    r"\(`&`, `wait`, `\$!`, `\$\?`\) is not an option: under `scripts/drive_epic\.py`'s default spawn mode, "
+    r"`acceptEdits`, with the default allowlist, Claude Code refuses it before it runs",
     r"\*\*Watch for completion, not progress\.\*\*",
     r"The hook books every Stop to the story `\.current-story` names",
     r"Start such work in that story's own loop, once its step 0 has made it current\.",
+)
+
+# The bullet once offered concurrent commands as one background command that
+# starts them together and prints each exit status. Under drive_epic.py's
+# default acceptEdits with the default allowlist, Claude Code refused every
+# shell form of it (`&` with `$!`, subshells with `wait`, `$?` after a `;`, a
+# bare `wait`), while each command alone ran. The offer must not come back.
+_RETIRED_WAIT_FORM = "one background command that starts them together"
+_PRE_FIX_COMMANDS_CLAUSE = (
+    "concurrent commands as one background command that starts them together, waits for each and prints "
+    "each one's exit status (a bare `wait` returns 0 even when a job failed)"
 )
 
 
@@ -271,6 +286,8 @@ def _states_that_waits_spend_turns(text: str) -> bool:
     try:
         loop = _story_loop(text)
     except ValueError:
+        return False
+    if _RETIRED_WAIT_FORM in loop:
         return False
     return all(re.search(c, loop) for c in _WAIT_CLAUSES) and bool(
         re.search(
@@ -291,7 +308,9 @@ def test_execute_says_waiting_spends_turns():
         "whatever the response did.",
         "that lands while the session is idle starts a response of its own",
         "**Make each wait report once.**",
-        "(a bare `wait` returns 0 even when a job failed)",
+        "which runs each as its own simple command and reports every exit status in its one reply",
+        "(`&`, `wait`, `$!`, `$?`) is not an option",
+        "Claude Code refuses it before it runs",
         "**Watch for completion, not progress.**",
         "The hook books every Stop to the story `.current-story` names",
         "in that story's own loop, once its step 0 has made it current.",
@@ -315,6 +334,21 @@ def test_waits_predicate_rejects_the_paragraph_outside_the_story_loop():
 def test_waits_predicate_rejects_an_execute_without_it():
     """Twin: an older shipped execute.md, captured before this edit, fails it."""
     assert not _states_that_waits_spend_turns(_PRE_WAITS_EXECUTE.read_text(encoding="utf-8"))
+
+
+def test_waits_predicate_rejects_the_compound_command_offer():
+    """Twin: the bullet as first written, offering the one background command
+    the default spawn mode refuses, fails it, and so does that offer added back
+    beside the subagent form."""
+    live = _execute()
+    new_clause = (
+        "concurrent commands as one subagent the session waits for, which runs each as its own simple command "
+        "and reports every exit status in its one reply"
+    )
+    assert new_clause in live
+    assert not _states_that_waits_spend_turns(live.replace(new_clause, _PRE_FIX_COMMANDS_CLAUSE))
+    both = live.replace(new_clause, new_clause + ", or " + _PRE_FIX_COMMANDS_CLAUSE)
+    assert not _states_that_waits_spend_turns(both)
 
 
 _TROUBLE_WAITS = re.compile(
