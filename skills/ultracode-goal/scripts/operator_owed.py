@@ -40,6 +40,11 @@ script cannot read gives false, which leaves the re-loop route as it was:
     other tag;
   - none of those ACs has a live record TEA classified `fail` or
     `contradicted`: a failed measurement is a finding, not owed evidence;
+  - none of those ACs has a live record TEA classified `counted`: a pass at
+    the traced commit that TEA still holds below FULL covers only part of the
+    criterion, and recording it again changes nothing, so the re-loop's
+    correct-course narrows the criterion (or the operator records fuller
+    evidence);
   - the summary names the commit it measured (`source_sha`), which is the
     commit the record must be made at.
 
@@ -80,6 +85,10 @@ _TAG = re.compile(r"\*\*Gate-ability:\*\*\s*`?([A-Za-z][A-Za-z-]*)`?")
 
 # Live record dispositions that say the measurement was made and failed.
 _REFUTED = ("fail", "contradicted")
+# The disposition TEA gives a `pass` record made at the commit it traced. An
+# open AC that holds one is not owed a record: TEA held it below FULL because
+# the record exercises only part of the criterion.
+_COUNTED = "counted"
 
 
 def _own_artifact(trace_output: Path, name: str, story: str) -> Path | None:
@@ -266,6 +275,13 @@ def evaluate(args: argparse.Namespace) -> dict:
         if refuted:
             reasons.append(
                 f"{rid}: its recorded evidence is {', '.join(refuted)}; that is a finding, not owed evidence"
+            )
+            continue
+        if _COUNTED in found:
+            reasons.append(
+                f"{rid} is open ({requirement.get('coverage')}) with a pass record TEA counted at the "
+                "assessed commit, so the recorded evidence covers only part of the criterion: narrow "
+                "the criterion through correct-course, or record fuller evidence"
             )
             continue
         out["operator"].append(rid)

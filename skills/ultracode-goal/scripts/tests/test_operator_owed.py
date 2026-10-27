@@ -24,7 +24,8 @@ closed direction is therefore pinned here:
   operator-evidence and nothing else, inside its one `## Acceptance Criteria`
   section; a plain `operator` tag is work the dev agent builds, never owed;
 - a live record that failed is a finding, never owed evidence; a stale one is
-  still owed;
+  still owed; a counted one TEA still holds below FULL covers only part of the
+  criterion, which a re-loop's correct-course narrows, so it is not owed;
 - anything unreadable gives false.
 
 Run: uv run --with pytest pytest skills/ultracode-goal/scripts/tests/test_operator_owed.py -v
@@ -399,6 +400,36 @@ def test_a_failed_record_is_a_finding_and_a_stale_one_is_still_owed(tmp_path, di
     else:
         assert result["operator"] == []
         assert any(disposition in r for r in result["reasons"])
+
+
+def test_a_counted_record_trace_still_holds_partial_is_not_owed(tmp_path):
+    """The record is already there at the assessed commit, and TEA held the AC
+    PARTIAL anyway, since the record exercises only part of the criterion. An
+    escalation would ask for a record that exists, /ucg-resolve's close would
+    change nothing, and the re-gate would FAIL the same way: the re-loop's
+    correct-course narrows the criterion instead."""
+    reqs = [(rid, prio, "PARTIAL" if rid == "AC-10" else cov) for rid, prio, cov in CLEAN]
+    live = [
+        {
+            "id": f"{STORY}-LIVE-001",
+            "requirement_id": "AC-10",
+            "status": "pass",
+            "disposition": "counted",
+            "recorded_source_sha": SHA,
+        }
+    ]
+    project = Project(tmp_path, reqs=reqs, live=live).write()
+    result = run(project.argv())
+    assert result["owed"] is False
+    assert result["open"] == ["AC-10"]
+    assert result["operator"] == [] and result["assessed_commit"] is None
+    reason = next(r for r in result["reasons"] if r.startswith("AC-10"))
+    assert "covers only part of the criterion" in reason
+    assert "narrow the criterion through correct-course, or record fuller evidence" in reason
+    # Twin: the same AC with its record made at another commit is still owed.
+    project.matrix["live_records"][0]["disposition"] = "stale"
+    project.write()
+    assert run(project.argv())["owed"] is True
 
 
 # --- the gate must be the full instrument, failing on coverage alone -------------

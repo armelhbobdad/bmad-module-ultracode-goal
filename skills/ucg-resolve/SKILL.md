@@ -110,6 +110,12 @@ at four fields and cannot carry one, so its id is derived rather than read:
 uv run {ucg-root}/scripts/red_ids.py --mint-one <kind> <artifact path> <decision_needed>
 ```
 
+For a sidecar the three arguments are its own `kind`, `source` and `decision_needed`
+fields, each passed verbatim: `<artifact path>` is the sidecar's `source` field, its
+`:line` suffix and all (the id layer strips it), never the path of the sidecar file
+itself. The resume also reads a close keyed by the sidecar file's own path as closed,
+since earlier passes keyed some that way, but never mint a new id from that path.
+
 It prints the id and touches nothing. **A ledger `decision:` row is keyed by the same
 call** — kind `decision`, the ledger path, and the row's reason — because the row's own
 `id` column is unique only within its Epic heading, so `d1` under one Epic and `d1` under
@@ -213,7 +219,17 @@ The two dispositions are genuinely different things, not two names for one:
   `defer`. This surface never writes a record itself: the operator is its producer
   (`{ucg-root}/references/gate.md`, "Operator evidence is a recorded live result"). A
   ruling that narrows or moves the AC is the operator's story edit: record it, then close.
-  There is no counter reset.
+  **That close also writes the story's re-gate marker and resets its turn counter.** Write
+  `{workflow.implementation_artifacts}/.regate-<story_id>` as two lines, `sha=` the
+  assessed commit the sidecar names (in full, as `git rev-parse` prints it) and
+  `decision=` the id you closed, then delete the sidecar as for any close, and delete
+  `{workflow.implementation_artifacts}/.budget-<story_id>.json`: waiting for operator
+  evidence is not the story's work. The marker is the re-gate entry. While its `sha=`
+  names `HEAD`, the resume's `--assert-armed` call routes the story `gate-owed`, so it
+  re-enters at Stage 5 to re-gate that commit, and is never re-driven from step 0, where
+  the turn-ceiling read could escalate it and a commit past the assessed one would make
+  the records stale (`{ucg-root}/references/execute.md`, the resume rule). The gate
+  deletes the marker once the re-gate's verdict is logged.
 - **`defer`** — the decision is not made yet. Record the entry **without clearing
   anything**. The artifact stays exactly where it is, the item stays pending, and the next
   preflight still blocks on it.

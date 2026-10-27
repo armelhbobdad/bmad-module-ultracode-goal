@@ -6,7 +6,7 @@
 """The resume manifest: `preflight_check.py --assert-armed`.
 
 One deterministic read replaces the tool-action-per-fact environment sweep the
-resume rule costs on every `--max-stories` spawn. These tests pin the five
+resume rule costs on every `--max-stories` spawn. These tests pin the six
 properties that make it trustworthy rather than merely convenient:
 
 1. FAIL-CLOSED ARMING. Exit 0 requires the epic branch, both hooks with the
@@ -32,8 +32,15 @@ properties that make it trustworthy rather than merely convenient:
 5. AN OPEN ESCALATION OUTRANKS EVERY ROUTE, AND CLOSED MEANS WHAT /ucg-resolve
    MEANS. A story whose `escalation-<story>.json` is on disk routes
    `decision-pending` ahead of the other three, unless /ucg-resolve closed the
-   id it keys that sidecar by (red_ids.py's) or the sidecar is a handoff. A
-   sidecar that cannot be read fails closed, and none of it moves the exit.
+   id it keys that sidecar by (red_ids.py's, from its `source` or from the
+   sidecar's own path) or the sidecar is a handoff. A sidecar that cannot be
+   read, or whose fields no id can be minted from, fails closed, and none of
+   it moves the exit.
+6. A CLOSED OPERATOR-EVIDENCE-OWED STORY IS RE-GATED, NOT RE-DRIVEN. The
+   `.regate-<story>` marker /ucg-resolve writes on that close routes a
+   baselined story `gate-owed` while its `sha=` resolves to HEAD, and is
+   `stale` otherwise (a later commit, or no commit id), which routes as if it
+   were absent.
 
 Run: uv run --with pytest pytest scripts/tests/test_preflight_assert_armed.py
 """
@@ -1005,8 +1012,12 @@ def test_an_unreadable_decisions_file_closes_nothing(tmp_path: Path, decisions: 
         # Under the size cap, so it is the nesting that fails the parse.
         "[" * 20_000 + "]" * 20_000,
         json.dumps({"source": "s", "kind": "k", "decision_needed": "d", "pad": "x" * 70_000}),
+        # A lone surrogate parses from its JSON escape but encodes to no UTF-8,
+        # so no id can be minted from the field that holds it.
+        '{"source": "s", "kind": "k", "decision_needed": "Pick (a) or (b) \\ud800.", "evidence": "e"}',
+        '{"source": "s\\udc80", "kind": "story-decomposed", "decision_needed": "d", "evidence": "e"}',
     ],
-    ids=["bad-json", "array", "kind-not-str", "too-deep", "oversize"],
+    ids=["bad-json", "array", "kind-not-str", "too-deep", "oversize", "surrogate", "surrogate-handoff"],
 )
 def test_an_unreadable_sidecar_fails_closed(tmp_path: Path, raw: str) -> None:
     """Something escalated, and nothing here can say it was answered."""
@@ -1098,6 +1109,181 @@ def test_the_blocker_renders_a_one_line_reason_naming_the_sidecar(tmp_path: Path
     assert "\n" not in envelope["reason"]
 
 
+def _close(impl: Path, rid: str) -> None:
+    (impl / ".decisions.json").write_text(
+        json.dumps({"decisions": [{"id": rid, "answer": "a", "action": "close"}]}),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("spelling", ["relative", "absolute"])
+def test_a_close_keyed_by_the_sidecar_path_is_residue_too(tmp_path: Path, spelling: str) -> None:
+    """The field case: real /ucg-resolve closes keyed the id by the sidecar's
+    own path, not its `source`, and left the sidecar on disk. Reading that as
+    open stopped the resume on a decision the operator had closed."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    body = _sidecar(impl)
+    name = f"escalation-{_ESC_STORY}.json"
+    path = f"impl/{name}" if spelling == "relative" else str(impl / name)
+    _close(impl, _load("red_ids").mint_id(body["kind"], path, body["decision_needed"]))
+    _, out = _run(root, "--story", _ESC_STORY, impl=impl)
+    escalation = out["checks"]["story"]["escalation"]
+    assert escalation["state"] == "closed"
+    # The id reported stays the documented one, minted from `source`.
+    assert escalation["id"] == _load("red_ids").mint_id(body["kind"], body["source"], body["decision_needed"])
+    assert "blocker" not in escalation
+    assert out["checks"]["story"]["route"] == "story-boundary"
+
+
+def test_a_path_keyed_close_of_another_sidecar_does_not_close_this_one(tmp_path: Path) -> None:
+    """Twin: the path id binds the path and the decision's wording, so a
+    close keyed by a sibling story's sidecar path leaves this one open."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    body = _sidecar(impl)
+    _close(impl, _load("red_ids").mint_id(body["kind"], "impl/escalation-7-1.json", body["decision_needed"]))
+    _, out = _run(root, "--story", _ESC_STORY, impl=impl)
+    assert out["checks"]["story"]["escalation"]["state"] == "open"
+    assert out["checks"]["story"]["route"] == "decision-pending"
+
+
+# --- a closed operator-evidence-owed story owes a re-gate ---------------------
+
+
+def _failed_gate(root: Path, impl: Path) -> tuple[Path, str]:
+    """The story an operator-evidence-owed escalation leaves: committed past a
+    fresh baseline, green, and its FAIL gate's artifacts in the trace dir."""
+    trace = _committed_green(root, impl)
+    (trace / f"trace-{_ESC_STORY}.md").write_text("---\nworkflowType: testarch-trace\n---\n", encoding="utf-8")
+    (trace / f"gate-decision-{_ESC_STORY}.json").write_text(
+        json.dumps({"gate_status": "FAIL"}), encoding="utf-8"
+    )
+    return trace, _head(root)
+
+
+def _regate(impl: Path, sha: str) -> None:
+    """The marker /ucg-resolve writes when it closes the escalation."""
+    (impl / f".regate-{_ESC_STORY}").write_text(
+        f"sha={sha}\ndecision=operator-evidence-owed:trace/trace-{_ESC_STORY}.md:0123456789ab\n",
+        encoding="utf-8",
+    )
+
+
+def test_a_closed_operator_evidence_owed_story_is_re_gated_not_re_driven(tmp_path: Path) -> None:
+    """The reproduced shape: after the close the sidecar is gone and the FAIL
+    gate's artifacts block gate-owed, so the resume re-drove the story from
+    step 0, where the ceiling read could escalate it and steps 1-4 could commit
+    past the commit the operator's records were made at."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    trace, head = _failed_gate(root, impl)
+    _, out = _run(root, "--story", _ESC_STORY, "--trace-output", str(trace), impl=impl)
+    story = out["checks"]["story"]
+    assert story["gate_artifacts"] == "present" and story["escalation"] is None
+    assert story["regate"] is None
+    assert story["route"] == "mid-story"  # the twin: no marker
+    _regate(impl, head)
+    for extra in (("--trace-output", str(trace)), ()):
+        code, out = _run(root, "--story", _ESC_STORY, *extra, impl=impl)
+        story = out["checks"]["story"]
+        assert code == 0
+        assert story["regate"]["state"] == "fresh"
+        assert story["regate"]["sha"] == head
+        assert story["regate"]["decision"].startswith("operator-evidence-owed:")
+        assert story["route"] == "gate-owed"
+
+
+def test_a_regate_marker_short_sha_naming_head_is_fresh(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    trace, head = _failed_gate(root, impl)
+    _regate(impl, head[:12].upper())
+    _, out = _run(root, "--story", _ESC_STORY, "--trace-output", str(trace), impl=impl)
+    assert out["checks"]["story"]["regate"]["state"] == "fresh"
+    assert out["checks"]["story"]["route"] == "gate-owed"
+
+
+def test_a_regate_marker_behind_head_is_stale(tmp_path: Path) -> None:
+    """A later commit makes the operator's records stale: route as without it."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    trace, head = _failed_gate(root, impl)
+    _regate(impl, head)
+    (root / "later.txt").write_text("later\n", encoding="utf-8")
+    _git(root, "add", "later.txt")
+    _git(root, "commit", "-q", "-m", "after the assessed commit")
+    _, out = _run(root, "--story", _ESC_STORY, "--trace-output", str(trace), impl=impl)
+    story = out["checks"]["story"]
+    assert story["regate"]["state"] == "stale"
+    assert story["regate"]["sha"] == head
+    assert story["route"] == "mid-story"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["sha=HEAD\n", "sha=\n", "decision=x\n", "sha=" + "0" * 40 + "\n", "sha=zz\n", b"sha=\xff\n", "x" * 5000],
+    ids=["ref-name", "empty", "no-sha", "no-such-commit", "not-hex", "not-utf8", "oversize"],
+)
+def test_a_regate_marker_that_names_no_head_commit_is_stale(tmp_path: Path, raw: str | bytes) -> None:
+    """Fail closed: only a commit id that resolves to HEAD skips steps 0-4."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    trace, _ = _failed_gate(root, impl)
+    marker = impl / f".regate-{_ESC_STORY}"
+    if isinstance(raw, bytes):
+        marker.write_bytes(raw)
+    else:
+        marker.write_text(raw, encoding="utf-8")
+    code, out = _run(root, "--story", _ESC_STORY, "--trace-output", str(trace), impl=impl)
+    assert code == 0
+    assert out["checks"]["story"]["regate"]["state"] == "stale"
+    assert out["checks"]["story"]["route"] == "mid-story"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs a FIFO (POSIX)")
+def test_a_fifo_under_the_regate_name_is_stale_not_a_hang(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    trace, _ = _failed_gate(root, impl)
+    os.mkfifo(impl / f".regate-{_ESC_STORY}")
+    _, out = _run(root, "--story", _ESC_STORY, "--trace-output", str(trace), impl=impl, timeout=60)
+    assert out["checks"]["story"]["regate"]["state"] == "stale"
+    assert out["checks"]["story"]["route"] == "mid-story"
+
+
+def test_an_open_escalation_outranks_a_fresh_regate(tmp_path: Path) -> None:
+    """The re-gate escalated again: the new sidecar is the pending decision."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    trace, head = _failed_gate(root, impl)
+    _regate(impl, head)
+    _sidecar(impl, kind="operator-evidence-owed")
+    _, out = _run(root, "--story", _ESC_STORY, "--trace-output", str(trace), impl=impl)
+    assert out["checks"]["story"]["regate"]["state"] == "fresh"
+    assert out["checks"]["story"]["route"] == "decision-pending"
+
+
+def test_a_fresh_regate_without_a_baseline_is_not_gate_owed(tmp_path: Path) -> None:
+    """Step 5 re-reads the baseline; with none, nothing routes past step 0."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    impl.mkdir()
+    _regate(impl, _head(root))
+    _, out = _run(root, "--story", _ESC_STORY, impl=impl)
+    assert out["checks"]["story"]["regate"]["state"] == "fresh"
+    assert out["checks"]["story"]["route"] == "story-boundary"
+
+
 # --- the doc contract ---------------------------------------------------------
 
 
@@ -1138,3 +1324,13 @@ def test_resume_rule_stops_on_an_open_escalation() -> None:
     resume = next(line for line in skill.splitlines() if line.startswith("**Resume.**"))
     for token in ("`decision-pending`", "`/ucg-resolve`"):
         assert token in resume, f"SKILL.md's Resume paragraph is missing {token}"
+
+
+def test_ucg_resolve_names_the_value_a_sidecar_id_is_minted_from() -> None:
+    """The reader accepts a close keyed by `source` or by the sidecar's path,
+    but /ucg-resolve must mint with one value, said plainly: `source`."""
+    resolve = " ".join((SCRIPTS.parents[1] / "ucg-resolve" / "SKILL.md").read_text(encoding="utf-8").split())
+    assert "`<artifact path>` is the sidecar's `source` field" in resolve
+    assert "never the path of the sidecar file itself" in resolve
+    execute = " ".join((SCRIPTS.parent / "references" / "execute.md").read_text(encoding="utf-8").split())
+    assert "a close keyed by the sidecar file's own path, as earlier passes keyed some, counts too" in execute

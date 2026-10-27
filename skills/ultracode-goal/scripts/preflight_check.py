@@ -80,8 +80,9 @@ colour, red for anything but a green latch v2),
 reports `impl_artifacts_tracked` as step 1 does (a resumed session has no
 step-1 report to read it from), and, given --story, derives the story's resume route from artifacts alone:
 decision-pending (an open escalation-<story>.json, which outranks the rest),
-story-boundary (no baseline), gate-owed (committed, green, un-gated - requires
---trace-output evidence; without it that route never fires), or mid-story.
+story-boundary (no baseline), gate-owed (committed, green, un-gated, which
+requires --trace-output evidence and never fires without it; or a re-gate owed,
+a .regate-<story> marker naming HEAD), or mid-story.
 Exit 0 iff branch+hooks+env+skills are armed; the latch, the tracked fact and
 the story block never move the exit code, because they inform model-owned actions rather than certify
 them.
@@ -1193,19 +1194,53 @@ def _red_ids():
     return red_ids
 
 
-def _escalation_of(impl_artifacts: Path, story: str) -> dict | None:
+def _sidecar_ids(data: dict, path: Path, project_root: Path) -> list[str]:
+    """The ids a /ucg-resolve close of this sidecar may be recorded under.
+
+    First the documented one, minted from the sidecar's own `source` field.
+    Then the same kind and decision minted from the sidecar file's own path,
+    project-root-relative and absolute, since real closes were keyed that way.
+    The digest still binds the decision's wording, so none of these can close
+    another decision. Raises UnicodeError when a field cannot be encoded.
+    """
+    for field in ("source", "kind", "decision_needed"):
+        data[field].encode("utf-8")
+    try:
+        resolved = path.parent.resolve() / path.name
+    except (OSError, RuntimeError):  # RuntimeError: a symlink loop
+        resolved = path
+    spellings = [str(path), path.as_posix(), str(resolved), resolved.as_posix()]
+    for candidate in (path, resolved):
+        try:
+            relative = candidate.relative_to(project_root)
+        except ValueError:
+            continue
+        spellings += [relative.as_posix(), str(relative)]
+    mint = _red_ids().mint_id
+    ids = [mint(data["kind"], data["source"], data["decision_needed"])]
+    for spelling in spellings:
+        minted = mint(data["kind"], spelling, data["decision_needed"])
+        if minted not in ids:
+            ids.append(minted)
+    return ids
+
+
+def _escalation_of(impl_artifacts: Path, story: str, project_root: Path) -> dict | None:
     """The re-entry story's typed escalation sidecar, read as /ucg-resolve reads it.
 
     None when `escalation-<story>.json` is absent. Otherwise `state` is:
       - `open`: a decision nobody has closed. /ucg-resolve deletes the sidecar
         when it closes one and leaves it on disk on a `defer`, so presence is
         pending, unless the id /ucg-resolve keys the answer by (red_ids.py's,
-        from the sidecar's own kind, source and decision_needed) is closed in
+        from the sidecar's own kind, source and decision_needed, or the same
+        minted from the sidecar's own path; see _sidecar_ids) is closed in
         `.decisions.json`: /ucg-resolve never re-asks a closed id, so routing on
         that residue would stop the resume on a question no surface offers.
         A sidecar that cannot be read is `open` too (fail closed): something
-        escalated, and nothing here can say it was answered.
-      - `closed`: present, but its id is closed in `.decisions.json`.
+        escalated, and nothing here can say it was answered. So is one whose
+        fields no id can be minted from (a lone surrogate, which parses from a
+        JSON `\\ud800` escape but encodes to no UTF-8).
+      - `closed`: present, but one of its ids is closed in `.decisions.json`.
       - `handoff`: a `story-decomposed` or `defined-not-driven` sidecar, work
         handed to this invocation rather than a decision.
     An `open` sidecar also carries `blocker`, the one {source, decision_needed}
@@ -1230,20 +1265,25 @@ def _escalation_of(impl_artifacts: Path, story: str) -> dict | None:
         except (ValueError, RecursionError):  # RecursionError: nested too deep
             data = None
     fields = ("source", "kind", "decision_needed")
+    minted: list[str] | None = None
     if isinstance(data, dict) and all(isinstance(data.get(f), str) for f in fields):
+        try:
+            minted = _sidecar_ids(data, path, project_root)
+        except UnicodeError:
+            minted = None
+    if minted is not None:
         out["readable"] = True
         out["kind"] = data["kind"]
         if data["kind"] in _HANDOFF_KINDS:
             out["state"] = "handoff"
         else:
-            ids = _red_ids()
-            out["id"] = ids.mint_id(data["kind"], data["source"], data["decision_needed"])
+            out["id"] = minted[0]
             decisions = impl_artifacts / ".decisions.json"
             try:
-                closed = ids.closed_ids(decisions) if decisions.is_file() else set()
+                closed = _red_ids().closed_ids(decisions) if decisions.is_file() else set()
             except Exception:  # noqa: BLE001 - an unreadable record closes nothing
                 closed = set()
-            if out["id"] in closed:
+            if any(rid in closed for rid in minted):
                 out["state"] = "closed"
     if out["state"] == "open":
         what = (
@@ -1256,6 +1296,57 @@ def _escalation_of(impl_artifacts: Path, story: str) -> dict | None:
             "decision_needed": "decision-pending: the re-entry story %s %s; "
             "answer it with /ucg-resolve, then resume" % (story, what),
         }
+    return out
+
+
+# A legitimate re-gate marker is two short lines.
+_REGATE_MAX_BYTES = 4 * 1024
+# A commit id as git prints one, never a ref name: `sha=HEAD` must not match.
+_COMMIT_ID = re.compile(r"[0-9a-f]{7,64}")
+
+
+def _regate_of(project_root: Path, impl_artifacts: Path, story: str) -> dict | None:
+    """The story's `.regate-<story>` marker, which /ucg-resolve writes when it
+    closes an `operator-evidence-owed` escalation (skills/ucg-resolve/SKILL.md).
+
+    It holds `sha=<the assessed commit>` and `decision=<the closed id>`. None
+    when absent. Otherwise `state` is:
+      - `fresh`: `sha=` resolves to HEAD, the commit the operator's records were
+        made at, so the story owes a re-gate of that commit and nothing else.
+      - `stale`: anything else. A later commit makes the records stale
+        (references/gate.md), and a marker that cannot be read, or names no
+        commit id, says nothing about HEAD: the route is then what it would be
+        without the marker.
+    """
+    path = impl_artifacts / f".regate-{story}"
+    try:
+        raw = _mem_common().read_regular_file(path, limit=_REGATE_MAX_BYTES + 1)
+    except FileNotFoundError:
+        if not path.is_symlink():
+            return None
+        raw = None  # a dangling link under the marker's name
+    except OSError:
+        raw = None
+    out: dict = {"path": str(path), "state": "stale", "sha": None, "decision": None}
+    text = None
+    if raw is not None and len(raw) <= _REGATE_MAX_BYTES:
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = None
+    if text is None:
+        return out
+    for key in ("sha", "decision"):
+        match = re.search(r"^%s=(.*)$" % key, text, re.MULTILINE)
+        if match and match.group(1).strip():
+            out[key] = match.group(1).strip()
+    sha = (out["sha"] or "").lower()
+    if not _COMMIT_ID.fullmatch(sha):
+        return out
+    code, named = _git(["rev-parse", "--verify", "-q", sha + "^{commit}"], project_root)
+    head_code, head = _git(["rev-parse", "--verify", "-q", "HEAD"], project_root)
+    if code == 0 and head_code == 0 and named and named == head:
+        out["state"] = "fresh"
     return out
 
 
@@ -1277,7 +1368,12 @@ def _assert_story(
         a tests-ran marker still matching it, and NO per-story gate artifact) —
         enter at step 5. This route REQUIRES --trace-output: with no artifact
         evidence the discriminator cannot hold in full, and skipping steps 1-4
-        on a guess is the fail-open this mode must not introduce.
+        on a guess is the fail-open this mode must not introduce. A baselined
+        story whose `.regate-<story>` is `fresh` (see _regate_of) takes it
+        too, with or without --trace-output, since the marker and HEAD are its
+        evidence: /ucg-resolve closed its `operator-evidence-owed` escalation, its
+        FAIL gate's artifacts are on disk, and it owes a re-gate of HEAD, never
+        a re-drive that could commit past the operator's records.
       - `mid-story`: everything else — re-read the baseline, run the ordinary
         loop from step 0.
     """
@@ -1301,10 +1397,14 @@ def _assert_story(
             out["gate_artifacts"] = "present" if gated else "absent"
     else:
         out["gate_artifacts"] = "unknown"
-    escalation = _escalation_of(impl_artifacts, story)
+    escalation = _escalation_of(impl_artifacts, story, project_root)
     out["escalation"] = escalation
+    regate = _regate_of(project_root, impl_artifacts, story)
+    out["regate"] = regate
     if escalation is not None and escalation["state"] == "open":
         out["route"] = "decision-pending"
+    elif baseline and regate is not None and regate["state"] == "fresh":
+        out["route"] = "gate-owed"
     elif not baseline:
         out["route"] = "story-boundary"
     elif (
@@ -1429,7 +1529,8 @@ def main(argv: list[str] | None = None) -> int:
         "--story",
         help="assert-armed only: the story the resume will drive; adds the "
         "artifact-derived route (decision-pending / story-boundary / mid-story / "
-        "gate-owed) and the story's escalation sidecar state.",
+        "gate-owed), the story's escalation sidecar state and its re-gate "
+        "marker state.",
     )
     parser.add_argument(
         "--run-id",

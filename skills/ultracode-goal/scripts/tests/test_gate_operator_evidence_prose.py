@@ -17,11 +17,15 @@ reads it:
     `operator` tag keeps its meaning, work the dev agent builds;
   - gate.md names the live results file trace reads, asks `operator_owed.py`
     on every FAIL BEFORE the re-loop route, escalates with kind
-    `operator-evidence-owed` on `owed: true`, and parks an owed AC on advance
-    or defer without claiming a P2 or P3 one cannot fail the gate;
+    `operator-evidence-owed` on `owed: true`, sends an AC whose counted record
+    TEA still holds below FULL to the re-loop, parks an owed AC on advance or
+    defer without claiming a P2 or P3 one cannot fail the gate, and deletes the
+    re-gate marker once a verdict is logged;
   - execute.md names the kind as a live one, keeps it off ucg-dev-story's
-    plate, and says to get an AC narrowed before pinning a stated bound;
-  - ucg-resolve closes the escalation only with the records on disk;
+    plate, says to get an AC narrowed before pinning a stated bound, and
+    re-gates (never re-drives) a story whose escalation /ucg-resolve closed;
+  - ucg-resolve closes the escalation only with the records on disk, and that
+    close writes `.regate-<story_id>` and resets the story's turn counter;
   - finalize.md files it under the escalated route.
 
 test_operator_owed.py pins the script; this pins the routing. The documented
@@ -245,3 +249,64 @@ def test_every_surface_keys_the_owed_class_on_operator_evidence():
     # Twin: the old wording, which keyed the class on the plain tag, fails the check.
     old = "An AC tagged `**Gate-ability:** operator` is proven only through TEA's live verification results."
     assert any(_PLAIN_TAG in s and "builds" not in s for s in _SENTENCE.split(old))
+
+
+# --- the re-gate a closed escalation owes, and a record that covers part of an AC ---
+
+
+def test_ucg_resolve_writes_the_regate_marker_and_resets_the_counter():
+    """Without the marker the resume re-drove the closed story from step 0,
+    where its grown turn count could escalate it and steps 1-4 could commit
+    past the commit the operator's records were made at."""
+    close = re.search(r"- \*\*`close`\*\*.*?(?=\n- \*\*`|\n\n)", RESOLVE, re.DOTALL)
+    assert close is not None
+    text = _norm(close.group(0))
+    operator = text[text.index("**Closing an `operator-evidence-owed` escalation") :]
+    assert "`{workflow.implementation_artifacts}/.regate-<story_id>`" in operator
+    assert "`sha=` the assessed commit" in operator
+    assert "`decision=` the id you closed" in operator
+    assert "`{workflow.implementation_artifacts}/.budget-<story_id>.json`" in operator
+    assert "routes the story `gate-owed`" in operator
+    assert "There is no counter reset" not in RESOLVE
+
+
+_FOURTH_CASE = "**A fourth case: a closed `operator-evidence-owed` story owes a re-gate, not a re-drive.**"
+
+
+def test_execute_resume_rule_re_gates_a_closed_operator_evidence_story():
+    assert EXECUTE.count(_FOURTH_CASE) == 1
+    # In the resume rule: after the third case, before the story loop.
+    assert EXECUTE.index("**A third case:") < EXECUTE.index(_FOURTH_CASE) < EXECUTE.index("## Default")
+    paragraph = _norm(EXECUTE[EXECUTE.index(_FOURTH_CASE) :].split("\n\n")[0])
+    for token in (
+        "`{workflow.implementation_artifacts}/.regate-<story_id>`",
+        "resets the story's turn counter",
+        "the route is `gate-owed`",
+        "skipping step 0's turn-ceiling read and steps 1 through 4",
+        "Commit nothing before that gate",
+        "A `stale` marker",
+        "routes as if it were absent",
+        "the gate deletes the marker once this story's verdict is logged",
+    ):
+        assert token in paragraph, token
+    sweep = next(ln for ln in EXECUTE.splitlines() if ln.startswith("**The re-assertion sweep is one script call"))
+    assert "the re-gate a closed `operator-evidence-owed` escalation owes" in sweep
+
+
+def test_the_gate_deletes_the_regate_marker_once_the_verdict_is_logged():
+    """Left on disk, a marker still naming HEAD would route the next resume to
+    another re-gate of a story whose verdict already stands."""
+    route = _norm(_section(GATE, "## Route on the verdict"))
+    settle = "**A logged verdict settles an owed re-gate.**"
+    removal = "delete `{workflow.implementation_artifacts}/.regate-<story_id>` if it exists"
+    assert route.count(settle) == 1 and removal in route
+    # After the record ("Run the gate", above), before every route that follows.
+    assert route.index(settle) < route.index(removal) < route.index("- **`advance`**")
+    assert "Once this story's verdict is recorded in `.decision-log.md`" in route
+    assert "the resume re-gates that commit rather than re-driving the story" in _norm(_operator_route())
+
+
+def test_a_counted_record_trace_holds_partial_takes_the_reloop():
+    route = _norm(_operator_route())
+    assert "already holds a `pass` record TEA counted at the assessed commit is not owed" in route
+    assert "the run takes the re-loop, and its `bmad-correct-course` narrows the AC" in route
