@@ -79,6 +79,7 @@ a present latch also reports its `latch_version` and a derived `store_ok`
 colour, red for anything but a green latch v2),
 reports `impl_artifacts_tracked` as step 1 does (a resumed session has no
 step-1 report to read it from), and, given --story, derives the story's resume route from artifacts alone:
+decision-pending (an open escalation-<story>.json, which outranks the rest),
 story-boundary (no baseline), gate-owed (committed, green, un-gated - requires
 --trace-output evidence; without it that route never fires), or mid-story.
 Exit 0 iff branch+hooks+env+skills are armed; the latch, the tracked fact and
@@ -1170,6 +1171,91 @@ def _story_gate_artifacts_present(trace_output: Path, story: str) -> bool | None
     return False
 
 
+# Typed escalation sidecar kinds that hand work to the next invocation rather
+# than ask a human for a decision (references/execute.md, "durable work and
+# advanced no row"). Kept equal to drive_epic.HANDOFF_KINDS by a test.
+_HANDOFF_KINDS = frozenset({"story-decomposed", "defined-not-driven"})
+# A legitimate sidecar is four short strings (drive_epic reads it the same way).
+_SIDECAR_MAX_BYTES = 64 * 1024
+
+
+def _red_ids():
+    """scripts/red_ids.py, imported the way _mem_common imports lib/mem_common:
+    sibling module, path set here, never at module load."""
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    import red_ids  # noqa: PLC0415  (sibling script, path set above)
+
+    return red_ids
+
+
+def _escalation_of(impl_artifacts: Path, story: str) -> dict | None:
+    """The re-entry story's typed escalation sidecar, read as /ucg-resolve reads it.
+
+    None when `escalation-<story>.json` is absent. Otherwise `state` is:
+      - `open`: a decision nobody has closed. /ucg-resolve deletes the sidecar
+        when it closes one and leaves it on disk on a `defer`, so presence is
+        pending, unless the id /ucg-resolve keys the answer by (red_ids.py's,
+        from the sidecar's own kind, source and decision_needed) is closed in
+        `.decisions.json`: /ucg-resolve never re-asks a closed id, so routing on
+        that residue would stop the resume on a question no surface offers.
+        A sidecar that cannot be read is `open` too (fail closed): something
+        escalated, and nothing here can say it was answered.
+      - `closed`: present, but its id is closed in `.decisions.json`.
+      - `handoff`: a `story-decomposed` or `defined-not-driven` sidecar, work
+        handed to this invocation rather than a decision.
+    An `open` sidecar also carries `blocker`, the one {source, decision_needed}
+    pair a headless stop hands the adapter so its `reason` names the sidecar.
+    """
+    path = impl_artifacts / f"escalation-{story}.json"
+    try:
+        # A FIFO under the sidecar's name is never opened (that blocks with no
+        # writer): read_regular_file returns None for anything but a file.
+        raw = _mem_common().read_regular_file(path, limit=_SIDECAR_MAX_BYTES + 1)
+    except FileNotFoundError:
+        if not path.is_symlink():
+            return None
+        raw = None  # a dangling link under the sidecar's name
+    except OSError:
+        raw = None
+    out: dict = {"path": str(path), "state": "open", "readable": False, "kind": None}
+    data = None
+    if raw is not None and len(raw) <= _SIDECAR_MAX_BYTES:
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (ValueError, RecursionError):  # RecursionError: nested too deep
+            data = None
+    fields = ("source", "kind", "decision_needed")
+    if isinstance(data, dict) and all(isinstance(data.get(f), str) for f in fields):
+        out["readable"] = True
+        out["kind"] = data["kind"]
+        if data["kind"] in _HANDOFF_KINDS:
+            out["state"] = "handoff"
+        else:
+            ids = _red_ids()
+            out["id"] = ids.mint_id(data["kind"], data["source"], data["decision_needed"])
+            decisions = impl_artifacts / ".decisions.json"
+            try:
+                closed = ids.closed_ids(decisions) if decisions.is_file() else set()
+            except Exception:  # noqa: BLE001 - an unreadable record closes nothing
+                closed = set()
+            if out["id"] in closed:
+                out["state"] = "closed"
+    if out["state"] == "open":
+        what = (
+            "still carries an open escalation (kind %s)" % out["kind"]
+            if out["readable"]
+            else "carries an escalation sidecar that cannot be read"
+        )
+        out["blocker"] = {
+            "source": str(path),
+            "decision_needed": "decision-pending: the re-entry story %s %s; "
+            "answer it with /ucg-resolve, then resume" % (story, what),
+        }
+    return out
+
+
 def _assert_story(
     project_root: Path,
     impl_artifacts: Path,
@@ -1179,6 +1265,9 @@ def _assert_story(
     """Classify the resume story by artifacts, never by prose.
 
     Routes mirror references/execute.md's resume rule exactly:
+      - `decision-pending`: the story's escalation-<story>.json is open (see
+        _escalation_of); it outranks the three below, because driving or
+        gating the story would act on a decision nobody closed.
       - `story-boundary`: no baseline marker — the normal `--max-stories` case;
         step 0 writes the baseline fresh.
       - `gate-owed`: committed, green and un-gated (commits past the baseline,
@@ -1209,7 +1298,11 @@ def _assert_story(
             out["gate_artifacts"] = "present" if gated else "absent"
     else:
         out["gate_artifacts"] = "unknown"
-    if not baseline:
+    escalation = _escalation_of(impl_artifacts, story)
+    out["escalation"] = escalation
+    if escalation is not None and escalation["state"] == "open":
+        out["route"] = "decision-pending"
+    elif not baseline:
         out["route"] = "story-boundary"
     elif (
         out["gate_artifacts"] == "absent"
@@ -1332,7 +1425,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--story",
         help="assert-armed only: the story the resume will drive; adds the "
-        "artifact-derived route (story-boundary / mid-story / gate-owed).",
+        "artifact-derived route (decision-pending / story-boundary / mid-story / "
+        "gate-owed) and the story's escalation sidecar state.",
     )
     parser.add_argument(
         "--run-id",

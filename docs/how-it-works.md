@@ -117,7 +117,7 @@ The **production** profile wires the full TEA chain as gates: test-design, atdd,
 
 ## The decision log
 
-The run's `.decision-log.md`, held in the skill's run folder, is canonical memory. Compaction can drop everything else; the log recovers full state. It records scope, the preflight verdict, every gate outcome, every deferral, and (in headless) every assumption. **Resume** reads it: on a resumed run, Execute re-enters at the first story whose last logged gate verdict is not `advance`; advanced stories are not re-run, and the Epic branch, hooks, and allowlist are re-asserted (not rebuilt) before continuing.
+The run's `.decision-log.md`, held in the skill's run folder, is canonical memory. Compaction can drop everything else; the log recovers full state. It records scope, the preflight verdict, every gate outcome, every deferral, and (in headless) every assumption. **Resume** reads it: on a resumed run, Execute re-enters at the first story whose last logged gate verdict is not `advance`; advanced stories are not re-run, and the Epic branch, hooks, and allowlist are re-asserted (not rebuilt) before continuing. A re-entry story that still carries an open escalation is not re-entered: the run stops and points at `/ucg-resolve`.
 
 ## The run report, the gate trail, and the deferred-work ledger
 

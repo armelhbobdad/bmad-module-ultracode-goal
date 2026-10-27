@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  A resumed run no longer re-drives a story whose escalation is still open. When the story the resume would re-enter still has its `escalation-<story_id>.json` on disk, and `/ucg-resolve` has not closed that decision in `.decisions.json`, `preflight_check.py --assert-armed` now reports the route `decision-pending` and the resume drives nothing: an attended run offers `/ucg-resolve`, and a headless run ends `blocked` with a `reason` that names the sidecar. A `story-decomposed` or `defined-not-driven` sidecar is a handoff rather than a decision, and the resume goes on as before.
