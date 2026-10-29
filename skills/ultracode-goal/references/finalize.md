@@ -119,13 +119,15 @@ The delegation is hard time-boxed by the `timeout 300` wrapper above and is **no
 
 Execute maintains the heartbeat `{workflow.implementation_artifacts}/run-status.json` as the spine advances (shape: `{epic, story, index, total, last_verdict, last_reasons, reloop_count, stories, budget_used, profile, updated}`). At close, write its **terminal** state — the final story/index, the `last_verdict` (`advance` when the Epic completed, the escalating story's verdict when blocked, or the last in-scope story's `advance` for a `partial-complete` run — a deliberate strict subset of the Epic delivered with no Epic-level gate), and a fresh `updated` timestamp — so a poller reading the file after the run sees the settled outcome, not a stale mid-run snapshot. **Write the whole shape, not a subset.** This write overwrites the file, so a narrower object silently strips keys a poller was reading mid-run: carry `last_reasons` and `stories` through from the last heartbeat rather than dropping them off the artifact at the moment the run settles — those two have no fresher source than the snapshot. **`budget_used` does have one, so it is re-derived, never carried**: re-read the final story's `{workflow.implementation_artifacts}/.budget-<story>.json` exactly as every heartbeat write does (execute.md's hook-file-wins rule — "never carry the snapshot's own number forward"). The terminal write is the write most likely to land after turns the last heartbeat never saw — this stage's own — and a carried-forward number under-reports precisely there, in the one direction that matters: a run that ran close to its ceiling reports headroom, and that figure feeds the sizing decisions the next Epic makes. **The enumerated keys are the whole shape.** This file is a single live snapshot, not an accumulating record: do not add a key the shape does not name, and do not carry one forward from an earlier run's write. Dropping an unenumerated key is not narrowing — narrowing loses a key this shape defines and a poller was reading, whereas an unenumerated key has no reader (`scripts/status_render.py` renders exactly these keys and ignores anything else) and no consumer may pin against it (`docs/_internal/STABILITY.md` places this file outside the consumable contract).
 
+A run that stopped on an `evidence-commit-rejected` escalation keeps that story's `advance` as `last_verdict`, since the story advanced, so its terminal `last_reasons` carries one reason naming that story's `escalation-<story_id>.json` and saying its gate evidence is not committed: without it, the last story's stop would read exactly like a completed Epic. The resume that later makes that commit replaces those reasons with one naming the commit it made, rather than carrying the blocked run's forward.
+
 ## Surface the deferred-work ledger
 
 Show the user **this run's Epic heading** from the ledger at `{workflow.deferred_work_path}` — the open items under that one heading, their severity and suggested actions — so nothing parked during the run is invisible at handoff. The ledger holds one heading per Epic across runs; do not surface other Epics' parked work. If the file (or this Epic's heading) does not exist, say so plainly: nothing was deferred this run.
 
 ## Epic-complete hook
 
-This hook fires **only when the Epic-level gate verdict was `advance`** (a `complete` run). On a `blocked` run — a story escalated and the Epic never advanced — skip this step entirely; a "notify success" command must not fire on a blocked Epic.
+This hook fires **only when the Epic-level gate verdict was `advance`** (a `complete` run) and its evidence is committed. On a `blocked` run (a story escalated, so the Epic never advanced or the evidence commit of its last story waits on the operator), skip this step entirely; a "notify success" command must not fire on a blocked Epic.
 
 When the Epic advanced, run: `uv run --no-project {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_epic_complete`
 
@@ -133,7 +135,7 @@ If the resolved `{workflow.on_epic_complete}` is non-empty, follow it as the fin
 
 ## Escalation hook
 
-The mirror of the epic-complete hook at the opposite terminal. This hook fires **only on a `blocked` run** — a story escalated and the Epic never advanced — and never on a clean advance, so an operator who walked away learns that the run stopped being able to make progress on its own.
+The mirror of the epic-complete hook at the opposite terminal. This hook fires **only on a `blocked` run** (a story escalated, so the Epic never advanced or the evidence commit of its last story waits on the operator) and never on a clean advance, so an operator who walked away learns that the run stopped being able to make progress on its own.
 
 Execute may already have pinged when the gate escalated a story on its turn count, so this site is deduped against that same run-scoped marker, `{workflow.implementation_artifacts}/.on-escalation-fired-<run-id>`, **check-then-write**, at that byte-identical path, where `<run-id>` is this invocation's run id, minted at Stage 1 or at a resume's re-entry and carried forward verbatim. If the marker is already present, skip silently: the other fire site already pinged for this run. If it is absent, run: `uv run --no-project {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_escalation`
 
@@ -143,7 +145,7 @@ This is a side effect on the way out, never a gate on the exit: a hook that erro
 
 ## Headless output
 
-In headless (`-H`), build the final JSON **through the `scripts/headless_envelope.py` adapter** — never hand-composed here — run the Workflow health check (below) in its unattended queue-only mode, then emit the JSON and stop. `status` is `complete` when the Epic-level gate advanced, or `blocked` when a story escalated, and the adapter has one entry point per shape:
+In headless (`-H`), build the final JSON **through the `scripts/headless_envelope.py` adapter** (never hand-composed here), run the Workflow health check (below) in its unattended queue-only mode, then emit the JSON and stop. `status` is `complete` when the Epic-level gate advanced and its evidence is committed, or `blocked` when a story escalated, the last story's `evidence-commit-rejected` included, though the Epic-level gate advanced before it (`references/gate.md`), and the adapter has one entry point per shape:
 
 ```
 build_complete_envelope(<path to this run's .decision-log.md>, report=<run-report.md path or None>, deferred_work=<{workflow.deferred_work_path} or None>, impl_artifacts={workflow.implementation_artifacts})

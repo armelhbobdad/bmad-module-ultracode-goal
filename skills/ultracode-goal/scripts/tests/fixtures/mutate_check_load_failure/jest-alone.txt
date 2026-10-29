@@ -1,0 +1,67 @@
+FAIL tests/clamp.test.js
+  ● Test suite failed to run
+
+    SyntaxError: /home/dev/work/load-failure/jt/calc.js: Unexpected token, expected ")" (2:13)
+
+      1 | function clamp(x, hi) {
+    > 2 |   if (x > hi {
+        |              ^
+      3 |     return hi;
+      4 |   }
+      5 |   return x;
+
+    > 1 | const { clamp } = require('../calc');
+        |                   ^
+      2 |
+      3 | test('clamp at the bound', () => {
+      4 |   expect(clamp(9, 5)).toBe(5);
+
+      at constructor (node_modules/@babel/parser/src/parse-error.ts:96:45)
+      at Parser.toParseError [as raise] (node_modules/@babel/parser/src/tokenizer/index.ts:1509:19)
+      at Parser.raise [as unexpected] (node_modules/@babel/parser/src/tokenizer/index.ts:1549:16)
+      at Parser.unexpected [as expect] (node_modules/@babel/parser/src/parser/util.ts:157:12)
+      at Parser.expect [as parseHeaderExpression] (node_modules/@babel/parser/src/parser/statement.ts:935:10)
+      at Parser.parseHeaderExpression [as parseIfStatement] (node_modules/@babel/parser/src/parser/statement.ts:1111:22)
+      at Parser.parseIfStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:544:21)
+      at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:485:17)
+      at Parser.parseStatementLike [as parseStatementListItem] (node_modules/@babel/parser/src/parser/statement.ts:434:17)
+      at Parser.parseStatementListItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1466:16)
+      at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1439:10)
+      at Parser.parseBlockBody [as parseBlock] (node_modules/@babel/parser/src/parser/statement.ts:1407:10)
+      at Parser.parseBlock [as parseFunctionBody] (node_modules/@babel/parser/src/parser/expression.ts:2685:24)
+      at Parser.parseFunctionBody [as parseFunctionBodyAndFinish] (node_modules/@babel/parser/src/parser/expression.ts:2654:10)
+      at parseFunctionBodyAndFinish (node_modules/@babel/parser/src/parser/statement.ts:1723:12)
+      at Parser.callback [as withSmartMixTopicForbiddingContext] (node_modules/@babel/parser/src/parser/expression.ts:3238:14)
+      at Parser.withSmartMixTopicForbiddingContext [as parseFunction] (node_modules/@babel/parser/src/parser/statement.ts:1721:10)
+      at Parser.parseFunction [as parseFunctionStatement] (node_modules/@babel/parser/src/parser/statement.ts:1105:17)
+      at Parser.parseFunctionStatement [as parseStatementContent] (node_modules/@babel/parser/src/parser/statement.ts:528:21)
+      at Parser.parseStatementContent [as parseStatementLike] (node_modules/@babel/parser/src/parser/statement.ts:485:17)
+      at Parser.parseStatementLike [as parseModuleItem] (node_modules/@babel/parser/src/parser/statement.ts:422:17)
+      at Parser.parseModuleItem [as parseBlockOrModuleBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1465:16)
+      at Parser.parseBlockOrModuleBlockBody [as parseBlockBody] (node_modules/@babel/parser/src/parser/statement.ts:1439:10)
+      at Parser.parseBlockBody [as parseProgram] (node_modules/@babel/parser/src/parser/statement.ts:232:10)
+      at Parser.parseProgram [as parseTopLevel] (node_modules/@babel/parser/src/parser/statement.ts:206:25)
+      at Parser.parseTopLevel [as parse] (node_modules/@babel/parser/src/parser/index.ts:83:25)
+      at parse (node_modules/@babel/parser/src/index.ts:86:38)
+      at parser (node_modules/@babel/core/src/parser/index.ts:29:19)
+          at parser.next (<anonymous>)
+      at normalizeFile (node_modules/@babel/core/src/transformation/normalize-file.ts:49:24)
+          at normalizeFile.next (<anonymous>)
+      at run (node_modules/@babel/core/src/transformation/index.ts:41:36)
+          at run.next (<anonymous>)
+      at transform (node_modules/@babel/core/src/transform.ts:29:20)
+          at transform.next (<anonymous>)
+      at evaluateSync (node_modules/gensync/index.js:251:28)
+      at sync (node_modules/gensync/index.js:89:14)
+      at fn (node_modules/@babel/core/src/errors/rewrite-stack-trace.ts:99:14)
+      at transformSync (node_modules/@babel/core/src/transform.ts:66:52)
+      at ScriptTransformer.transformSource (node_modules/@jest/transform/build/index.js:422:31)
+      at ScriptTransformer._transformAndBuildScript (node_modules/@jest/transform/build/index.js:519:40)
+      at ScriptTransformer.transform (node_modules/@jest/transform/build/index.js:558:19)
+      at Object.require (tests/clamp.test.js:1:19)
+
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        0.35 s
+Ran all test suites matching tests/clamp.test.js.

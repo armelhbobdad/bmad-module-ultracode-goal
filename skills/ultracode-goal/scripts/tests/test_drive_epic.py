@@ -411,6 +411,31 @@ def test_already_done_stories_are_never_driven(project, monkeypatch):
     assert DONE_STORY in summary["skipped_already_done"]
 
 
+def test_an_all_done_epic_that_owes_its_evidence_commit_is_not_all_done(project, monkeypatch, capsys):
+    """The last story advanced, the Epic-level gate advanced, and a commit hook
+    rejected the evidence commit, so the run stopped `blocked` with every row
+    `done` and `.evidence-owed-<story>` on disk. `/ucg-resolve` deletes the
+    escalation's sidecar when it closes it, so a re-drive found nothing pending
+    and stopped `all-done`, exit 0, with the commit never made."""
+    write_sprint_status(project["impl"], {DONE_STORY: "done", STORY_A: "done", STORY_B: "done"})
+    (project["impl"] / f".evidence-owed-{STORY_B}").write_text("sprint-status.yaml\n", encoding="utf-8")
+    fake = FakeSession(project, [])
+    summary = run_drive(project, monkeypatch, fake)
+
+    assert summary["stopped_because"] == drive_epic.STOP_EVIDENCE_OWED
+    assert drive_epic.STOP_EVIDENCE_OWED not in drive_epic.CLEAN_STOPS
+    assert fake.calls == [], "nothing is left to spawn: the commit is the resume's"
+    assert STORY_B in (summary["detail"] or "")
+    assert drive_epic.STOP_EVIDENCE_OWED in capsys.readouterr().out
+    # A dry run previews the same stop, never a clean `0 spawn(s) planned`.
+    preview = run_drive(project, monkeypatch, FakeSession(project, []), dry_run=True)
+    assert preview["stopped_because"] == drive_epic.STOP_EVIDENCE_OWED
+    # The twin: once the resume has made the commit and removed the marker, the
+    # same Epic is finished.
+    (project["impl"] / f".evidence-owed-{STORY_B}").unlink()
+    assert run_drive(project, monkeypatch, FakeSession(project, []))["stopped_because"] == drive_epic.STOP_ALL_DONE
+
+
 # --- the stale-terminal delete ----------------------------------------------
 
 

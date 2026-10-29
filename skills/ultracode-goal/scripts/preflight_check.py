@@ -1358,7 +1358,11 @@ def _assert_story(
 ) -> dict:
     """Classify the resume story by artifacts, never by prose.
 
-    Routes mirror references/execute.md's resume rule exactly:
+    Routes mirror the artifact-derived cases of references/execute.md's resume
+    rule. Its fifth case (a gate stopped between automate and trace) is read
+    from the story's .decision-log.md, which this script never reads, so it is
+    the conductor's call: such a story is reported here as gate-owed or
+    mid-story, and execute.md takes the fifth case instead of either.
       - `decision-pending`: the story's escalation-<story>.json is open (see
         _escalation_of); it outranks the three below, because driving or
         gating the story would act on a decision nobody closed.

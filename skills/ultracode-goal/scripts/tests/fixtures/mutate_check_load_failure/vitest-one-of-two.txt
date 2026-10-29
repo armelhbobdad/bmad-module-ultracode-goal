@@ -1,0 +1,29 @@
+
+ RUN  v3.2.4 /home/dev/work/load-failure/vt
+
+ ✓ tests/other.test.js (1 test) 4ms
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 passed (1)
+   Start at  03:48:24
+   Duration  362ms (transform 27ms, setup 0ms, collect 12ms, tests 4ms, environment 0ms, prepare 163ms)
+
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/clamp.test.js [ tests/clamp.test.js ]
+Error: Failed to parse source for import analysis because the content contains invalid JS syntax. If you are using JSX, make sure to name the file with the .jsx or .tsx extension.
+  Plugin: vite:import-analysis
+  File: /home/dev/work/load-failure/vt/calc.js:1:0
+  1  |  export function clamp(x, hi) {
+     |  ^
+  2  |    if (x > hi {
+  3  |      return hi;
+ ❯ TransformPluginContext._formatLog node_modules/vite/dist/node/chunks/config.js:29250:43
+ ❯ TransformPluginContext.error node_modules/vite/dist/node/chunks/config.js:29247:14
+ ❯ TransformPluginContext.transform node_modules/vite/dist/node/chunks/config.js:27333:10
+ ❯ EnvironmentPluginContainer.transform node_modules/vite/dist/node/chunks/config.js:29048:14
+ ❯ loadAndTransform node_modules/vite/dist/node/chunks/config.js:22914:26
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+

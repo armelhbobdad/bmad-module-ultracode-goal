@@ -263,6 +263,7 @@ STOP_BLOCKED = "blocked"
 STOP_UNKNOWN_STATUS = "unknown-status"
 STOP_NO_PROGRESS = "no-progress"
 STOP_SIGNALLED = "signalled"
+STOP_EVIDENCE_OWED = "evidence-owed"
 
 # The stops that mean "this invocation finished its work", i.e. exit 0. A
 # signalled stop is deliberately NOT one: the operator interrupted the drive.
@@ -319,6 +320,20 @@ def pending_ids(stories: list[dict]) -> list[str]:
 def done_ids(stories: list[dict]) -> list[str]:
     """The already-`done` story ids, in sprint-status order."""
     return [str(row.get("id")) for row in stories if row.get("status") == DONE and row.get("id")]
+
+
+def evidence_owed_ids(impl_artifacts: Path, story_ids: list[str]) -> list[str]:
+    """The stories whose gate evidence commit is still owed, in the order given.
+
+    The gate writes `.evidence-owed-<story>` when a repo commit hook's rejection
+    of a story's evidence commit escalates as `evidence-commit-rejected`, and
+    removes it once a resume makes the commit. `/ucg-resolve` deletes the
+    escalation's sidecar when it closes it and leaves this marker, so on the
+    Epic's last story it is the one sign that an Epic whose rows all read `done`
+    still owes a commit: `references/gate.md`'s advance route.
+    """
+    root = Path(impl_artifacts)
+    return [story for story in story_ids if (root / f".evidence-owed-{story}").is_file()]
 
 
 def result_path(impl_artifacts: Path) -> Path:
@@ -979,6 +994,20 @@ def drive(
             planned = planned[:limit]
         for position, story_id in enumerate(planned, start=1):
             say(f"[{position}/{len(planned)}] {story_id} would run: {shlex.join(command)}")
+        owed = [] if planned else evidence_owed_ids(impl_artifacts, done_ids(stories))
+        if owed:
+            # A preview must not read a finished Epic where the drive itself
+            # would stop on the owed commit.
+            detail = f"would stop: {STOP_EVIDENCE_OWED} ({', '.join(owed)})"
+            say(f"dry run: {detail}")
+            return _summary(
+                epic_key=epic_key,
+                driven=[],
+                advanced=[],
+                skipped=skipped,
+                stopped_because=STOP_EVIDENCE_OWED,
+                detail=detail,
+            )
         say(f"dry run: {len(planned)} spawn(s) planned, none started")
         return _summary(
             epic_key=epic_key,
@@ -991,6 +1020,26 @@ def drive(
 
     while True:
         pending = pending_ids(stories)
+        owed = [] if pending else evidence_owed_ids(impl_artifacts, done_ids(stories))
+        if owed:
+            # Every row is `done`, yet the run that advanced the last of them
+            # stopped `blocked` with its evidence staged. Re-driving finds no
+            # story to spawn, so `all-done` would report a finished Epic, exit 0,
+            # and leave the commit owed for good.
+            detail = (
+                f"{', '.join(owed)}: every story is done, but its gate evidence is not committed "
+                "(.evidence-owed-<story>); close its escalation with /ucg-resolve if it is still open, "
+                "then resume the run once to make the commit"
+            )
+            say(f"stopped: {STOP_EVIDENCE_OWED} - {detail}")
+            return _summary(
+                epic_key=epic_key,
+                driven=driven,
+                advanced=advanced,
+                skipped=skipped,
+                stopped_because=STOP_EVIDENCE_OWED,
+                detail=detail,
+            )
         if not pending:
             say(f"stopped: {STOP_ALL_DONE} - every story of epic {epic} is done")
             return _summary(

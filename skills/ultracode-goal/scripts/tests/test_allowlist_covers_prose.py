@@ -69,7 +69,8 @@ PRESCRIBED = {
     "git rev-parse": "execute.md step 0 records the baseline SHA; ucg-dev-story does too",
     "git diff": "execute.md reads the staged diff with `git diff --cached`",
     "git check-ignore": "preflight.md step 5 and execute.md ask which run outputs git ignores",
-    "git worktree": "gate.md adds, removes and prunes the measurement worktree",
+    "git status": "gate.md lists the tests automate backfilled with `git status --porcelain --untracked-files=all`",
+    "git worktree": "gate.md adds, removes, rebuilds after automate and prunes the measurement worktree",
     "uv run": "every script call, the customization resolver included",
 }
 
@@ -86,6 +87,11 @@ NOT_RUN_UNDER_THE_ALLOWLIST = {
     "git show": "the guard runs `git show :<path>` itself, in the hook process, outside any permission rule",
     "git ls-files": "names the kind of project conformance gate execute.md warns about; the run never calls it",
     "git -c": "the guard's worked example of a quoted `&` (`git -c alias.x='a&b' commit`)",
+    "git -C": (
+        "gate.md names `git -C <tmp-path> status` only as the status read it does not make: "
+        "no entry covers it (#158's rehearsal saw `git -C <repo> rev-parse` refused), and an "
+        "entry would cover every git command in any folder, so the gate rebuilds its worktree instead"
+    ),
 }
 
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
@@ -274,6 +280,25 @@ def test_the_rule_model():
     assert not _covered("python3 /p/_bmad/scripts/resolve_customization.py --skill s", entries)
     # The space is part of the rule: `git diff` does not cover `git difftool`.
     assert not _covered("git difftool", entries)
+
+
+def test_the_gate_rebuilds_its_worktree_with_commands_the_allowlist_runs():
+    """Issue #174: once automate's mutation runs have edited the gate worktree,
+    the gate rebuilds it rather than reading its status, because the status read
+    would need `git -C`, which no entry covers and none should."""
+    entries = _allowlist()
+    for command in (
+        "git worktree remove --force /p/_bmad-output/implementation-artifacts/.gate-worktree-4-2",
+        "git worktree add /p/_bmad-output/implementation-artifacts/.gate-worktree-4-2 0123abc",
+        "uv run /s/scripts/link_worktree_deps.py --project-root /p --worktree /w",
+        "git status --porcelain --untracked-files=all",
+        "git add tests/unit/a.test.ts",
+        # The backfill resume tells a committed backfill from an uncommitted one.
+        "git rev-parse HEAD~1",
+    ):
+        assert _covered(command, entries), command
+    assert not _covered("git -C /p/.gate-worktree-4-2 status --porcelain", entries)
+    assert "git -C" not in entries
 
 
 def test_the_extraction_on_the_shapes_the_prose_uses():
