@@ -42,11 +42,13 @@ Classification, per row:
   - KILLED+others    red and named, but more than one case failed (or the
                      count could not be parsed): the kill stands, the extra
                      reds are surfaced rather than silently absorbed.
-  - MISATTRIBUTED    red, but the expected case never appears beside a
-                     failure token (or the output's own count says 0 failed):
-                     something failed, and it was not the observer this row
-                     claims to test. The name must sit on a line that speaks
-                     of failure, because verbose reporters echo PASSING names.
+  - MISATTRIBUTED    red, but the output's own count says 0 failed (checked
+                     first: a collection or harness error, so no test the row
+                     names went red), or the expected case never appears
+                     beside a failure token: something failed, and it was not
+                     the observer this row claims to test. The name must sit
+                     on a line that speaks of failure, because verbose
+                     reporters echo PASSING names.
   - STALE / NOT UNIQUE / UNDECODABLE  the anchor (or the file) did not hold;
                      nothing was mutated for the row.
 
@@ -61,10 +63,20 @@ jest picks under Claude Code); --verbose adds U+2715 (U+00D7 on Windows).
 vitest marks a failed test with U+00D7.
 
 The failure count is read from each run's summary line: Node's `fail N`, the
-`Tests` line of jest and vitest (never their `Test Suites` or `Test Files`
-line, which counts files), and pytest's last line, where a test's setup or
-teardown `error` counts as a failure too. When the output holds several, as a
-command that runs two suites or two runners does, their counts are added.
+`Tests` line of jest and vitest, and pytest's last line, where a test's setup
+or teardown `error` counts as a failure too. jest's `Test Suites` line and
+vitest's `Test Files` line count files, a test file that failed to load among
+them, so once a `Tests` line was read neither is: a test file jest or vitest
+cannot load runs no test. An error collecting a test module does not count
+either: pytest names it with an `ERROR collecting <path>` header and a short
+summary line `ERROR <path>` with no `::` test id (a directory's path when a
+conftest.py in it fails to import), and no test there ran. Nor does a
+conftest.py that pytest loads before it collects and cannot import: it writes
+`ImportError while loading conftest '<path>'.` and stops, with no summary,
+before any test runs. So a mutant that breaks a module such a file imports (a
+dropped colon, say) reads 0 failed rather than a kill. When the output holds
+several summaries, as a command that runs two suites or two runners does,
+their counts are added.
 
 A failure word inside the expected name never counts: a test named "fails
 when ..." supplies its own. A line never counts as a failure line when it
@@ -133,18 +145,67 @@ def _install_signal_unwind() -> None:
 # The summary lines that count one run's failed tests, each a whole line of
 # its own, so a "3 failed" quoted inside an assertion message cannot win:
 # Node's `fail N` behind U+2139 (spec reporter) or `#` (TAP), the `Tests:`
-# line of jest and the `Tests` line of vitest (never the `Test Suites:` or
-# `Test Files` line above it, which counts failing files), and pytest's last
-# line, with or without its `=` rule. A run prints one, `fail 0` included for
-# Node, so the counts of every summary are added: a command that runs a
-# passing suite first, or one runner and then another, does not read 0 failed.
+# line of jest and the `Tests` line of vitest (which reads `no tests` when no
+# test file loaded), and pytest's last line, with or without its `=` rule. A
+# run prints one, `fail 0` included for Node, so the counts of every summary
+# are added: a command that runs a passing suite first, or one runner and then
+# another, does not read 0 failed.
 _NODE_FAIL_SUMMARY_RE = re.compile(r"^[ \t]*(?:ℹ|#)[ \t]*fail[ \t]+(\d+)[ \t]*$", re.IGNORECASE)
-_TESTS_SUMMARY_RE = re.compile(r"^\s*Tests:?\s+(.*?(?:\b\d+ total|\(\d+\)))\s*$")
-_PYTEST_SUMMARY_RE = re.compile(r"^=*\s*((?:\d+ \w+, )*\d+ \w+) in [\d.]+s\b.*$")
+_TESTS_SUMMARY_RE = re.compile(r"^\s*Tests:?\s+(.*?(?:\b\d+ total|\(\d+\))|no tests)\s*$")
+# jest's `Test Suites:` line and vitest's `Test Files` line, above their
+# `Tests` line, count test files, and a file that failed to load counts as a
+# failed one: `Test Suites: 1 failed, 1 passed` beside `Tests: 1 passed`. Once
+# a `Tests` line was read, the count the fallback shapes below would take from
+# that line is no test's failure, so neither line is read for one.
+_FILES_SUMMARY_RE = re.compile(r"^\s*Test (?:Suites:|Files\s)")
+# pytest 9 counts passed subtests apart, `2 subtests passed`, in the same line
+# (a failed subtest counts in `failed`).
+_PYTEST_SUMMARY_RE = re.compile(r"^=*\s*((?:\d+ (?:subtests )?\w+, )*\d+ (?:subtests )?\w+) in [\d.]+s\b.*$")
 _SUMMARY_FAILED_RE = re.compile(r"\b(\d+) failed\b")
 # pytest counts a test whose fixture raised as an `error`, not a failure, and
 # never prints "0 failed": without these, every setup error read 0 failed.
 _PYTEST_ERRORS_RE = re.compile(r"\b(\d+) errors?\b")
+# An error collecting a module is counted in the same `error` total, but no
+# test in that module ran, so it is no failure. pytest heads it `ERROR
+# collecting <path>` in its ERRORS section and lists it in the short summary as
+# `ERROR <path>`, a path with no `::` test id after it (a setup error's line
+# carries one, so the pattern, which stops at `::`, never takes it). The path
+# is a module's, or a directory's when a conftest.py in it, which pytest loads
+# while it collects, fails to import. That line is read only from the short
+# summary's own header to its end (the stats line, or the next `=` or `!`
+# rule): a failing fixture's captured output, printed above it, can hold a line
+# such as `ERROR bound-not-enforced`, and read anywhere it took the row's own
+# setup-error kill off the count. An entry can run over several lines (pytest
+# prints each one's whole message under `-vv` or when `CI` is set, and under
+# xdist a collection error's message is its traceback), so the section does
+# not end at the first line that opens no entry, and inside it only a token
+# shaped like a path pytest collected counts: one ending in `.py`, one with a
+# path separator, or a name that exists under the project root (`ERROR sub`,
+# a top-level directory whose conftest.py failed). A skip reason or a kill's
+# message that runs over lines can hold `ERROR connection-refused`. Without
+# xdist the run also stops with `Interrupted: N error(s) during collection`;
+# under xdist it does not, and the other modules still run. Under `-qq` with
+# xdist pytest prints neither that line nor a stats line, so a short summary
+# that lists collection errors and no test (no `FAILED` entry, no `ERROR` entry
+# with a `::` id) means no test failed.
+_PYTEST_COLLECTING_RE = re.compile(r"^_+ ERROR collecting (\S+) _+$")
+_PYTEST_SHORT_HEADER_RE = re.compile(r"^=+ short test summary info =+$")
+_PYTEST_SECTION_END_RE = re.compile(r"^(?:=+ .+ =+|!+ .+ !+)$")
+_PYTEST_SHORT_ERROR_RE = re.compile(r"^ERROR ((?:(?!::)\S)+)(?: - .*)?$")
+_PYTEST_SHORT_TEST_RE = re.compile(r"^(?:FAILED|ERROR) \S*::")
+_PYTEST_INTERRUPTED_RE = re.compile(r"Interrupted: (\d+) errors? during collection")
+# A conftest.py pytest loads before it collects (the rootdir's, say) that fails
+# to import, whatever it raised, stops pytest before any test runs, under xdist
+# too: it writes this line and the error, and exits 4 with no summary and no
+# `ERROR collecting` line.
+_PYTEST_CONFTEST_RE = re.compile(r"^ImportError while loading conftest '.+'\.$")
+# A module the root conftest names in `pytest_plugins`, or a plugin pytest loads
+# at startup, that fails to import is not wrapped as a conftest error: pytest
+# dies with a bare traceback through its config setup and exit 1, before any
+# test runs.
+_PYTEST_STARTUP_CRASH_RE = re.compile(
+    r'^\s*File ".*[/\\]_pytest[/\\]config[/\\]__init__\.py", line \d+, in _prepareconfig$'
+)
 
 # Failure-count shapes across the other common runners (mocha, cargo, and any
 # runner whose summary is not one of the above). First match wins; no match
@@ -224,9 +285,57 @@ def _run(command: str, cwd: Path) -> tuple[int, str]:
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
-def _fail_count(lines: list[str]) -> int | None:
+def _collected_path(token: str, root: Path | None) -> bool:
+    """Whether a short summary's `ERROR <token>` names what pytest collected."""
+    if token.endswith(".py") or "/" in token or "\\" in token:
+        return True
+    if root is None:
+        return False
+    try:
+        return (root / token).exists()
+    except (OSError, ValueError):
+        return False
+
+
+def _collection_errors(lines: list[str], root: Path | None = None) -> tuple[int, bool]:
+    """How many of pytest's counted errors were errors collecting a module,
+    and whether no test failed: pytest stopped at them, or at a conftest.py or
+    a startup plugin it could not load, before running any test, or its short
+    summary lists collection errors and no test."""
+    headers = sum(1 for line in lines if _PYTEST_COLLECTING_RE.match(line))
+    short = 0
+    interrupted = 0
+    stopped = False
+    in_summary = False
+    tests_listed = False
+    for line in lines:
+        if _PYTEST_SHORT_HEADER_RE.match(line):
+            in_summary = True
+            continue
+        if in_summary and (_PYTEST_SUMMARY_RE.match(line) or _PYTEST_SECTION_END_RE.match(line)):
+            in_summary = False
+        if in_summary:
+            entry = _PYTEST_SHORT_ERROR_RE.match(line)
+            if entry and _collected_path(entry.group(1), root):
+                short += 1
+            tests_listed = tests_listed or bool(_PYTEST_SHORT_TEST_RE.match(line))
+        halt = _PYTEST_INTERRUPTED_RE.search(line)
+        if halt:
+            interrupted += int(halt.group(1))
+            stopped = True
+        if _PYTEST_CONFTEST_RE.match(line) or _PYTEST_STARTUP_CRASH_RE.match(line):
+            stopped = True
+    if short and not tests_listed:
+        stopped = True
+    return max(headers, short, interrupted), stopped
+
+
+def _fail_count(lines: list[str], root: Path | None = None) -> int | None:
     summed: int | None = None
     others: list[str] = []
+    tests_read = False
+    # Taken off the pytest summaries' error counts, once in all.
+    collection, stopped = _collection_errors(lines, root)
     for line in lines:
         node = _NODE_FAIL_SUMMARY_RE.match(line)
         tests = _TESTS_SUMMARY_RE.match(line)
@@ -237,8 +346,12 @@ def _fail_count(lines: list[str]) -> int | None:
         elif summary:
             failed = _SUMMARY_FAILED_RE.search(summary.group(1))
             count = int(failed.group(1)) if failed else 0
+            tests_read = tests_read or bool(tests)
             if pytest_summary:
-                count += sum(int(n) for n in _PYTEST_ERRORS_RE.findall(summary.group(1)))
+                errors = sum(int(n) for n in _PYTEST_ERRORS_RE.findall(summary.group(1)))
+                uncollected = min(errors, collection)
+                collection -= uncollected
+                count += errors - uncollected
         else:
             others.append(line)
             continue
@@ -246,12 +359,22 @@ def _fail_count(lines: list[str]) -> int | None:
     if summed:
         return summed
     # No summary counted a failure: another runner in the same command may
-    # have printed its count in a shape not listed above.
+    # have printed its count in a shape not listed above. A `Tests` line has
+    # counted the tests jest or vitest ran, so the files line beside it counts
+    # none of them.
+    if tests_read:
+        others = [line for line in others if not _FILES_SUMMARY_RE.match(line)]
     for pattern in _FAIL_COUNT_RES:
         for line in others:
             match = pattern.search(line)
             if match:
                 return int(match.group(1))
+    # pytest stopped at a collection error, or at a conftest.py or a startup
+    # plugin it could not load, before any test ran, or listed only collection
+    # errors, and printed no summary line after it (`-qq` prints none, and a
+    # conftest's or a plugin's failure none at all): no test failed.
+    if summed is None and stopped:
+        return 0
     return summed
 
 
@@ -343,9 +466,22 @@ def _named_in_failure_context(lines: list[str], expect_red: str) -> bool:
     return False
 
 
-def _classify_red(output: str, expect_red: str) -> tuple[str, str, bool]:
-    """(status, detail, is_finding) for a red run."""
+def _classify_red(output: str, expect_red: str, root: Path | None = None) -> tuple[str, str, bool]:
+    """(status, detail, is_finding) for a red run. `root` is the directory the
+    command ran in, so a bare name in pytest's short summary can be checked."""
     lines = _output_lines(output)
+    count = _fail_count(lines, root)
+    if count == 0:
+        # A red exit whose own summary counts zero failures is a collection or
+        # harness error wearing a red exit code, not the observer firing. It
+        # is read before the name: a collection error never names the test, and
+        # read as a missing name it looked like some other test's kill.
+        return (
+            "MISATTRIBUTED",
+            "red, but the output's own count says 0 failed - a collection or "
+            "harness error, not the observer",
+            True,
+        )
     if not _named_in_failure_context(lines, expect_red):
         return (
             "MISATTRIBUTED",
@@ -353,18 +489,8 @@ def _classify_red(output: str, expect_red: str) -> tuple[str, str, bool]:
             "whatever failed, it was not the observer this row claims",
             True,
         )
-    count = _fail_count(lines)
     if count == 1:
         return "KILLED", f"exactly {expect_red!r} went red", False
-    if count == 0:
-        # A red exit whose own summary counts zero failures is a collection or
-        # harness error wearing a red exit code, not the observer firing.
-        return (
-            "MISATTRIBUTED",
-            "red, but the output's own count says 0 failed - a collection or "
-            "harness error, not the observer",
-            True,
-        )
     if count is None:
         return "KILLED+others", f"{expect_red!r} went red; failure count unparseable", False
     return "KILLED+others", f"{expect_red!r} went red among {count} failures", False
@@ -459,7 +585,7 @@ def run_table(table: list[dict], project_root: Path) -> tuple[list[dict], int]:
             )
             findings = True
         else:
-            status, detail, is_finding = _classify_red(output, row["expect_red"])
+            status, detail, is_finding = _classify_red(output, row["expect_red"], project_root)
             entry.update(status=status, detail=detail)
             findings = findings or is_finding
         rows.append(entry)

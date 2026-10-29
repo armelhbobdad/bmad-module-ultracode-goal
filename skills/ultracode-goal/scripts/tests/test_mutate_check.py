@@ -65,7 +65,7 @@ def _row(**overrides) -> dict:
     return row
 
 
-def _run_table(project: Path, rows: list[dict]):
+def _run_table(project: Path, rows: list[dict], env: dict | None = None):
     table = project / "table.json"
     table.write_text(json.dumps(rows), encoding="utf-8")
     proc = subprocess.run(
@@ -73,8 +73,20 @@ def _run_table(project: Path, rows: list[dict]):
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     return proc
+
+
+def _ci_env(ci: bool) -> dict:
+    """The environment with pytest's CI switch set or cleared. pytest prints
+    each short summary entry's whole message when `CI` or `BUILD_NUMBER` is set,
+    as GitHub Actions sets it, so a test that reads pytest's output runs both
+    ways and reads the same on a laptop and in CI."""
+    env = {key: value for key, value in os.environ.items() if key not in ("CI", "BUILD_NUMBER")}
+    if ci:
+        env["CI"] = "true"
+    return env
 
 
 def test_killed_attributable_row_exits_zero(tmp_path):
@@ -270,6 +282,364 @@ def test_zero_count_red_is_not_a_kill(tmp_path):
     assert proc.returncode == 1
     assert "| MISATTRIBUTED |" in proc.stdout
     assert "0 failed" in proc.stdout
+
+
+# --- A mutant that breaks a module: pytest's collection error ------------------
+
+_CLAMP = "def clamp(x, hi):\n    if x > hi:\n        return hi\n    return x\n"
+
+
+def _pytest_project(tmp_path: Path, tests: dict[str, str]) -> Path:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "calc.py").write_text(_CLAMP, encoding="utf-8", newline="\n")
+    for name, body in tests.items():
+        (tmp_path / "tests" / name).write_text(body, encoding="utf-8", newline="\n")
+    return tmp_path
+
+
+def _pytest_row(flags: str, replacement: str, expect_red: str = "test_clamp_at_the_bound") -> dict:
+    return {
+        "file": "calc.py",
+        "anchor": "if x > hi:",
+        "replacement": replacement,
+        "command": f'"{sys.executable}" -m pytest {flags} -p no:cacheprovider tests',
+        "expect_red": expect_red,
+    }
+
+
+_AT_THE_BOUND = "from calc import clamp\n\n\ndef test_clamp_at_the_bound():\n    assert clamp(9, 5) == 5\n"
+_OTHER = "def test_other():\n    assert True\n"
+
+
+# Each shape leans on one sign of the error: `-q --tb=no -rN` prints only the
+# `Interrupted:` line, `-q -rN -n 2` only the `ERROR collecting` header, and
+# `-q --tb=no -n 2` only the short summary line.
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize(
+    "flags", ["-q", "-qq", "-q --tb=no -rN", "-q -n 2", "-q -rN -n 2", "-q --tb=no -n 2", "-qq -n 2"]
+)
+def test_a_mutant_that_breaks_collection_is_no_kill(tmp_path, flags, ci):
+    """A replacement that drops the colon breaks `calc.py`, so pytest stops at
+    collecting the module that imports it and no test runs. The output never
+    names the row's test, and pytest counts the collection error in its
+    `error` total, so the row read `MISATTRIBUTED` as a missing name, which
+    the gate reads as another test's kill: the gap closed with no test run.
+    It now reads 0 failed, a collection error. Under xdist pytest does not
+    stop, and a module that collects still runs beside the error."""
+    if "-n" in flags:
+        pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_clamp.py": _AT_THE_BOUND, "test_other.py": _OTHER})
+    proc = _run_table(project, [_pytest_row(flags, "if x > hi")], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {
+        0: ("MISATTRIBUTED", "red, but the output's own count says 0 failed - a collection or harness error, not the observer"),
+    }, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+def test_a_setup_error_still_counts_as_a_failure(tmp_path):
+    """The twin: a fixture that raises under the mutant is an error AT SETUP of
+    a test that pytest collected, named with its `::` id, and it still kills."""
+    fixture = (
+        "import pytest\nfrom calc import clamp\n\n\n@pytest.fixture\ndef bound():\n"
+        "    assert clamp(9, 5) == 5\n    return 5\n\n\n"
+        "def test_clamp_at_the_bound(bound):\n    assert bound == 5\n"
+    )
+    project = _pytest_project(tmp_path, {"test_clamp.py": fixture, "test_other.py": _OTHER})
+    proc = _run_table(project, [_pytest_row("-q", "if False:")])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'test_clamp_at_the_bound' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize("flags", ["-q", "-q -n 2"])
+def test_a_setup_error_kill_whose_fixture_prints_an_error_line_still_kills(tmp_path, flags, ci):
+    """pytest prints a failing fixture's captured output above the short
+    summary, so a line such as `ERROR bound-not-enforced` reaches the output
+    beside the setup error's own line. Read as a short summary line, it took
+    the row's one kill off the count, and the kill read 0 failed, a row that
+    cannot run. Only a line under the short summary's header is read."""
+    if "-n" in flags:
+        pytest.importorskip("xdist")
+    fixture = (
+        "import pytest\nfrom calc import clamp\n\n\n@pytest.fixture\ndef bound():\n"
+        "    if clamp(9, 5) != 5:\n        print('ERROR bound-not-enforced')\n"
+        "        raise RuntimeError('bound')\n    return 5\n\n\n"
+        "def test_clamp_at_the_bound(bound):\n    assert bound == 5\n"
+    )
+    project = _pytest_project(tmp_path, {"test_clamp.py": fixture, "test_other.py": _OTHER})
+    proc = _run_table(project, [_pytest_row(flags, "if False:")], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'test_clamp_at_the_bound' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize("flags", ["-q --tb=no -n 2", "-vv --tb=no -n 2", "-q -n 2"])
+def test_every_collection_error_counts_when_entries_span_lines(tmp_path, flags, ci):
+    """Under `-vv`, or when `CI` is set, pytest prints each short summary
+    entry's whole message, and under xdist a collection error's message is its
+    traceback, so one `ERROR <path>` entry spans many lines. A scan that ended
+    the short summary at the first line opening no entry read only the first of
+    two collection errors, so `2 errors` left one standing as a failure and the
+    row read as another test's kill."""
+    pytest.importorskip("xdist")
+    project = _pytest_project(
+        tmp_path, {"test_clamp.py": _AT_THE_BOUND, "test_below.py": _AT_THE_BOUND, "test_other.py": _OTHER}
+    )
+    proc = _run_table(project, [_pytest_row(flags, "if x > hi")], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+_SUBTESTS = (
+    "import sys\n\nimport pytest\n\n\ndef test_cases(subtests):\n    for n in (1, 2):\n"
+    "        with subtests.test(n=n):\n            assert n > 0\n\n\n"
+    "def test_platforms(subtests):\n    with subtests.test(msg='nt'):\n"
+    "        if sys.platform != 'nt':\n            pytest.skip('windows only')\n"
+)
+
+
+@pytest.mark.parametrize("flags", ["-q -n 2", "-q -ra --tb=no -n 2"])
+def test_a_collection_error_beside_subtests_is_no_kill(tmp_path, flags):
+    """pytest 9 counts passed subtests apart on the stats line (`2 passed, 1
+    error, 2 subtests passed`), which the stats pattern did not read, and lists a
+    skipped subtest as `SUBSKIPPED(...)` in the short summary. Either way the
+    collection error beside them stood as a failure, so a mutant that only broke
+    collection read as another test's kill."""
+    pytest.importorskip("xdist")
+    if int(pytest.__version__.split(".")[0]) < 9:
+        pytest.skip("pytest 9 ships the subtests fixture")
+    project = _pytest_project(tmp_path, {"test_clamp.py": _AT_THE_BOUND, "test_subtests.py": _SUBTESTS})
+    proc = _run_table(project, [_pytest_row(flags, "if x > hi")], _ci_env(False))
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+_SKIP_WITH_A_LOG = (
+    "import pytest\n\n\ndef test_database():\n"
+    "    pytest.skip('database unreachable, server log:\\n  connecting to db:5432\\nERROR connection-refused')\n"
+)
+_FAIL_WITH_A_LOG = (
+    "import pytest\nfrom calc import clamp\n\n\n@pytest.fixture\ndef bound():\n"
+    "    if clamp(9, 5) != 5:\n"
+    "        pytest.fail('checking bounds\\n  hi=5 x=9\\nERROR bound-not-enforced')\n    return 5\n\n\n"
+    "def test_clamp_at_the_bound(bound):\n    assert bound == 5\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("tests", "flags", "ci"),
+    [
+        ({"test_clamp.py": None, "test_env.py": _SKIP_WITH_A_LOG}, "-q -rs", False),
+        ({"test_clamp.py": None, "test_env.py": _SKIP_WITH_A_LOG}, "-q -rs -n 2", False),
+        ({"test_clamp.py": _FAIL_WITH_A_LOG}, "-vv", False),
+        ({"test_clamp.py": _FAIL_WITH_A_LOG}, "-q", True),
+        ({"test_clamp.py": _FAIL_WITH_A_LOG}, "-q -n 2", True),
+    ],
+    ids=["skip-reason", "skip-reason-xdist", "kill-message-vv", "kill-message-ci", "kill-message-ci-xdist"],
+)
+def test_an_error_line_inside_a_summary_entry_is_no_collection_error(tmp_path, tests, flags, ci):
+    """A short summary entry runs over lines when its reason or message does: a
+    skip or xfail reason always, a kill's message under `-vv` or when `CI` is
+    set. A line of it such as `ERROR connection-refused` is no collected path,
+    so it is not a collection error, and the row's setup-error kill is still the
+    one failure. Counted as one, it took that kill off the count and the row
+    read 0 failed, a row that cannot run."""
+    if "-n" in flags:
+        pytest.importorskip("xdist")
+    fixture = (
+        "import pytest\nfrom calc import clamp\n\n\n@pytest.fixture\ndef bound():\n"
+        "    if clamp(9, 5) != 5:\n        raise RuntimeError('bound')\n    return 5\n\n\n"
+        "def test_clamp_at_the_bound(bound):\n    assert bound == 5\n"
+    )
+    project = _pytest_project(tmp_path, {name: body or fixture for name, body in tests.items()})
+    proc = _run_table(project, [_pytest_row(flags, "if False:")], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'test_clamp_at_the_bound' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize("flags", ["-q", "-qq", "-q -n 2"])
+def test_a_mutant_that_breaks_a_startup_plugin_is_no_kill(tmp_path, flags):
+    """A module the root conftest names in `pytest_plugins` is imported while
+    pytest sets itself up, and one that fails to import is not reported as a
+    conftest error: pytest dies with a bare traceback through `_prepareconfig`,
+    exit 1, no summary. No test ran, so the row reads 0 failed, not a kill by a
+    test of another name."""
+    if "-n" in flags:
+        pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_clamp.py": _THROUGH_A_FIXTURE, "test_other.py": _OTHER})
+    (project / "conftest.py").write_text('pytest_plugins = ["fixtures.calc_fixtures"]\n', encoding="utf-8", newline="\n")
+    (project / "fixtures").mkdir()
+    (project / "fixtures" / "__init__.py").write_text("", encoding="utf-8")
+    (project / "fixtures" / "calc_fixtures.py").write_text(_CONFTEST, encoding="utf-8", newline="\n")
+    proc = _run_table(project, [_pytest_row(flags, "if x > hi")], _ci_env(False))
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+    # The twin: a mutant the plugin still imports under fails the test, a kill.
+    proc = _run_table(project, [_pytest_row(flags, "if False:")], _ci_env(False))
+    status, detail = _ledger_rows(proc.stdout)[0]
+    assert status.startswith("KILLED") or detail.startswith("red, but 'test_clamp_at_the_bound' never appears"), (
+        proc.stdout + proc.stderr
+    )
+
+
+@pytest.mark.parametrize("flags", ["-q --tb=no -n 2", "-qq -n 2"])
+def test_a_top_level_directory_whose_conftest_fails_is_a_collection_error(tmp_path, flags):
+    """A conftest.py in a top-level directory that fails to import is listed as
+    `ERROR sub` when pytest collects from the project root, a bare name with no
+    `.py` and no separator: it counts because that name is a directory under the
+    project root. (Named on the command line, the directory's conftest.py loads
+    at startup instead, as `ImportError while loading conftest`.)"""
+    pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_other.py": _OTHER})
+    (project / "sub").mkdir()
+    (project / "sub" / "conftest.py").write_text(_CONFTEST, encoding="utf-8", newline="\n")
+    (project / "sub" / "test_clamp.py").write_text(_THROUGH_A_FIXTURE, encoding="utf-8", newline="\n")
+    row = _pytest_row(flags, "if x > hi")
+    row["command"] = row["command"][: -len(" tests")]
+    proc = _run_table(project, [row], _ci_env(False))
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+def test_a_collection_error_beside_a_kill_is_not_counted(tmp_path):
+    """Under xdist a module that fails to collect sits beside the modules that
+    ran. Here the mutant makes one module fail at import and the row's test
+    fail: the one test that went red is the kill, and the collection error is
+    not a second failure (it read `KILLED+others` among 2)."""
+    pytest.importorskip("xdist")
+    import_time = "from calc import clamp\n\nassert clamp(9, 5) == 5\n\n\ndef test_import_time():\n    assert True\n"
+    project = _pytest_project(tmp_path, {"test_clamp.py": _AT_THE_BOUND, "test_import_time.py": import_time})
+    proc = _run_table(project, [_pytest_row("-q -n 2", "if False:")])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'test_clamp_at_the_bound' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    # Without xdist pytest stops at that module, so no test ran at all.
+    proc = _run_table(project, [_pytest_row("-q", "if False:")])
+    assert _ledger_rows(proc.stdout)[0][0] == "MISATTRIBUTED", proc.stdout
+    assert "0 failed" in proc.stdout
+
+
+def test_a_collection_error_beside_a_setup_error_kill_is_one_kill(tmp_path):
+    """Under xdist, a mutant that breaks `calc.py` stops one module at import,
+    which pytest prints once as an `ERROR collecting` header and once as a
+    short summary line, and the row's own test errors at setup, since its
+    fixture imports the module only then: `2 errors`, one of them the kill.
+    The collection error is taken off that count once, so the row reads
+    `KILLED`. Taken off once for each sign of it, the kill read 0 failed, a
+    row that cannot run."""
+    pytest.importorskip("xdist")
+    eager = "from calc import clamp\n\n\ndef test_a_uses_clamp():\n    assert clamp(1, 5) == 1\n"
+    lazy = (
+        "import pytest\n\n\n@pytest.fixture\ndef clamp():\n    import calc\n    return calc.clamp\n\n\n"
+        "def test_clamp_at_the_bound(clamp):\n    assert clamp(9, 5) == 5\n"
+    )
+    project = _pytest_project(tmp_path, {"test_a.py": eager, "test_b.py": lazy})
+    proc = _run_table(project, [_pytest_row("-q -n 2", "if x > hi")])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'test_clamp_at_the_bound' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+_ZERO_FAILED = "red, but the output's own count says 0 failed - a collection or harness error, not the observer"
+_CONFTEST = "import pytest\nimport calc\n\n\n@pytest.fixture\ndef clamp():\n    return calc.clamp\n"
+_THROUGH_A_FIXTURE = "def test_clamp_at_the_bound(clamp):\n    assert clamp(9, 5) == 5\n"
+
+
+@pytest.mark.parametrize("flags", ["-q", "-qq", "-q --tb=no -rN", "-q -n 2", "-q -rN -n 2", "-q --tb=no -n 2"])
+def test_a_mutant_that_breaks_what_the_root_conftest_imports_is_no_kill(tmp_path, flags):
+    """In a Flask, Django or FastAPI project, conftest.py imports the app. A
+    replacement that breaks the module it imports stops pytest before it
+    collects anything: it writes `ImportError while loading conftest` and the
+    error, and exits 4 with no summary and no `ERROR collecting` line, under
+    xdist too, so no test runs. The row read `MISATTRIBUTED` as a missing
+    name, which the gate reads as another test's kill; it now reads 0
+    failed."""
+    if "-n" in flags:
+        pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_clamp.py": _THROUGH_A_FIXTURE, "test_other.py": _OTHER})
+    (project / "conftest.py").write_text(_CONFTEST, encoding="utf-8", newline="\n")
+    proc = _run_table(project, [_pytest_row(flags, "if x > hi")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+    # The twin: a mutant the conftest still loads under fails the test through
+    # the fixture, a kill, never 0 failed (a shape that prints no failed test's
+    # name reads it as a kill by another name, and one with no summary line as
+    # a kill with an unparseable count, as for any kill).
+    proc = _run_table(project, [_pytest_row(flags, "if False:")])
+    status, detail = _ledger_rows(proc.stdout)[0]
+    assert status.startswith("KILLED") or detail.startswith("red, but 'test_clamp_at_the_bound' never appears"), (
+        proc.stdout + proc.stderr
+    )
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize(
+    "flags", ["-q", "-qq", "-q --tb=no -rN", "-q -n 2", "-q -rN -n 2", "-q --tb=no -n 2", "-qq -n 2"]
+)
+def test_a_mutant_that_breaks_what_a_nested_conftest_imports_is_no_kill(tmp_path, flags, ci):
+    """A conftest.py below the path the command names is loaded while pytest
+    collects, and one that fails to import is a collection error of its
+    directory: the short summary line reads `ERROR tests/sub`, a path that is
+    no module's. Under `--tb=no -n 2` that line is the only sign of it, so the
+    row read `MISATTRIBUTED` as a missing name; it now reads 0 failed."""
+    if "-n" in flags:
+        pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_other.py": _OTHER})
+    (project / "tests" / "sub").mkdir()
+    (project / "tests" / "sub" / "conftest.py").write_text(_CONFTEST, encoding="utf-8", newline="\n")
+    (project / "tests" / "sub" / "test_clamp.py").write_text(_THROUGH_A_FIXTURE, encoding="utf-8", newline="\n")
+    proc = _run_table(project, [_pytest_row(flags, "if x > hi")], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+# --- A test file jest or vitest cannot load ------------------------------------
+#
+# Real output, captured on Linux with Node 24.21.0 outside Claude Code, of a
+# mutant that breaks the module a test file imports at its top (`if (x > hi {`
+# in calc.js), beside a second test file that does not import it:
+#   jest-one-of-two     jest 30.2.0, `jest` over both files
+#   jest-alone          `jest tests/clamp.test.js`
+#   vitest-one-of-two   vitest 3.2.4, `vitest run` over both files
+#   vitest-alone        `vitest run tests/clamp.test.js`
+# The file that fails to load runs no test. Its test, `clamp at the bound`,
+# appears only in jest's code frame. Local paths are replaced with
+# /home/dev/work/load-failure.
+
+LOAD_FAILURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_load_failure"
+
+LOAD_FAILURE_CHECKER = """\
+import sys
+from pathlib import Path
+if "LIMIT = 5" in open("code.py", encoding="utf-8").read():
+    print("all green")
+    sys.exit(0)
+sys.stdout.buffer.write(Path("capture.txt").read_bytes())
+sys.exit(1)
+"""
+
+
+@pytest.mark.parametrize("capture", ["jest-one-of-two", "jest-alone", "vitest-one-of-two", "vitest-alone"])
+def test_a_test_file_jest_or_vitest_cannot_load_is_no_kill(tmp_path, capture):
+    """jest's `Test Suites:` line and vitest's `Test Files` line count the file
+    that failed to load as a failed one. When the `Tests` line counted no
+    failure (`1 passed`, `0 total`, `no tests`), the fallback count shapes
+    took `1 failed` from the files line, no failure line named the row's test,
+    and the row read `MISATTRIBUTED` as a missing name, which the gate reads
+    as another test's kill. The `Tests` line now gives the count: 0 failed."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="clamp at the bound")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
 
 
 def test_unparseable_count_still_kills_without_the_exactly_one_claim(tmp_path):
