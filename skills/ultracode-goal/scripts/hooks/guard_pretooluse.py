@@ -51,6 +51,10 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      - The store, when the latch names a usable store path: a Read, Grep,
        Glob, Write, Edit, MultiEdit, NotebookEdit or Bash call that names that
        path is denied.
+     Both read a Bash command without each heredoc body the guard can tell
+     bash only hands to a `cat` or `tee` that leads its simple command, as
+     data (_without_heredoc_data, whose section comment lists the
+     conditions); every other body is read as commands.
      A Bash segment is exempt from both only when it runs this skill's own
      scripts/mem_recall.py or scripts/mem_observation.py, by path, as
      `uv run <path> ...` or `python <path> ...`, with no redirection, command
@@ -60,7 +64,8 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      Accepted residual, stated like the exec-wrapper one below: indirection
      (for the store, a `cd` then a relative path; for both, a variable
      holding part of the path or the name, a script that names the store or
-     the latch in its contents), commands on an ancestor directory (a search
+     the latch in its contents, whether a file tool or a heredoc fed to `cat`
+     or `tee` wrote it), commands on an ancestor directory (a search
      of it, removing the implementation artifacts folder, a `git clean` or
      `git stash --all`), repo-wide searches that reach a store inside the
      workspace, the interpreter `uv` or `python` resolves to, with the
@@ -122,6 +127,7 @@ Config resolution (all optional, env wins so the conductor can inject per run):
                   skips differently and this check would not see them.
 """
 
+import bisect
 import fnmatch
 import functools
 import json
@@ -1765,8 +1771,183 @@ _REBINDING_WORDS = frozenset(
     }
 )
 _REBINDING_KEYWORDS = frozenset({"for", "select", "function", "coproc"})
-_REBINDING_TEXT = re.compile(r"\(\(|\$\[|\$\{[A-Za-z_][A-Za-z0-9_]*:?=")
-_ANY_ASSIGNMENT = re.compile(r"^[({]*[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+# Words that run what follows them in this shell, so a rebinding builtin behind
+# them rebinds as it does at the head (`command export PATH=...`), and so does
+# an assignment behind the `time` keyword (`time PATH=...`). `command -v` and
+# `-V` only look a name up and run nothing.
+_CURRENT_SHELL_WRAPPERS = frozenset({"command", "time"})
+_MAX_WRAPPERS = 32
+# Rebinding shapes the word scan in _command_rebinds cannot reach, because it
+# splits a command at blanks and reads only each segment's head. Each changes
+# command lookup or the environment where a bare `NAME=` head does not sit:
+#   - `((` and `$[` open arithmetic (a `$((` holds `((`), which can assign;
+#   - the hash and alias arrays rebind a command name by entry. Any mention of
+#     them counts, even one that only reads them (`${#BASH_CMDS[@]}`, a search
+#     for the word): a command whose name the text does not spell can write an
+#     entry (`"$(printf %s r e a d)" 'BASH_CMDS[cat]' <<< /bin/rm` runs `read`),
+#     and then the array's name is all the text shows of the write.
+_REBINDING_TEXT = re.compile(r"\(\(|\$\[|(?<![A-Za-z0-9_])BASH_(?:CMDS|ALIASES)(?![A-Za-z0-9_])")
+# A subscript may nest (`PATH[a[0]]=x`), and bash reads one with blanks in it
+# (`PATH[ 0 ]=x`) as a single assignment word, which shlex splits at the blanks:
+# _command_rebinds also matches a head that opens a subscript against the
+# segment's words joined again.
+_ANY_ASSIGNMENT = re.compile(r"^[({]*[A-Za-z_][A-Za-z0-9_]*(?:\[.*\])?\+?=")
+_OPEN_SUBSCRIPT_HEAD = re.compile(r"^[({]*[A-Za-z_][A-Za-z0-9_]*\[")
+
+# A mutation: a `=` that is not a comparison (`==`, `!=`, `<=`, `>=`, `=~`), a
+# compound assignment (`+= -= *= /= %= &= ^= |= <<= >>=`), or `++`/`--`. Where
+# bash evaluates arithmetic, it assigns.
+_MUTATION = r"(?:(?<![=!<>])=(?![=~])|\+=|-=|\*=|/=|%=|\^=|\|=|&=|<<=|>>=|\+\+|--)"
+# A mutation in arithmetic: after a name or a subscript's `]`, blanks allowed
+# between (`PATH = 1`, `BASH_CMDS[cat]++`), or a `++`/`--` before a name.
+_ARITHMETIC_MUTATION = re.compile(
+    rf"(?:(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*|\])[ \t]*(?P<op>{_MUTATION})"
+    r"|(?P<pre>\+\+|--)[ \t]*[A-Za-z_]"
+)
+# A mutation glued to a name or a subscript's `]`, the only kind read in a
+# `[[ ]]` test: there a lone `=` compares strings, and `--help` is a word.
+_GLUED_MUTATION = re.compile(rf"(?:(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*|\])(?P<op>{_MUTATION})")
+
+# Where bash evaluates arithmetic outside `((` and `$[`, so a mutation there
+# assigns (_arithmetic_rebinds):
+#   - the offset and length of a `${...}` substring (`${PWD:PATH=1}`);
+#   - a subscript inside a `${...}` (`${a[PATH=1]}`, `${a[BASH_CMDS[cat]++]}`),
+#     in a word that assigns to it (`a[PATH=1]=x`), and in a name that `-v` or
+#     `-R` reads in a `test`, `[` or `[[` (`test -v 'a[PATH=1]'`);
+#   - a `[[ ]]` test that compares numbers (`-eq`, `-ne`, `-lt`, `-le`, `-gt`,
+#     `-ge`), whose operands are arithmetic (`[[ 1 -eq PATH=1 ]]`), with the
+#     subscripts inside it.
+# A bracket anywhere else is no subscript bash evaluates (`grep 'a[b=c]'` hands
+# grep a character class), so a mutation in it does not count. A `${...}` also
+# assigns by its operator: a `=` or `:=` right after the name and any subscript
+# (`${x=1}`, `${x:=1}`, `${BASH_CMDS[cat]:=/bin/rm}`, `${!x:=1}`); a `=` later in
+# it (`${PWD#*=}`, `${line%=*}`, `${x:-a=b}`, `${x/=/-}`) is only text. Brackets
+# and braces are paired quote-blind in one pass and every span is found from
+# them, so the reading stays linear in the command's length. In order below: a
+# `${` with its `!` or `#` and its parameter, a `NAME[` that opens a subscript,
+# `[[` and `]]` where they stand as words, `test` or `[` as a word, a `-v` or
+# `-R` operand, and the text between two of `;`, `&`, `|` and a newline.
+_PARAMETER =re.compile(r"\$\{([!#]?)([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])")
+_SUBSCRIPT = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*\[")
+_TEST_BOUND = re.compile(r"(?<![^\s;&|(){}!])\[\[(?=\s)|(?<=\s)\]\](?![^\s;&|()])")
+_TEST_COMMAND = re.compile(r"""(?<![^\s;&|(){}!'"])(?:test|\[)(?=[\s'"])""")
+_NAME_OPERAND = re.compile(r"""(?<![^\s!('"])-[vR](?=[\s'"])""")
+_ARITH_COMPARISON = re.compile(r"(?<![A-Za-z0-9_])-(?:eq|ne|lt|le|gt|ge)(?![A-Za-z0-9_])")
+_SIMPLE_PIECE = re.compile(r"[^;&|\n]+")
+# An assignment whose value OPENS a command substitution, for a name that
+# changes command lookup or the interpreter (the names _EXEMPT_UNSAFE_ASSIGNMENT
+# lists). shlex splits the substitution at its blanks, so _strip_assignments
+# would eat `PATH=$(printf` and read the rest as a command; this keeps the whole
+# assignment a rebinding (`PATH=$(printf %s /x):$PATH`). The opener must sit
+# right after the `=`, so a markdown code span such as `` `PYTHON_COLORS=0` ``
+# in a heredoc body is not read as one.
+_VALUE_SUBSTITUTION = re.compile(
+    r"(?:^|[\s;&|(){}])(?:PATH|VIRTUAL_ENV|CONDA_\w*|PYTHON\w*|UV_\w*|LD_\w*"
+    r"|DYLD_\w*|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_\w*|GIT_\w*)"
+    r"(?:\[[^][]*\])?\+?=(?:\$\(|`)"
+)
+
+
+def _closers(text: str, opener: str, closer: str) -> dict[int, int]:
+    """Where each `opener` in the text closes, paired quote-blind the way
+    nested brackets pair; one that never closes runs to the text's end."""
+    closes: dict[int, int] = {}
+    unclosed: list[int] = []
+    for match in re.finditer(f"[{re.escape(opener)}{re.escape(closer)}]", text):
+        if match.group() == opener:
+            unclosed.append(match.start())
+        elif unclosed:
+            closes[unclosed.pop()] = match.start()
+    for index in unclosed:
+        closes[index] = len(text)
+    return closes
+
+
+def _mutation_within(command: str, pattern: re.Pattern[str], spans: list[tuple[int, int]]) -> bool:
+    """True when a mutation `pattern` finds has its operator inside one of the
+    (start, end) spans."""
+    if not spans:
+        return False
+    starts: list[int] = []
+    ends: list[int] = []
+    for start, end in sorted(spans):
+        if starts and start <= ends[-1]:
+            ends[-1] = max(ends[-1], end)
+        else:
+            starts.append(start)
+            ends.append(end)
+    for match in pattern.finditer(command):
+        at = match.start("op") if match.group("op") is not None else match.start("pre")
+        index = bisect.bisect_right(starts, at) - 1
+        if index >= 0 and at < ends[index]:
+            return True
+    return False
+
+
+def _arithmetic_rebinds(command: str) -> bool:
+    """True when a `${...}` assigns by its operator, or a mutation stands where
+    bash evaluates arithmetic outside `((` and `$[` (see the comment above)."""
+    brackets = _closers(command, "[", "]") if "[" in command else {}
+    braces: dict[int, int] | None = None
+    spaced: list[tuple[int, int]] = []  # blanks may stand around the operator
+    glued: list[tuple[int, int]] = []  # `[[ ]]` number tests: glued to a name
+
+    def subscripts(start: int, end: int) -> None:
+        for match in _SUBSCRIPT.finditer(command, start, end):
+            spaced.append((match.end(), brackets[match.end() - 1]))
+
+    for match in _PARAMETER.finditer(command):
+        after = match.end()
+        if command.startswith("[", after):
+            spaced.append((after + 1, brackets[after]))
+            after = brackets[after] + 1
+        if command.startswith(("=", ":="), after):
+            return True
+        if command.startswith(":", after) and command[after + 1 : after + 2] not in ("-", "=", "+", "?"):
+            if braces is None:
+                braces = _closers(command, "{", "}")
+            spaced.append((after + 1, braces[match.start() + 1]))
+    for match in _SUBSCRIPT.finditer(command):
+        close = brackets[match.end() - 1]
+        if command.startswith(("=", "+="), close + 1):
+            spaced.append((match.end(), close))
+    tests: list[tuple[int, int]] = []
+    opened: int | None = None
+    for match in _TEST_BOUND.finditer(command):
+        if match.group() == "[[":
+            if opened is None:
+                opened = match.end()
+        elif opened is not None:
+            tests.append((opened, match.start()))
+            opened = None
+    if opened is not None:
+        tests.append((opened, len(command)))
+    for start, end in tests:
+        numbers = _ARITH_COMPARISON.search(command, start, end) is not None
+        if numbers:
+            glued.append((start, end))
+        if numbers or _NAME_OPERAND.search(command, start, end):
+            subscripts(start, end)
+    for piece in _SIMPLE_PIECE.finditer(command):
+        start, end = piece.span()
+        if _TEST_COMMAND.search(command, start, end) and _NAME_OPERAND.search(command, start, end):
+            subscripts(start, end)
+    return _mutation_within(command, _ARITHMETIC_MUTATION, spaced) or _mutation_within(
+        command, _GLUED_MUTATION, glued
+    )
+
+
+def _rebinding_text(command: str) -> bool:
+    """The rebinding shapes the per-segment word scan in _command_rebinds
+    cannot reach (see _REBINDING_TEXT): `((` or `$[`, any mention of the hash
+    or alias arrays, a `${...}` that assigns or a mutation where bash evaluates
+    arithmetic (_arithmetic_rebinds), and an assignment whose value opens a
+    substitution. Read quote-blind, like the word scan and the separator
+    split, and in time linear in the command's length."""
+    if _REBINDING_TEXT.search(command) or _VALUE_SUBSTITUTION.search(command):
+        return True
+    return _arithmetic_rebinds(command)
+
 
 # How much of a denied segment its deny reason quotes.
 _SEGMENT_SHOWN = 160
@@ -2187,9 +2368,17 @@ def _exempt_operand(segment: str) -> str | None:
 @functools.lru_cache(maxsize=64)
 def _command_rebinds(command: str) -> bool:
     """True when some segment of the command can change what a later `uv` or
-    `python` resolves to, or the environment it runs with (see
-    _REBINDING_WORDS). Read under every separator set, quote-blind like them."""
-    if _REBINDING_TEXT.search(command):
+    `python` resolves to, or the environment it runs with: a rebinding builtin
+    or keyword at a segment head (_REBINDING_WORDS), or one of the shapes the
+    head scan cannot reach (_rebinding_text): `((` or `$[`, a mutation where
+    bash evaluates arithmetic (a `[[ ... -eq NAME=1 ]]` test, a `${...}`
+    substring, a subscript in a `${...}`, in an assignment word or in a test
+    with `-v` or `-R`), any mention of the hash or alias arrays, a `${...}`
+    whose operator assigns, and an assignment to an interpreter or path
+    variable whose value opens a substitution. Read under every separator
+    set, quote-blind like them. A head behind `command` or `time`
+    (_CURRENT_SHELL_WRAPPERS) is read as a head."""
+    if _rebinding_text(command):
         return True
     for separators in _STORE_SEPARATOR_SETS:
         for segment in re.split(separators, command):
@@ -2197,22 +2386,45 @@ def _command_rebinds(command: str) -> bool:
                 words = _tokenize(segment)
             except ValueError:
                 words = segment.split()
-            rest = _strip_leading_noise(words)
-            prefix = words[: len(words) - len(rest)]
-            if any(w.lower().lstrip(_GROUP_OPENERS) in _REBINDING_KEYWORDS for w in prefix):
-                return True
-            if not rest:
-                if any(_ANY_ASSIGNMENT.match(w) for w in prefix):
-                    return True
-                continue
-            head = rest[0]
-            if head in _REBINDING_WORDS or _ANY_ASSIGNMENT.match(head):
-                return True
-            if "()" in head or (len(rest) > 1 and rest[1].startswith("()")):
-                return True
-            if head == "printf" and len(rest) > 1 and rest[1].startswith("-v"):
+            if _segment_rebinds(words):
                 return True
     return False
+
+
+def _segment_rebinds(words: list[str]) -> bool:
+    """True when one segment's words rebind at its head (see _command_rebinds).
+    A loop, not a recursion, over the wrappers ahead of the head, and a bounded
+    one: each pass re-reads the rest of the segment, so a run of more wrappers
+    than _MAX_WRAPPERS counts as a rebind (fail closed) rather than costing
+    time quadratic in its length."""
+    for _ in range(_MAX_WRAPPERS + 1):
+        rest = _strip_leading_noise(words)
+        prefix = words[: len(words) - len(rest)]
+        if any(w.lower().lstrip(_GROUP_OPENERS) in _REBINDING_KEYWORDS for w in prefix):
+            return True
+        if not rest:
+            return any(_ANY_ASSIGNMENT.match(w) for w in prefix)
+        head = rest[0]
+        if head not in _CURRENT_SHELL_WRAPPERS:
+            break
+        index = 1
+        while index < len(rest) and rest[index].startswith("-"):
+            option = rest[index]
+            index += 1
+            if option == "--":
+                break
+            if head == "command" and ("v" in option or "V" in option):
+                return False
+        words = rest[index:]
+    else:
+        return True
+    if head in _REBINDING_WORDS or _ANY_ASSIGNMENT.match(head):
+        return True
+    if _OPEN_SUBSCRIPT_HEAD.match(head) and _ANY_ASSIGNMENT.match(" ".join(rest)):
+        return True
+    if "()" in head or (len(rest) > 1 and rest[1].startswith("()")):
+        return True
+    return head == "printf" and len(rest) > 1 and rest[1].startswith("-v")
 
 
 def _operand_path(operand: str, cwd: str) -> str | None:
@@ -2395,6 +2607,554 @@ def _names_file_name(segment: str, name: str) -> bool:
     return False
 
 
+# --- Heredoc bodies that are data ---------------------------------------------
+# The latch and store rules split a command at its separators whatever the
+# quoting, so a heredoc's body was read line by line as shell segments (issue
+# #176): a report appended with `cat >> <file> <<'EOF'` from the latch's own
+# folder was denied for a markdown line ending `row 6).**`, whose `.**` reads as
+# a dot glob that matches the latch, and a table's `|` made the whole command
+# count as piped. Bash hands a body to its command on standard input and, when
+# the delimiter is quoted, runs none of it, so the two rules read a command
+# without the bodies that are only data to it (_without_heredoc_data).
+#
+# Leaving text out is the direction that can let a call through, so the
+# reading is narrow, and wherever it is unsure it keeps the whole command:
+#   - A body is data only when its simple command is led by `cat` or `tee`
+#     (_HEREDOC_SINKS), by bare name, after plain assignments that leave command
+#     lookup alone, with no keyword, `{`, `!` or redirection in front. Any other
+#     command may run what it reads (`bash`, `python3 -`, `xargs`,
+#     `source /dev/stdin`, `git apply`, `ed`, `sqlite3`, a `while read` loop),
+#     so its body is read as before.
+#   - A sink with a `|` after it, before the next `;`, `&`, `&&`, `||` or the
+#     end of its line, keeps its body: `cat <<'EOF' | sh` hands it to a shell,
+#     and so does `cat <<'EOF' |` with `sh` on the line after the delimiter. A
+#     `|` anywhere else in the command cannot reach the body.
+#   - Nothing before a sink may change what `cat` or `tee` runs: no rebinding
+#     _command_rebinds finds, and no assignment at all (_HEREDOC_ASSIGNS).
+#     What follows the sink runs after it, unless a group, a subshell, a loop
+#     or a function wraps it, and then a `|` or such a change anywhere in the
+#     command keeps the body: `{ cat <<'EOF'; } | sh`, a loop that changes
+#     PATH after the sink, and `f() {` with a later `f | sh` all reach it. A
+#     `(` that opens no substitution or arithmetic, and `{`, `if`, `while`,
+#     `until`, `for`, `select`, `function` or `coproc` where a word starts,
+#     count as such a wrapper for every sink after them (_HEREDOC_COMPOUNDS).
+#   - A `<(` or `>(` outside the bodies, even inside quotes, keeps every body.
+#   - A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) expands nothing in the
+#     body. An unquoted one runs each `$(...)`, `$((...))`, `${...}`, `$[...]`
+#     and backtick in it, so those stay in the reading, each read wide
+#     (_heredoc_expansions).
+#   - A `<<` counts only where bash reads one: outside quotes, comments and
+#     arithmetic. One inside `[[ ]]`, `$(...)` or backticks keeps the whole
+#     command, since bash ends a body inside a substitution at a line that only
+#     starts with its delimiter (`EOF)`), and so does a `case`, whose patterns'
+#     `)` the reading does not pair. A body ends at the first line equal to its
+#     delimiter, leading tabs stripped for `<<-`, and several heredocs on one
+#     line take consecutive bodies. In an unquoted body a line ending in a
+#     backslash joins the next before bash compares it, so such a body keeps
+#     the whole command too, and so does a body no delimiter line ends.
+#   - A quote-aware second reading (_quoted_segments) must find the same
+#     heredocs, in the same order, with the same delimiters.
+# What follows a delimiter line is a command again, and is read as one. The
+# claude-mem rule keeps reading every body: it denies `.claude-mem` anywhere in
+# a call, by design. Accepted residual, the one stated for a script that names
+# the store or the latch: a body written to a file that another command runs
+# (a FIFO reader can start before the writer, so not only a later one).
+_HEREDOC_SINKS = frozenset({"cat", "tee"})
+
+# A heredoc operator and its delimiter word: a name, bare, quoted whole in
+# single or double quotes, or behind a backslash, ended by a metacharacter. A
+# word of any other shape keeps the whole command.
+_HEREDOC_OPERATOR = re.compile(
+    r"<<(?P<dash>-?)[ \t]*(?:'(?P<single>[A-Za-z_][A-Za-z0-9_]*)'"
+    r"|\"(?P<double>[A-Za-z_][A-Za-z0-9_]*)\"|\\(?P<escaped>[A-Za-z_][A-Za-z0-9_]*)"
+    r"|(?P<bare>[A-Za-z_][A-Za-z0-9_]*))(?![^ \t\n;&|()<>])"
+)
+
+# The head of a heredoc's simple command that makes its body data: plain
+# assignments (no quote, expansion or operator in the value), then a sink by
+# bare name, ended by a blank, a redirection or the command's end.
+_HEREDOC_SINK = re.compile(
+    r"[ \t]*((?:[A-Za-z_][A-Za-z0-9_]*=[^\s$`'\"\\(){};&|<>]*[ \t]+)*)"
+    rf"(?:{'|'.join(sorted(_HEREDOC_SINKS))})(?![^ \t<>])"
+)
+
+# What ends a word where a keyword (`case`, `[[`, `]]`) can stand.
+_HEREDOC_METACHARS = " \t\n;&|()<>"
+
+# The keywords that open a group, a loop or a function, which can wrap a sink
+# in a pipeline or run it again. A `(` counts too, wherever it stands, unless
+# it opens a substitution or arithmetic (`$(`, `$((`, `((`).
+_HEREDOC_COMPOUNDS = ("{", "if", "while", "until", "for", "select", "function", "coproc")
+
+# What _command_rebinds still does not count (see _rebinding_text), because
+# flagging it everywhere would over-deny the read and exemption paths: a plain
+# `NAME=` or `NAME[...]=` anywhere, read quote-blind. The heredoc path is
+# stricter than those, so it treats ANY such assignment before a sink as able
+# to change what `cat` or `tee` runs, an argument such as `CC=gcc` included;
+# one led by `-`, `.` or `/` (`--format=`, `user.name=`) cannot assign and does
+# not. A `${...}` counts as it does there, where its operator assigns
+# (`${x:=1}`), and here also where it holds such a `NAME=` (`${x:+a=b}`); a `=`
+# after no name, or after one led by `-` (`${PWD#*=}`, `${x:-a=b}`), is text.
+_HEREDOC_ASSIGNS = re.compile(r"(?<![A-Za-z0-9_./-])[A-Za-z_][A-Za-z0-9_]*(?:\[[^][]*\])?\+?=")
+
+
+class _Unsure(Exception):
+    """A command whose heredocs the reading cannot vouch for: it is read whole."""
+
+
+class _Heredoc(NamedTuple):
+    """One heredoc, as _HeredocScan finds it."""
+
+    word: str  # its delimiter, `-` in front for `<<-`, as _quoted_heredoc_words reads it
+    quoted: bool  # the delimiter was quoted, so bash expands nothing in the body
+    head: str  # the simple command its operator sits in
+    start: int  # where that simple command starts
+    piped: bool  # a `|` follows that command in its pipeline
+    body: int  # where its body starts
+    close: int  # where its delimiter line starts
+    end: int  # past its delimiter line
+
+
+class _HeredocScan:
+    """One pass over a command that finds its heredocs where bash does, or
+    raises _Unsure. What it reads, and why, is in the section comment above."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.found: list[_Heredoc] = []
+        # The operators read on the current line, each with the start and,
+        # once read, the end of its simple command; their bodies start at the
+        # next line.
+        self.pending: list[dict] = []
+        # Where the first group, subshell, loop or function opens, if any
+        # does (_HEREDOC_COMPOUNDS).
+        self.compound: int | None = None
+
+    def run(self) -> list[_Heredoc]:
+        self.command(0, None, True)
+        return self.found
+
+    def keyword(self, index: int, word: str) -> bool:
+        end = index + len(word)
+        return self.text.startswith(word, index) and (
+            end == len(self.text) or self.text[end] in _HEREDOC_METACHARS
+        )
+
+    def command(self, index: int, closer: str | None, heredocs: bool) -> int:
+        """Shell text from `index` to the `)` that closes it (`closer`), or to
+        the end at the top; returns the index past it. `heredocs` is false in a
+        substitution, where a `<<` keeps the whole command."""
+        text = self.text
+        size = len(text)
+        start = index  # where the current simple command starts
+        current: list[dict] = []
+        # The operators read in the current pipeline, up to a `;`, `&`, `&&`,
+        # `||` or the line's end: a `|` after one hands its command's output on.
+        pipeline: list[dict] = []
+        word_start = True
+        in_test = False
+
+        def end_command(at: int) -> None:
+            for entry in current:
+                entry["end"] = at
+            current.clear()
+
+        while index < size:
+            char = text[index]
+            if (
+                word_start
+                and self.compound is None
+                and any(self.keyword(index, word) for word in _HEREDOC_COMPOUNDS)
+            ):
+                self.compound = index
+            if char == "\\":
+                index += 2  # an escaped character, a line continuation included
+                word_start = False
+            elif char == "#" and word_start:
+                end = text.find("\n", index)
+                index = size if end == -1 else end
+            elif char == "'":
+                index = self.single(index + 1)
+                word_start = False
+            elif text.startswith("$'", index):
+                index = self.ansi_c(index + 2)
+                word_start = False
+            elif char == '"':
+                index = self.double(index + 1)
+                word_start = False
+            elif char == "`":
+                index = self.backtick(index + 1)
+                word_start = False
+            elif text.startswith("$((", index):
+                index = self.arithmetic(index + 3)
+                word_start = False
+            elif text.startswith("$(", index):
+                index = self.command(index + 2, ")", False)
+                word_start = False
+            elif text.startswith("${", index):
+                index = self.braced(index + 2)
+                word_start = False
+            elif text.startswith(("$[", "<(", ">("), index):
+                raise _Unsure
+            elif word_start and text.startswith("((", index):
+                index = self.arithmetic(index + 2)
+                word_start = False
+            elif word_start and self.keyword(index, "case"):
+                raise _Unsure  # a pattern's `)` would close a `(` early
+            elif word_start and self.keyword(index, "[["):
+                in_test = True
+                index += 2
+            elif word_start and self.keyword(index, "]]"):
+                in_test = False
+                index += 2
+            elif text.startswith("<<<", index):
+                index += 3
+                word_start = True
+            elif text.startswith("<<", index):
+                match = _HEREDOC_OPERATOR.match(text, index)
+                if in_test or not heredocs or match is None:
+                    raise _Unsure
+                entry = {"match": match, "start": start, "end": None, "piped": False}
+                self.pending.append(entry)
+                current.append(entry)
+                pipeline.append(entry)
+                index = match.end()
+                word_start = True
+            elif char in "<>":
+                index += 2 if text.startswith((">>", ">&", ">|", "<&", "<>"), index) else 1
+                word_start = True
+            elif text.startswith("&>", index):
+                index += 3 if text.startswith("&>>", index) else 2
+                word_start = True
+            elif char == "|" and not text.startswith("||", index):
+                end_command(index)
+                for entry in pipeline:
+                    entry["piped"] = True
+                index += 2 if text.startswith("|&", index) else 1
+                start = index
+                word_start = True
+            elif char in ";&|":
+                end_command(index)
+                pipeline.clear()
+                index += 2 if text.startswith(("&&", "||"), index) else 1
+                start = index
+                word_start = True
+            elif char == "(":
+                if self.compound is None:
+                    self.compound = index
+                end_command(index)
+                # A `(` glued to a word (an array, an extglob group, a function
+                # name) opens no subshell, so no heredoc counts inside it.
+                index = self.command(index + 1, ")", heredocs and word_start)
+                start = index
+                word_start = True
+            elif char == ")":
+                if closer is None:
+                    raise _Unsure
+                end_command(index)
+                return index + 1
+            elif char == "\n":
+                if in_test:
+                    raise _Unsure
+                end_command(index)
+                pipeline.clear()
+                index = self.bodies(index + 1, heredocs)
+                start = index
+                word_start = True
+            else:
+                index += 1
+                word_start = char in " \t"
+        if closer is not None or self.pending:
+            raise _Unsure  # an unclosed `(`, or an operator with no line after it
+        end_command(size)
+        return index
+
+    def bodies(self, index: int, heredocs: bool) -> int:
+        """The bodies of the operators on the line just ended, in order, from
+        `index`; returns the index past the last delimiter line."""
+        if not self.pending:
+            return index
+        if not heredocs:
+            raise _Unsure
+        text = self.text
+        size = len(text)
+        for entry in self.pending:
+            match = entry["match"]
+            if entry["end"] is None:
+                raise _Unsure
+            name = match["single"] or match["double"] or match["escaped"] or match["bare"]
+            quoted = match["bare"] is None
+            body = index
+            while True:
+                if index >= size:
+                    raise _Unsure  # no delimiter line ends the body
+                newline = text.find("\n", index)
+                line_end = size if newline == -1 else newline
+                line = text[index:line_end]
+                if (line.lstrip("\t") if match["dash"] else line) == name:
+                    break
+                if not quoted and line.endswith("\\"):
+                    raise _Unsure  # bash joins it to the next line first
+                index = line_end + 1
+            after = min(line_end + 1, size)
+            head = text[entry["start"] : entry["end"]]
+            self.found.append(
+                _Heredoc(match["dash"] + name, quoted, head, entry["start"], entry["piped"], body, index, after)
+            )
+            index = after
+        self.pending.clear()
+        return index
+
+    def single(self, index: int) -> int:
+        end = self.text.find("'", index)
+        if end == -1 or (self.pending and "\n" in self.text[index:end]):
+            raise _Unsure
+        return end + 1
+
+    def ansi_c(self, index: int) -> int:
+        text = self.text
+        while index < len(text):
+            if text[index] == "\\":
+                index += 2
+                continue
+            if text[index] == "'":
+                return index + 1
+            if text[index] == "\n" and self.pending:
+                raise _Unsure
+            index += 1
+        raise _Unsure
+
+    def double(self, index: int) -> int:
+        """A double-quoted string from past its opening quote, the
+        substitutions in it read as bash reads them."""
+        text = self.text
+        while index < len(text):
+            char = text[index]
+            if char == "\\":
+                index += 2
+            elif char == '"':
+                return index + 1
+            elif char == "`":
+                index = self.backtick(index + 1)
+            elif text.startswith("$((", index):
+                index = self.arithmetic(index + 3)
+            elif text.startswith("$(", index):
+                index = self.command(index + 2, ")", False)
+            elif text.startswith("${", index):
+                index = self.braced(index + 2)
+            elif text.startswith("$[", index) or (char == "\n" and self.pending):
+                raise _Unsure
+            else:
+                index += 1
+        raise _Unsure
+
+    def backtick(self, index: int) -> int:
+        """Old-style substitution, which bash ends at the first backtick no
+        backslash escapes; a `<<` in it keeps the whole command."""
+        text = self.text
+        start = index
+        while index < len(text):
+            if text[index] == "\\":
+                index += 2
+            elif text[index] == "`":
+                inner = text[start:index]
+                if "<<" in inner or (self.pending and "\n" in inner):
+                    raise _Unsure
+                return index + 1
+            else:
+                index += 1
+        raise _Unsure
+
+    def arithmetic(self, index: int) -> int:
+        """Arithmetic, `$((...))` or `((...))`, up to its `))`, where a `<<` is
+        a shift. One that spans lines, holds a quote or a backslash, or does
+        not close as arithmetic keeps the whole command."""
+        text = self.text
+        depth = 0
+        while index < len(text):
+            char = text[index]
+            if char in "\n'\"`\\" or text.startswith("$[", index):
+                raise _Unsure
+            if text.startswith("$((", index):
+                index = self.arithmetic(index + 3)
+                continue
+            if text.startswith("$(", index):
+                index = self.command(index + 2, ")", False)
+                continue
+            if text.startswith("${", index):
+                index = self.braced(index + 2)
+                continue
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                if depth:
+                    depth -= 1
+                elif text.startswith("))", index):
+                    return index + 2
+                else:
+                    raise _Unsure
+            index += 1
+        raise _Unsure
+
+    def braced(self, index: int) -> int:
+        """A `${...}` from past its `{`, up to its `}`; one that quotes,
+        substitutes or spans lines keeps the whole command."""
+        text = self.text
+        depth = 1
+        while index < len(text):
+            char = text[index]
+            if char in "\n'\"`\\" or text.startswith(("$(", "$["), index):
+                raise _Unsure
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if not depth:
+                    return index + 1
+            index += 1
+        raise _Unsure
+
+
+def _heredoc_lookup_changes(text: str) -> bool:
+    """True when the text can change what a later `cat` or `tee` runs: what
+    _command_rebinds finds, and any assignment it can miss (_HEREDOC_ASSIGNS)."""
+    return _command_rebinds(text) or _HEREDOC_ASSIGNS.search(text) is not None
+
+
+def _heredoc_sink(head: str) -> bool:
+    """True when a heredoc's simple command hands its body to a command that
+    only reads it as data (_HEREDOC_SINK), after no assignment that changes
+    command lookup or what the command loads."""
+    match = _HEREDOC_SINK.match(head)
+    if match is None:
+        return False
+    return not any(_EXEMPT_UNSAFE_ASSIGNMENT.match(word) for word in match.group(1).split())
+
+
+def _heredoc_expansions(body: str) -> list[str]:
+    """What bash runs in an unquoted heredoc body: each backtick span, up to
+    the first backtick no backslash escapes, and each `$(`, `${` or `$[` from
+    its opener up to the body's last `)`, `}` or `]`, which holds its real
+    closer whatever nests in it. Quotes mean nothing in a body, so none is
+    read as one."""
+    spans: list[str] = []
+    index = 0
+    size = len(body)
+    while index < size:
+        char = body[index]
+        if char == "\\":
+            index += 2
+        elif char == "`":
+            end = index + 1
+            while end < size and body[end] != "`":
+                end += 2 if body[end] == "\\" else 1
+            spans.append(body[index : end + 1])
+            index = end + 1
+        elif char == "$" and body[index + 1 : index + 2] in ("(", "{", "["):
+            closer = body.rfind({"(": ")", "{": "}", "[": "]"}[body[index + 1]])
+            end = closer + 1 if closer > index + 1 else size
+            spans.append(body[index:end])
+            index = end
+        else:
+            index += 1
+    return spans
+
+
+def _quoted_heredoc_words(text: str) -> list[str]:
+    """The delimiter after each `<<` the quote-aware reading finds, in order,
+    `-` in front for `<<-`; none when the text does not lex."""
+    words: list[str] = []
+    for tokens in _quoted_segments(text):
+        for index, token in enumerate(tokens):
+            if token != "<<":
+                continue
+            after = tokens[index + 1 : index + 3]
+            if after[:1] == ["-"] and len(after) == 2:
+                words.append("-" + after[1])
+            else:
+                words.append(after[0] if after else "")
+    return words
+
+
+def _cut(text: str, cuts: list[tuple[int, int, str]]) -> str:
+    """The text with each (start, end) span, in order, replaced by its string."""
+    out: list[str] = []
+    index = 0
+    for start, end, kept in cuts:
+        out.append(text[index:start])
+        out.append(kept)
+        index = end
+    out.append(text[index:])
+    return "".join(out)
+
+
+@functools.lru_cache(maxsize=64)
+def _without_heredoc_data(command: str) -> str:
+    """The command as the latch and store rules read it: each heredoc body bash
+    only hands to `cat` or `tee` as data left out, with its delimiter line, and
+    of an unquoted one only what bash runs in it kept, a line each. Any other
+    body is kept, and the command is kept as it is wherever the reading is
+    unsure (see the section comment above)."""
+    if "<<" not in command:
+        return command
+    scan = _HeredocScan(command)
+    try:
+        heredocs = scan.run()
+    except (_Unsure, RecursionError):  # a substitution nested past the stack is unsure too
+        return command
+    if not heredocs:
+        return command
+    bodies = [(heredoc.body, heredoc.end, "") for heredoc in heredocs]
+    skeleton = _cut(command, bodies)
+    if (
+        "<(" in skeleton
+        or ">(" in skeleton
+        or _quoted_heredoc_words(skeleton) != [heredoc.word for heredoc in heredocs]
+    ):
+        return command
+    cuts: list[tuple[int, int, str]] = []
+    # A lookup change before a sink, in the already-data-cut prefix, keeps its
+    # body. A sink's simple command starts at a top-level boundary (a `<<`
+    # inside `[[ ]]`, `(( ))`, `${...}`, a substitution or a `(` raises _Unsure
+    # or opens a compound, so no boundary here sits inside one), and no
+    # rebinding shape spans such a boundary. So each sink's prefix extends the
+    # last one's, and once something before a sink changes lookup so does every
+    # later prefix: carry a flag and read only the text added since the last
+    # check, which keeps the whole pass linear in the command's length.
+    lookup_changed = False
+    checked = 0
+    for heredoc in heredocs:
+        if not _heredoc_sink(heredoc.head):
+            continue
+        if heredoc.piped:
+            continue
+        if scan.compound is not None and scan.compound < heredoc.start:
+            # A group, subshell, loop or function may wrap the sink, so what
+            # follows it can reach it too.
+            if _PIPE.search(skeleton) or _heredoc_lookup_changes(skeleton):
+                continue
+        else:
+            # Only the bodies already left out as data leave this text: any
+            # other body may run in this shell before the sink does. Read the
+            # slice added since the last check (checked..start), with the data
+            # bodies cut in that slice left out, and keep the running flag.
+            if not lookup_changed and heredoc.start > checked:
+                delta = _cut(
+                    command[checked : heredoc.start],
+                    [(s - checked, e - checked, k) for s, e, k in cuts if checked <= s and e <= heredoc.start],
+                )
+                lookup_changed = _heredoc_lookup_changes(delta)
+                checked = heredoc.start
+            if lookup_changed:
+                continue
+        kept = ""
+        if not heredoc.quoted:
+            spans = _heredoc_expansions(command[heredoc.body : heredoc.close])
+            kept = "".join(f"{span}\n" for span in spans)
+        cuts.append((heredoc.body, heredoc.end, kept))
+    return _cut(command, cuts)
+
+
 def _store_segment(
     command: str,
     roots: tuple[str, ...],
@@ -2404,6 +3164,7 @@ def _store_segment(
     exempt: bool = True,
     reads: bool = False,
     name: str | None = None,
+    data: bool = False,
 ) -> str | None:
     """The first shell segment that names a root and is not let through.
 
@@ -2412,8 +3173,14 @@ def _store_segment(
     of its segments either. With `reads` true (the latch), a segment that
     only reads is let through as well, in a command that allows reads. With
     a `name` (the latch's file name), a segment that holds that name on its
-    own (_names_file_name) counts as naming the root.
+    own (_names_file_name) counts as naming the root. With `data` true (the
+    latch and the store), the command is read without the heredoc bodies bash
+    only hands to `cat` or `tee` (_without_heredoc_data), by every check here:
+    bash runs none of that text, so it can neither name a root nor rebind,
+    pipe, change folder or hand on a `$_`.
     """
+    if data:
+        command = _without_heredoc_data(command)
     home_key = tuple(homes)
     reads = reads and _command_allows_reads(command)
     for separators in _STORE_SEPARATOR_SETS:
@@ -2445,14 +3212,17 @@ def _input_names(
     exempt: bool,
     reads: bool = False,
     name: str | None = None,
+    data: bool = False,
 ) -> str | None:
     """What in one input names a root: the Bash segment, or the file-tool
     value; None when nothing does. `reads` lets a Bash read through and
     `name` matches a Bash segment on the file name alone too (both for the
-    latch rule); a file tool is matched on its value alone."""
+    latch rule), and `data` reads a Bash command without the heredoc bodies
+    that are only data (the latch and store rules); a file tool is matched on
+    its value alone."""
     if key == "command":
         return _store_segment(
-            value, roots, cwd, homes, exempt=exempt, reads=reads, name=name
+            value, roots, cwd, homes, exempt=exempt, reads=reads, name=name, data=data
         )
     bases = [cwd]
     own_path = tool_input.get("path")
@@ -2574,7 +3344,7 @@ def _latch_gate(event: dict, state_path: Path) -> None:
 
     # 2) Reach into claude-mem's own files, through every inspected input: the
     # folder's name anywhere, or a path, glob or brace expansion that reaches
-    # it under a home.
+    # it under a home. A heredoc body is read too, data or not.
     mem_roots = _claude_mem_roots(homes)
     for key, value in inputs:
         if _mentions_claude_mem(value) or (
@@ -2590,7 +3360,8 @@ def _latch_gate(event: dict, state_path: Path) -> None:
 
     # 3) The latch-path rule (decision 11), whatever the latch holds: a call
     # that names the latch and may change it. Read, Grep and Glob only read,
-    # so they are not looked at; a Bash segment that only reads passes.
+    # so they are not looked at; a Bash segment that only reads passes, and a
+    # heredoc body that is only data to its command is not read.
     if tool_name in _LATCH_CHANGING_TOOLS:
         latch_roots = _roots(str(state_path))
         for key, value in inputs:
@@ -2604,6 +3375,7 @@ def _latch_gate(event: dict, state_path: Path) -> None:
                 exempt=True,
                 reads=True,
                 name=state_path.name,
+                data=True,
             )
             if found is None:
                 continue
@@ -2621,13 +3393,14 @@ def _latch_gate(event: dict, state_path: Path) -> None:
 
     # 4) The store-path rule, for a latch that names a usable store. A latch
     # with none (a v1 latch, an unset store, an unreadable latch) has no path
-    # to match, so it denies only through 1) to 3).
+    # to match, so it denies only through 1) to 3). A heredoc body that is
+    # only data to its command is not read, as for the latch.
     store = _latch_view(_read_latch(state_path))["store"]
     if store is None:
         return
     roots = _roots(store)
     for key, value in inputs:
-        found = _input_names(key, value, tool_input, roots, cwd, homes, exempt=True)
+        found = _input_names(key, value, tool_input, roots, cwd, homes, exempt=True, data=True)
         if found is None:
             continue
         if key == "command":

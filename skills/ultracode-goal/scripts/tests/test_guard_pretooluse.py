@@ -6066,6 +6066,848 @@ def test_mutant_without_the_file_name_lets_a_cd_reach_the_latch(
     )
 
 
+# --- Heredoc bodies that are data (issue #176) -----------------------------------
+# A body bash only hands to `cat` or `tee` is data, so the latch and store rules
+# read the command without it. Every shape where bash can run the body, or
+# where the reading cannot vouch for where a body ends, is read as before.
+
+# A gate report appended from the latch's own folder. `(ledger row 6).**` holds
+# `.**`, a dot glob that matches the latch there; the table's `|` made the
+# command count as piped; the apostrophes do not tokenize.
+_REPORT_BODY = (
+    "### (2) Reading the two cases\n"
+    "\n"
+    "- **Both halves, on the real paths.** The paste half drives `handle_paste`, "
+    "the link half drives `handle_link`. Neither calls a step directly.\n"
+    "- **Each asserts the required precondition (ledger row 6).** The answer's "
+    "shape is `Rejected`, which `map_status` builds from the server's 401.\n"
+    "\n"
+    "| # | Mutant | Result |\n"
+    "| --- | --- | --- |\n"
+    "| 0 | the early return | KILLED |\n"
+)
+
+
+def _report(world: _StoreWorld) -> str:
+    return (world.tmp / "test-artifacts" / "automation-summary-1-1.md").as_posix()
+
+
+@pytest.mark.parametrize(
+    "opener,closer",
+    [
+        ("cat >> {report} <<'EOF'", "EOF"),
+        ('cat >> {report} <<"EOF"', "EOF"),
+        ("cat >> {report} <<\\EOF", "EOF"),
+        ("cat >> {report} <<-'EOF'", "\tEOF"),
+        ("cat > {report} << 'EOF'", "EOF"),
+        ("tee -a {report} <<'EOF'", "EOF"),
+        ("LC_ALL=C cat >> {report} <<'EOF'", "EOF"),
+    ],
+    ids=["single-quoted", "double-quoted", "escaped", "dash", "spaced", "tee", "safe-assignment"],
+)
+def test_csr_quoted_heredoc_report_from_the_latch_folder_passes(
+    latch_world: _StoreWorld, opener: str, closer: str
+) -> None:
+    """Issue #176: a markdown report appended with a quoted heredoc, from the
+    latch's own folder, passes. Its body is data handed to `cat` or `tee`."""
+    command = f"{opener.format(report=_report(latch_world))}\n{_REPORT_BODY}{closer}"
+    _assert_allowed(*_bash(latch_world, command, cwd=latch_world.impl))
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    [
+        ("", "grep -c $'\\u2014' {report}; git -C {worktree} status --porcelain | wc -l"),
+        ("", "grep -cE 'KILLED|SURVIVED' {report}"),
+        ("", "export LC_ALL=C"),
+        ("", "echo $((1 + 2))"),
+        ("", 'for f in {report}; do wc -l "$f"; done'),
+        ("", 'g() {{ wc -l "$1"; }}; g {report} | cat'),
+        ("", "{{ echo done; }} | wc -l"),
+        ("git -C {worktree} log --oneline | head -1\n", ""),
+        ("ls | wc -l; ", ""),
+    ],
+    ids=[
+        "count-then-status-piped",
+        "quoted-alternation",
+        "export",
+        "arithmetic",
+        "loop",
+        "function",
+        "group-piped",
+        "pipe-on-a-line-before",
+        "pipe-before-a-separator",
+    ],
+)
+def test_csr_report_append_beside_other_commands_passes(latch_world: _StoreWorld, before: str, after: str) -> None:
+    """Issue #176 as reported: the append was followed, on the line after its
+    delimiter, by a count of the report and a `git status` piped to `wc -l`.
+    A pipe in another pipeline cannot reach the body, and what runs after the
+    sink cannot change what it ran, so the body stays data."""
+    names = {"report": _report(latch_world), "worktree": (latch_world.impl / ".gate-worktree-1-1").as_posix()}
+    command = f"{before.format(**names)}cat >> {names['report']} <<'EOF'\n{_REPORT_BODY}EOF"
+    if after:
+        command += f"\n{after.format(**names)}"
+    _assert_allowed(*_bash(latch_world, command, cwd=latch_world.impl))
+
+
+def test_csr_the_report_body_still_denies_where_bash_runs_it(latch_world: _StoreWorld) -> None:
+    """Twin of the passes above: the same body fed to a shell, piped onward
+    (on its operator's line, past the body from a line ending in `|`, or from
+    a group around it), with command lookup changed before it, or with nothing
+    that makes it a heredoc's body, is read as commands, and its `.**` names
+    the latch from its folder."""
+    report = _report(latch_world)
+    for command in (
+        f"bash <<'EOF'\n{_REPORT_BODY}EOF",
+        f"cat <<'EOF' | sh\n{_REPORT_BODY}EOF",
+        f"cat <<'EOF' |\n{_REPORT_BODY}EOF\nsh",
+        f"{{ echo start; cat <<'EOF'\n{_REPORT_BODY}EOF\n}} | sh",
+        f"export PATH=/tmp/evil:$PATH\ncat >> {report} <<'EOF'\n{_REPORT_BODY}EOF",
+        f"echo start > {report}\n{_REPORT_BODY}",
+    ):
+        reason = _assert_latch_denied(*_bash(latch_world, command, cwd=latch_world.impl), latch_world.latch)
+        assert "names the run latch and may change it." in reason
+
+
+def test_csr_data_heredoc_keeps_reads_of_the_latch_a_read(latch_world: _StoreWorld) -> None:
+    """A body's table `|` no longer makes the command count as piped, so a
+    read of the latch beside the report stays a read. (`tee -a`, not `cat >>`:
+    the separator set without the newline reads the two lines as one segment,
+    and a `>` in it is no read.)"""
+    latch = latch_world.latch.as_posix()
+    command = f"cat {latch}\ntee -a {_report(latch_world)} <<'EOF'\n{_REPORT_BODY}EOF"
+    _assert_allowed(*_bash(latch_world, command, cwd=latch_world.impl))
+
+
+def test_csr_unquoted_heredoc_prose_passes_and_its_substitutions_are_read(latch_world: _StoreWorld) -> None:
+    """An unquoted delimiter: the body's plain text is data, while each
+    substitution bash runs in it is read as a command."""
+    report = _report(latch_world)
+    body = "Run at $(date -u), by `whoami`; costs $5.\n| a | b |\nThe latch is .mem-state.json, it's kept.\n"
+    _assert_allowed(*_bash(latch_world, f"cat > {report} <<EOF\n{body}EOF", cwd=latch_world.impl))
+    _assert_latch_denied(
+        *_bash(latch_world, f"cat > {report} <<EOF\n{body}$(rm -f .mem-state.json)\nEOF", cwd=latch_world.impl),
+        latch_world.latch,
+    )
+
+
+def _heredoc_bypasses(target: str, out: str) -> dict[str, str]:
+    """Commands where bash changes `target` outside any data body: each must
+    be denied. `out` is a harmless file to write."""
+    change = f"rm -rf {target}"
+    return {
+        # A command that runs what it reads.
+        "bash": f"bash <<'EOF'\n{change}\nEOF",
+        "sh-s": f"sh -s <<'EOF'\n{change}\nEOF",
+        "zsh": f"zsh <<'EOF'\n{change}\nEOF",
+        "dash": f"dash <<'EOF'\n{change}\nEOF",
+        "ksh": f"ksh <<'EOF'\n{change}\nEOF",
+        "python3": f"python3 - <<'EOF'\nimport shutil\nshutil.rmtree('{target}')\nEOF",
+        "node": f"node <<'EOF'\nrequire('fs').rmSync('{target}', {{recursive: true}})\nEOF",
+        "perl": f"perl <<'EOF'\nunlink '{target}';\nEOF",
+        "ruby": f"ruby <<'EOF'\nFile.delete('{target}')\nEOF",
+        "php": f"php <<'EOF'\n<?php unlink('{target}');\nEOF",
+        "uv-run-python": f"uv run python - <<'EOF'\nimport os; os.remove('{target}')\nEOF",
+        "xargs": f"xargs rm -rf <<'EOF'\n{target}\nEOF",
+        "source-stdin": f"source /dev/stdin <<'EOF'\n{change}\nEOF",
+        "dot-stdin": f". /dev/stdin <<'EOF'\n{change}\nEOF",
+        "git-apply": f"git apply <<'EOF'\n--- a{target}\n+++ /dev/null\nEOF",
+        "patch": f"patch -p0 <<'EOF'\n--- {target}\n+++ /dev/null\nEOF",
+        "ed": f"ed -s <<'EOF'\n!{change}\nq\nEOF",
+        "sed-f": f"sed -f - {out} <<'EOF'\nw {target}\nEOF",
+        "awk-f": f"awk -f - <<'EOF'\nBEGIN {{ system(\"{change}\") }}\nEOF",
+        "sqlite3": f"sqlite3 <<'EOF'\n.shell {change}\nEOF",
+        "while-read": f"while read -r line; do eval \"$line\"; done <<'EOF'\n{change}\nEOF",
+        "env-cat": f"env cat <<'EOF'\n{change}\nEOF",
+        "path-assignment": f"PATH=/tmp/evil:$PATH cat <<'EOF'\n{change}\nEOF",
+        "function-named-cat": f"cat() {{ bash; }}; cat <<'EOF'\n{change}\nEOF",
+        # Command lookup changed before the sink, or after it where a loop or
+        # a function runs the sink again.
+        "path-on-a-line-before": f"PATH=/tmp/evil:$PATH\ncat <<'EOF'\n{change}\nEOF",
+        "export-before": f"export PATH=/tmp/evil:$PATH; cat <<'EOF'\n{change}\nEOF",
+        "alias-before": f"shopt -s expand_aliases\nalias cat=bash\ncat <<'EOF'\n{change}\nEOF",
+        "hash-before": f"hash -p /bin/bash cat; cat <<'EOF'\n{change}\nEOF",
+        "hash-entry-default": f": ${{BASH_CMDS[cat]=/bin/bash}}\ncat <<'EOF'\n{change}\nEOF",
+        "hash-entry-substitution": f"BASH_CMDS[cat]=$(command -v bash)\ncat <<'EOF'\n{change}\nEOF",
+        "path-substitution": f"PATH=$(echo /tmp/evil):$PATH\ncat <<'EOF'\n{change}\nEOF",
+        "path-substitution-blank": f"PATH=$(printf %s /tmp/evil):$PATH\ncat <<'EOF'\n{change}\nEOF",
+        "arithmetic-assignment": f"[[ 1 -eq PATH=1 ]]\ncat <<'EOF'\n{change}\nEOF",
+        # A rebinding with no `=`: the hash array hit by an increment or a
+        # compound assignment in an arithmetic context (issue finding on main's
+        # detector), which _HEREDOC_ASSIGNS, needing a `=`, could not see.
+        "hash-entry-increment": f"[[ 0 -eq BASH_CMDS[cat]++ ]]\ncat <<'EOF'\n{change}\nEOF",
+        "hash-entry-preincrement": f"[[ 1 -eq ++BASH_CMDS[cat] ]]\ncat <<'EOF'\n{change}\nEOF",
+        "hash-entry-minus": f"[[ 0 -ne BASH_CMDS[cat]-=-1 ]]\ncat <<'EOF'\n{change}\nEOF",
+        "hash-entry-times": f"[[ 1 -ne BASH_CMDS[tee]*=1 ]]\ncat <<'EOF'\n{change}\nEOF",
+        "hash-entry-subscript": f"echo ${{a[BASH_CMDS[cat]++]}}\ncat <<'EOF'\n{change}\nEOF",
+        "hash-entry-default-colon": f": ${{BASH_CMDS[cat]:=/bin/bash}}\ncat <<'EOF'\n{change}\nEOF",
+        "path-between-sinks": f"cat > {out} <<'A'\nnotes\nA\nPATH=/tmp/evil:$PATH\ncat <<'B'\n{change}\nB",
+        "for-loop-path-after": f"for i in 1 2; do\ncat <<'EOF'\n{change}\nEOF\nPATH=/tmp/evil:$PATH\ndone",
+        "while-loop-path-after": f"while :; do\ncat <<'EOF'\n{change}\nEOF\nPATH=/tmp/evil:$PATH\ndone",
+        "function-run-after-path": f"f() {{\ncat <<'EOF'\n{change}\nEOF\n}}\nPATH=/tmp/evil:$PATH\nf",
+        # The body handed on to a shell.
+        "piped-to-sh": f"cat <<'EOF' | sh\n{change}\nEOF",
+        "piped-after-the-body": f"cat <<'EOF' |\n{change}\nEOF\nsh",
+        "piped-after-a-comment": f"cat <<'EOF' | # run it\n{change}\nEOF\n\nsh",
+        "piped-with-stderr": f"cat <<'EOF' |&\n{change}\nEOF\nsh",
+        "continued-into-a-pipe": f"cat <<'EOF' \\\n| sh\n{change}\nEOF",
+        "second-operator-piped": f"cat > {out} <<'A'; cat <<'B' |\nnotes\nA\n{change}\nB\nsh",
+        "group-piped": f"{{ echo start; cat <<'EOF'\n{change}\nEOF\n}} | bash",
+        "group-on-its-own-line-piped": f"{{\ncat <<'EOF'\n{change}\nEOF\n}} | sh",
+        "subshell-piped": f"(\ncat <<'EOF'\n{change}\nEOF\n) | sh",
+        "if-piped": f"if true; then\ncat <<'EOF'\n{change}\nEOF\nfi | sh",
+        "while-piped": f"while :; do\ncat <<'EOF'\n{change}\nEOF\nbreak\ndone | sh",
+        "function-piped": f"f() {{\ncat <<'EOF'\n{change}\nEOF\n}}\nf | sh",
+        "function-keyword-piped": f"function f {{\ncat <<'EOF'\n{change}\nEOF\n}}\nf | sh",
+        "coprocess": f"coproc {{\ncat <<'EOF'\n{change}\nEOF\n}}\nsh <&${{COPROC[0]}}",
+        "process-substitution": f"cat <<'EOF' > >(sh)\n{change}\nEOF",
+        # An unquoted body runs its substitutions.
+        "unquoted-substitution": f"cat > {out} <<EOF\nnote $({change})\nEOF",
+        "unquoted-backticks": f"cat > {out} <<EOF\nnote `{change}`\nEOF",
+        "unquoted-arithmetic": f"cat > {out} <<EOF\n$(( $({change}) + 1 ))\nEOF",
+        "unquoted-parameter": f"cat > {out} <<EOF\n${{x:-$({change})}}\nEOF",
+        "unquoted-over-lines": f"cat > {out} <<EOF\nnote $(true\n{change})\nEOF",
+        "unquoted-dash": f"cat > {out} <<-EOF\n\tnote $({change})\n\tEOF",
+        # The target as the data sink's own output.
+        "cat-into-it": f"cat > {target} <<'EOF'\n{{}}\nEOF",
+        "cat-appending-to-it": f"cat >> {target} <<'EOF'\n{{}}\nEOF",
+        "tee-into-it": f"tee {target} <<'EOF'\n{{}}\nEOF",
+        # A command after the delimiter line.
+        "after-the-delimiter": f"cat > {out} <<'EOF'\nnotes\nEOF\n{change}",
+        "after-a-dash-delimiter": f"cat > {out} <<-'EOF'\n\tnotes\n\tEOF\n{change}\nEOF",
+        "after-two-bodies": f"cat > {out} <<'A'; cat >> {out} <<'B'\none\nA\ntwo\nB\n{change}",
+        # A line that only resembles a delimiter keeps the body going, so a
+        # code body runs on over what reads as the next body.
+        "trailing-space": f"bash <<'A'; cat > {out} <<'B'\nx\nA \n{change}\nB\nA\nB",
+        "tab-without-dash": f"bash <<'A'; cat > {out} <<'B'\nx\n\tA\n{change}\nB\nA\nB",
+        "carriage-return": f"bash <<'A'; cat > {out} <<'B'\nx\nA\r\n{change}\nB\nA\nB",
+        # An unquoted body joins a line ending in a backslash to the next.
+        "line-continuation": f"cat > {out} <<EOF\nnotes\nEO\\\nF\n{change}\nEOF",
+        # A `<<` that is no heredoc.
+        "single-quoted-operator": f"cat '{out} <<EOF'\n{change}\nEOF",
+        "double-quoted-operator": f'cat "{out} <<EOF"\n{change}\nEOF',
+        "escaped-operator": f"cat \\<<EOF\n{change}\nEOF",
+        "here-string": f"cat <<<EOF\n{change}\nEOF",
+        "comment": f"cat {out} # see <<EOF\n{change}\nEOF",
+        "arithmetic": f"cat {out}$(( 1 <<EOF ))\n{change}\nEOF",
+        "arithmetic-command": f"(( n = 1 <<EOF )); cat {out}\n{change}\nEOF",
+        "test": f"[[ -f {out} <<EOF ]] || cat\n{change}\nEOF",
+        # bash ends a body inside a substitution early, at `EOF)`.
+        "command-substitution": f"x=$(cat <<'EOF'\ndata\nEOF)\n{change}\nEOF\n)",
+        "quoted-substitution": f"cat \"$(cat <<'EOF'\n{out}\nEOF)\"\n{change}\nEOF\n)\"",
+        "backticks": f"x=`cat <<'EOF'\ndata\nEOF`\n{change}",
+        # No delimiter line: the reading cannot vouch for the body.
+        "unterminated": f"cat > {out} <<'EOF'\nnotes\n{change}",
+    }
+
+
+_HEREDOC_BYPASSES = tuple(_heredoc_bypasses("/t", "/o"))
+
+
+@pytest.mark.parametrize("name", _HEREDOC_BYPASSES)
+def test_csr_heredoc_that_bash_can_run_still_names_the_latch(latch_world: _StoreWorld, name: str) -> None:
+    """Issue #176, fail closed: leaving a body out is the direction that can
+    let a change through, so every shape where bash runs the body, or runs
+    what follows a body, or where the reading is unsure, still denies."""
+    out = (latch_world.tmp / "notes.md").as_posix()
+    command = _heredoc_bypasses(latch_world.latch.as_posix(), out)[name]
+    reason = _assert_latch_denied(*_bash(latch_world, command), latch_world.latch)
+    assert "names the run latch and may change it." in reason
+
+
+@pytest.mark.parametrize("name", _HEREDOC_BYPASSES)
+def test_csr_heredoc_that_bash_can_run_still_names_the_store(store_world: _StoreWorld, name: str) -> None:
+    """Issue #176: the store rule reads heredocs the same way as the latch
+    rule, so each shape is denied on the store too."""
+    out = (store_world.tmp / "notes.md").as_posix()
+    command = _heredoc_bypasses(store_world.s, out)[name]
+    reason = _assert_latch_denied(*_bash(store_world, command), store_world.latch)
+    assert f"names the recall store {store_world.store}" in reason
+
+
+def test_csr_quoted_heredoc_that_mentions_the_store_passes(store_world: _StoreWorld) -> None:
+    """Issue #176, the store rule's half: a report that quotes the store path
+    in a data body passes; the claude-mem rule still reads every body."""
+    out = (store_world.tmp / "notes.md").as_posix()
+    body = f"The run store is {store_world.s}, and its records sit in {store_world.s}/runs.\n"
+    _assert_allowed(*_bash(store_world, f"cat >> {out} <<'EOF'\n{body}EOF"))
+    _assert_allowed(*_bash(store_world, f"tee {out} <<'EOF'\n{body}EOF"))
+    code, out_json = _bash(store_world, f"cat >> {out} <<'EOF'\nclaude-mem kept ~/.claude-mem\nEOF")
+    assert "reaches into '.claude-mem'" in _assert_latch_denied(code, out_json, store_world.latch)
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        ("cat > f <<'EOF'\na | b\nEOF\nls", "cat > f <<'EOF'\nls"),
+        ("cat > f <<-EOF\n\tnow $(date) and `id` | x\n\tEOF\n", "cat > f <<-EOF\n$(date)\n`id`\n"),
+        ("cat <<A; tee g <<'B'\none\nA\ntwo\nB\necho after", "cat <<A; tee g <<'B'\necho after"),
+        ("cat <<'A'; bash <<'B'\none\nA\ntwo\nB", "cat <<'A'; bash <<'B'\ntwo\nB"),
+        ("cat > f <<EOF\n${x:-a} $[1] and ) later\nEOF", "cat > f <<EOF\n${x:-a}\n$[1]\n"),
+        ("bash <<'EOF'\nrm x\nEOF", None),
+        ("cat <<'EOF' | sh\nrm x\nEOF", None),
+        ("cat <<'EOF'\nrm x", None),
+        ("x=$(cat <<'EOF'\nrm x\nEOF\n)", None),
+        ("case $1 in a) cat <<'EOF'\nrm x\nEOF\n;; esac", None),
+        ("for f in a; do cat <<'EOF'\nrm x\nEOF\ndone", None),
+        ("cat > f <<'EOF'\na\nEOF\nls | wc -l", "cat > f <<'EOF'\nls | wc -l"),
+        ("cat <<'EOF' |\nrm x\nEOF\nsh", None),
+        ("cat <<'A' | sh\nrm x\nA\ncat > f <<'B'\nnotes\nB", "cat <<'A' | sh\nrm x\nA\ncat > f <<'B'\n"),
+        ("{\ncat <<'EOF'\nrm x\nEOF\n} | sh", None),
+        ("export A=1\ncat <<'EOF'\nrm x\nEOF", None),
+        ("cat <<'EOF'\nrm x\nEOF\nexport A=1", "cat <<'EOF'\nexport A=1"),
+        ("cat <<'EOF'\nrm x\nEOF\nfor f in a; do :; done", "cat <<'EOF'\nfor f in a; do :; done"),
+        ("PATH=$(echo /x):$PATH\ncat <<'EOF'\nrm x\nEOF", None),
+        ("ls --format=long\ncat > f <<'EOF'\na\nEOF", "ls --format=long\ncat > f <<'EOF'\n"),
+    ],
+    ids=[
+        "quoted",
+        "unquoted-dash",
+        "two-sinks",
+        "sink-then-shell",
+        "unquoted-closers",
+        "shell",
+        "piped",
+        "unterminated",
+        "substitution",
+        "case",
+        "loop",
+        "pipe-on-a-later-line",
+        "piped-past-the-body",
+        "piped-then-data",
+        "group-piped",
+        "rebinding-before",
+        "rebinding-after",
+        "loop-after",
+        "assignment-with-a-blank-before",
+        "option-before",
+    ],
+)
+def test_csr_heredoc_data_reading(guard_module, command: str, expected: str | None) -> None:
+    """What the latch and store rules read of a command: a data body left out,
+    of an unquoted one only its substitutions (each up to the body's last
+    closer), any other body kept, and the command as it is wherever bash may
+    run every body or the reading is unsure (None)."""
+    assert guard_module._without_heredoc_data(command) == (command if expected is None else expected)
+
+
+_SINK_CHECK = "        if not _heredoc_sink(heredoc.head):\n            continue\n"
+_QUOTED_CHECK = "        if not heredoc.quoted:\n"
+
+
+def test_mutant_any_command_as_a_sink_runs_a_shell_body(latch_world: _StoreWorld, tmp_path: Path) -> None:
+    """Twin: take every heredoc's command for a data sink and `bash <<'EOF'`
+    hides the `rm` it runs, while the report still passes; the sink check is
+    what keeps the shell's body a command."""
+    mutant = _write_mutant(tmp_path, "any_sink", _SINK_CHECK, "")
+    command = f"bash <<'EOF'\nrm -f {latch_world.latch.as_posix()}\nEOF"
+
+    _assert_allowed(*_bash(latch_world, command, hook=mutant))
+    _assert_latch_denied(*_bash(latch_world, command), latch_world.latch)
+    report = f"cat >> {_report(latch_world)} <<'EOF'\n{_REPORT_BODY}EOF"
+    _assert_allowed(*_bash(latch_world, report, cwd=latch_world.impl, hook=mutant))
+
+
+def test_mutant_unquoted_read_as_quoted_hides_a_substitution(latch_world: _StoreWorld, tmp_path: Path) -> None:
+    """Twin: read an unquoted delimiter as a quoted one and a `$(rm ...)` the
+    body runs is left out; keeping the substitutions is what denies it."""
+    mutant = _write_mutant(tmp_path, "unquoted_as_quoted", _QUOTED_CHECK, "        if False:\n")
+    command = f"cat > {_report(latch_world)} <<EOF\nnote $(rm -f {latch_world.latch.as_posix()})\nEOF"
+
+    _assert_allowed(*_bash(latch_world, command, hook=mutant))
+    _assert_latch_denied(*_bash(latch_world, command), latch_world.latch)
+
+
+_PIPED_CHECK = "        if heredoc.piped:\n            continue\n"
+_WRAPPED_CHECK = "        if scan.compound is not None and scan.compound < heredoc.start:\n"
+_BEFORE_CHECK = "            if lookup_changed:\n                continue\n"
+
+
+@pytest.mark.parametrize(
+    "name,old,new,shape",
+    [
+        ("no_piped", _PIPED_CHECK, "", "cat <<'EOF' |\n{change}\nEOF\nsh"),
+        ("no_wrapper", _WRAPPED_CHECK, "        if False:\n", "{{\ncat <<'EOF'\n{change}\nEOF\n}} | sh"),
+        ("no_before", _BEFORE_CHECK, "", "PATH=/tmp/evil:$PATH\ncat <<'EOF'\n{change}\nEOF"),
+    ],
+    ids=["pipe-after-the-sink", "wrapper", "lookup-changed-before"],
+)
+def test_mutant_without_a_narrowed_check_a_shell_runs_the_body(
+    latch_world: _StoreWorld, tmp_path: Path, name: str, old: str, new: str, shape: str
+) -> None:
+    """Twins of the checks that replaced the whole-command pipe and lookup
+    fallbacks (issue #176): drop one and a body bash hands to a shell, or to a
+    `cat` that PATH points elsewhere, is left out, so the `rm` of the latch in
+    it passes. The report with a pipe on a later line passes either way."""
+    mutant = _write_mutant(tmp_path, name, old, new)
+    command = shape.format(change=f"rm -f {latch_world.latch.as_posix()}")
+
+    _assert_allowed(*_bash(latch_world, command, hook=mutant))
+    _assert_latch_denied(*_bash(latch_world, command), latch_world.latch)
+    report = f"cat >> {_report(latch_world)} <<'EOF'\n{_REPORT_BODY}EOF\nls | wc -l"
+    _assert_allowed(*_bash(latch_world, report, cwd=latch_world.impl, hook=mutant))
+
+
+# --- Rebinding command lookup without a plain `NAME=` --------------------------
+# _command_rebinds reads a command's segment heads split at blanks, so it used
+# to miss a rebinding dressed as arithmetic, as a hash-array entry, or as an
+# assignment whose value opens a substitution (shlex splits it). Each of these
+# changes what a later `cat`, `uv` or `python` resolves to, so it must refuse
+# both the latch-read exemption and the recall-script exemption.
+
+_REBIND_SHAPES = {
+    "hash-default": ": ${BASH_CMDS[cat]:=/bin/rm}",
+    "hash-default-no-colon": ": ${BASH_CMDS[cat]=/bin/rm}",
+    "hash-entry-assign": "BASH_CMDS[cat]=/bin/rm",
+    "hash-entry-increment": "[[ 0 -eq BASH_CMDS[cat]++ ]]",
+    "hash-entry-preincrement": "[[ 1 -eq ++BASH_CMDS[cat] ]]",
+    "hash-entry-compound": "[[ 0 -ne BASH_CMDS[cat]-=-1 ]]",
+    "hash-entry-times": "[[ 1 -ne BASH_CMDS[cat]*=1 ]]",
+    "hash-entry-in-subscript": "echo ${a[BASH_CMDS[cat]++]}",
+    "alias-array": "BASH_ALIASES[x]=y",
+    "path-value-substitution": "PATH=$(printf %s /tmp/evil):$PATH",
+    "path-value-backtick": "PATH=`printf %s /tmp/evil`:$PATH",
+    "test-arithmetic-assignment": "[[ 1 -eq PATH=1 ]]",
+    "subscript-assignment": "echo ${a[PATH=1]}",
+    "subscript-assignment-bare": "test -v 'a[PATH=1]'",
+    "substring-offset-assignment": "s=abc; echo ${s:x=1}",
+    # Each `${...}` form that still assigns once a `=` later in it no longer
+    # counts: its operator right after the name, through `!` too, and the
+    # arithmetic of a substring or a subscript, blanks and nesting included.
+    "indirect-default": ": ${!x:=/tmp/evil}",
+    "substring-offset": "echo ${PWD:PATH=1}",
+    "substring-length-spaced": "echo ${PWD:0:PATH = 1}",
+    "substring-after-a-nested-expansion": "echo ${PWD:${#x}:PATH=1}",
+    "subscript-spaced": "echo ${a[ PATH = 1 ]}",
+    "subscript-of-a-length": "echo ${#a[PATH=1]}",
+    "subscript-nested-increment": "echo ${a[b[c]++]}",
+    # A subscript where bash evaluates it outside a `${...}`: in a word that
+    # assigns to it (blanks split the word for shlex, not for bash), and in a
+    # name `-v` reads.
+    "assignment-word-spaced-subscript": "a[PATH = 1]=x",
+    "assignment-word-subscript-split-by-a-separator": "a[PATH=1 && 1]=x",
+    "bracket-test-names-a-subscript": "[ -v 'a[PATH=1]' ]",
+    "double-bracket-test-names-a-subscript": "[[ -v a[PATH=1] ]]",
+    "number-test-subscript": "[[ 1 -eq a[b[PATH=1]] ]]",
+    # Any mention of the hash array counts, even a read: a command whose name
+    # the text does not spell can write an entry.
+    "hash-read-only": "echo ${#BASH_CMDS[@]}",
+    "hash-written-by-a-computed-read": "\"$(printf %s r e a d)\" 'BASH_CMDS[cat]' <<< /bin/rm",
+    # A rebinding builtin behind `command`, and an assignment behind the `time`
+    # keyword, run in this shell as they do at the head.
+    "command-export": "command export PATH=/tmp/evil:$PATH",
+    "command-option-export": "command -p export PATH=/tmp/evil:$PATH",
+    "command-builtin-declare": "command builtin declare -x PATH=/tmp/evil",
+    "time-assignment": "time PATH=/tmp/evil:$PATH",
+    "time-option-assignment": "time -p PATH=/tmp/evil:$PATH",
+    "not-time-assignment": "! time PATH=/tmp/evil:$PATH",
+    # A nested subscript, and one with blanks in it, which bash reads as one
+    # assignment word and shlex splits.
+    "nested-subscript-head": "PATH[a[0]]=/tmp/evil",
+    "spaced-subscript-head": "PATH[ 0 ]=/tmp/evil",
+}
+_REBIND_SHAPE_IDS = tuple(_REBIND_SHAPES)
+
+_REBIND_CONTROLS = {
+    # A `==` comparison, a string `[[ = ]]`, a `--long-option`, an `name=value`
+    # argument to another command, and a harmless `FOO=$(...)`: none rebinds
+    # `cat`, `uv` or `python`, so each keeps the read and the exemption.
+    "equality": "[[ 1 == 1 ]]",
+    "string-compare": '[[ "$x" = y ]]',
+    "long-option": "git log --oneline --format=%H",
+    "argument-assignment": "git config user.name=x",
+    "harmless-substitution": "msg=$(date +%s)",
+    # A `=` later in a `${...}` than its operator is text, and a bracket bash
+    # does not evaluate as a subscript is no arithmetic.
+    "strip-prefix": "echo ${PWD#*=}",
+    "strip-suffix": "echo ${line%=*}",
+    "default-holds-equals": "echo ${PATTERN:-a=b}",
+    "alternative-holds-equals": "echo ${x:+a=b}",
+    "replace-equals": "echo ${x/=/-}",
+    "character-class": "grep -c 'a[b=c]' /dev/null",
+    "glob-bracket": "ls -d foo[x=y]",
+    "invert-with-a-class": "grep -vc 'a[b=c]' /dev/null",
+    "number-test": '[[ "$1" == --help || $# -eq 0 ]]',
+    # `command -v` and `-V` only look a name up, and a program behind
+    # `command` or `time` is no builtin.
+    "command-lookup": "command -v uv",
+    "command-lookup-of-a-builtin": "command -V export",
+    "command-runs-a-program": "command ls /dev/null",
+    "timed-program": "time -p ls /dev/null",
+}
+_REBIND_CONTROL_IDS = tuple(_REBIND_CONTROLS)
+
+
+@pytest.mark.parametrize("name", _REBIND_SHAPE_IDS)
+def test_csr_rebind_shape_before_a_latch_read_denies(latch_world: _StoreWorld, name: str) -> None:
+    """A rebinding of `cat` before a read of the latch means the `cat <latch>`
+    after it is no longer a read the guard can vouch for, so it is denied."""
+    command = f"{_REBIND_SHAPES[name]}; cat {latch_world.latch.as_posix()}"
+    _assert_latch_denied(*_bash(latch_world, command), latch_world.latch)
+
+
+@pytest.mark.parametrize("name", _REBIND_SHAPE_IDS)
+def test_csr_rebind_shape_refuses_the_recall_exemption(store_world: _StoreWorld, name: str) -> None:
+    """A rebinding of `uv` or `python` anywhere in the command refuses the
+    recall-script exemption, so the pinned call that names the store is denied."""
+    command = f"{_REBIND_SHAPES[name]}; {_exempt_filter(store_world)}"
+    reason = _assert_latch_denied(*_bash(store_world, command), store_world.latch)
+    assert "names the recall store" in reason
+
+
+@pytest.mark.parametrize("name", _REBIND_CONTROL_IDS)
+def test_csr_rebind_control_keeps_the_latch_read(latch_world: _StoreWorld, name: str) -> None:
+    """Controls: a comparison, a long option and an argument assignment do not
+    rebind, so a read of the latch beside them stays a read and passes."""
+    command = f"{_REBIND_CONTROLS[name]}; cat {latch_world.latch.as_posix()}"
+    _assert_allowed(*_bash(latch_world, command))
+
+
+@pytest.mark.parametrize("name", _REBIND_CONTROL_IDS)
+def test_csr_rebind_control_keeps_the_recall_exemption(store_world: _StoreWorld, name: str) -> None:
+    """The same controls keep the recall-script exemption."""
+    command = f"{_REBIND_CONTROLS[name]}; {_exempt_filter(store_world)}"
+    _assert_allowed(*_bash(store_world, command))
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        "cat {latch}; echo ${{PWD#*=}}",
+        "cat {latch}; echo ${{line%=*}}",
+        "cat {latch}; echo ${{x/=/-}}",
+        "grep ${{PATTERN:-a=b}} {latch}",
+        "grep -- ${{FLAG:-PATH=x}} {latch}",
+        "grep 'a[b=c]' {latch}",
+        "grep foo[x=y] {latch}",
+        "grep -v 'a[b=c]' {latch}",
+        "[ -f {latch} ] && grep 'a[b=c]' {latch}",
+    ],
+    ids=[
+        "strip-prefix",
+        "strip-suffix",
+        "replace",
+        "default",
+        "default-names-path",
+        "character-class",
+        "glob-bracket",
+        "inverted-class",
+        "test-then-class",
+    ],
+)
+def test_csr_read_beside_text_that_assigns_nothing_passes(latch_world: _StoreWorld, read: str) -> None:
+    """False positives of the widened rebinding reading: a `=` later in a
+    `${...}` than its operator, and a bracket bash does not evaluate as a
+    subscript (a grep character class or a glob), assign nothing, so a read
+    of the latch beside or around them stays a read."""
+    _assert_allowed(*_bash(latch_world, read.format(latch=latch_world.latch.as_posix())))
+
+
+def test_csr_hash_array_mention_is_kept_fail_closed(latch_world: _StoreWorld, tmp_path: Path) -> None:
+    """Decision: any mention of `BASH_CMDS` or `BASH_ALIASES` keeps counting,
+    a read-only one too. A command whose name the text does not spell can
+    write an entry (bash runs `read` here and maps `cat` to `rm`), and the
+    array's name is all the text shows of it. Twin: count only the assignment
+    forms, and that write passes as a read of the latch, while the read-only
+    mention the decision costs passes too."""
+    latch = latch_world.latch.as_posix()
+    computed = f"\"$(printf %s r e a d)\" 'BASH_CMDS[cat]' <<< /bin/rm; cat {latch}"
+    read_only = f"grep BASH_CMDS {latch}"
+    _assert_latch_denied(*_bash(latch_world, computed), latch_world.latch)
+    _assert_latch_denied(*_bash(latch_world, read_only), latch_world.latch)
+
+    mutant = _write_mutant(
+        tmp_path,
+        "hash_writes_only",
+        r"(?<![A-Za-z0-9_])BASH_(?:CMDS|ALIASES)(?![A-Za-z0-9_])",
+        r"(?<![A-Za-z0-9_])BASH_(?:CMDS|ALIASES)(?:\[[^]]*\])?[+:]?=",
+    )
+    _assert_allowed(*_bash(latch_world, computed, hook=mutant))
+    _assert_allowed(*_bash(latch_world, read_only, hook=mutant))
+    assigned = f"BASH_CMDS[cat]=/bin/rm; cat {latch}"
+    _assert_latch_denied(*_bash(latch_world, assigned, hook=mutant), latch_world.latch)
+
+
+_OPERATOR_CHECK = '        if command.startswith(("=", ":="), after):\n            return True\n'
+_SUBSTRING_SPAN = "            spaced.append((after + 1, braces[match.start() + 1]))\n"
+_ASSIGNED_SUBSCRIPT = '        if command.startswith(("=", "+="), close + 1):\n'
+_NAME_TEST_PIECE = (
+    "        if _TEST_COMMAND.search(command, start, end) and _NAME_OPERAND.search(command, start, end):\n"
+)
+
+
+@pytest.mark.parametrize(
+    "name,old,new,shape",
+    [
+        ("no_operator", _OPERATOR_CHECK, "", ": ${{!x:=/tmp/evil}}; cat {latch}"),
+        ("no_substring", _SUBSTRING_SPAN, "            pass\n", "echo ${{PWD:PATH=1}}; cat {latch}"),
+        ("no_assigned_subscript", _ASSIGNED_SUBSCRIPT, "        if False:\n", "a[PATH=1 && 1]=x; cat {latch}"),
+        ("no_name_test", _NAME_TEST_PIECE, "        if False:\n", "test -v 'a[PATH=1]'; cat {latch}"),
+    ],
+    ids=["assigning-operator", "substring", "assignment-word", "minus-v"],
+)
+def test_mutant_without_an_arithmetic_span_a_rebinding_reads_as_a_read(
+    latch_world: _StoreWorld, tmp_path: Path, name: str, old: str, new: str, shape: str
+) -> None:
+    """Twins of the spans the narrowed reading still finds: drop one and a
+    command that assigns PATH (or, through `${!x:=...}`, whatever `x` names)
+    before `cat <latch>` passes as a read; with it, the read is denied."""
+    mutant = _write_mutant(tmp_path, name, old, new)
+    command = shape.format(latch=latch_world.latch.as_posix())
+
+    _assert_allowed(*_bash(latch_world, command, hook=mutant))
+    _assert_latch_denied(*_bash(latch_world, command), latch_world.latch)
+
+
+@pytest.mark.parametrize(
+    "name,old,new,shape",
+    [
+        (
+            "no_wrapper_peel",
+            "        if head not in _CURRENT_SHELL_WRAPPERS:\n",
+            "        if True:\n",
+            "command export PATH=/tmp/evil:$PATH; cat {latch}",
+        ),
+        (
+            "no_wrapper_peel_for_time",
+            "        if head not in _CURRENT_SHELL_WRAPPERS:\n",
+            "        if True:\n",
+            "time PATH=/tmp/evil:$PATH; cat {latch}",
+        ),
+        (
+            "no_joined_subscript",
+            "    if _OPEN_SUBSCRIPT_HEAD.match(head) and",
+            "    if False and",
+            "PATH[ 0 ]=/tmp/evil; cat {latch}",
+        ),
+        (
+            "flat_subscript",
+            r'(?:\[.*\])?\+?=")',
+            r'(?:\[[^\]]*\])?\+?=")',
+            "PATH[a[0]]=/tmp/evil; cat {latch}",
+        ),
+    ],
+    ids=["command", "time", "spaced-subscript", "nested-subscript"],
+)
+def test_mutant_without_the_head_forms_a_rebinding_reads_as_a_read(
+    latch_world: _StoreWorld, tmp_path: Path, name: str, old: str, new: str, shape: str
+) -> None:
+    """Twins of the head forms behind a wrapper or in a subscript bash reads as
+    one word: drop one and a command that assigns PATH before `cat <latch>`
+    passes as a read; with it, the read is denied."""
+    mutant = _write_mutant(tmp_path, name, old, new)
+    command = shape.format(latch=latch_world.latch.as_posix())
+
+    _assert_allowed(*_bash(latch_world, command, hook=mutant))
+    _assert_latch_denied(*_bash(latch_world, command), latch_world.latch)
+
+
+def test_mutant_without_the_lookup_case_refuses_command_v(latch_world: _StoreWorld, tmp_path: Path) -> None:
+    """Twin of `command -v`: read its operand as a head, and a lookup of a
+    builtin's name before `cat <latch>` is refused; it runs nothing, so it
+    passes."""
+    mutant = _write_mutant(
+        tmp_path,
+        "no_lookup_case",
+        '            if head == "command" and ("v" in option or "V" in option):\n                return False\n',
+        "",
+    )
+    command = f"command -V export; cat {latch_world.latch.as_posix()}"
+
+    _assert_latch_denied(*_bash(latch_world, command, hook=mutant), latch_world.latch)
+    _assert_allowed(*_bash(latch_world, command))
+
+
+def test_mutant_every_bracket_a_subscript_refuses_a_character_class(latch_world: _StoreWorld, tmp_path: Path) -> None:
+    """Twin of the subscript gate: read every `NAME[...]` as a subscript bash
+    evaluates, as the reading did before, and `grep 'a[b=c]' <latch>` is
+    refused; the gate is what lets it through, while a real assignment word
+    with a mutating subscript is refused either way."""
+    mutant = _write_mutant(tmp_path, "every_bracket", _ASSIGNED_SUBSCRIPT, "        if True:\n")
+    latch = latch_world.latch.as_posix()
+    read = f"grep 'a[b=c]' {latch}"
+
+    _assert_latch_denied(*_bash(latch_world, read, hook=mutant), latch_world.latch)
+    _assert_allowed(*_bash(latch_world, read))
+    _assert_latch_denied(*_bash(latch_world, f"a[PATH=1]=x; cat {latch}"), latch_world.latch)
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        ("echo ${PWD#*=}\ncat > f <<'EOF'\nrm x\nEOF", "echo ${PWD#*=}\ncat > f <<'EOF'\n"),
+        ("echo ${x:-a=b} ${x/=/-}\ncat > f <<'EOF'\nrm x\nEOF", "echo ${x:-a=b} ${x/=/-}\ncat > f <<'EOF'\n"),
+        (": ${x:=1}\ncat <<'EOF'\nrm x\nEOF", None),
+        (": ${!x=1}\ncat <<'EOF'\nrm x\nEOF", None),
+        ("echo ${PWD:PATH=1}\ncat <<'EOF'\nrm x\nEOF", None),
+        ("echo ${a[ PATH = 1 ]}\ncat <<'EOF'\nrm x\nEOF", None),
+    ],
+    ids=[
+        "strip-before",
+        "default-and-replace-before",
+        "default-assigns-before",
+        "indirect-assigns-before",
+        "substring-assigns-before",
+        "subscript-assigns-before",
+    ],
+)
+def test_csr_heredoc_lookup_change_reads_a_parameter_expansion_by_its_operator(
+    guard_module, command: str, expected: str | None
+) -> None:
+    """The heredoc path's `${...}` check is narrowed as the read path's is: a
+    `${...}` before a sink keeps its body only when it assigns, by its operator
+    or in arithmetic, and a `=` later in one does not. (Any `NAME=` before a
+    sink still keeps it there, quotes or not: the heredoc path's own rule.)"""
+    assert guard_module._without_heredoc_data(command) == (command if expected is None else expected)
+
+
+def test_csr_heredoc_report_after_a_strip_expansion_passes(latch_world: _StoreWorld) -> None:
+    """End to end on the heredoc path: a report appended from the latch's own
+    folder after a `${PWD#*=}` keeps its body data, so its `.**` passes; after
+    a `${x:=...}` the body is read, and the `.**` names the latch."""
+    report = f"cat >> {_report(latch_world)} <<'EOF'\n{_REPORT_BODY}EOF"
+    _assert_allowed(*_bash(latch_world, f"echo ${{PWD#*=}}\n{report}", cwd=latch_world.impl))
+    _assert_latch_denied(*_bash(latch_world, f": ${{x:=1}}\n{report}", cwd=latch_world.impl), latch_world.latch)
+
+
+def test_csr_rebinding_text_is_linear_in_the_command_length(guard_module) -> None:
+    """The text scan for rebinding shapes once took time quadratic in the
+    command's length: a `[[ ]]` test read lazily to its `]]` from every `[[`,
+    a subscript tried from every letter of a long word, and a `${...}` or a
+    `PATH[` read to the end from each opener. A hook past its timeout lets
+    the call through, so the scan pairs brackets and braces in one pass now.
+    The bound is generous: each input took tens of seconds to minutes before."""
+    import time
+
+    inputs = (
+        "[[ -eq " * 50000,
+        "a" * 200000,
+        "${" * 100000,
+        " PATH[" * 50000,
+        "${a[" * 50000,
+        "test -v a[" * 30000,
+    )
+    start = time.perf_counter()
+    for text in inputs:
+        guard_module._rebinding_text(text)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 10.0, f"took {elapsed:.1f}s"
+
+
+def test_csr_a_run_of_wrappers_is_bounded(guard_module) -> None:
+    """Each wrapper ahead of a head makes the scan re-read the rest of its
+    segment, so the scan reads at most _MAX_WRAPPERS of them and counts a
+    longer run as a rebind: a long run once took time quadratic in its length,
+    and a hook past its timeout lets the call through. A short run is read
+    through to its head."""
+    import time
+
+    limit = guard_module._MAX_WRAPPERS
+    assert not guard_module._command_rebinds("time " * limit + "ls")
+    assert guard_module._command_rebinds("time " * (limit + 1) + "ls")
+    start = time.perf_counter()
+    assert guard_module._command_rebinds("time -p " * 50000 + "ls")
+    assert guard_module._command_rebinds("command " * 50000 + "ls")
+    elapsed = time.perf_counter() - start
+    assert elapsed < 10.0, f"took {elapsed:.1f}s"
+
+
+def test_csr_rebinding_prose_matches_the_reading() -> None:
+    """SECURITY.md, the change fragment and the guard's comment say what the
+    reading does: a `${...}` counts by its operator, not for any `=` in it; a
+    read-only mention of the hash array still counts, by decision; and a
+    bracket bash does not evaluate is no subscript."""
+    security = (_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    assert "a `${...}` that holds a `=`" not in security
+    assert "a `${...}` that assigns, and any `NAME=` or `NAME[...]=`" in security
+    assert "any mention of `BASH_CMDS` or `BASH_ALIASES`, even one that only reads them" in security
+    assert "a `${...}` whose operator assigns, a `=` or `:=` right after the name and any subscript" in security
+    assert "A `=` later in a `${...}` than its operator (`${PWD#*=}`, `${x:-a=b}`)" in security
+    assert "the character class in `grep 'a[b=c]'`" in security
+    assert "a rebinding builtin behind `command`, and an assignment behind the `time` keyword" in security
+    assert "though `command -v` and `-V` only look a name up" in security
+    assert "an assignment word whose subscript nests or holds blanks (`PATH[a[0]]=...`, `PATH[ 0 ]=...`)" in security
+    assert "a command name built at run time (`$(echo export) PATH=...`)" in security
+    assert "a value that only reaches arithmetic at run time" in security
+
+    fragment = (_REPO_ROOT / "changes" / "guard-rebinds-arithmetic-and-substitution.yaml").read_text(encoding="utf-8")
+    assert "a `BASH_CMDS` or `BASH_ALIASES` entry" not in fragment
+    assert "(`grep BASH_CMDS <latch>`) is refused too" in fragment
+    assert "a bracket that is no subscript (`grep 'a[b=c]' <latch>`) still pass" in fragment
+    assert "a rebinding builtin behind `command` and an assignment behind `time`" in fragment
+    assert "a command name built at run time, and a value that only reaches arithmetic at run time" in fragment
+
+    source = HOOK.read_text(encoding="utf-8")
+    assert "a `${...}` that holds\n#     a `=` assigns" not in source
+    assert "it (`${PWD#*=}`, `${line%=*}`, `${x:-a=b}`, `${x/=/-}`) is only text." in source
+
+
+def test_csr_heredoc_reading_is_linear_in_the_number_of_heredocs(guard_module) -> None:
+    """Issue finding on #176's reading: reading the command without its data
+    bodies once took time quadratic in the heredoc count, because each sink
+    re-scanned the whole growing prefix. It is linear now, so a command with a
+    few thousand data heredocs and a trailing `rm <latch>` resolves fast. The
+    bound is generous: a regression to the quadratic cost took tens of seconds
+    at this size."""
+    import time
+
+    command = "".join(f"cat >>f{i} <<'EOF'\nrow .**\nEOF\n" for i in range(2000))
+    command += "rm -f _bmad-output/implementation-artifacts/.mem-state.json"
+    guard_module._without_heredoc_data.cache_clear()
+    start = time.perf_counter()
+    read = guard_module._without_heredoc_data(command)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 10.0, f"took {elapsed:.1f}s"
+    # The trailing `rm` is kept (the data bodies are left out), so the command
+    # still names the latch and would be denied.
+    assert "rm -f _bmad-output/implementation-artifacts/.mem-state.json" in read
+
+
+def test_csr_process_substitution_inside_a_quoted_body_is_data(latch_world: _StoreWorld) -> None:
+    """The section comment says a `<(` or `>(` OUTSIDE the bodies keeps every
+    body; one inside a quoted data body does not, since bash runs none of that
+    body. The `<(x)` here is data, so the report passes, while the same text
+    outside a body keeps the body and is read as commands."""
+    latch = latch_world.latch.as_posix()
+    inside = f"cat >> {_report(latch_world)} <<'EOF'\n<(x) {latch}\nEOF"
+    _assert_allowed(*_bash(latch_world, inside, cwd=latch_world.impl))
+    # A `<(` outside the body, even inside single quotes, keeps every body, so
+    # the latch named in the kept body is read as a command and denied.
+    outside = f"echo '<(x)'\ncat >> {_report(latch_world)} <<'EOF'\n{latch}\nEOF"
+    _assert_latch_denied(*_bash(latch_world, outside, cwd=latch_world.impl), latch_world.latch)
+
+
+def test_csr_a_cat_body_written_to_a_file_another_command_runs_is_a_residual(latch_world: _StoreWorld) -> None:
+    """Accepted residual, now disclosed in the fragment: a body `cat` or `tee`
+    writes to a file is not read, even when the same command then runs that
+    file. A FIFO reader that starts first reads it too, so the comment says
+    `another command`, not `a later command`."""
+    latch = latch_world.latch.as_posix()
+    script = (latch_world.tmp / "s.sh").as_posix()
+    written_then_run = f"cat > {script} <<'EOF'\nrm -f {latch}\nEOF\nsh {script}"
+    _assert_allowed(*_bash(latch_world, written_then_run, cwd=latch_world.impl))
+
+
+def test_csr_heredoc_section_comment_and_fragment_match_the_reading() -> None:
+    """Findings 4 and 5: the guard's section comment and the change fragment
+    describe the reading as the code performs it. A `<(`/`>(` OUTSIDE the
+    bodies keeps every body, not a process substitution anywhere; the
+    write-then-run residual names `another command`, not only a later one; and
+    the fragment discloses the written-file residual and points at SECURITY.md."""
+    source = HOOK.read_text(encoding="utf-8")
+    assert "A `<(` or `>(` outside the bodies, even inside quotes, keeps every body." in source
+    assert "process substitution anywhere keeps every body" not in source
+    assert "a body written to a file that another command runs" in source
+    assert "a later command runs" not in source
+
+    fragment = (_REPO_ROOT / "changes" / "guard-heredoc-data.yaml").read_text(encoding="utf-8")
+    assert "a `<(` or `>(` outside its heredoc bodies" in fragment
+    assert "process substitution" not in fragment
+    assert "A body that `cat` or `tee` writes to a file is no longer read" in fragment
+    assert "the other indirection limits" in fragment
+
+
 # --- SECURITY.md (CSR-UNIT-042) ------------------------------------------------
 
 
