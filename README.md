@@ -102,7 +102,7 @@ A skeptical reader is probably already running one of these. Here is the honest 
 | Completion authority       | `gate_eval.py` reads TEA's `gate-decision.json`      | you, story by story                  | the model's self-assessment      | CI, but only after the agent stops   |
 | Preflight autonomy gate    | hard-gate to remediated green (intervention budget 0)| ad hoc, per story                    | none                             | none: CI runs post-hoc               |
 | Invariants enforcement     | `PreToolUse` hooks in `settings.local.json`          | your attention                       | prompt text (context, not a gate)| CI checks, after the fact            |
-| Rollback                   | git: epic branch, code + evidence commit per story   | manual                               | `/rewind` (misses Bash changes)  | revert after merge                   |
+| Rollback                   | git: epic branch, code + gate commits per story      | manual                               | `/rewind` (misses Bash changes)  | revert after merge                   |
 | Knowledge capture          | Auto Memory + CLAUDE.md split at Finalize            | none structured                      | none structured                  | none                                 |
 
 The alternatives aren't bad; they solve different problems. **UCG solves exactly one: advancing an epic only when a deterministic script confirms the gate passed, and giving you the verdict JSON to check it yourself.**

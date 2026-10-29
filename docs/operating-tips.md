@@ -42,13 +42,14 @@ Do not write a latch from the parent between drives. The old workaround, `latch 
 
 ## Reading the driver's stop reasons
 
-The driver names thirteen stop reasons (`drive_epic.py`'s `STOP_*` constants). Three mean the invocation finished its work and exit 0: `all-done`, `limit-reached`, `dry-run`. Every other stop is a fail-closed halt and exits 1, so a wrapper can branch on the exit code before it parses anything.
+The driver names fourteen stop reasons (`drive_epic.py`'s `STOP_*` constants). Three mean the invocation finished its work and exit 0: `all-done`, `limit-reached`, `dry-run`. Every other stop is a fail-closed halt and exits 1, so a wrapper can branch on the exit code before it parses anything.
 
-These six are the ones you will actually meet in a working week, and getting them confused wastes a spawn or, worse, propagates an ungated story. The rest name their own cause and need no table: `dry-run`, the pre-spawn refusals (`no-sprint-status`, `epic-not-found`, `sprint-status-elsewhere`, `stale-result`), a row carrying a status the driver does not recognize (`unknown-status`), and a drive that was killed (`signalled`).
+These seven are the ones you will actually meet in a working week, and getting them confused wastes a spawn or, worse, propagates an ungated story. The rest name their own cause and need no table: `dry-run`, the pre-spawn refusals (`no-sprint-status`, `epic-not-found`, `sprint-status-elsewhere`, `stale-result`), a row carrying a status the driver does not recognize (`unknown-status`), and a drive that was killed (`signalled`).
 
 | Stop reason | What happened | What to do |
 |---|---|---|
 | `all-done` | Every story of the Epic is `done`. | Nothing. The Epic is finished. |
+| `evidence-owed` | Every story is `done`, but a commit hook rejected the last story's gate evidence commit, which is still staged (`.evidence-owed-<story>`). | Close its escalation with `/ucg-resolve` if it is still open, then resume the run once (`/ultracode-goal <epic> -H`) to make the commit. |
 | `limit-reached` | Normal. `--limit` was reached. | Nothing. Drive again. |
 | `blocked` | The story escalated, and a typed sidecar holds the pending decision. | Run `/ucg-resolve`, which reconstructs every pending decision from the sidecars and walks them. |
 | `no-terminal` | The spawn exited without a readable result envelope. | **The work may be complete.** See below. |

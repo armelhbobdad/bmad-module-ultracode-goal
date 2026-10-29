@@ -176,8 +176,9 @@ typed record as never written.
 
 When `hunk` is on PATH, each story that recorded a baseline commit gains copy-paste
 `hunk show <commit>` lines, so a reader can go straight from a story row to its diff:
-one line per commit in the story's range (its implementation commit and the gate's
-evidence commit) when the repository is readable, else one line for the story's
+one line per commit in the story's range (its implementation commit, the gate's test
+backfill commit when automate made one, and the gate's evidence commit) when the
+repository is readable, else one line for the story's
 recorded end commit, or for its baseline when no end commit was recorded. When it is not on PATH, nothing about it is rendered and the render is otherwise
 unchanged.
 

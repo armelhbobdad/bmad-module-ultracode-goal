@@ -234,6 +234,14 @@ The two dispositions are genuinely different things, not two names for one:
   the turn-ceiling read could escalate it and a commit past the assessed one would make
   the records stale (`{ucg-root}/references/execute.md`, the resume rule). The gate
   deletes the marker once the re-gate's verdict is logged.
+  **Closing an `evidence-commit-rejected` escalation makes no commit.** Record the
+  operator's answer (the hook fixed or reconfigured, or the file it named changed by them),
+  then delete only the sidecar. Leave the staged evidence and
+  `{workflow.implementation_artifacts}/.evidence-owed-<story_id>` alone, even when the
+  answer is to commit as it stands: the resume makes that commit under the gate's hook rule
+  and removes the marker (`{ucg-root}/references/gate.md`, "Commit the gate's evidence
+  before the next story starts"), on the Epic's last story too, where every row already
+  reads `done` and the resume re-enters only for that commit before Finalize.
 - **`defer`** — the decision is not made yet. Record the entry **without clearing
   anything**. The artifact stays exactly where it is, the item stays pending, and the next
   preflight still blocks on it.
@@ -262,7 +270,9 @@ may skip, because the two arrive from different places:
   verdict is not advance; advanced stories are not re-run. Within that branch there is
   no other re-entry point: it is not the first story of the Epic, and not the story the
   answered decision happened to name, either of which would re-run stories that already
-  advanced, which is precisely what the shipped resume rule exists to prevent.
+  advanced, which is precisely what the shipped resume rule exists to prevent. When every
+  story advanced and a story's `.evidence-owed-<story_id>` is on disk, the resume drives no
+  story: it makes that story's owed evidence commit and goes to Finalize.
 
 Either branch **re-asserts** — never rebuilds — the Epic branch, both hooks, the
 allowlist, the `.mem-state.json` recall latch, and the in-flight story's baseline marker.

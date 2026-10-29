@@ -654,9 +654,11 @@ def commit_sha(impl_artifacts: Path | None, story: str) -> str | None:
     """The story's recorded END commit, or None when the run wrote no such marker.
 
     `references/execute.md` step 4 writes `.commit-<story>` once the commit lands,
-    step 5 refreshes it after any amend or remediation re-commit, and the gate's
-    advance route refreshes it after its evidence commit, so it names the
-    story's LAST commit. Reading it is what lets the trail stop inferring a
+    step 5 refreshes it after any amend or remediation re-commit, the gate
+    refreshes it after it commits a test `bmad-testarch-automate` backfilled
+    (`references/gate.md`, "When automate backfills"), and the gate's advance
+    route refreshes it after its evidence commit, so it names the story's LAST
+    commit. Reading it is what lets the trail stop inferring a
     range end from the next story's baseline.
 
     The inference it replaces could not be made correct from baselines alone. Two
