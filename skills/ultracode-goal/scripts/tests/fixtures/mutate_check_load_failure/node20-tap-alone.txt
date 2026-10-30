@@ -1,0 +1,30 @@
+TAP version 13
+# file:///home/dev/work/load-failure/calc.mjs:2
+#   if (x > hi {
+#              ^
+# SyntaxError: Unexpected token '{'
+#     at compileSourceTextModule (node:internal/modules/esm/utils:346:16)
+#     at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:146:18)
+#     at \#translate (node:internal/modules/esm/loader:497:12)
+#     at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:544:27)
+# Node.js v20.19.5
+# Subtest: /home/dev/work/load-failure/clamp.test.mjs
+not ok 1 - /home/dev/work/load-failure/clamp.test.mjs
+  ---
+  duration_ms: 36.870078
+  location: '/home/dev/work/load-failure/clamp.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 41.575905

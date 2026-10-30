@@ -67,16 +67,29 @@ The failure count is read from each run's summary line: Node's `fail N`, the
 or teardown `error` counts as a failure too. jest's `Test Suites` line and
 vitest's `Test Files` line count files, a test file that failed to load among
 them, so once a `Tests` line was read neither is: a test file jest or vitest
-cannot load runs no test. An error collecting a test module does not count
+cannot load runs no test. Node's test runner reports a test file whose process
+failed (the file cannot load, or its process exits non-zero after its tests
+ran) as a failed test of its own, named after the file and located at the
+file's line 1, column 1, and that test does not count either, so a file whose
+tests pass and whose process then exits non-zero reads 0 failed, a harness
+error. An error collecting a test module or a test class does not count
 either: pytest names it with an `ERROR collecting <path>` header and a short
 summary line `ERROR <path>` with no `::` test id (a directory's path when a
-conftest.py in it fails to import), and no test there ran. Nor does a
-conftest.py that pytest loads before it collects and cannot import: it writes
-`ImportError while loading conftest '<path>'.` and stops, with no summary,
-before any test runs. So a mutant that breaks a module such a file imports (a
-dropped colon, say) reads 0 failed rather than a kill. When the output holds
-several summaries, as a command that runs two suites or two runners does,
-their counts are added.
+conftest.py in it fails to import) or `ERROR <path>::<Class>`, an id whose
+last part starts with a capital letter, and no test there ran. The path can
+hold a space. Nor does a conftest.py that pytest loads before it collects and
+cannot import: it writes `ImportError while loading conftest '<path>'.` and
+stops, with no summary, before any test runs. So a mutant that breaks a module
+such a file imports (a dropped colon, say) reads 0 failed rather than a kill.
+When the output holds several summaries, as a command that runs two suites or
+two runners does, their counts are added, and the collection errors of each
+pytest run are taken off its own stats line only.
+
+A count in another shape (mocha's `N failing`, cargo's `N failed`) is read
+only when no summary counted a failure, and never from a line inside pytest's
+report, from its first `=` or `!` rule to its stats line: a test's traceback,
+message or captured output there can quote any count, such as a `0 failed` a
+test prints.
 
 A failure word inside the expected name never counts: a test named "fails
 when ..." supplies its own. A line never counts as a failure line when it
@@ -169,9 +182,13 @@ _PYTEST_ERRORS_RE = re.compile(r"\b(\d+) errors?\b")
 # test in that module ran, so it is no failure. pytest heads it `ERROR
 # collecting <path>` in its ERRORS section and lists it in the short summary as
 # `ERROR <path>`, a path with no `::` test id after it (a setup error's line
-# carries one, so the pattern, which stops at `::`, never takes it). The path
-# is a module's, or a directory's when a conftest.py in it, which pytest loads
-# while it collects, fails to import. That line is read only from the short
+# carries one). The path is a module's, or a directory's when a conftest.py in
+# it, which pytest loads while it collects, fails to import, and it can hold a
+# space. A class pytest cannot collect (a parametrize `ids` function that
+# raised, say) is listed as `ERROR <path>::<Class>`, and no test in it ran
+# either: an id whose last part starts with a capital letter names a class, as
+# pytest's default `Test*` and PEP 8 name one, while a test's id ends at a
+# function, which they name in lower case. That line is read only from the short
 # summary's own header to its end (the stats line, or the next `=` or `!`
 # rule): a failing fixture's captured output, printed above it, can hold a line
 # such as `ERROR bound-not-enforced`, and read anywhere it took the row's own
@@ -187,12 +204,19 @@ _PYTEST_ERRORS_RE = re.compile(r"\b(\d+) errors?\b")
 # under xdist it does not, and the other modules still run. Under `-qq` with
 # xdist pytest prints neither that line nor a stats line, so a short summary
 # that lists collection errors and no test (no `FAILED` entry, no `ERROR` entry
-# with a `::` id) means no test failed.
-_PYTEST_COLLECTING_RE = re.compile(r"^_+ ERROR collecting (\S+) _+$")
+# with a test's `::` id) means no test failed.
+_PYTEST_COLLECTING_RE = re.compile(r"^_+ ERROR collecting (.+?) _+$")
 _PYTEST_SHORT_HEADER_RE = re.compile(r"^=+ short test summary info =+$")
 _PYTEST_SECTION_END_RE = re.compile(r"^(?:=+ .+ =+|!+ .+ !+)$")
-_PYTEST_SHORT_ERROR_RE = re.compile(r"^ERROR ((?:(?!::)\S)+)(?: - .*)?$")
-_PYTEST_SHORT_TEST_RE = re.compile(r"^(?:FAILED|ERROR) \S*::")
+# A short summary entry: its outcome, its path up to a `::` id or the ` - `
+# before its message, and the id.
+_PYTEST_SHORT_ENTRY_RE = re.compile(r"^(FAILED|ERROR) ((?:(?!::| - ).)+)((?:::(?:(?! - ).)+)?)(?: - .*)?$")
+# One command can run pytest twice. A run ends at its stats line, and a `-qq`
+# run, which prints none, where the next run opens: at `test session starts`,
+# or at an ERRORS, FAILURES or short summary rule after its own short summary,
+# since pytest prints each of those before its short summary.
+_PYTEST_REPORT_RE = re.compile(r"^=+ (?:ERRORS|FAILURES|short test summary info) =+$")
+_PYTEST_SESSION_RE = re.compile(r"^=+ test session starts =+$")
 _PYTEST_INTERRUPTED_RE = re.compile(r"Interrupted: (\d+) errors? during collection")
 # A conftest.py pytest loads before it collects (the rootdir's, say) that fails
 # to import, whatever it raised, stops pytest before any test runs, under xdist
@@ -207,11 +231,26 @@ _PYTEST_STARTUP_CRASH_RE = re.compile(
     r'^\s*File ".*[/\\]_pytest[/\\]config[/\\]__init__\.py", line \d+, in _prepareconfig$'
 )
 
+# Node's test runner runs each test file in a process of its own. When that
+# process fails, as it does when the file cannot load (a mutant that breaks a
+# module it imports) or when it exits non-zero after its tests ran, Node
+# reports a failed test of its own, counted in `fail N`, and names it after the
+# file: U+2716 and the path in the spec reporter, `not ok N - <path>` in TAP,
+# the path relative to the directory node ran in (absolute on Node 20). No test
+# in that file went red. A test of the file's own is located wherever it is
+# declared, so only the runner's test is located at the file's line 1, column
+# 1: `test at <path>:1:1` directly above it in the spec reporter's list of
+# failing tests, `location: '<path>:1:1'` in its TAP block.
+_NODE_FAILED_TEST_RE = re.compile(r"^\s*(?:✖|not ok \d+ -) (.+?)(?: \([\d.]+m?s\))?\s*$")
+_NODE_PASSED_TEST_RE = re.compile(r"^\s*ok \d+\b")
+_NODE_SPEC_AT_RE = re.compile(r"^\s*test at (.+):1:1\s*$")
+_NODE_TAP_LOCATION_RE = re.compile(r"^\s*location: '(.+):1:1'\s*$")
+
 # Failure-count shapes across the other common runners (mocha, cargo, and any
 # runner whose summary is not one of the above). First match wins; no match
 # means the count is unparseable and the kill is reported without the
 # exactly-one claim. `[ \t]` keeps a digit that ends one line from pairing
-# with a FAILED that opens the next.
+# with a FAILED that opens the next. None is read inside pytest's report.
 _FAIL_COUNT_RES = (
     re.compile(r"(\d+)[ \t]+failed", re.IGNORECASE),
     re.compile(r"failures[:=][ \t]*(\d+)", re.IGNORECASE),
@@ -285,77 +324,165 @@ def _run(command: str, cwd: Path) -> tuple[int, str]:
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
-def _collected_path(token: str, root: Path | None) -> bool:
-    """Whether a short summary's `ERROR <token>` names what pytest collected."""
-    if token.endswith(".py") or "/" in token or "\\" in token:
-        return True
-    if root is None:
-        return False
+def _exists(path: Path) -> bool:
     try:
-        return (root / token).exists()
+        return path.exists()
     except (OSError, ValueError):
         return False
 
 
-def _collection_errors(lines: list[str], root: Path | None = None) -> tuple[int, bool]:
-    """How many of pytest's counted errors were errors collecting a module,
-    and whether no test failed: pytest stopped at them, or at a conftest.py or
-    a startup plugin it could not load, before running any test, or its short
-    summary lists collection errors and no test."""
+def _collected_path(token: str, root: Path | None) -> bool:
+    """Whether a short summary entry's path names what pytest collected. A
+    path that holds a space counts only when it is there: a line of a message
+    that runs over lines can open with `ERROR` and words."""
+    if " " in token:
+        return root is not None and _exists(root / token)
+    if token.endswith(".py") or "/" in token or "\\" in token:
+        return True
+    return root is not None and _exists(root / token)
+
+
+def _names_a_class(test_id: str) -> bool:
+    """Whether a short summary entry's `::` id ends at a class: its last part
+    starts with a capital letter and holds no parameters' `[...]`."""
+    last = test_id.rsplit("::", 1)[-1]
+    return bool(last) and last[0].isupper() and "[" not in last
+
+
+def _collection_errors(lines: list[str], root: Path | None = None) -> tuple[int, bool, bool, bool]:
+    """How many of one pytest run's counted errors were errors collecting a
+    module, a directory or a class, whether no test failed (pytest stopped at
+    them, or at a conftest.py or a startup plugin it could not load, before
+    running any test, or its short summary lists collection errors and no
+    test), whether the lines hold pytest's output at all, and whether its
+    short summary lists a test that failed or errored."""
     headers = sum(1 for line in lines if _PYTEST_COLLECTING_RE.match(line))
     short = 0
     interrupted = 0
     stopped = False
+    seen = headers > 0
     in_summary = False
     tests_listed = False
     for line in lines:
         if _PYTEST_SHORT_HEADER_RE.match(line):
-            in_summary = True
+            in_summary = seen = True
             continue
+        if _PYTEST_SUMMARY_RE.match(line) or _PYTEST_REPORT_RE.match(line):
+            seen = True
         if in_summary and (_PYTEST_SUMMARY_RE.match(line) or _PYTEST_SECTION_END_RE.match(line)):
             in_summary = False
         if in_summary:
-            entry = _PYTEST_SHORT_ERROR_RE.match(line)
-            if entry and _collected_path(entry.group(1), root):
-                short += 1
-            tests_listed = tests_listed or bool(_PYTEST_SHORT_TEST_RE.match(line))
+            entry = _PYTEST_SHORT_ENTRY_RE.match(line)
+            if entry and _collected_path(entry.group(2), root):
+                outcome, test_id = entry.group(1), entry.group(3)
+                if outcome == "ERROR" and (not test_id or _names_a_class(test_id)):
+                    short += 1
+                elif test_id:
+                    tests_listed = True
         halt = _PYTEST_INTERRUPTED_RE.search(line)
         if halt:
             interrupted += int(halt.group(1))
-            stopped = True
+            stopped = seen = True
         if _PYTEST_CONFTEST_RE.match(line) or _PYTEST_STARTUP_CRASH_RE.match(line):
-            stopped = True
+            stopped = seen = True
     if short and not tests_listed:
         stopped = True
-    return max(headers, short, interrupted), stopped
+    return max(headers, short, interrupted), stopped, seen, tests_listed
+
+
+def _same_file(name: str, location: str) -> bool:
+    """Whether a test's name and a location's path name one file: equal, or
+    one ends with the other after a separator (Node 20 names a file by its
+    absolute path, and TAP doubles each backslash in both)."""
+    name, location = (re.sub(r"[\\/]+", "/", path) for path in (name, location))
+    return name == location or name.endswith("/" + location) or location.endswith("/" + name)
+
+
+def _node_file_failures(lines: list[str]) -> int:
+    """How many of Node's failed tests are the runner's own, one for each test
+    file whose process failed: a failed test named after a file and located at
+    that file's line 1, column 1."""
+    files = set()
+    spec_at = None
+    tap_failed = None
+    for line in lines:
+        failed = _NODE_FAILED_TEST_RE.match(line)
+        if failed:
+            if spec_at is not None and _same_file(failed.group(1), spec_at):
+                files.add(failed.group(1))
+            tap_failed = failed.group(1)
+        elif _NODE_PASSED_TEST_RE.match(line):
+            tap_failed = None
+        location = _NODE_TAP_LOCATION_RE.match(line)
+        if location:
+            if tap_failed is not None and _same_file(tap_failed, location.group(1)):
+                files.add(tap_failed)
+            tap_failed = None
+        # The spec reporter's location line sits directly above its test.
+        at = _NODE_SPEC_AT_RE.match(line)
+        spec_at = at.group(1) if at else None
+    return len(files)
 
 
 def _fail_count(lines: list[str], root: Path | None = None) -> int | None:
     summed: int | None = None
     others: list[str] = []
     tests_read = False
-    # Taken off the pytest summaries' error counts, once in all.
-    collection, stopped = _collection_errors(lines, root)
+    # Inside pytest's report, from its first section rule to its stats line,
+    # every line is a test's traceback, message or captured output, which can
+    # quote any count, so none is read for another runner's count.
+    in_report = False
+    # Taken off Node's summaries, once in all.
+    node_files = _node_file_failures(lines)
+    # The current pytest run's lines. Its collection errors are taken off its
+    # own stats line only: a command that runs pytest twice, with flags that
+    # print different signs of them, does not pool the two runs' counts.
+    run: list[str] = []
+    run_reported = False
+    unsummarised: list[tuple[bool, bool]] = []
+
+    def close_run() -> None:
+        _, stopped, seen, listed = _collection_errors(run, root)
+        if seen:
+            unsummarised.append((stopped, listed))
+
     for line in lines:
+        session = _PYTEST_SESSION_RE.match(line)
+        if session or (run_reported and _PYTEST_REPORT_RE.match(line)):
+            # A run that printed no stats line (`-qq`) ends where the next opens.
+            close_run()
+            run, run_reported = [], False
+        run.append(line)
+        run_reported = run_reported or bool(_PYTEST_SHORT_HEADER_RE.match(line))
         node = _NODE_FAIL_SUMMARY_RE.match(line)
         tests = _TESTS_SUMMARY_RE.match(line)
         pytest_summary = None if tests else _PYTEST_SUMMARY_RE.match(line)
         summary = tests or pytest_summary
+        if session:
+            in_report = False
+        elif not pytest_summary and _PYTEST_SECTION_END_RE.match(line):
+            in_report = True
         if node:
             count = int(node.group(1))
+            uncounted = min(count, node_files)
+            node_files -= uncounted
+            count -= uncounted
         elif summary:
             failed = _SUMMARY_FAILED_RE.search(summary.group(1))
             count = int(failed.group(1)) if failed else 0
             tests_read = tests_read or bool(tests)
             if pytest_summary:
+                in_report = False
+                collection = _collection_errors(run, root)[0]
                 errors = sum(int(n) for n in _PYTEST_ERRORS_RE.findall(summary.group(1)))
-                uncollected = min(errors, collection)
-                collection -= uncollected
-                count += errors - uncollected
+                count += errors - min(errors, collection)
+                run, run_reported = [], False
         else:
-            others.append(line)
+            if not in_report:
+                others.append(line)
             continue
         summed = (summed or 0) + count
+    close_run()
     if summed:
         return summed
     # No summary counted a failure: another runner in the same command may
@@ -369,11 +496,15 @@ def _fail_count(lines: list[str], root: Path | None = None) -> int | None:
             match = pattern.search(line)
             if match:
                 return int(match.group(1))
-    # pytest stopped at a collection error, or at a conftest.py or a startup
-    # plugin it could not load, before any test ran, or listed only collection
-    # errors, and printed no summary line after it (`-qq` prints none, and a
-    # conftest's or a plugin's failure none at all): no test failed.
-    if summed is None and stopped:
+    # A pytest run that printed no stats line (`-qq` prints none, and a
+    # conftest's or a startup plugin's failure none at all) counted none of
+    # the tests its short summary lists as failed, so the count is not known.
+    if any(listed for _, listed in unsummarised):
+        return None
+    # Every such run stopped at a collection error, or at a conftest.py or a
+    # startup plugin it could not load, before any test ran, or listed only
+    # collection errors: no test failed.
+    if summed is None and unsummarised and all(stopped for stopped, _ in unsummarised):
         return 0
     return summed
 

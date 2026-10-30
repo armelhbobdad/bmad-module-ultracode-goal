@@ -76,6 +76,12 @@ the gate's own files, at most twice, then an `evidence-commit-rejected`
 escalation a resume waits on); a scan of gap-routing sentences that missed one
 naming only an `unkilled` or `unmeasured` line; and a release note no test
 read.
+
+#179 then found four more misreads in `mutate_check.py`, pinned in
+test_mutate_check.py. Two of them change what reads 0 failed: a class pytest
+cannot collect, and a test file Node's test runner cannot load or whose
+process exits non-zero after its tests pass. The cannot-run bullet now names
+both, and its release note is pinned below, each with a mutant twin.
 """
 
 from __future__ import annotations
@@ -493,6 +499,7 @@ def _gate_surfaces() -> dict[str, str]:
             "backfill fragment": (changes / "gate-automate-backfill-commit.yaml").read_text(encoding="utf-8"),
             "alone fragment": (changes / "gate-automate-runs-alone.yaml").read_text(encoding="utf-8"),
             "collection fragment": (changes / "mutate-check-collection-error.yaml").read_text(encoding="utf-8"),
+            "count fragment": (changes / "mutate-check-count-misreads.yaml").read_text(encoding="utf-8"),
         }
     )
     return surfaces
@@ -2770,9 +2777,54 @@ def test_a_mutant_that_breaks_a_module_is_a_row_that_cannot_run(tmp_path):
 
 _ZERO_FAILED_CASES = (
     "(a collection or harness error, not a test: a mutant reads this way when pytest then cannot collect a test "
+    "module or class or load a conftest.py, or jest, vitest or Node's test runner cannot load a test file, since no "
+    "test in that file or class runs, or when a Node test file's process exits non-zero after its tests pass, and no "
+    "other test fails)"
+)
+# 3.2.0's wording, which named neither a class pytest cannot collect nor Node's test runner.
+_ZERO_FAILED_CASES_BEFORE = (
+    "(a collection or harness error, not a test: a mutant reads this way when pytest then cannot collect a test "
     "module or load a conftest.py, or jest or vitest cannot load a test file, and no other test fails, since no test "
     "in that file runs)"
 )
+_NODE_CAPTURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_load_failure"
+
+
+@pytest.mark.parametrize(
+    "capture", ["node-spec-one-of-two", "node20-tap-alone", "node-tap-exits-after-its-tests-pass"]
+)
+def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture):
+    """Measured on `mutate_check.py`, over real `node --test` output (#179):
+    Node's test runner reports a test file whose process failed, because a
+    mutant stops it loading or because its process exits non-zero after its
+    tests pass, as a failed test named after the file. It read as another
+    test's kill; it now reads 0 failed, which the cannot-run bullet names, Node
+    and the non-zero exit included."""
+    mutate_check = _load_script("mutate_check")
+    output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
+    status, detail, _ = mutate_check._classify_red(output, "clamp at the bound")
+    assert status == "MISATTRIBUTED"
+    assert _reading(_bound(), status, detail) == "cannot run"
+    assert _ZERO_FAILED_CASES in re.sub(r"\s+", " ", _bound())
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (_ZERO_FAILED_CASES, _ZERO_FAILED_CASES_BEFORE),
+        ("cannot collect a test module or class or load", "cannot collect a test module or load"),
+        ("or jest, vitest or Node's test runner cannot load", "or jest or vitest cannot load"),
+        (", or when a Node test file's process exits non-zero after its tests pass,", ","),
+    ],
+    ids=["3.2.0", "no-class", "no-node", "no-exit"],
+)
+def test_zero_failed_pin_rejects_a_bullet_that_drops_a_case(old, new):
+    """The twin: the cannot-run bullet's list of what reads 0 failed, read as
+    3.2.0 wrote it or with one of #179's cases dropped, fails the pin."""
+    para = re.sub(r"\s+", " ", _bound())
+    mutant = para.replace(old, new)
+    assert mutant != para, "the mutant must actually change the text"
+    assert _ZERO_FAILED_CASES not in mutant
 
 
 def test_a_red_with_no_failed_test_is_a_row_that_cannot_run():
@@ -3532,6 +3584,35 @@ def _collection_gaps(collection: str) -> list[str]:
     return missing
 
 
+# #179's release note: the four misreads, each as mutate_check.py now reads it.
+_COUNT_SAYS = (
+    "and a count quoted there, such as a `0 failed` a test prints, no longer stands in for the run's count.",
+    "A count that another runner in the same command prints outside pytest's report, such as `cargo test`'s, is still "
+    "read.",
+    "a collection error at a path that holds a space, and one for a test class (`ERROR <path>::<Class>` in the short "
+    "summary, an id whose last part starts with a capital letter), now count as collection errors rather than "
+    "failures, so such a mutant reads 0 failed instead of a kill.",
+    "When one command runs pytest twice, each run's collection errors are taken off its own stats line only",
+    "a kill no longer reads 0 failed beside a `-qq` run.",
+    "Node's test runner reports a test file whose process failed (a mutant stops it loading, or its process exits "
+    "non-zero after its tests pass) as a failed test named after the file and located at its line 1, column 1.",
+    "That test no longer counts, so such a mutant reads 0 failed, a row that cannot run,",
+)
+
+
+def _count_fragment() -> str:
+    return re.sub(
+        r"\s+", " ", (_REPO_ROOT / "changes" / "mutate-check-count-misreads.yaml").read_text(encoding="utf-8")
+    )
+
+
+def _count_gaps(count: str) -> list[str]:
+    missing = [phrase for phrase in _COUNT_SAYS if phrase not in count]
+    if not count.startswith("type: fixed"):
+        missing.append("#179 is a fix")
+    return missing
+
+
 def _fragment_gaps(alone: str, backfill: str) -> list[str]:
     missing = [phrase for phrase in _ALONE_SAYS if phrase not in alone]
     missing += [phrase for phrase in _BACKFILL_SAYS if phrase not in backfill]
@@ -3546,6 +3627,7 @@ def test_the_fragments_say_what_the_prose_does():
     alone, backfill = _fragments()
     assert _fragment_gaps(alone, backfill) == []
     assert _collection_gaps(_collection_fragment()) == []
+    assert _count_gaps(_count_fragment()) == []
     # Earlier wordings: a carry past two routes only, a P0 gap that never reached
     # trace, and automate once per cycle with no resume to qualify it.
     assert "a gap a cap-only re-loop or an escalation leaves untaken is carried" not in backfill
@@ -3607,12 +3689,27 @@ def test_the_fragments_say_what_the_prose_does():
         ("collection", ", one that reads `no tests` included", ""),
         ("collection", " Node's test runner counts a test file it cannot load as a failed test, so there such a mutant "
          "still reads as a kill.", ""),
+        # #179: each of the four misreads, the reading it now gives, and the count still read.
+        ("count", ", such as `cargo test`'s, is still read.", ", such as `cargo test`'s, is no longer read."),
+        ("count", ", and one for a test class (`ERROR <path>::<Class>` in the short summary, an id whose last part "
+         "starts with a capital letter),", ""),
+        ("count", "a collection error at a path that holds a space, and one", "one"),
+        ("count", "are taken off its own stats line only", "are taken off its first stats line"),
+        ("count", " and a kill no longer reads 0 failed beside a `-qq` run.", ""),
+        ("count", "(a mutant stops it loading, or its process exits non-zero after its tests pass)",
+         "(a mutant stops it loading)"),
+        ("count", "so such a mutant reads 0 failed, a row that cannot run,", "so such a mutant reads as a kill,"),
     ],
 )
 def test_fragment_predicate_rejects_a_sentence_that_contradicts_the_prose(which, old, new):
     """Fragment sentences that once survived mutation, each pinned now."""
     alone, backfill = _fragments()
-    if which == "collection":
+    if which == "count":
+        count = _count_fragment()
+        mutant = count.replace(old, new)
+        assert mutant != count, "the mutant must actually change the text"
+        assert _count_gaps(mutant)
+    elif which == "collection":
         collection = _collection_fragment()
         mutant = collection.replace(old, new)
         assert mutant != collection, "the mutant must actually change the text"
