@@ -7287,23 +7287,46 @@ _UNDECODABLE_BRANCHES = [
     pytest.param("release-Ł", id="utf8-outside-cp1252"),
 ]
 
+# The locale the hook runs under: the one the tests run under, and the C locale
+# with Python's UTF-8 mode off, whose filesystem encoding is ASCII, so the
+# environment reads every byte past ASCII as a surrogate. Every POSIX system
+# has the C locale; Windows reads the environment as UTF-16 whatever it is.
+_HOOK_LOCALES = [
+    pytest.param({}, id="inherited-locale"),
+    pytest.param(
+        {"LC_ALL": "C", "PYTHONUTF8": "0"},
+        marks=pytest.mark.skipif(sys.platform == "win32", reason="Windows reads the environment as UTF-16"),
+        id="ascii-locale",
+    ),
+]
 
+
+@pytest.mark.parametrize("hook_locale", _HOOK_LOCALES)
 @pytest.mark.parametrize("branch", _UNDECODABLE_BRANCHES)
-def test_a_branch_name_the_platform_cannot_decode_is_still_read(tmp_path: Path, branch: str) -> None:
+def test_a_branch_name_the_platform_cannot_decode_is_still_read(
+    tmp_path: Path, branch: str, hook_locale: dict[str, str]
+) -> None:
     """The branch probe decoded git's output the platform's way, so a branch
     name it could not decode raised before any check ran: the hook made no
-    decision, and the commit went through. The name is read as UTF-8 now, a
-    byte that is not UTF-8 kept as the environment keeps it, so it matches the
-    protected list that names it, and off that list the commit meets the
-    tests-ran check."""
+    decision, and the commit went through. Read as UTF-8 instead, a non-ASCII
+    name differed, under a locale that is not UTF-8, from the same bytes the
+    environment decodes the locale's way, so a push on that protected branch
+    went through. The name is decoded as the environment is now, so in either
+    locale it matches the protected list that names it, and off that list the
+    commit meets the tests-ran check."""
+    try:
+        os.fsencode(branch)
+    except UnicodeEncodeError:
+        pytest.skip("this locale cannot hand the name to git or to the hook's environment")
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo, branch)
-    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_PROTECTED_BRANCHES": branch})
-    assert code == 2
-    assert "Protected-branch" in _reason(out)
+    for event in (_commit_event(repo), _commit_event(repo, "git push origin HEAD")):
+        code, out = _run_hook(event, repo, {**hook_locale, "ULTRACODE_PROTECTED_BRANCHES": branch})
+        assert code == 2
+        assert "Protected-branch" in _reason(out)
 
-    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_PROTECTED_BRANCHES": "main"})
+    code, out = _run_hook(_commit_event(repo), repo, {**hook_locale, "ULTRACODE_PROTECTED_BRANCHES": "main"})
     assert code == 2
     assert "Tests-ran guard" in _reason(out)
 

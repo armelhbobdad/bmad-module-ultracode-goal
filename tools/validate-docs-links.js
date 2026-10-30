@@ -41,26 +41,17 @@
  *   node tools/validate-docs-links.js [--strict] [--verbose] [--require-build]
  */
 
-const fs = require('node:fs');
-const path = require('node:path');
-
-/** Hosts/schemes that are never local links. */
-const EXTERNAL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
-
 /**
  * Where this project's docs are published. README.md and SECURITY.md render
  * away from the site (on GitHub, and README.md on npm too), where
  * `./docs/x.md` opens the Markdown file, so they link each docs page by its
  * URL here. The source pass maps such a URL back to the docs/ page it renders
  * from.
+ *
+ * This and REPO_URL are the only lines that name this repository. They sit
+ * above the code on purpose, so the code from `const fs` on names none.
  */
 const SITE_URL = 'https://armelhbobdad.github.io/bmad-module-ultracode-goal/';
-
-/**
- * The files `tools/build-docs.js` writes into the site beside its pages, each
- * served at its own route: the two text bundles for LLMs.
- */
-const SITE_FILES = new Set(['llms.txt', 'llms-full.txt']);
 
 /**
  * Where this project's repository is shown. The site publishes docs/ alone,
@@ -68,6 +59,18 @@ const SITE_FILES = new Set(['llms.txt', 'llms-full.txt']);
  * view on `main` here. The source pass maps such a URL back to that file.
  */
 const REPO_URL = 'https://github.com/armelhbobdad/bmad-module-ultracode-goal/';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+/** Hosts/schemes that are never local links. */
+const EXTERNAL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
+
+/**
+ * The files `tools/build-docs.js` writes into the site beside its pages, each
+ * served at its own route: the two text bundles for LLMs.
+ */
+const SITE_FILES = new Set(['llms.txt', 'llms-full.txt']);
 
 /**
  * Read a `--flag value` pair out of an argv array.
@@ -421,9 +424,9 @@ function extractAnchors(content) {
 const ROOT_DOCS = ['CONTRIBUTING.md', 'README.md', 'SECURITY.md', 'changes/README.md'];
 
 /**
- * The path an absolute URL names below a base URL, percent-decoded and
- * without its outer slashes ('' for the base itself), or null when the URL is
- * not below that base.
+ * The path an absolute URL names below a base URL, percent-decoded, without
+ * its leading slashes and keeping a trailing one ('' for the base itself), or
+ * null when the URL is not below that base.
  *
  * Parsing resolves `.` and `..` segments first, as a browser does, so a link
  * that climbs out of the base is not below it. A malformed escape is kept as
@@ -442,7 +445,7 @@ function pathBelow(href, base) {
   if (url.origin !== root.origin || !asBase(url.pathname).startsWith(rootPath)) {
     return null;
   }
-  const rest = url.pathname.slice(rootPath.length).replaceAll(/^\/+|\/+$/g, '');
+  const rest = url.pathname.slice(rootPath.length).replace(/^\/+/, '');
   try {
     return decodeURIComponent(rest);
   } catch {
@@ -457,22 +460,70 @@ function fileBelow(dir, rel) {
   return file === root || file.startsWith(root + path.sep) ? file : null;
 }
 
+/** Whether a path names a file: false for null, and for a path no file can have (one holding a NUL byte). */
+function isFile(file) {
+  try {
+    return Boolean(file && fs.statSync(file, { throwIfNoEntry: false })?.isFile());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The docs/ page a docs build of this tree serves at the route `<page>/`
+ * ('' for the root), or null.
+ *
+ * docs/x.md and docs/x/index.md are served at x/, docs/index.md at the root,
+ * and a name starting with `_` is never published. docs/404.md is served at
+ * 404.html alone, never at 404/, a route ending in `index` serves no page
+ * (docs/x/index.md is at x/), and one with an extension names a file.
+ */
+function pageAt(page, docsDir) {
+  if (page === '404' || path.extname(page) || /(?:^|\/)index$/.test(page) || page.split('/').some((segment) => segment.startsWith('_'))) {
+    return null;
+  }
+  const candidates = [`${page || 'index'}.md`, path.join(page, 'index.md')].map((rel) => fileBelow(docsDir, rel));
+  return candidates.find((file) => isFile(file)) ?? null;
+}
+
+/**
+ * What a docs build of this tree writes at a file path of the site: `{file}`
+ * naming the docs/ page an HTML file there renders, null for a file served as
+ * it is, which has no heading to check (SITE_FILES and the files under
+ * website/public/), or undefined when it writes nothing there.
+ *
+ * Each page at x/ is written to x/index.html, and docs/404.md to 404.html.
+ * Other files the build generates (the sitemap, the search index) are not
+ * linked from these docs, so a link to one is reported.
+ */
+function servedAt(rel, { docsDir, projectRoot }) {
+  if (SITE_FILES.has(rel) || isFile(fileBelow(path.join(projectRoot, 'website', 'public'), rel))) {
+    return null;
+  }
+  if (rel === '404.html') {
+    const notFound = path.join(docsDir, '404.md');
+    return isFile(notFound) ? { file: notFound } : undefined;
+  }
+  const html = rel.match(/^(?:(.*)\/)?index\.html$/s);
+  const file = html && pageAt(html[1] ?? '', docsDir);
+  return file ? { file } : undefined;
+}
+
 /**
  * What a link into the published site shows: `{file}` naming the docs/ page
  * that renders at its route, `{file: null}` when a docs build of this tree
- * serves nothing there (with `pageAsFile` when the route names a page as a
- * .md or .html file), or null when the href is not below the site or names a
- * file the site serves as it is, which has no heading to check.
+ * serves nothing there (with `pageAsFile` when the route names, as a .md or
+ * .html file, a page served at its own route), or null when the href is not
+ * below the site or names a file the site serves as it is, which has no
+ * heading to check.
  *
- * Routes follow the build: docs/x.md and docs/x/index.md are served at x/,
- * docs/index.md at the root, and a name starting with `_` is never published.
- * The build writes each page to an HTML file the site serves too: the page at
- * x/ to x/index.html, and docs/404.md to 404.html alone, never at 404/. Any
- * other route with an extension names a file, and the only other files the
- * site serves are SITE_FILES and those under website/public/, so a link to
- * x.md or x.html is dead there. Other files the build generates (the sitemap,
- * the search index) are not linked from these docs, so a link to one is
- * reported.
+ * The route is looked up as GitHub Pages serves it: a route ending in `/` (or
+ * the root) from its index.html, and any other from the file it names, else
+ * that name plus `.html`, else its index.html (by a redirect to the route
+ * with a `/`). So x/, x, x/index.html and x/index serve the page at x/, and
+ * 404.html and 404 the not-found page, while x.md, x.html, 404/, index/ and a
+ * file's route with a `/` added (llms.txt/) serve nothing. See `servedAt` for
+ * the files a build writes.
  * The link's `#anchor` is checked against GitHub's ids for that page, which
  * are the site's too except in the two cases `headingToAnchor` names.
  *
@@ -485,23 +536,19 @@ function fileBelow(dir, rel) {
  */
 function siteSource(href, { siteUrl, docsDir, projectRoot }) {
   const route = pathBelow(href, siteUrl);
-  const asIs = route === null ? null : fileBelow(path.join(projectRoot, 'website', 'public'), route);
-  if (route === null || SITE_FILES.has(route) || (asIs && fs.statSync(asIs, { throwIfNoEntry: false })?.isFile())) {
+  if (route === null) {
     return null;
   }
-  if (route === '404.html') {
-    const notFound = path.join(docsDir, '404.md');
-    return { file: fs.existsSync(notFound) ? notFound : null };
+  const name = route.replace(/\/+$/, '');
+  const index = `${name ? `${name}/` : ''}index.html`;
+  for (const rel of name && name === route ? [name, `${name}.html`, index] : [index]) {
+    const shown = servedAt(rel, { docsDir, projectRoot });
+    if (shown !== undefined) {
+      return shown;
+    }
   }
-  const page = route.replace(/(?:^|\/)index\.html$/, '');
-  if (/\.(?:md|html)$/i.test(page)) {
-    return { file: null, pageAsFile: true };
-  }
-  if (path.extname(page) || page === '404' || /(?:^|\/)index$/.test(page) || page.split('/').some((segment) => segment.startsWith('_'))) {
-    return { file: null };
-  }
-  const candidates = [`${page || 'index'}.md`, path.join(page, 'index.md')].map((rel) => fileBelow(docsDir, rel));
-  return { file: candidates.find((file) => file && fs.existsSync(file)) ?? null };
+  const asFile = name.match(/^(.+)\.(?:md|html)$/is);
+  return asFile && pageAt(asFile[1].replace(/(?:^|\/)index$/, ''), docsDir) ? { file: null, pageAsFile: true } : { file: null };
 }
 
 /**

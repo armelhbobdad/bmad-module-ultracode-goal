@@ -192,24 +192,24 @@ def _protected_branches() -> list[str]:
 
 def _current_branch(cwd: str | None) -> str | None:
     # Git prints a branch name as the bytes it stores it as, and the platform's
-    # decoding could not read every name (a byte that is not UTF-8, or on
+    # text decoding could not read every name (a byte that is not UTF-8, or on
     # Windows a UTF-8 name its ANSI code page lacks): the hook raised instead
-    # of reporting the branch. UTF-8 reads every name, and a byte that is not
-    # UTF-8 is kept as os.environ keeps it on POSIX, so the name still matches
-    # one ULTRACODE_PROTECTED_BRANCHES spells.
+    # of reporting the branch. The bytes are decoded as os.environ decodes
+    # ULTRACODE_PROTECTED_BRANCHES (os.fsdecode: the locale's encoding with
+    # surrogateescape on POSIX, UTF-8 on Windows). Read as UTF-8 whatever the
+    # locale, a non-ASCII name under a locale that is not UTF-8 read one way
+    # here and another in the list, and matched no protected name.
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=cwd or None,
             capture_output=True,
-            encoding="utf-8",
-            errors="surrogateescape",
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode == 0:
-        branch = out.stdout.strip()
+        branch = os.fsdecode(out.stdout).strip()
         return branch or None
     # An unborn HEAD (a fresh `git init`, nothing committed) fails rev-parse
     # while still printing the literal `HEAD`, which matched no protected name
@@ -220,15 +220,13 @@ def _current_branch(cwd: str | None) -> str | None:
             ["git", "symbolic-ref", "--short", "-q", "HEAD"],
             cwd=cwd or None,
             capture_output=True,
-            encoding="utf-8",
-            errors="surrogateescape",
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if ref.returncode != 0:
         return None
-    return ref.stdout.strip() or None
+    return os.fsdecode(ref.stdout).strip() or None
 
 
 def _staged_index_nonempty(cwd: str | None) -> bool:

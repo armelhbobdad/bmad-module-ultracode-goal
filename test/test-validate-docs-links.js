@@ -269,6 +269,9 @@ async function main() {
             `[m](${site}guide.md) [ma](${site}guide.md#hook-security) [h](${site}guide.html) [t](${site}llms-ful.txt)`,
             `[pm](${site}img/nope.svg) [pd](${site}img/) [gi](${site}gide/index.html) [ga](${site}guide/index.html#nope)`,
             `[o](${site}404/) [i](${site}index/) [si](${site}sub/index/) [ii](${site}index/index.html)`,
+            `[ls](${site}llms.txt/) [ps](${site}img/logo.svg/) [ns](${site}404.html/) [gs](${site}guide/index.html/)`,
+            `[o4](${site}404) [ix](${site}index#home) [gx](${site}guide/index#hook-security) [gn](${site}guide/index#nope)`,
+            `[c](${site}..%2F..%2FREADME.md)`,
           ].join('\n'),
           'website/public/img/logo.svg': '<svg/>',
         },
@@ -299,6 +302,12 @@ async function main() {
         `README.md: ${served}: ${site}index/`,
         `README.md: ${served}: ${site}sub/index/`,
         `README.md: ${served}: ${site}index/index.html`,
+        `README.md: ${served}: ${site}llms.txt/`,
+        `README.md: ${served}: ${site}img/logo.svg/`,
+        `README.md: ${served}: ${site}404.html/`,
+        `README.md: ${served}: ${site}guide/index.html/ ${asFile}`,
+        `README.md: anchor matches no heading in ${path.join('docs', 'guide.md')}: ${site}guide/index#nope`,
+        `README.md: ${served}: ${site}..%2F..%2FREADME.md`,
       ],
     );
 
@@ -342,6 +351,34 @@ async function main() {
     const cfg = resolveConfig([]);
     assert.strictEqual(cfg.siteUrl, `https://${owner}.github.io/${repo}/`);
     assert.strictEqual(cfg.repoUrl, `https://github.com/${owner}/${repo}/`);
+  });
+
+  test('the validator names this repository only in its two URL constants, above its code', () => {
+    // A sibling repository keeps a copy of this validator whose code, from
+    // `const fs` on, is this one byte for byte, and this test file too: a
+    // repository's name below that line would make the two copies differ.
+    const { repository } = require('../package.json');
+    const [, owner, repo] = repository.url.match(/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/);
+    const source = fs.readFileSync(path.join(__dirname, '..', 'tools', 'validate-docs-links.js'), 'utf8');
+    const start = source.indexOf("\nconst fs = require('node:fs');\n");
+    assert.ok(start > 0, 'the validator must require node:fs on a line of its own');
+    for (const name of [owner, repo]) {
+      assert.ok(source.slice(0, start).includes(name), `the header must name ${name}`);
+      assert.ok(!source.slice(start).includes(name), `the code from \`const fs\` on must not name ${name}`);
+    }
+  });
+
+  await testAsync('a site link whose path decodes to a NUL byte is reported, not a crash', async () => {
+    const site = 'https://example.com/base/';
+    const { cfg } = fixture(
+      { root: { 'README.md': `[z](${site}x%00y) [y](${site}img/x%00y.svg) [g](${site}gide/)\n` }, docs: { 'index.md': '# Home\n' } },
+      ['--site-url', site],
+    );
+    const served = 'site link names no page or file a docs build of this tree serves';
+    assert.deepStrictEqual(
+      (await runQuiet(cfg)).issues.map((i) => i.detail),
+      [`${served}: ${site}x%00y`, `${served}: ${site}img/x%00y.svg`, `${served}: ${site}gide/`],
+    );
   });
 
   await testAsync('a root-absolute .md target has its anchor checked', async () => {
