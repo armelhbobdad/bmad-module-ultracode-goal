@@ -1364,8 +1364,8 @@ def test_red_route_predicate_rejects_a_p0_gap_that_ends_the_cycle():
 
 
 def test_red_route_predicate_rejects_a_verdict_logged_as_prose():
-    """`gate_trail.py` reads a verdict only from a fenced JSON object, so a
-    verdict logged as a word reads as no verdict at all."""
+    """`gate_trail.py` reads a verdict only from a JSON object, so a verdict
+    logged as a word reads as no verdict at all."""
     para = _backfill_commit()
     start = para.index("Log this cycle's verdict in `.decision-log.md`")
     end = para.index("Then take the `reloop` route", start)

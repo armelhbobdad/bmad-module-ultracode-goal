@@ -27,9 +27,9 @@ The verdict cell is `gate_eval.GATE_VERDICT[gate_status]` and nothing else. An
 unrecognized gate_status is rendered verbatim rather than re-classified, and the
 production AND is NEVER re-applied here: it already ran when the gate decided,
 and re-running it at finalize would be a second, later judgment. When the run
-recorded its own verdict for a story (a fenced JSON object carrying a `verdict`
-key under that story's heading in `.decision-log.md`, which
-`references/gate.md` has the run write before each gate cycle as
+recorded its own verdict for a story (a JSON object carrying a `verdict` key,
+fenced or inline in backticks, under that story's heading in `.decision-log.md`,
+which `references/gate.md` has the run write before each gate cycle as
 `### Story <story_id>: gate`), that recorded verdict wins over the mapped one,
 because it is what the run actually acted on - including any downgrade the gate
 applied at decision time.
@@ -154,8 +154,27 @@ _AMBIGUOUS_AC_HEADERS = frozenset({"id", "criterion", "criteria"})
 # either would render test ids or file numbers as criteria.
 _OVERRIDE_AC_HEADERS = frozenset(_AC_HEADERS - {"id", "acs"})
 
-_STORY_HEADING = re.compile(r"^#{2,4}\s+story\s+([0-9][\w.\-]*)", re.IGNORECASE | re.MULTILINE)
+# A heading whose first word is `Story`, with the id after it and the rest of the
+# line. Which of these name a story is `_story_heading_id`'s call: most are prose
+# (`### Story ORDER: one deviation`), and a prose heading must not end a story's
+# entries.
+_STORY_HEADING = re.compile(
+    r"^(#{2,4})[ \t]+story[ \t]+([\w.\-]*\w)(.*)$", re.IGNORECASE | re.MULTILINE
+)
+# The rest of the line in the heading `references/gate.md` ("Run the gate") has
+# the run write before each gate cycle: `### Story <story_id>: gate`.
+_GATE_HEADING_TAIL = re.compile(r":[ \t]*gate[ \t]*", re.IGNORECASE)
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n(\{.*?\})\s*\n```", re.DOTALL)
+# A JSON object as a single-backtick code span, the way some runs log
+# `gate_eval.py`'s result inside a sentence. `[^`]` keeps it inside one span.
+_INLINE_JSON = re.compile(r"(?<!`)`(\{[^`]*\})`(?!`)")
+# The per-story gate file a `gate_eval.py` result says it read, in its `reasons`
+# (`gate read from gate-decision-<story>.json`). That wording is not a contract
+# (docs/_internal/STABILITY.md), so it is used only to refuse a verdict object
+# that names another story's file, never to accept one.
+_GATE_READ_FROM = re.compile(
+    r"gate\s+read\s+from\s+(?:gate-decision|e2e-trace-summary)-([\w.\-]+?)\.json"
+)
 
 # The one escalation kind the gate's advance route writes (references/gate.md,
 # "Commit the gate's evidence before the next story starts"): the story keeps its
@@ -578,20 +597,89 @@ def verdict_for(gate_status: str | None, recorded: str | None) -> str:
     return gate_eval.GATE_VERDICT.get(gate_status.upper(), gate_status)
 
 
-def recorded_verdicts(decision_log: Path | None) -> dict[str, str]:
+def _story_heading_id(match: re.Match[str], keys: set[str]) -> str | None:
+    """The story id a `_STORY_HEADING` match names, or None for a prose heading.
+
+    Three shapes name a story: an id that starts with a digit, as a numeric
+    sprint key does (`7-1`, `92-0a`), the shape this reader has always read; an
+    id that is one of `keys`, the keys sprint-status lists, so a letter-prefixed
+    key (`lp-0-1-...`) is read too; and the heading `references/gate.md` has the
+    run write, `### Story <story_id>: gate`, whatever its id. Any other heading
+    (`### Story committed and re-verified`) is prose, and ends no story's
+    entries.
+    """
+    level, ident, tail = match.groups()
+    if ident[0].isdigit() or ident in keys:
+        return ident
+    if level == "###" and _GATE_HEADING_TAIL.fullmatch(tail):
+        return ident
+    return None
+
+
+def _names_another_story(payload: dict, ident: str) -> bool:
+    """True iff the object's `reasons` say it read another story's gate file.
+
+    A heading's span can run far past its own entries in a log that heads its
+    stories in another shape: measured on a real epic, one story's span held two
+    later stories' verdicts and none of its own.
+    """
+    reasons = payload.get("reasons")
+    if not isinstance(reasons, list):
+        return False
+    for named in _GATE_READ_FROM.findall(" ".join(str(reason) for reason in reasons)):
+        if _components(named) and not (
+            _heading_matches_story(ident, named) or _heading_matches_story(named, ident)
+        ):
+            return True
+    return False
+
+
+def _first_verdict(span: str, ident: str) -> str | None:
+    """The verdict of the first JSON object in `span` that is story `ident`'s.
+
+    Read fenced or inline, in the order they stand. An object carrying
+    `"epic_level": true` is the Epic-level gate's roll-up, which follows the
+    last story's entries under no story heading of its own, so it is never a
+    story's verdict, and neither is one whose `reasons` name another story's
+    gate file. `strict=False` lets a string a log wrapped across lines still
+    parse.
+    """
+    found = sorted(
+        [(m.start(), m.group(1)) for m in _JSON_FENCE.finditer(span)]
+        + [(m.start(), m.group(1)) for m in _INLINE_JSON.finditer(span)]
+    )
+    for _, raw in found:
+        try:
+            payload = json.loads(raw, strict=False)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(payload, dict) or not payload.get("verdict"):
+            continue
+        if payload.get("epic_level") or _names_another_story(payload, ident):
+            continue
+        return str(payload["verdict"])
+    return None
+
+
+def recorded_verdicts(decision_log: Path | None, keys: set[str] | None = None) -> dict[str, str]:
     """Verdicts the run recorded per story in its decision log.
 
-    A story heading followed by a fenced JSON object carrying a `verdict` key is
-    read as the verdict the run acted on. Prose headings without such a block
-    contribute nothing, which is the common case.
+    A story heading (`_story_heading_id`, with `keys` the sprint-status keys)
+    followed by a JSON object carrying a `verdict` key, fenced or inline in
+    backticks, is read as the verdict the run acted on. Prose headings without
+    such an object contribute nothing, which is the common case.
 
     A heading's entries run to the next story heading, so the FIRST verdict
     object after it is its own: a log whose later stories are headed in another
-    shape puts their verdicts, and the epic roll-up's, in an earlier story's
-    span. A later heading for the same id replaces an earlier one's verdict.
-    `references/gate.md` ("Run the gate") has the run write
-    `### Story <story_id>: gate` before each gate cycle, so each span is one
-    cycle and a story's last cycle decides its verdict.
+    shape puts their verdicts in an earlier story's span, and the Epic-level
+    roll-up follows the last story's (`_first_verdict` skips the roll-up, and
+    any object whose `reasons` name another story's gate file). A later heading
+    for the same id replaces an earlier one's verdict, and one whose span holds
+    no verdict object drops it, so the trail falls back to the gate artifact
+    rather than show an earlier cycle's verdict. `references/gate.md` ("Run the
+    gate") has the run write `### Story <story_id>: gate` before each gate
+    cycle, so each span is one cycle and a story's last cycle decides its
+    verdict.
 
     Keyed by the heading's id VERBATIM. It used to be keyed by
     `numeric_prefix(...)`, which collapsed every alphanumeric child id of one
@@ -604,19 +692,20 @@ def recorded_verdicts(decision_log: Path | None) -> dict[str, str]:
     text = read_text(decision_log)
     if not text:
         return {}
+    listed = keys or set()
+    headings = [
+        (match, ident)
+        for match in _STORY_HEADING.finditer(text)
+        if (ident := _story_heading_id(match, listed))
+    ]
     out: dict[str, str] = {}
-    matches = list(_STORY_HEADING.finditer(text))
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        span = text[match.end() : end]
-        for fence in _JSON_FENCE.finditer(span):
-            try:
-                payload = json.loads(fence.group(1))
-            except (ValueError, TypeError):
-                continue
-            if isinstance(payload, dict) and payload.get("verdict"):
-                out[match.group(1)] = str(payload["verdict"])
-                break
+    for index, (match, ident) in enumerate(headings):
+        end = headings[index + 1][0].start() if index + 1 < len(headings) else len(text)
+        verdict = _first_verdict(text[match.end() : end], ident)
+        if verdict:
+            out[ident] = verdict
+        else:
+            out.pop(ident, None)
     return out
 
 
@@ -665,6 +754,18 @@ def resolve_recorded_verdicts(recorded: dict[str, str], stories: list[str]) -> d
     return out
 
 
+def sprint_rows(impl_artifacts: Path | None, repo: Path) -> dict[str, str]:
+    """sprint-status.yaml's rows, key to status, located and read as a resume
+    reads them (`preflight_check`). Fail-soft: no impl-artifacts dir, or no
+    readable file, reads as no rows."""
+    if impl_artifacts is None:
+        return {}
+    import preflight_check  # noqa: PLC0415  (sibling script, path set above)
+
+    text = read_text(preflight_check._locate_sprint_status(repo, impl_artifacts))
+    return preflight_check._parse_development_status(text) if text else {}
+
+
 def open_escalations(impl_artifacts: Path | None, stories: list[str], repo: Path) -> dict[str, str]:
     """Each story whose escalation is still open, mapped to its sidecar's kind.
 
@@ -681,10 +782,7 @@ def open_escalations(impl_artifacts: Path | None, stories: list[str], repo: Path
         return {}
     import preflight_check  # noqa: PLC0415  (sibling script, path set above)
 
-    rows: dict[str, str] = {}
-    text = read_text(preflight_check._locate_sprint_status(repo, impl_artifacts))
-    if text:
-        rows = preflight_check._parse_development_status(text)
+    rows = sprint_rows(impl_artifacts, repo)
     out: dict[str, str] = {}
     for story in stories:
         escalation = preflight_check._escalation_of(impl_artifacts, story, repo)
@@ -885,7 +983,10 @@ def render(
 ) -> str:
     # Resolved against the story list, so `recorded` below is keyed by the SAME
     # full story ids the sections are rendered for and every lookup is exact.
-    recorded = resolve_recorded_verdicts(recorded_verdicts(decision_log), stories)
+    # The sprint-status keys and the story list tell a heading that names a
+    # letter-prefixed key from a prose one.
+    keys = set(sprint_rows(impl_artifacts, repo)) | set(stories)
+    recorded = resolve_recorded_verdicts(recorded_verdicts(decision_log, keys), stories)
     baselines = {story: baseline_sha(impl_artifacts, story) for story in stories}
     escalated = open_escalations(impl_artifacts, stories, repo)
 

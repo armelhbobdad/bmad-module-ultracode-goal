@@ -1632,6 +1632,241 @@ def test_a_story_heading_never_lends_a_later_storys_verdict(tmp_path):
     assert recorded == {"7-1": "defer"}
 
 
+# ---------------------------------------------------------------------------
+# Under the prescribed heading, the trail shows the story's own latest verdict
+# object: not an earlier cycle's, and not the Epic-level roll-up's. A real
+# project's conductor logged `gate_eval.py`'s result inline in backticks in five
+# of seven gate cycles of one epic, which gate.md's "Record the full verdict
+# JSON" allows, and a reader of fenced objects alone kept the cycle before.
+# ---------------------------------------------------------------------------
+
+
+def _fenced(payload: dict) -> str:
+    return "```json\n" + json.dumps(payload) + "\n```\n\n"
+
+
+def _inline(payload: dict) -> str:
+    """`gate_eval.py`'s result as that project's log holds it: inside a sentence,
+    wrapped mid-string."""
+    raw = json.dumps(payload).replace("gate_status PASS", "gate_status\nPASS")
+    return f"**gate_eval.py (production):** `{raw}`. `gate-provenance: tea`.\n\n"
+
+
+_PASS = {"verdict": "advance", "gate_status": "PASS", "epic_level": False, "reasons": ["gate_status PASS -> advance"]}
+_FAIL = {"verdict": "reloop", "gate_status": "FAIL", "epic_level": False, "reasons": ["gate_status FAIL -> reloop"]}
+
+
+def _trail_over(tmp_path: Path, log_text: str, story: str = "7-1") -> str:
+    """One story of the production fixture (7-1's gate file reads PASS, 7-2's
+    FAIL) under `log_text`."""
+    root = copy_fixture("production", tmp_path)
+    log = root / "decision-log.md"
+    log.write_text(log_text, encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_trail(
+        run_dir=run_dir,
+        profile="production",
+        stories=[story],
+        impl_artifacts=root / "impl-artifacts",
+        trace_output=root / "test-artifacts" / "traceability",
+        decision_log=log,
+        repo=tmp_path,
+    )
+    return section((run_dir / "gate-trail.md").read_text(encoding="utf-8"), story)
+
+
+def test_a_later_cycle_logged_inline_replaces_the_earlier_cycles_verdict(tmp_path):
+    """Measured on a real epic: cycle 1 fenced its `reloop`, cycles 2 and 3
+    logged theirs inline, and cycle 3 advanced. Every row read cycle 1's
+    `reloop` once the prescribed heading stood before each cycle."""
+    heading = "### Story 7-1: gate\n\n"
+    body = _trail_over(
+        tmp_path,
+        "# Decision log\n\n" + heading + _fenced(_FAIL) + heading + _inline(_FAIL) + heading + _inline(_PASS),
+    )
+    assert {row[3] for row in rows(body)} == {"advance"}
+    assert _source_line(body) == "- Verdict source: recorded in the decision log"
+
+
+def test_an_inline_downgrade_is_the_verdict_shown(tmp_path):
+    """The case the heading was prescribed for: a `PASS` the production signals
+    downgraded to `reloop` must not read `advance` because it was logged
+    inline."""
+    downgraded = {"verdict": "reloop", "gate_status": "PASS", "nfr_status": "FAIL", "reasons": ["nfr FAIL"]}
+    body = _trail_over(tmp_path, "# Decision log\n\n### Story 7-1: gate\n\n" + _inline(downgraded))
+    assert {row[3] for row in rows(body)} == {"reloop"}
+    assert _source_line(body) == "- Verdict source: recorded in the decision log"
+
+
+@pytest.mark.parametrize(
+    ("own", "shown", "source"),
+    [
+        (_inline(_PASS), "advance", "recorded in the decision log"),
+        ("Gate: PASS, verdict advance.\n\n", "advance", "the gate artifact's status, mapped by the gate's own table"),
+    ],
+    ids=["own-verdict-inline", "own-verdict-as-prose"],
+)
+def test_the_epic_level_rollup_is_never_a_storys_verdict(tmp_path, own, shown, source):
+    """The Epic-level gate runs after the last story's cycle under no story
+    heading, so its fenced roll-up falls in that story's entries."""
+    rollup = {"verdict": "defer", "gate_status": "CONCERNS", "epic_level": True, "reasons": ["roll-up"]}
+    body = _trail_over(
+        tmp_path,
+        "# Decision log\n\n### Story 7-1: gate\n\n" + own + "### Stage 5: Epic-level gate\n\n" + _fenced(rollup),
+    )
+    assert {row[3] for row in rows(body)} == {shown}
+    assert _source_line(body) == f"- Verdict source: {source}"
+
+
+def test_a_later_cycle_with_no_readable_verdict_drops_the_earlier_one(tmp_path):
+    """A later heading for the story is a later cycle: with no verdict object
+    under it, the trail falls back to the gate file rather than show the
+    earlier cycle's verdict as the story's."""
+    body = _trail_over(
+        tmp_path,
+        "# Decision log\n\n### Story 7-1: gate\n\n"
+        + _fenced(_FAIL)
+        + "### Story 7-1: gate\n\nGate: PASS, verdict advance.\n",
+    )
+    assert {row[3] for row in rows(body)} == {"advance"}
+    assert _source_line(body) == "- Verdict source: the gate artifact's status, mapped by the gate's own table"
+
+
+def test_an_unchanged_later_cycle_still_reads_its_own_fenced_verdict(tmp_path):
+    """Control: a log in the shape gate.md prescribes reads the last cycle."""
+    heading = "### Story 7-1: gate\n\n"
+    body = _trail_over(tmp_path, "# Decision log\n\n" + heading + _fenced(_PASS) + heading + _fenced(_FAIL))
+    assert {row[3] for row in rows(body)} == {"reloop"}
+
+
+def _read_from(gate_file: str, payload: dict) -> dict:
+    return {**payload, "reasons": [f"gate read from {gate_file}", *payload["reasons"]]}
+
+
+def test_a_verdict_naming_another_storys_gate_file_is_not_this_storys(tmp_path):
+    """Measured on a real epic: a planning note headed `### Story 92-3b` opened a
+    span nine thousand lines long, whose first verdict objects were two later
+    stories' gates (`gate read from gate-decision-92-8d-...json`), and the trail
+    showed one of them as the story's. 7-2's own gate file reads FAIL."""
+    body = _trail_over(
+        tmp_path,
+        "# Decision log\n\n### Story 7-2 - scope notes before the drafting pass\n\nNotes only.\n\n"
+        "### Stage 5: Gate, 7-8\n\nVerdict JSON:\n"
+        + _inline(_read_from("gate-decision-7-8-...json", _PASS)).replace("gate read from ", "gate read from\n")
+        + "### Stage 5: Gate, 7-9\n\n"
+        + _fenced(_read_from("gate-decision-7-9-a-later-story.json", _PASS)),
+        story="7-2",
+    )
+    assert {row[3] for row in rows(body)} == {"reloop"}
+    assert _source_line(body) == "- Verdict source: the gate artifact's status, mapped by the gate's own table"
+
+
+@pytest.mark.parametrize(
+    "gate_file",
+    ["gate-decision-7-1.json", "gate-decision-7-1-a-slug.json", "gate-decision.json", "gate-decision-...json"],
+)
+def test_a_verdict_naming_the_storys_own_gate_file_is_read(tmp_path, gate_file):
+    """Control: the story's own file, short or slugged, and a file that names
+    no story (generic, or its id elided), leave the object the story's."""
+    downgraded = {**_FAIL, "verdict": "reloop", "gate_status": "PASS"}
+    body = _trail_over(tmp_path, "# Decision log\n\n### Story 7-1: gate\n\n" + _fenced(_read_from(gate_file, downgraded)))
+    assert {row[3] for row in rows(body)} == {"reloop"}
+    assert _source_line(body) == "- Verdict source: recorded in the decision log"
+
+
+# ---------------------------------------------------------------------------
+# A letter-prefixed sprint key (`lp-0-1-...`) names a story as a numeric one
+# does, while a heading that only starts with the word `Story` stays prose.
+# ---------------------------------------------------------------------------
+
+
+def test_a_letter_prefixed_key_under_the_prescribed_heading_is_read(tmp_path):
+    log = tmp_path / "decision-log.md"
+    log.write_text(
+        "# Decision log\n\n### Story 7-1: gate\n\n"
+        + _fenced(_PASS)
+        + "### Story lp-7-2-a-letter-key: gate\n\n"
+        + _fenced(_FAIL),
+        encoding="utf-8",
+    )
+    assert gate_trail.recorded_verdicts(log) == {"7-1": "advance", "lp-7-2-a-letter-key": "reloop"}
+
+
+def test_a_heading_naming_a_listed_letter_key_is_read(tmp_path):
+    """Read only when sprint-status lists the key: unlisted, the same heading is
+    prose, and its verdict stays in the previous story's entries."""
+    log = tmp_path / "decision-log.md"
+    log.write_text(
+        "# Decision log\n\n### Story 7-1 - a numeric key\n\nGate notes only.\n\n"
+        "### Story lp-7-2-a-letter-key - a letter key\n\n" + _fenced(_FAIL),
+        encoding="utf-8",
+    )
+    assert gate_trail.recorded_verdicts(log, {"7-1", "lp-7-2-a-letter-key"}) == {"lp-7-2-a-letter-key": "reloop"}
+    assert gate_trail.recorded_verdicts(log) == {"7-1": "reloop"}
+
+
+def test_the_render_reads_letter_keys_from_sprint_status(tmp_path):
+    """End to end. A listed key's heading is read as its story's, and the keys
+    come from sprint-status.yaml, not from `--story` alone: the heading of a
+    story the invocation does not render still ends the entries of the story
+    before it, whose own gate logged no verdict object."""
+    trace = tmp_path / "traceability"
+    trace.mkdir()
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    first, second, third, fourth = (f"lp-7-{n}-story-{n}" for n in range(1, 5))
+    for story in (first, third):
+        (trace / f"gate-decision-{story}.json").write_text(json.dumps({"gate_status": "PASS"}), encoding="utf-8")
+    _sprint(impl, {key: "done" for key in (first, second, third, fourth)})
+    log = tmp_path / "decision-log.md"
+    log.write_text(
+        f"# Decision log\n\n### Story {first} - downgraded at its gate\n\n"
+        + _fenced({**_PASS, "verdict": "reloop", "nfr_status": "FAIL"})
+        + f"### Story {third} - its gate logged as prose\n\nGate: PASS, verdict advance.\n\n"
+        f"### Story {fourth} - not rendered by this invocation\n\n" + _fenced(_FAIL),
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "run"
+    run_trail(
+        run_dir=run_dir,
+        profile="production",
+        stories=[first, third],
+        impl_artifacts=impl,
+        trace_output=trace,
+        decision_log=log,
+        repo=tmp_path,
+    )
+    text = (run_dir / "gate-trail.md").read_text(encoding="utf-8")
+    assert {row[3] for row in rows(section(text, first))} == {"reloop"}
+    assert _source_line(section(text, first)) == "- Verdict source: recorded in the decision log"
+    assert {row[3] for row in rows(section(text, third))} == {"advance"}
+    assert _source_line(section(text, third)) == (
+        "- Verdict source: the gate artifact's status, mapped by the gate's own table"
+    )
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "### Story committed and re-verified",
+        "### Story ORDER: one deviation from the named sequence, and why",
+        "#### Story lp-7-2-a-letter-key: gate",
+        "### Story line ranges in `epics.md` (for the drafting pass)",
+    ],
+)
+def test_a_prose_heading_ends_no_storys_entries(tmp_path, prose):
+    """Headings a real project's logs hold under the word `Story`. Between a
+    story's heading and its verdict, each leaves the verdict the story's. The
+    third is the prescribed heading at another level, for a key sprint-status
+    does not list."""
+    log = tmp_path / "decision-log.md"
+    log.write_text(
+        "# Decision log\n\n### Story 7-1: gate\n\n" + prose + "\n\n" + _fenced(_FAIL),
+        encoding="utf-8",
+    )
+    assert gate_trail.recorded_verdicts(log, {"7-1"}) == {"7-1": "reloop"}
+
+
 def _finalize_escalation_failures(text: str) -> list[str]:
     match = re.search(r"^## Gate trail\s*$(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
     assert match, "finalize.md has no `## Gate trail` section"
@@ -1688,17 +1923,18 @@ def _prescribed_heading(text: str) -> str | None:
 
 
 def _log_in_the_prescribed_shape(template: str, path: Path) -> Path:
-    """Two stories logged as gate.md prescribes: a re-looped story's two cycles,
-    with Execute's entries between them, then a story whose red backfill sweep
-    re-looped it, then the epic roll-up, which takes no story heading. The
-    stories' own section headings are the shape a real project's logs use."""
-    first, second = "7-2-the-slugged-key", "7-3-another-key"
+    """Three stories logged as gate.md prescribes: a re-looped story's two
+    cycles, with Execute's entries between them, then a story whose red backfill
+    sweep re-looped it, then a letter-prefixed key, then the epic roll-up, which
+    takes no story heading. The stories' own section headings are the shape a
+    real project's logs use."""
+    first, second, third = "7-2-the-slugged-key", "7-3-another-key", "lp-7-4-a-letter-key"
 
     def fence(payload: dict) -> str:
         return "```json\n" + json.dumps(payload) + "\n```\n\n"
 
     path.write_text(
-        "# Decision log\n\n## Session 1\n\n### 7-2-the-slugged-key (story 1 of 2)\n\n"
+        "# Decision log\n\n## Session 1\n\n### 7-2-the-slugged-key (story 1 of 3)\n\n"
         + template.replace("<story_id>", first)
         + "\n\ngate-automate: abc1234\n\n"
         + fence({"verdict": "reloop", "gate_status": "FAIL", "reasons": ["FAIL"]})
@@ -1706,10 +1942,14 @@ def _log_in_the_prescribed_shape(template: str, path: Path) -> Path:
         + template.replace("<story_id>", first)
         + "\n\n"
         + fence({"verdict": "advance", "gate_status": "PASS", "reasons": []})
-        + "### 7-3-another-key (story 2 of 2)\n\n"
+        + "### 7-3-another-key (story 2 of 3)\n\n"
         + template.replace("<story_id>", second)
         + "\n\n"
         + fence({"verdict": "reloop", "reasons": ["the backfill sweep went red"]})
+        + "### lp-7-4-a-letter-key (story 3 of 3)\n\n"
+        + template.replace("<story_id>", third)
+        + "\n\n"
+        + fence({"verdict": "defer", "gate_status": "CONCERNS", "reasons": []})
         + "### Stage 5: Epic-level gate\n\n"
         + fence({"verdict": "advance", "gate_status": "PASS", "epic_level": True}),
         encoding="utf-8",
@@ -1723,14 +1963,23 @@ def _heading_rule_failures(text: str, tmp_path: Path) -> list[str]:
         return ["gate.md names no heading to write before a gate cycle"]
     failures = []
     log = _log_in_the_prescribed_shape(template, tmp_path / "prescribed-log.md")
-    stories = ["7-2-the-slugged-key", "7-3-another-key"]
+    stories = ["7-2-the-slugged-key", "7-3-another-key", "lp-7-4-a-letter-key"]
+    # No sprint-status keys: the prescribed shape alone names the letter key.
     recorded = gate_trail.resolve_recorded_verdicts(gate_trail.recorded_verdicts(log), stories)
-    if recorded != {"7-2-the-slugged-key": "advance", "7-3-another-key": "reloop"}:
+    if recorded != {"7-2-the-slugged-key": "advance", "7-3-another-key": "reloop", "lp-7-4-a-letter-key": "defer"}:
         failures.append(f"the trail reads {recorded} from a log in the prescribed shape")
     paragraph = _heading_paragraph(text)
     for clause in (
         "with `<story_id>` the sprint-status key copied verbatim",
         "Write it again before each later cycle of the story, a re-gate included.",
+        "Under it, log the cycle's verdict JSON as a fenced JSON object on lines of its own",
+        "fenced or inline in backticks, and never from one carrying `\"epic_level\": true`, the Epic-level "
+        "gate's roll-up",
+        "or from one whose `reasons` say it read another story's gate file",
+        "one whose id is a key `sprint-status.yaml` lists, so a prose heading such as `### Story order` ends none",
+        "A later heading for the story replaces what an earlier one's entries recorded, even when no verdict "
+        "object follows it",
+        "never an earlier cycle's verdict",
         "never a position such as `Story 2 of 5`",
     ):
         if clause not in paragraph:
@@ -1755,3 +2004,39 @@ def test_the_heading_pin_reds_when_the_rule_is_removed_or_reshaped(tmp_path):
     reshaped = text.replace("`### Story <story_id>: gate`", "`### <story_id>: gate`")
     failures = _heading_rule_failures(reshaped, tmp_path)
     assert len(failures) == 1 and failures[0].startswith("the trail reads {}"), failures
+
+
+def test_the_heading_pin_reds_on_a_heading_only_a_numeric_key_survives(tmp_path):
+    """Twin: without its `: gate` tail, the heading still names a numeric key,
+    but a letter-prefixed key sprint-status is not asked for reads as prose."""
+    text = GATE.read_text(encoding="utf-8")
+    reshaped = text.replace("`### Story <story_id>: gate`", "`### Story <story_id>`")
+    failures = _heading_rule_failures(reshaped, tmp_path)
+    assert failures == [
+        "the trail reads {'7-2-the-slugged-key': 'advance', '7-3-another-key': 'reloop'} "
+        "from a log in the prescribed shape"
+    ], failures
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Under it, log the cycle's verdict JSON as a fenced JSON object on lines of its own, as a red "
+        "backfill sweep logs its re-loop. ",
+        "`scripts/gate_trail.py` reads the verdict the run acted on from the first JSON object carrying "
+        "`verdict` after such a heading, ",
+        "The heading's entries run to the next heading the trail reads as a story's: ",
+        "A later heading for the story replaces what an earlier one's entries recorded, ",
+    ],
+)
+def test_the_heading_pin_reds_without_each_reader_sentence(tmp_path, sentence):
+    """Twin: each sentence that tells the conductor how the trail reads its log
+    is pinned; cutting one reds the pin."""
+    text = GATE.read_text(encoding="utf-8")
+    paragraph = _heading_paragraph(text)
+    start = paragraph.index(sentence)
+    end = paragraph.find(". ", start + len(sentence) - 2)
+    cut = paragraph[:start] + paragraph[end + 2 :]
+    assert cut != paragraph
+    failures = _heading_rule_failures(text.replace(paragraph, cut), tmp_path)
+    assert failures and all(f.startswith("the rule does not say") for f in failures), failures
