@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  When the host refuses `bmad-testarch-automate`'s write of its gate summary, or of a draft of it, the gate now has automate return the summary's full text, its frontmatter and its mutation rows included, in its result rather than write it some other way, and writes that text unchanged at `automation-summary-<story_id>-<sha>.md` itself, before anything reads it and before it logs the pass's `gate-gap:` lines, noting in `.decision-log.md` that it did. The summary's `lastStep` is the one automate's text gives, never one the gate sets, so a resume still reuses a finished pass and moves an unfinished one aside. Before, the gate named no step for a summary automate could not write, so a pass whose write was refused could leave no summary on disk: the backfill had no list of tests to stage, a later cycle lost the rows it re-runs, and a resume ran automate again at a commit it had already measured.
+issues: [183]

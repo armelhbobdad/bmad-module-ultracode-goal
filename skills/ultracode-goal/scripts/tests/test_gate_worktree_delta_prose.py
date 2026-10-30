@@ -97,6 +97,14 @@ caveat checks for such a server with probe_servers.py, gives the worktree its
 own server where a scratch runner config can, and otherwise briefs every
 assessor with the limit and reads a row through that server as one that
 cannot run. Each of those rules is pinned below with a mutant twin.
+
+A later run found a summary automate could not write (#183): the host refused
+its write of a draft of the summary, automate returned the summary as text,
+and the gate named no step for that, so the conductor composed a summary of
+its own, frontmatter included. The gate now writes automate's text unchanged
+at the summary's name, before anything reads it, and logs that it did; the
+pins below also hold the maintainer's ruling that the step names no host's
+rule and adds no automate pass.
 """
 
 from __future__ import annotations
@@ -3620,6 +3628,80 @@ def test_the_rows_named_are_the_keys_a_table_row_needs():
     for key in ("anchor", "replacement", "command"):
         assert key not in header
     assert re.search(r"leaves out each row's anchor, replacement and command", _bound())
+
+
+_ROWS = "**Automate's summary records its rows.**"
+_RETURNED = (
+    "A host can also refuse a delegated agent's write of a report file, so tell automate, too, that when the host "
+    "refuses its write of the summary, or of a draft of it, it returns the summary's full text, its frontmatter and "
+    "its rows included, in its result, rather than write it some other way.",
+    "When it returns that text, write it at that name yourself, unchanged, in place of whatever is there, before "
+    "anything else reads it and before you log its `gate-gap:` lines, and log in `.decision-log.md` that you wrote it "
+    "from automate's text.",
+    "Its rows are then the ones automate copied, and its frontmatter's `lastStep` the one automate's text gives, "
+    "never one you set, so a resume reads it as \"A summary already at that name is this cycle's own\" below says.",
+)
+
+
+def _writes_a_returned_summary(para: str) -> bool:
+    flat = re.sub(r"\s+", " ", para)
+    return bool(
+        _ROWS in flat
+        and all(sentence in flat for sentence in _RETURNED)
+        # The maintainer's ruling on #183: the step names no host's own rule,
+        # and a summary automate returned as text adds no automate pass.
+        and "Claude Code" not in flat
+        and not re.search(r"(?<!not )(?:delegate|run) automate (?:again|a second time)", flat)
+    )
+
+
+def test_a_summary_automate_could_not_write_is_written_from_its_text():
+    """#183: the host refused automate's write of a draft of its summary, and
+    automate returned the summary as text, but the gate named no step for that,
+    so the conductor composed a summary of its own, frontmatter included. With
+    no summary at that name, the backfill has no list of tests to stage, a later
+    cycle loses the rows it re-runs, and a resume runs automate again at a
+    commit it measured."""
+    assert _writes_a_returned_summary(_paragraph(GATE, _ROWS))
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The improvisation: the conductor composes a summary, or a lastStep, of its own.
+        ("write it at that name yourself, unchanged, in place", "write it at that name yourself, in place"),
+        ("its frontmatter and its rows included, ", ""),
+        ("the one automate's text gives, never one you set", "`step-04-validate-and-summarize`, which you set"),
+        # A refused draft, the case #183 met, left out.
+        ("refuses its write of the summary, or of a draft of it,", "refuses its write of the summary,"),
+        # Written after something has read it, or after the lines that name it.
+        ("before anything else reads it and before you log", "before you log"),
+        ("before anything else reads it and before you log its `gate-gap:` lines", "after you log its `gate-gap:` lines"),
+        # A delegate that routes around the host's refusal.
+        (", rather than write it some other way.", ", or writes it some other way."),
+        # No record of who wrote the file.
+        (", and log in `.decision-log.md` that you wrote it from automate's text.", "."),
+        # The host's own rule named, or an automate pass the step adds.
+        ("below says.", "below says. Claude Code refuses a subagent's write of a `.md` file whose name starts with "
+         "`summary`."),
+        ("below says.", "below says. When it returns no text either, delegate automate again."),
+    ],
+)
+def test_returned_summary_predicate_rejects_a_weaker_rule(old, new):
+    para = re.sub(r"\s+", " ", _paragraph(GATE, _ROWS))
+    mutant = para.replace(old, new)
+    assert mutant != para, "the mutant must actually change the text"
+    assert not _writes_a_returned_summary(mutant)
+
+
+def test_returned_summary_predicate_rejects_the_pre_edit_paragraph():
+    para = re.sub(r"\s+", " ", _paragraph(GATE, _ROWS))
+    pre_edit = para
+    for sentence in _RETURNED:
+        pre_edit = pre_edit.replace(" " + sentence, "")
+    assert pre_edit != para, "the pre-edit paragraph must actually differ"
+    assert _records_rows(pre_edit)
+    assert not _writes_a_returned_summary(pre_edit)
 
 
 def _delta_says_automate_is_scoped(para: str) -> bool:
