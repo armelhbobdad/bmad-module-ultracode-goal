@@ -191,12 +191,19 @@ def _protected_branches() -> list[str]:
 
 
 def _current_branch(cwd: str | None) -> str | None:
+    # Git prints a branch name as the bytes it stores it as, and the platform's
+    # decoding could not read every name (a byte that is not UTF-8, or on
+    # Windows a UTF-8 name its ANSI code page lacks): the hook raised instead
+    # of reporting the branch. UTF-8 reads every name, and a byte that is not
+    # UTF-8 is kept as os.environ keeps it on POSIX, so the name still matches
+    # one ULTRACODE_PROTECTED_BRANCHES spells.
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=cwd or None,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
@@ -213,7 +220,8 @@ def _current_branch(cwd: str | None) -> str | None:
             ["git", "symbolic-ref", "--short", "-q", "HEAD"],
             cwd=cwd or None,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
@@ -868,11 +876,13 @@ def _token_write_verbs(
     bounded one, as _segment_rebinds bounds its own: a run of a thousand
     wrappers overflowed Python's recursion limit, and a hook that exits on an
     exception makes no decision, so the command went through. Past
-    _MAX_WRAPPERS the reading fails closed as the depth cap does: a `git` in
-    what is left counts as both verbs, and without one the caller scans the
-    segment.
+    _MAX_WRAPPERS wrappers the reading stops, and the segment counts as both
+    verbs whatever follows: a search of the unread words for a `git` would
+    miss one that bash spells only once it removes quotes (`bash -c 'g""it
+    commit'`, `G''IT commit`), which reading them finds.
     """
-    for _ in range(_MAX_WRAPPERS + 1):
+    wrappers = 0
+    while True:
         tokens = _strip_leading_noise(tokens)
         if not tokens:
             return set()
@@ -895,6 +905,9 @@ def _token_write_verbs(
             return _command_write_verbs(" ".join(args), depth + 1, scope)
         if head not in _EXEC_WRAPPERS:
             return set()
+        wrappers += 1
+        if wrappers > _MAX_WRAPPERS:
+            return set(_UNRESOLVED_VERBS)
         # Every wrapper has its own option grammar (`timeout 30 …`, `nice -n 10
         # …`, `sudo -u u …`, `stdbuf -oL …`), and modelling them one by one is
         # exactly how a LISTED wrapper turns into a fail-open. So read the rest
@@ -907,7 +920,6 @@ def _token_write_verbs(
                 break
         else:
             return set()
-    return set(_UNRESOLVED_VERBS) if any(_GIT_WORD.search(t) for t in tokens) else None
 
 
 def _anywhere_write_verbs(segment: str) -> set[str]:
@@ -3502,7 +3514,7 @@ def main() -> None:
         verbs, unknown = _classify(command)
     except Exception as exc:  # noqa: BLE001  fail closed on the unforeseen
         # A crash would exit non-zero, which the client reads as no decision,
-        # letting the command past every git gate below. A command the guard
+        # letting the command past every git gate. A command the guard
         # cannot read is refused instead, as a segment it cannot lex is read
         # toward the deny.
         _deny(
@@ -3515,6 +3527,29 @@ def main() -> None:
         )
     if not verbs:
         _allow()
+    try:
+        _git_write_gates(cwd, verbs, unknown)
+    except Exception as exc:  # noqa: BLE001  fail closed on the unforeseen
+        # The checks read files and ask git, and an input none of them was
+        # written for (a NUL byte in a test-file path the checklist lists)
+        # raised out of them: the hook exited with no decision, and the
+        # command went past every check still to run. It is refused instead.
+        detail = " ".join(str(exc).split())[:160]
+        _deny(
+            f"Commit/push guard: refusing this `git {'/'.join(sorted(verbs))}`, "
+            f"because checking it raised an error ({type(exc).__name__}: {detail}), "
+            "so the protected-branch, tests-ran, freshness, empty-index and "
+            "un-skip checks could not all run, and it is refused (failing "
+            "closed) rather than let through unchecked. Fix what the error "
+            "names, then run it again."
+        )
+
+
+def _git_write_gates(cwd: str | None, verbs: set[str], unknown: list[str]) -> NoReturn:
+    """The checks a Bash command that commits or pushes must pass: the
+    protected branch for either verb, then, for a commit, the tests-ran
+    marker, its freshness, a staged index and the un-skip proof. Each one
+    denies; a command that passes them all is allowed."""
     hint = _unknown_hint(unknown)
 
     protected = _protected_branches()

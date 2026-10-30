@@ -129,12 +129,14 @@ def test_over_promising_note_is_rejected():
 
 # Two shapes that fail closed beside the matches-anywhere lanes (issue #179): a
 # long run of exec wrappers, which once crashed the guard, and a command whose
-# reading raises. An operator predicting a deny needs both.
+# reading raises, or a git write whose checks do. An operator predicting a deny
+# needs each.
 _FAILS_CLOSED_CLAUSES = (
     "A segment whose command sits behind a run of more than 32 exec wrappers is read through the "
-    "first 32 only: a `git` anywhere after them counts as both a commit and a push",
+    "first 32 only, and counts as both a commit and a push whatever follows them",
     "a command the guard cannot classify at all, because reading it raised an error, is denied "
     "outright, whatever it holds",
+    "as is a commit or push whose checks raise one",
 )
 
 

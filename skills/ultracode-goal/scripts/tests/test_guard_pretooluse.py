@@ -7022,13 +7022,13 @@ def test_a_run_of_bang_words_is_linear(guard_module) -> None:
 
 def test_a_short_run_of_exec_wrappers_is_read_through(guard_module) -> None:
     """The bound reaches no further than it must: a run of _MAX_WRAPPERS
-    wrappers is read through to its head, and a longer run ahead of a command
-    that is no git still reads as no write."""
+    wrappers is read through to its head, whether that is a git write or a
+    command that is no git."""
     limit = guard_module._MAX_WRAPPERS
     assert guard_module._git_writes("env " * limit + _V + " -m x") == {"commit"}
     assert guard_module._git_writes("nice -n 1 " * limit + _V + " -m x") == {"commit"}
-    assert guard_module._git_writes("env " * (limit + 1) + "ls") == set()
-    assert guard_module._git_writes("env " * (limit + 2) + "ls") == set()
+    assert guard_module._git_writes("env " * limit + "ls") == set()
+    assert guard_module._git_writes("sudo -u u " * limit + "git status") == set()
 
 
 def test_a_long_run_of_exec_wrappers_fails_closed(tmp_path: Path, guard_module) -> None:
@@ -7036,8 +7036,8 @@ def test_a_long_run_of_exec_wrappers_fails_closed(tmp_path: Path, guard_module) 
     recursive call, so a run of about a thousand (`env env ... git commit`)
     overflowed Python's recursion limit, the hook exited 1 with no decision
     and the commit went through every git gate. The wrappers are read in a
-    bounded loop now, and past _MAX_WRAPPERS a `git` in what is left counts as
-    both verbs, as it does past the depth cap."""
+    bounded loop now, and past _MAX_WRAPPERS the segment counts as both verbs,
+    whatever follows them."""
     protected = _protected_repo(tmp_path)
     code, out = _run_hook(_bash_event(protected, "env " * 2000 + _V + " -m x"), protected)
     assert code == 2
@@ -7047,6 +7047,94 @@ def test_a_long_run_of_exec_wrappers_fails_closed(tmp_path: Path, guard_module) 
     assert guard_module._git_writes("env " * (limit + 1) + _V + " -m x") == {"commit", "push"}
     assert guard_module._git_writes("nice " * 5000 + _V + " -m x") == {"commit", "push"}
     assert guard_module._git_writes("sudo -u u " * 5000 + "git status") == {"commit", "push"}
+    assert guard_module._git_writes("env " * (limit + 1) + "ls") == {"commit", "push"}
+    assert guard_module._git_writes("env " * (limit + 1)) == {"commit", "push"}
+
+
+# What a run of wrappers can run: a git that bash spells only once it removes
+# quotes or a backslash, behind a nested shell, an `eval` or as the head itself
+# (`GIT` runs git on a case-insensitive file system), a literal git write or
+# read, and commands that are no git. The 3.2.0 reading, a recursion, read each
+# of them through any number of wrappers, until about a thousand overflowed it.
+_BEHIND_WRAPPERS = (
+    "bash -c 'g\"\"it commit -m x'",
+    "bash -c 'g\\it commit -m x'",
+    "bash -c 'gi\"\"t push origin main'",
+    "eval 'g\"\"it commit -m x'",
+    "eval 'g\"\"it ci'",
+    "G''IT commit -m x",
+    "bash -c 'git commit -m x'",
+    _V + " -m x",
+    "git push",
+    "git status",
+    "ls",
+    "",
+)
+
+
+@pytest.mark.parametrize("wrapper", ["env ", "command ", "nice -n 1 ", "sudo -u u "])
+def test_the_wrapper_bound_reads_no_write_as_less(guard_module, wrapper: str) -> None:
+    """Every command the unbounded reading denied is still denied. Within the
+    bound a run of wrappers reads as one wrapper does; past it the segment
+    counts as both verbs, a superset of what one wrapper reads. The bound's
+    first form searched the words past it for a literal `git`, so a git bash
+    spells only once it removes quotes read as no write there, and a commit
+    the unbounded reading denied went through."""
+    limit = guard_module._MAX_WRAPPERS
+    for payload in _BEHIND_WRAPPERS:
+        one = guard_module._git_writes(wrapper + payload)
+        for n in (2, limit):
+            assert guard_module._git_writes(wrapper * n + payload) == one, (n, payload)
+        for n in (limit + 1, limit + 2, 100, 990):
+            assert guard_module._git_writes(wrapper * n + payload) == {"commit", "push"}, (n, payload)
+
+
+def test_past_the_wrapper_bound_a_git_bash_unquotes_is_denied(tmp_path: Path, guard_module) -> None:
+    """Through the real hook: one wrapper past the bound, a commit or push whose
+    git bash spells only once it removes quotes is denied on a protected
+    branch, as the unbounded reading denied it."""
+    protected = _protected_repo(tmp_path)
+    over = guard_module._MAX_WRAPPERS + 1
+    for command in ("env " * over + "bash -c 'g\"\"it commit -m x'", "command " * over + "eval 'g\"\"it push'"):
+        code, out = _run_hook(_bash_event(protected, command), protected)
+        assert code == 2, command
+        assert "Protected-branch" in _reason(out)
+
+
+# The bound's verdict, and its first form's: a search of the unread words for a
+# literal `git`, which hands a segment without one to the matches-anywhere
+# scan.
+_WRAPPER_BOUND_VERDICT = "        if wrappers > _MAX_WRAPPERS:\n            return set(_UNRESOLVED_VERBS)\n"
+_WRAPPER_BOUND_GIT_SEARCH = (
+    "        if wrappers > _MAX_WRAPPERS:\n"
+    "            return set(_UNRESOLVED_VERBS) if any(_GIT_WORD.search(t) for t in tokens) else None\n"
+)
+
+
+def test_mutant_searching_past_the_bound_for_a_git_lets_the_commit_through(tmp_path: Path, guard_module) -> None:
+    """Twin: past the bound, search the unread words for a `git` instead of
+    counting both verbs, and the protected-branch commit above goes through."""
+    mutant = _write_mutant(tmp_path, "bound_git_search", _WRAPPER_BOUND_VERDICT, _WRAPPER_BOUND_GIT_SEARCH)
+    protected = _protected_repo(tmp_path)
+    command = "env " * (guard_module._MAX_WRAPPERS + 1) + "bash -c 'g\"\"it commit -m x'"
+    code, out = _run_mutant_hook(mutant, _bash_event(protected, command), protected)
+    assert code == 0
+    assert out is None
+
+
+def test_a_run_past_the_wrapper_bound_is_read_in_linear_time(guard_module) -> None:
+    """The bound's first form handed a run past it with no `git` word left in
+    it to the matches-anywhere scan, which restarts at every `git` word in
+    the segment, so `--git` words ahead of the run cost time quadratic in
+    their number (tens of seconds at this size) where the unbounded reading
+    took linear time. Past the bound the reading decides on its own now."""
+    import time
+
+    command = "env" + " --git" * 8000 + " env" * (guard_module._MAX_WRAPPERS + 1) + " ls"
+    start = time.perf_counter()
+    assert guard_module._git_writes(command) == {"commit", "push"}
+    elapsed = time.perf_counter() - start
+    assert elapsed < 10.0, f"took {elapsed:.1f}s"
 
 
 def test_the_wrapper_bound_is_one_constant_beside_the_wrappers(guard_module) -> None:
@@ -7128,29 +7216,131 @@ def test_a_story_pointer_that_is_not_utf8_denies_the_commit(tmp_path: Path) -> N
     assert "(unknown)" in _reason(out)
 
 
+# A NUL byte in a test-file path the checklist lists: git cannot take the path
+# as an argument, so the un-skip check raised (ValueError) instead of deciding.
+_NUL_LISTED = "\n  - 'tests/acceptance/a\x00b.spec.ts'"
+
+
+def _nul_listed_repo(tmp_path: Path) -> tuple[Path, dict]:
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={_ACCEPTANCE_REL: _CLEAN_ACCEPTANCE},
+        checklist=_listed_checklist(_NUL_LISTED),
+    )
+    return repo, _production_env(impl, tests_root)
+
+
+def test_a_git_write_whose_checks_raise_is_denied(tmp_path: Path) -> None:
+    """An error raised inside the checks a git write must pass ended the hook
+    with no decision, so the commit went past every check still to run. It is
+    denied now, naming the error. A command that is no git write never reaches
+    those checks, so the same broken checklist leaves it alone."""
+    repo, env = _nul_listed_repo(tmp_path)
+    code, out = _run_hook(_commit_event(repo), repo, env)
+    assert code == 2
+    reason = _reason(out)
+    assert reason.startswith("Commit/push guard: refusing this `git commit`, because checking it raised")
+    assert "(ValueError: embedded null byte)" in reason
+    assert "failing closed" in reason
+
+    code, out = _run_hook(_bash_event(repo, "ls -la"), repo, env)
+    assert code == 0
+    assert out is None
+
+    # Control: the same checklist with the path written plainly lets the
+    # green commit through, so the deny above is the error's.
+    (Path(env["ULTRACODE_TEST_ARTIFACTS"]) / _CHECKLIST_NAME).write_text(_listed_checklist(_LISTED_BLOCK))
+    code, out = _run_hook(_commit_event(repo), repo, env)
+    assert code == 0
+    assert out is None
+
+
+# The catch around the checks in main(), from its `try:` to the end of main().
+_CHECKS_CALL = "    _git_write_gates(cwd, verbs, unknown)\n"
+
+
+def _checks_catch(src: str) -> str:
+    start = src.index("    try:\n    " + _CHECKS_CALL)
+    end = src.index("\n\n\ndef _git_write_gates(", start)
+    return src[start : end + 1]
+
+
+def test_mutant_without_the_checks_catch_lets_a_raising_check_through(tmp_path: Path) -> None:
+    """Twin: drop the catch around the checks, and the same commit exits 1 with
+    no decision, which the client reads as no objection."""
+    mutant = _write_mutant(tmp_path, "no_checks_catch", _checks_catch(_hook_source()), _CHECKS_CALL)
+    repo, env = _nul_listed_repo(tmp_path)
+    code, out = _run_mutant_hook(mutant, _commit_event(repo), repo, env)
+    assert code == 1
+    assert out is None
+
+
+# Branch names the platform's decoding cannot read: a byte that is not UTF-8
+# (POSIX only, since Windows keeps ref names as UTF-16 file names), and a UTF-8
+# name that Windows' ANSI code page lacks.
+_UNDECODABLE_BRANCHES = [
+    pytest.param(
+        "release-\udcff",
+        marks=pytest.mark.skipif(sys.platform == "win32", reason="Windows ref names are UTF-16 file names"),
+        id="not-utf8",
+    ),
+    pytest.param("release-Ł", id="utf8-outside-cp1252"),
+]
+
+
+@pytest.mark.parametrize("branch", _UNDECODABLE_BRANCHES)
+def test_a_branch_name_the_platform_cannot_decode_is_still_read(tmp_path: Path, branch: str) -> None:
+    """The branch probe decoded git's output the platform's way, so a branch
+    name it could not decode raised before any check ran: the hook made no
+    decision, and the commit went through. The name is read as UTF-8 now, a
+    byte that is not UTF-8 kept as the environment keeps it, so it matches the
+    protected list that names it, and off that list the commit meets the
+    tests-ran check."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo, branch)
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_PROTECTED_BRANCHES": branch})
+    assert code == 2
+    assert "Protected-branch" in _reason(out)
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_PROTECTED_BRANCHES": "main"})
+    assert code == 2
+    assert "Tests-ran guard" in _reason(out)
+
+
 # Where SECURITY.md lists the failure behavior, it says what the classifier
-# does with a command it cannot read, and where the wrapper bound starts.
+# does with a command it cannot read, where the wrapper bound starts, and what
+# an error in the checks of a git write does.
 _SECURITY_CLASSIFY_FAILS_CLOSED = (
     "The reading of a Bash command that invariants 1 to 5 share fails closed too: a command the guard "
     "cannot classify, because reading it raised an error, is denied on any branch, and a segment that "
     "puts more than 32 exec wrappers (`env`, `nice`, `sudo`, and the others) ahead of its command counts "
-    "a `git` after them as both a commit and a push."
+    "as both a commit and a push, whatever that command is."
+)
+_SECURITY_CHECKS_FAIL_CLOSED = (
+    "So do their checks: an error raised while checking a commit or push (a NUL byte in a test-file "
+    "path the checklist lists, say) denies it."
 )
 _SECURITY_POINTER_FAILS_CLOSED = "an unreadable marker or story pointer (`.current-story`)"
+_SECURITY_FAIL_CLOSED_CLAUSES = (
+    _SECURITY_CLASSIFY_FAILS_CLOSED,
+    _SECURITY_CHECKS_FAIL_CLOSED,
+    _SECURITY_POINTER_FAILS_CLOSED,
+)
 
 
 def _security_states_the_classifier_fails_closed(text: str) -> bool:
     flat = " ".join(text.split())
-    return _SECURITY_CLASSIFY_FAILS_CLOSED in flat and _SECURITY_POINTER_FAILS_CLOSED in flat
+    return all(clause in flat for clause in _SECURITY_FAIL_CLOSED_CLAUSES)
 
 
 def test_security_md_lists_the_classifier_and_the_pointer_as_failing_closed() -> None:
     assert _security_states_the_classifier_fails_closed((_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("clause", [_SECURITY_CLASSIFY_FAILS_CLOSED, _SECURITY_POINTER_FAILS_CLOSED])
+@pytest.mark.parametrize("clause", _SECURITY_FAIL_CLOSED_CLAUSES)
 def test_security_predicate_rejects_a_dropped_clause(clause: str) -> None:
-    """Twin: the predicate rejects SECURITY.md with either rule taken out."""
+    """Twin: the predicate rejects SECURITY.md with any rule taken out."""
     live = " ".join((_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8").split())
     mutant = live.replace(clause, "")
     assert mutant != live, "the mutant must actually change the text"

@@ -31,8 +31,8 @@ A Stop with no current story at all (no ULTRACODE_STORY_ID and no
 .current-story marker, as before a project's first story's step 0 once the
 hooks are armed) is not a story's turn: nothing is counted and nothing is
 written, so the hook never leaves a stray .budget-unknown.json in the tree.
-An empty or unreadable marker still counts against "unknown", because a
-story may be in flight behind it.
+An empty or unreadable marker (one that is not UTF-8 included) still counts
+against "unknown", because a story may be in flight behind it.
 
 Every other Stop counts, including one that ends a response that only
 acknowledged a background task's notification. The Stop input carries the
@@ -108,9 +108,11 @@ def _current_story(impl: Path | None) -> str | None:
     if impl is not None:
         marker = impl / ".current-story"
         if marker.is_file():
+            # A marker that is not UTF-8 is unreadable too: raising here would
+            # end the hook before it counted the turn.
             try:
                 return marker.read_text(encoding="utf-8").strip() or "unknown"
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 return "unknown"
     return None
 

@@ -184,6 +184,19 @@ def test_an_empty_story_marker_still_counts_against_unknown(tmp_path: Path) -> N
     assert json.loads((impl / ".budget-unknown.json").read_text())["turns"] == 1
 
 
+def test_a_story_marker_that_is_not_utf8_still_counts_against_unknown(tmp_path: Path) -> None:
+    """A marker holding bytes that are not UTF-8 raised out of the hook, which
+    exited 1 before it counted the turn, so the ceiling could not see it. It
+    counts as an unreadable marker does now."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_bytes(b"\xff\xfeS1\n")
+    code, out = _run({"hook_event_name": "Stop", "cwd": str(tmp_path)}, tmp_path, _no_story_env(impl, "25"))
+    assert code == 0
+    assert out is None
+    assert json.loads((impl / ".budget-unknown.json").read_text())["turns"] == 1
+
+
 def test_token_env_vars_are_inert(tmp_path: Path) -> None:
     """A conductor that still injects the old token vars changes nothing.
 
