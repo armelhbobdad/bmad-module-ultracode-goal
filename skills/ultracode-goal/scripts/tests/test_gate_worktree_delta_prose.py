@@ -109,6 +109,20 @@ its own, frontmatter included. The gate now writes automate's text unchanged
 at the summary's name, before anything reads it, and logs that it did; the
 pins below also hold the maintainer's ruling that the step names no host's
 rule and adds no automate pass.
+
+The review of those fixes found three more, each pinned below with a mutant
+twin. The reused-server rule covered only a mutant the server alone loads, so
+a row whose spec also loaded the mutated file read through the main tree's
+server as a kill that was none, or as a gap; it now covers every row whose
+command runs through that server and whose mutated file the server loads. The
+own-server route turned reuse off and said the runner stops its server, but a
+server a launcher such as turbo starts outlives the run and keeps the port, so
+each later run stopped before any test and read as another test's kill; the
+route now checks the port before each run and keeps its runs apart, and a run
+that could not start its web server reads as one in which no test ran. And
+the twins of the rebuild's re-check, the honesty line and the cases that read
+0 failed only checked that a sentence was gone once it was replaced, so none
+of them could fail: each now feeds a weaker rule to a predicate its pin uses.
 """
 
 from __future__ import annotations
@@ -189,15 +203,29 @@ _REUSED_SAYS = (
     "to a port the probe reports free, with reuse turned off and the base URL pointed at that port.",
     "The runner takes it by its config flag (`--config <file>` for Playwright), never by an environment variable set "
     "in front of the command, which the command's allow rule does not match past.",
-    "Tell every assessor to run the runner with it, a mutation row's `command` included,",
+    "Tell every assessor to run the runner with it, a mutation row's `command` included, so that each run starts a "
+    "server from the worktree.",
+    # Its port free at each run: a server a launcher such as turbo starts outlives the run.
+    "Each run then needs that port free: with reuse off, a run that finds it taken stops before any test runs,",
+    "the runner stops only the process group its start command runs in, so a server that a launcher such as turbo "
+    "runs in a group of its own outlives the run and keeps the port.",
+    "So give the scratch config a start command that runs the server in that group where the project has one (the "
+    "package's own dev script rather than a task runner's),",
+    "check its URLs with the same probe before each assessor starts, moving each one that answers to a port the "
+    "probe reports free, and run no two assessors under it at once.",
+    "have it check them the same way before each `mutate_check.py` table it runs under it, moving a port that "
+    "answers before it runs the table.",
+    "A row whose run stopped before any test reads as one that cannot run",
     # Otherwise the limit, in every brief, automate's included.
     "Otherwise tell every assessor, automate included, in its brief, which URL answers",
     "and that no mutation in the worktree reaches it.",
-    "Tell automate, too, that it writes no mutation row whose mutant only a run through that server would load:",
+    "Tell automate, too, that it writes no mutation row whose command runs through that server and whose mutated "
+    "file that server would load, even when the worktree's own processes load that file too",
     "and a risk on a P0 criterion that no such row can measure is one it leaves unmeasured",
     "Any such row it runs, one behind a carried `gate-gap:` line or a previous backfill included, is a row that "
     "cannot run, whatever `mutate_check.py` prints",
-    "so it is no gap, no test is backfilled for it and no `unkilled` line is logged from it.",
+    "so its `GREEN` is no gap and its red no kill, no test is backfilled for it and no `unkilled` line is logged "
+    "from it.",
 )
 
 
@@ -246,8 +274,13 @@ def test_reused_server_predicate_rejects_the_three_caveat_section():
     [
         # A GREEN through the reused server read by mutate_check.py's word: a false gap, a backfill, an `unkilled`.
         ("is a row that cannot run, whatever `mutate_check.py` prints", "is read by what `mutate_check.py` prints"),
-        ("so it is no gap, no test is backfilled for it and no `unkilled` line is logged from it.",
-         "so it is a gap like any other."),
+        ("so its `GREEN` is no gap and its red no kill, no test is backfilled for it and no `unkilled` line is logged "
+         "from it.", "so it is a gap like any other."),
+        # A red through it read as a kill: a spec that loads the mutated file too goes red against the server's tree.
+        ("its `GREEN` is no gap and its red no kill,", "its `GREEN` is no gap,"),
+        # Only a mutant the server alone loads kept out of automate's rows (the first wording): a false kill.
+        ("whose command runs through that server and whose mutated file that server would load, even when the "
+         "worktree's own processes load that file too", "whose mutant only a run through that server would load"),
         # Checked once only: a server started after the first check goes unseen by trace, NFR and test review.
         ("before the first run in the worktree and again after the rebuild", "before the first run in the worktree"),
         # The operator's server stopped by the run.
@@ -258,6 +291,22 @@ def test_reused_server_predicate_rejects_the_three_caveat_section():
         ("with reuse turned off and the base URL", "with the base URL"),
         ("never by an environment variable set in front of the command, which the command's allow rule does not match "
          "past", "or by setting `BASE_URL` in front of the command"),
+        # The first wording's promise that the runner stops its server, which a launcher such as turbo breaks.
+        ("so that each run starts a server from the worktree.", "so the runner starts and stops a server from the "
+         "worktree itself."),
+        # The scratch port checked once: a server an earlier run left up keeps it, and each later run stops before
+        # any test, which read as another test's kill.
+        ("before each assessor starts, moving each one that answers to a port the probe reports free",
+         "before the first assessor starts"),
+        ("before each `mutate_check.py` table it runs under it, moving a port that answers before it runs the table",
+         "before its first `mutate_check.py` table"),
+        ("So give the scratch config a start command that runs the server in that group where the project has one "
+         "(the package's own dev script rather than a task runner's), check", "So check"),
+        # Two assessors at once on the one port: the second runs no test.
+        (", and run no two assessors under it at once.", "."),
+        # A run that stopped before any test read by mutate_check.py's word.
+        (" A row whose run stopped before any test reads as one that cannot run (\"A reported gap stays open until a "
+         "later pass measures it closed\").", ""),
         # Automate's brief without the limit, though it is the assessor that runs the mutants.
         ("Otherwise tell every assessor, automate included, in its brief,",
          "Otherwise tell trace, NFR and test review, in their briefs,"),
@@ -272,45 +321,106 @@ def test_reused_server_predicate_rejects_a_one_clause_mutant(old, new):
     assert not _owns_a_reused_server(mutant)
 
 
+def test_the_own_server_route_no_longer_promises_the_runner_stops_its_server():
+    """A server that turbo starts runs in a process group of its own, which
+    Playwright's teardown never stops."""
+    assert "starts and stops a server from the worktree itself" not in GATE
+
+
 _REUSED_CANNOT_RUN = (
-    "A row whose mutant only a run through a server the gate set reuses would load cannot run either, whatever "
-    "`mutate_check.py` prints, and the two bullets above do not read it (\"A server the gate set reuses does not "
-    "follow the commit\", under \"Measure the commit, not the working tree\"): that run measures the tree the server "
-    "was started from and never the mutant, so its `GREEN` is no gap, no test is backfilled for it and no `unkilled` "
-    "line is logged from it."
+    "A row whose command runs through a server the gate set reuses, and whose mutated file that server would load, "
+    "cannot run either, even when the worktree's own processes load that file too, whatever `mutate_check.py` "
+    "prints, and the two bullets above do not read it (\"A server the gate set reuses does not follow the commit\", "
+    "under \"Measure the commit, not the working tree\"): that server serves the tree it was started from and never "
+    "the mutant, so whatever the run reads, its `GREEN` is no gap and its red no kill, no test is backfilled for it, "
+    "no `unkilled` line is logged from it and no line closes on it."
 )
+# The rows the rule covers: every row run through the reused server whose
+# mutated file the server loads, whether or not the worktree's own processes
+# (the spec) load that file too.
+_REUSED_ROW = (
+    "A row whose command runs through a server the gate set reuses, and whose mutated file that server would load, "
+    "cannot run either,"
+)
+_REUSED_ROW_SHARED = " even when the worktree's own processes load that file too,"
+# The first wording, which covered only a mutant the server alone loads.
+_REUSED_ROW_ONLY = "A row whose mutant only a run through a server the gate set reuses would load cannot run either,"
+_REUSED_ROW_UNREAD = "whatever `mutate_check.py` prints, and the two bullets above do not read it"
 
 
-def _reading_a_served_row(para: str, status: str, detail: str, through_reused: bool) -> str | None:
-    """How gate.md reads a row: one whose mutant only a run through a reused
-    server would load by the cannot-run bullet, when that bullet names such a
-    row, before the two bullets above it; any other row as `_reading` does."""
+def _reused_rule_covers(para: str, spec_loads_mutant: bool) -> bool:
+    """Whether the cannot-run bullet takes a row run through a reused server,
+    whose mutated file that server loads, away from the two bullets above it:
+    any such row under the rule's wording, and under the first wording only
+    one whose mutant the worktree's own processes do not load as well."""
     bullet = next((line for line in para.splitlines() if line.startswith("- A row cannot run when it reads")), "")
-    if through_reused and _REUSED_CANNOT_RUN in re.sub(r"\s+", " ", bullet):
+    flat = re.sub(r"\s+", " ", bullet)
+    if _REUSED_ROW_UNREAD not in flat:
+        return False
+    if _REUSED_ROW in flat:
+        return not spec_loads_mutant or _REUSED_ROW + _REUSED_ROW_SHARED in flat
+    return _REUSED_ROW_ONLY in flat and not spec_loads_mutant
+
+
+def _reading_a_served_row(
+    para: str, status: str, detail: str, through_reused: bool, spec_loads_mutant: bool = False
+) -> str | None:
+    """How gate.md reads a row: one run through a reused server by the
+    cannot-run bullet, when that bullet covers it, before the two bullets
+    above it; any other row as `_reading` does."""
+    if through_reused and _reused_rule_covers(para, spec_loads_mutant):
         return "cannot run"
     return _reading(para, status, detail)
 
 
-def _served_rows(tmp_path: Path) -> tuple[dict, dict]:
-    """Measured on `mutate_check.py`: one row whose command fetches a page from
-    a server started from another tree (the main tree's dev server), and the
-    same row through a server started from the worktree."""
+# A spec's stand-in: a script the row's command runs in the worktree, which
+# fetches pages from the server whose port it is given, and prints a pytest-
+# shaped failure. No proxy: a request sent through one set in the environment
+# would not reach this machine's 127.0.0.1.
+_SPEC_HEAD = (
+    "import sys\nimport urllib.request\n\n"
+    "opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))\n\n\n"
+    "def page(name):\n    return opener.open(f'http://127.0.0.1:{sys.argv[1]}/{name}').read().decode()\n\n\n"
+    "def fail(test):\n    print(f'FAILED {test}')\n    print('1 failed')\n    sys.exit(1)\n\n\n"
+)
+_SERVED = {
+    # Only the server loads the mutated file: through the main tree's server a kill reads `GREEN`.
+    "server-only": (
+        {"app.txt": "ok\n"},
+        "if page('app.txt') != 'ok\\n':\n    fail('test_app_serves_ok')\n",
+        {"file": "app.txt", "anchor": "ok\n", "replacement": "broken\n", "expect_red": "test_app_serves_ok"},
+    ),
+    # The spec reads its expected text from the mutated file too, so it can tell no mutant of it: through the
+    # main tree's server, which serves the text unmutated, that mutant reads killed.
+    "false-kill": (
+        {"msg.txt": "hello\n"},
+        "if page('msg.txt') != open('msg.txt', encoding='utf-8').read():\n    fail('test_page_shows_message')\n",
+        {"file": "msg.txt", "anchor": "hello\n", "replacement": "bye\n", "expect_red": "test_page_shows_message"},
+    ),
+    # The spec reads the page's title from the mutated file, and its price only through the server: through the
+    # main tree's server a mutant of the price reads `GREEN`.
+    "false-gap": (
+        {"app.txt": "title=Shop\nprice=9.99\n"},
+        "title = open('app.txt', encoding='utf-8').read().splitlines()[0]\n"
+        "shown = page('app.txt').splitlines()\n"
+        "if shown[0] != title or shown[1] != 'price=9.99':\n    fail('test_price_shown')\n",
+        {"file": "app.txt", "anchor": "price=9.99\n", "replacement": "price=0.00\n", "expect_red": "test_price_shown"},
+    ),
+}
+
+
+def _served_rows(tmp_path: Path, case: str = "server-only") -> tuple[dict, dict]:
+    """Measured on `mutate_check.py`: one row whose command runs a spec
+    against a server started from another tree (the main tree's dev server),
+    and the same row through a server started from the worktree."""
     mutate_check = _load_script("mutate_check")
+    files, spec, row = _SERVED[case]
     main_tree, worktree = tmp_path / "main", tmp_path / "worktree"
     for tree in (main_tree, worktree):
         tree.mkdir()
-        (tree / "app.txt").write_text("ok\n", encoding="utf-8", newline="\n")
-    (worktree / "check_app.py").write_text(
-        "import sys\nimport urllib.request\n\n"
-        # No proxy: a request sent through one set in the environment would not reach this machine's 127.0.0.1.
-        "opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
-        "body = opener.open(f'http://127.0.0.1:{sys.argv[1]}/app.txt').read()\n"
-        "if body != b'ok\\n':\n"
-        "    print('FAILED test_app_serves_ok')\n    print('1 failed')\n    sys.exit(1)\n"
-        "print('1 passed')\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+        for name, text in files.items():
+            (tree / name).write_text(text, encoding="utf-8", newline="\n")
+    (worktree / "check_app.py").write_text(_SPEC_HEAD + spec + "print('1 passed')\n", encoding="utf-8", newline="\n")
 
     class _Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *args):
@@ -325,16 +435,7 @@ def _served_rows(tmp_path: Path) -> tuple[dict, dict]:
     try:
         reused, own = (
             mutate_check.run_table(
-                [
-                    {
-                        "file": "app.txt",
-                        "anchor": "ok\n",
-                        "replacement": "broken\n",
-                        "command": f'"{sys.executable}" check_app.py {server.server_address[1]}',
-                        "expect_red": "test_app_serves_ok",
-                    }
-                ],
-                worktree,
+                [dict(row, command=f'"{sys.executable}" check_app.py {server.server_address[1]}')], worktree
             )[0][0]
             for server in servers
         )
@@ -370,30 +471,121 @@ def test_without_the_reused_server_rule_that_row_reads_as_a_false_gap(tmp_path):
     assert _reading_a_served_row(mutant, reused["status"], reused["detail"], through_reused=True) == "gap"
 
 
+# What the run through the main tree's server reads, and what the same row reads through the worktree's own.
+_SHARED_READINGS = {"false-kill": ("killed", "gap"), "false-gap": ("gap", "killed")}
+
+
+@pytest.mark.parametrize("case", sorted(_SHARED_READINGS))
+def test_a_row_whose_spec_loads_the_mutant_too_cannot_run_through_a_reused_server(tmp_path, case):
+    """A mutant that both the worktree's spec and the reused server load: the
+    spec runs on the mutant, the server on the main tree's file. Read by the
+    two bullets above the cannot-run one, a mutant no test can tell read
+    killed, so its gap was never backfilled or a carried line closed, and a
+    mutant the spec does kill read as a gap, backfilled or logged
+    `unkilled`."""
+    reused, own = _served_rows(tmp_path, case)
+    para = _bound()
+    through_reused, through_own = _SHARED_READINGS[case]
+    assert _reading(para, reused["status"], reused["detail"]) == through_reused, reused
+    assert _reading(para, own["status"], own["detail"]) == through_own, own
+    assert (
+        _reading_a_served_row(para, reused["status"], reused["detail"], through_reused=True, spec_loads_mutant=True)
+        == "cannot run"
+    )
+
+
+@pytest.mark.parametrize("case", sorted(_SHARED_READINGS))
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The first wording: a mutant only the server loads.
+        (_REUSED_ROW + _REUSED_ROW_SHARED, _REUSED_ROW_ONLY),
+        # The exception turned round: a row whose spec loads the file too read by the two bullets above.
+        (_REUSED_ROW_SHARED, " unless the worktree's own processes load that file too,"),
+    ],
+    ids=["only-the-server", "unless-the-spec"],
+)
+def test_reused_rule_predicate_rejects_a_rule_for_a_mutant_only_the_server_loads(tmp_path, case, old, new):
+    """The twin: under a rule that keeps out of the two bullets only a row
+    whose mutant the server alone loads, that row still cannot run, but the
+    row whose spec loads the mutant too is read by them again, as the run
+    through the main tree's server measured it."""
+    reused, _ = _served_rows(tmp_path, case)
+    para = _bound()
+    mutant = para.replace(old, new)
+    assert mutant != para, "the mutant must actually change the text"
+    assert _reading_a_served_row(mutant, "GREEN", "", through_reused=True) == "cannot run"
+    reading = _reading_a_served_row(
+        mutant, reused["status"], reused["detail"], through_reused=True, spec_loads_mutant=True
+    )
+    assert reading == _SHARED_READINGS[case][0]
+
+
+# The rebuild checks the reused URLs again: after the worktree is set up again,
+# since acting on a port means changing the inputs it copies in, and before any
+# of the assessors that run after automate starts.
 _REBUILD_RECHECKS = (
     "Then check the URLs the gate set may reuse again (\"A server the gate set reuses does not follow the commit\" "
     "above), and act on what it finds, as that caveat says, before trace, NFR and test review start: a server may "
     "have started since the first check, one started from the old worktree among them, which outlives the "
     "worktree's removal."
 )
+_REBUILD_RECHECK_SAYS = (
+    "Then check the URLs the gate set may reuse again",
+    "and act on what it finds, as that caveat says,",
+    "before trace, NFR and test review start:",
+    "a server may have started since the first check, one started from the old worktree among them,",
+)
+
+
+def _rechecks_reused_servers(para: str) -> bool:
+    flat = re.sub(r"\s+", " ", para)
+    if not all(phrase in flat for phrase in _REBUILD_RECHECK_SAYS):
+        return False
+    return flat.index(_REBUILD_RECHECK_SAYS[0]) > flat.index("copy the same untracked inputs in again")
 
 
 def test_the_rebuild_checks_the_reused_servers_again():
+    assert _rechecks_reused_servers(_rebuild())
     assert _REBUILD_RECHECKS in re.sub(r"\s+", " ", _rebuild())
 
 
-def test_rebuild_predicate_rejects_a_rebuild_with_no_second_check():
-    """The mutant twin: a rebuild that checks nothing again lets trace, NFR and
-    test review run through a server started after the first check."""
-    para = _rebuild()
-    mutant = para.replace(" " + _REBUILD_RECHECKS, "")
+_REBUILD_OPENER = "**Rebuild the worktree once automate has finished (production).** "
+_REBUILD_MUTANTS = {
+    # NFR and test review run through a server started since the first check.
+    "trace-only": lambda para: para.replace("before trace, NFR and test review start:", "before trace starts:"),
+    # A check whose finding changes nothing.
+    "no-action": lambda para: para.replace("and act on what it finds, as that caveat says, ", ""),
+    # A check only where the first one found a server: one started since goes unseen.
+    "only-if-found": lambda para: para.replace(
+        "Then check the URLs the gate set may reuse again",
+        "Then, when the first check found one answering, check the URLs the gate set may reuse again",
+    ),
+    # The check moved ahead of the new worktree's setup, whose inputs, copied in again, undo a port it moved.
+    "before-the-setup": lambda para: para.replace(" " + _REBUILD_RECHECKS, "").replace(
+        _REBUILD_OPENER, _REBUILD_OPENER + _REBUILD_RECHECKS + " "
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_REBUILD_MUTANTS))
+def test_rebuild_predicate_rejects_a_weaker_second_check(name):
+    """The mutant twin: a re-check that leaves an assessor after automate
+    running through a server the check did not see, or did not act on."""
+    para = re.sub(r"\s+", " ", _rebuild())
+    mutant = _REBUILD_MUTANTS[name](para)
     assert mutant != para, "the mutant must actually change the text"
-    assert _REBUILD_RECHECKS not in re.sub(r"\s+", " ", mutant)
+    assert not _rechecks_reused_servers(mutant)
 
 
 _HONEST_ABOUT_THE_SERVER = (
     "When a runner reused a server the gate did not start, the line also names its URL, the folder it ran from when "
     "the probe could read one, and what it left unmeasured."
+)
+_HONEST_SAYS = (
+    "When a runner reused a server the gate did not start, the line also names its URL,",
+    "the folder it ran from when the probe could read one",
+    "and what it left unmeasured.",
 )
 
 
@@ -401,17 +593,35 @@ def _honesty_line(section: str) -> str:
     return _paragraph(section, "Record in `.decision-log.md`, once per gated story")
 
 
+def _honest_about_a_reused_server(section: str) -> bool:
+    flat = re.sub(r"\s+", " ", _honesty_line(section))
+    return all(phrase in flat for phrase in _HONEST_SAYS)
+
+
 def test_worktree_honesty_line_names_a_reused_server():
+    assert _honest_about_a_reused_server(_worktree_section())
     assert _HONEST_ABOUT_THE_SERVER in _honesty_line(_worktree_section())
 
 
-def test_honesty_predicate_rejects_a_line_silent_on_the_server():
-    """The mutant twin: unmutated browser evidence through another tree's
-    server, recorded as the worktree's."""
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # Unmutated browser evidence through another tree's server, recorded with no word of what it missed.
+        (", and what it left unmeasured.", "."),
+        # A server named without the tree it measured.
+        (" the folder it ran from when the probe could read one,", ""),
+        # The line names the gate's own server, the one that follows the commit, and not the reused one.
+        ("When a runner reused a server the gate did not start,", "When the gate gave the worktree its own server,"),
+    ],
+    ids=["no-unmeasured", "no-folder", "wrong-server"],
+)
+def test_honesty_predicate_rejects_a_line_that_hides_what_the_server_measured(old, new):
+    """The mutant twin: a line that keeps the sentence but drops what makes
+    evidence through another tree's server read as that server's."""
     section = _worktree_section()
-    mutant = section.replace(" " + _HONEST_ABOUT_THE_SERVER, "")
+    mutant = section.replace(old, new)
     assert mutant != section, "the mutant must actually change the text"
-    assert _HONEST_ABOUT_THE_SERVER not in _honesty_line(mutant)
+    assert not _honest_about_a_reused_server(mutant)
 
 
 _TIP_SAYS = (
@@ -452,8 +662,14 @@ _REUSED_FRAGMENT_SAYS = (
     "The new `scripts/probe_servers.py`, run with `uv run`,",
     "The gate never stops such a server.",
     "otherwise it tells every assessor, automate included, what the server limits.",
-    "a row it runs through that server reads as one that cannot run, whatever `mutate_check.py` prints, rather than "
-    "as a `GREEN` gap: no test is backfilled for it and no `unkilled` line is logged from it,",
+    "checks that the port is still free before each assessor runs under it, and automate before each mutation table,",
+    "and runs no two assessors under it at once;",
+    "Automate then writes no mutation row whose command runs through that server and whose mutated file that server "
+    "would load, even when the worktree's own spec loads that file too,",
+    "such a row it runs reads as one that cannot run, whatever `mutate_check.py` prints, rather than as a `GREEN` gap "
+    "or a kill: no test is backfilled for it, no `unkilled` line is logged from it and no line closes on it,",
+    "`mutate_check.py` now reads a Playwright run that could not start its web server (its port already used, or its "
+    "start command failing or timing out) as one in which no test ran, a row that cannot run, rather than as a kill.",
 )
 
 
@@ -482,6 +698,14 @@ def test_the_reused_server_fragment_says_what_the_prose_does():
         ("The gate never stops such a server.", "The gate stops such a server."),
         (", automate included,", ""),
         ("type: fixed", "type: changed"),
+        # The first wording: only a mutant the server alone loads, and a row through it read as no gap but a kill.
+        ("whose command runs through that server and whose mutated file that server would load, even when the "
+         "worktree's own spec loads that file too,", "whose mutant only that server would load,"),
+        ("rather than as a `GREEN` gap or a kill:", "rather than as a `GREEN` gap:"),
+        # The own-server route's port checked once, and its runs let overlap.
+        ("before each assessor runs under it, and automate before each mutation table,", "before the first run,"),
+        (", and runs no two assessors under it at once;", ";"),
+        ("as one in which no test ran, a row that cannot run, rather than as a kill.", "as a kill."),
     ],
 )
 def test_reused_fragment_predicate_rejects_a_sentence_that_contradicts_the_prose(old, new):
@@ -3188,28 +3412,107 @@ def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture):
     assert _ZERO_FAILED_CASES in re.sub(r"\s+", " ", _bound())
 
 
-@pytest.mark.parametrize(
-    ("old", "new"),
-    [
-        (_ZERO_FAILED_CASES, _ZERO_FAILED_CASES_BEFORE),
-        ("cannot collect a test module or class or load", "cannot collect a test module or load"),
-        ("or jest, vitest or Node's test runner cannot load", "or jest or vitest cannot load"),
-        (", or when a Node test file's process exits non-zero after the row's test passes,", ","),
-        ("after the row's test passes", "after its tests pass"),
-        ("; a Node test file's process that exits or crashes during a test, before Node reports the row's test, still "
-         "reads as a kill, since the row's `expect_red` then never appears beside a failure token)", ")"),
-    ],
-    ids=["3.2.0", "no-class", "no-node", "no-exit", "any-test-passing", "no-crash"],
+_RUNNER = r"(?:jest|vitest|Node's test runner)"
+_ZERO_FAILED_ALL = frozenset(
+    {
+        "a test module pytest cannot collect",
+        "a test class pytest cannot collect",
+        "a conftest.py pytest cannot load",
+        "a test file jest cannot load",
+        "a test file vitest cannot load",
+        "a test file Node's test runner cannot load",
+        "a Node test file's process that exits non-zero after the row's test passes",
+    }
 )
-def test_zero_failed_pin_rejects_a_bullet_that_drops_a_case(old, new):
-    """The twin: the cannot-run bullet's list of what reads 0 failed, read as
-    3.2.0 wrote it, with one of #179's cases dropped, with an exit after any
-    test passes in place of the row's own, or without the process that dies
-    during a test, fails the pin."""
-    para = re.sub(r"\s+", " ", _bound())
+_DIES_DURING_A_TEST = (
+    "a Node test file's process that exits or crashes during a test, before Node reports the row's test, still "
+    "reads as a kill"
+)
+
+
+def _zero_failed_parenthesis(para: str) -> str | None:
+    """The cannot-run bullet's parenthesis after the 0 failed detail."""
+    bullet = next((line for line in para.splitlines() if line.startswith("- A row cannot run when it reads")), "")
+    found = re.search(r"with the detail that the output's own count says 0 failed \(([^()]*)\)", bullet)
+    return None if found is None else found.group(1)
+
+
+def _reads_zero_failed(para: str) -> set[str]:
+    """What the cannot-run bullet names as a harness error a mutant reads 0
+    failed through: its parenthesis after the 0 failed detail, read case by
+    case, and nothing while it no longer says that no other test fails (a
+    kill beside such an error is still a kill)."""
+    text = _zero_failed_parenthesis(para)
+    if text is None or "and no other test fails" not in text:
+        return set()
+    cases = set()
+    pytest_case = re.search(r"pytest then cannot collect a test module( or class)?( or load a conftest\.py)?", text)
+    if pytest_case:
+        cases.add("a test module pytest cannot collect")
+        if pytest_case.group(1):
+            cases.add("a test class pytest cannot collect")
+        if pytest_case.group(2):
+            cases.add("a conftest.py pytest cannot load")
+    runners = re.search(rf"\bor ({_RUNNER}(?:(?:, | or ){_RUNNER})*) cannot load a test file", text)
+    if runners:
+        cases.update(f"a test file {runner} cannot load" for runner in re.split(r", | or ", runners.group(1)))
+    if "when a Node test file's process exits non-zero after the row's test passes" in text:
+        cases.add("a Node test file's process that exits non-zero after the row's test passes")
+    return cases
+
+
+def _keeps_a_dying_process_a_kill(para: str) -> bool:
+    """Whether that parenthesis says a Node test file's process that exits or
+    crashes during a test, before Node reports the row's test, still reads as
+    a kill, as `mutate_check.py` reads it."""
+    text = _zero_failed_parenthesis(para)
+    return text is not None and _DIES_DURING_A_TEST in text
+
+
+def test_the_cannot_run_bullet_names_each_case_that_reads_0_failed():
+    """Each harness error `mutate_check.py` reads 0 failed (pinned in
+    test_mutate_check.py, the measured ones here too): pytest's module, class
+    and conftest.py, a test file jest, vitest or Node cannot load, and a Node
+    test file whose process exits non-zero after the row's test passes. A Node
+    test file whose process dies during a test still reads as a kill."""
+    assert _reads_zero_failed(_bound()) == _ZERO_FAILED_ALL
+    assert _keeps_a_dying_process_a_kill(_bound())
+
+
+_EXIT_CASE = "a Node test file's process that exits non-zero after the row's test passes"
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "dropped", "dying_kill"),
+    [
+        (_ZERO_FAILED_CASES, _ZERO_FAILED_CASES_BEFORE,
+         {"a test class pytest cannot collect", "a test file Node's test runner cannot load", _EXIT_CASE}, False),
+        ("cannot collect a test module or class or load", "cannot collect a test module or load",
+         {"a test class pytest cannot collect"}, True),
+        ("or jest, vitest or Node's test runner cannot load", "or jest or vitest cannot load",
+         {"a test file Node's test runner cannot load"}, True),
+        (", or when a Node test file's process exits non-zero after the row's test passes,", ",", {_EXIT_CASE}, True),
+        # An exit after any test passes, in place of the row's own, read a kill 0 failed.
+        ("after the row's test passes", "after its tests pass", {_EXIT_CASE}, True),
+        # A load failure beside a real kill read 0 failed too: the kill lost.
+        (", and no other test fails;", ";", _ZERO_FAILED_ALL, True),
+        # A process that dies during a test read 0 failed, a gap only ever logged `unmeasured`.
+        ("; a Node test file's process that exits or crashes during a test, before Node reports the row's test, still "
+         "reads as a kill, since the row's `expect_red` then never appears beside a failure token)", ")", set(), False),
+    ],
+    ids=["3.2.0", "no-class", "no-node", "no-exit", "any-test-passing", "beside-a-kill", "no-crash"],
+)
+def test_zero_failed_predicate_rejects_a_bullet_that_drops_a_case(old, new, dropped, dying_kill):
+    """The twin: the cannot-run bullet as 3.2.0 wrote it, or with one of
+    #179's cases dropped, with an exit after any test passes in place of the
+    row's own, without the process that dies during a test, or one that no
+    longer keeps a kill beside a harness error, reads every other case as
+    before and not the one it dropped."""
+    para = _bound()
     mutant = para.replace(old, new)
     assert mutant != para, "the mutant must actually change the text"
-    assert _ZERO_FAILED_CASES not in mutant
+    assert _reads_zero_failed(mutant) == _ZERO_FAILED_ALL - dropped
+    assert _keeps_a_dying_process_a_kill(mutant) is dying_kill
 
 
 @pytest.mark.parametrize(
@@ -3250,6 +3553,51 @@ def test_a_red_with_no_failed_test_is_a_row_that_cannot_run():
     )
     assert status == "MISATTRIBUTED"
     assert _reading(_bound(), status, detail) == "killed"
+
+
+_WEB_SERVER_CAPTURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_web_server"
+_NO_TEST_RAN = (
+    "or `MISATTRIBUTED` with the detail that no test ran (a harness error too: the runner stopped before any test "
+    "because it could not start its web server, its port taken, by a server an earlier run left up among others, or "
+    "its start command failing, whether or not the mutant made it fail)"
+)
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        "playwright-port-already-used",
+        "playwright-start-command-failed",
+        "playwright-start-command-exited-early",
+        "playwright-start-timed-out",
+    ],
+)
+def test_a_run_that_could_not_start_its_web_server_is_a_row_that_cannot_run(capture):
+    """Measured on `mutate_check.py`, over real Playwright output (#182): with
+    reuse off, a server an earlier run left up (one a launcher such as turbo
+    started, which outlives the run) takes the port, and the run stops before
+    any test. With no count and no test named, it read as a missing name, a
+    kill by another test, so a mutant no test can tell read killed; it now
+    reads that no test ran, which the cannot-run bullet names."""
+    mutate_check = _load_script("mutate_check")
+    output = (_WEB_SERVER_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
+    status, detail, _ = mutate_check._classify_red(output, "page is served")
+    assert status == "MISATTRIBUTED"
+    assert _reading(_bound(), status, detail) == "cannot run"
+    assert _NO_TEST_RAN in re.sub(r"\s+", " ", _bound())
+
+
+def test_without_the_web_server_case_such_a_row_is_left_unread():
+    """The twin: the cannot-run bullet without that case leaves such a row in
+    no state, as `test_every_classification_mutate_check_prints_has_a_reading`
+    forbids for a status."""
+    mutate_check = _load_script("mutate_check")
+    output = (_WEB_SERVER_CAPTURES / "playwright-port-already-used.txt").read_text(encoding="utf-8")
+    status, detail, _ = mutate_check._classify_red(output, "page is served")
+    para = _bound()
+    mutant = para.replace(", " + _NO_TEST_RAN, "")
+    assert mutant != para, "the mutant must actually change the text"
+    assert _reading(mutant, status, detail) is None
 
 
 def test_closure_predicate_rejects_the_killed_only_wording():

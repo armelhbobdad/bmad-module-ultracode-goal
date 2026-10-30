@@ -44,11 +44,14 @@ Classification, per row:
                      reds are surfaced rather than silently absorbed.
   - MISATTRIBUTED    red, but the output's own count says 0 failed (checked
                      first: a collection or harness error, so no test the row
-                     names went red), or the expected case never appears
-                     beside a failure token: something failed, and it was not
-                     the observer this row claims to test. The name must sit
-                     on a line that speaks of failure, because verbose
-                     reporters echo PASSING names.
+                     names went red), or no test ran (the runner counted none
+                     and named none, and reported that it could not start its
+                     web server: Playwright's `config.webServer` errors, a
+                     port already used among them), or the expected case
+                     never appears beside a failure token: something failed,
+                     and it was not the observer this row claims to test. The
+                     name must sit on a line that speaks of failure, because
+                     verbose reporters echo PASSING names.
   - STALE / NOT UNIQUE / UNDECODABLE  the anchor (or the file) did not hold;
                      nothing was mutated for the row.
 
@@ -661,6 +664,16 @@ def _named_in_failure_context(lines: list[str], expect_red: str) -> bool:
     return False
 
 
+# Playwright's report that it could not start a `config.webServer` entry, and
+# so ran no test: its port is already used (`<url> is already used, make sure
+# that nothing is running on the port/url ...`, which a server an earlier run
+# left up causes when reuse is off), its start command exited (`Process from
+# config.webServer was not able to start. Exit code: N`, or `... exited
+# early.`) or it never answered (`Timed out waiting <N>ms from
+# config.webServer.`). It prints no test and no count.
+_WEB_SERVER_FAILED_RE = re.compile(r"^\s*Error: .*\bconfig\.webServer\b")
+
+
 def _classify_red(output: str, expect_red: str, root: Path | None = None) -> tuple[str, str, bool]:
     """(status, detail, is_finding) for a red run. `root` is the directory the
     command ran in, so a bare name in pytest's short summary can be checked."""
@@ -677,7 +690,18 @@ def _classify_red(output: str, expect_red: str, root: Path | None = None) -> tup
             "harness error, not the observer",
             True,
         )
-    if not _named_in_failure_context(lines, expect_red):
+    named = _named_in_failure_context(lines, expect_red)
+    if not named and count is None and any(_WEB_SERVER_FAILED_RE.match(line) for line in lines):
+        # A runner that stopped before any test, because it could not start
+        # its web server, counted none and named none: read as a missing name,
+        # it looked like some other test's kill.
+        return (
+            "MISATTRIBUTED",
+            "red, but no test ran - the runner could not start its web server, "
+            "a harness error, not the observer",
+            True,
+        )
+    if not named:
         return (
             "MISATTRIBUTED",
             f"red, but {expect_red!r} never appears beside a failure token - "

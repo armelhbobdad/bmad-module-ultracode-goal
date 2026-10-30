@@ -642,6 +642,75 @@ def test_a_test_file_jest_or_vitest_cannot_load_is_no_kill(tmp_path, capture):
     assert proc.returncode == 1
 
 
+# --- A runner that could not start its web server ------------------------------
+#
+# Real output of Playwright 1.58.2 (Node 24.21.0, Linux) under a config whose
+# `webServer` entry has `reuseExistingServer: false`, captured outside CI:
+#   playwright-port-already-used             another server held the port
+#   playwright-start-command-failed          the start command exited 1
+#   playwright-start-command-exited-early    the start command exited 0
+#   playwright-start-timed-out               the start command never answered
+# Playwright stops before any test and prints no count (#182: a server that a
+# launcher such as turbo starts outlives the run that started it, so with reuse
+# off each later run of a mutation table found the port taken).
+
+WEB_SERVER_FAILURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_web_server"
+_NO_TEST_RAN = "red, but no test ran - the runner could not start its web server, a harness error, not the observer"
+_WEB_SERVER_CAPTURES = [
+    "playwright-port-already-used",
+    "playwright-start-command-failed",
+    "playwright-start-command-exited-early",
+    "playwright-start-timed-out",
+]
+
+
+@pytest.mark.parametrize("capture", _WEB_SERVER_CAPTURES)
+def test_a_runner_that_could_not_start_its_web_server_ran_no_test(tmp_path, capture):
+    """No test ran, so no test killed the mutant. With no count and no test
+    named, the row read `MISATTRIBUTED` as a missing name, which the gate reads
+    as another test's kill: a mutant no test can tell read killed."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((WEB_SERVER_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="page is served")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NO_TEST_RAN)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("printed", "expected"),
+    [
+        # A test the run names beside the error went red: the kill stands, uncounted.
+        ("  1) page is served FAILED\n", ("KILLED+others", "'page is served' went red; failure count unparseable")),
+        # A count read beside it: some test ran and failed, and it was not this row's.
+        ("  1 failed\n", ("MISATTRIBUTED", "red, but 'page is served' never appears beside a failure token - "
+                                           "whatever failed, it was not the observer this row claims")),
+    ],
+    ids=["named", "counted"],
+)
+def test_a_web_server_error_beside_a_test_that_ran_is_read_by_that_test(tmp_path, printed, expected):
+    """The twin: the error says no test ran only when the run counted none
+    and named none."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    capture = (WEB_SERVER_FAILURES / "playwright-port-already-used.txt").read_text(encoding="utf-8")
+    (project / "capture.txt").write_text(capture + printed, encoding="utf-8", newline="\n")
+    proc = _run_table(project, [_row(expect_red="page is served")])
+    assert _ledger_rows(proc.stdout) == {0: expected}, proc.stdout + proc.stderr
+
+
+def test_a_red_that_names_no_test_and_no_web_server_still_reads_as_a_missing_name(tmp_path):
+    """The other twin: a red that counts and names no test is no web server
+    error unless the runner says it is (a type check that fails, say)."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_text(
+        "src/calc.ts(2,9): error TS1005: ')' expected.\nError: the build failed\n", encoding="utf-8", newline="\n"
+    )
+    proc = _run_table(project, [_row(expect_red="page is served")])
+    assert _ledger_rows(proc.stdout)[0][1].startswith("red, but 'page is served' never appears"), proc.stdout
+
+
 def test_unparseable_count_still_kills_without_the_exactly_one_claim(tmp_path):
     project = _project(tmp_path)
     _custom_checker(
