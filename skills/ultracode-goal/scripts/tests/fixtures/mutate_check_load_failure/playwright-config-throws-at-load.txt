@@ -1,0 +1,11 @@
+Error: boom at load
+    at file:///home/dev/work/load-failure/helper.mjs:1:40
+    at file:///home/dev/work/load-failure/helper.mjs:1:68
+    at ModuleJob.run (node:internal/modules/esm/module_job:561:25)
+    at node:internal/modules/esm/loader:647:26
+    at requireOrImport (/home/dev/work/load-failure/node_modules/playwright/lib/transform/transform.js:223:12)
+    at loadUserConfig (/home/dev/work/load-failure/node_modules/playwright/lib/common/configLoader.js:107:46)
+    at loadConfig (/home/dev/work/load-failure/node_modules/playwright/lib/common/configLoader.js:119:22)
+    at loadConfigFromFile (/home/dev/work/load-failure/node_modules/playwright/lib/common/configLoader.js:331:10)
+    at runTests (/home/dev/work/load-failure/node_modules/playwright/lib/program.js:197:18)
+    at i.<anonymous> (/home/dev/work/load-failure/node_modules/playwright/lib/program.js:70:7)

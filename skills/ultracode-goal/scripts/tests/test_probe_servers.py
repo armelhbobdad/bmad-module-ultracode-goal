@@ -107,6 +107,42 @@ def test_a_url_with_no_host_or_a_bad_port_is_refused(url, capsys):
     assert "REFUSED" in capsys.readouterr().err
 
 
+# The checks gate.md's fourth caveat makes with this script. Its docstring said
+# the gate checks before the first run and after the rebuild, and otherwise only
+# under a scratch config; but a server one of the worktree's own runs starts
+# through turbo outlives that run, and with reuse on every later row of a
+# mutation table ran through it, so automate checks after each table too.
+_DOC_CHECKS = (
+    "The gate checks those URLs before its first run in the worktree and again after the rebuild.",
+    "Automate checks them before and after each mutation table it runs, since a server one of the worktree's own "
+    "runs starts can outlive that run",
+)
+
+
+def _doc_check_gaps(doc: str) -> list[str]:
+    flat = " ".join(doc.split())
+    return [phrase for phrase in _DOC_CHECKS if phrase not in flat]
+
+
+def test_the_docstring_names_each_check_the_gate_makes():
+    assert _doc_check_gaps(probe_servers.__doc__) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("before and after each mutation table", "before each mutation table"),
+        ("Automate checks them before and after each mutation table it runs, since a server one of the worktree's "
+         "own runs starts can outlive that run", "A server one of the worktree's own runs starts can outlive that run"),
+    ],
+)
+def test_docstring_predicate_rejects_a_check_left_out(old, new):
+    doc = " ".join(probe_servers.__doc__.split())
+    mutant = doc.replace(old, new)
+    assert mutant != doc, "the mutant must actually change the text"
+    assert _doc_check_gaps(mutant)
+
+
 def test_the_folder_is_read_only_from_a_listening_socket(tmp_path):
     """A /proc laid out as Linux lays it out: the process holding the
     listening socket on the port names the folder, and one holding a socket

@@ -58,6 +58,8 @@ skills/ultracode-goal/
 │   ├── gate_eval.py               #   gate status -> verdict (the completion authority)
 │   ├── operator_owed.py           #   is a gate FAIL owed only operator-evidence ACs' records? (fail-closed)
 │   ├── mutate_check.py            #   mutation harness: attributable-red proof for the story's guards
+│   ├── probe_servers.py           #   which URLs a test runner may reuse already answer, and from which folder
+│   ├── link_worktree_deps.py      #   links the main tree's dependency folders into the gate worktree
 │   ├── gate_trail.py              #   per-story evidence trail (gate-trail.md) at finalize
 │   ├── formalize_check.py         #   readiness kernel behind the /ucg-formalize gate
 │   ├── status_render.py           #   read-side render behind /ucg-status

@@ -6,15 +6,19 @@
 """Report which of the URLs a test runner may reuse already have a server.
 
 A runner that attaches to a server already answering at its URL, instead of
-starting one (Playwright's `webServer` with `reuseExistingServer`), runs a gate
-worktree's tests against the tree that server was started from, usually the
-main tree (references/gate.md, "A server the gate set reuses does not follow
-the commit"). The gate checks those URLs before its first run in the worktree
-and again after the rebuild, and when a scratch runner config gives the
-worktree's runs a server of their own, that config's URLs before each run
-under it, since a server an earlier run left up can hold the port. `ss`,
-`lsof` and `curl` are not on the run's allowlist; this script runs under
-`uv run`, which is.
+starting one (Playwright's `webServer` with `reuseExistingServer`), runs a
+gate worktree's tests against the tree that server was started from, usually
+the main tree (references/gate.md, "A server the gate set reuses does not
+follow the commit"). The gate checks those URLs before its first run in the
+worktree and again after the rebuild. Automate checks them before and after
+each mutation table it runs, since a server one of the worktree's own runs
+starts can outlive that run (a launcher such as turbo runs it in a process
+group of its own), and with reuse on every later run reuses it while it serves
+the files as they were when it started. When a scratch runner config gives the
+worktree's runs a server of their own, the gate also checks that config's URLs
+before each assessor runs under it, since a server an earlier run left up can
+hold the port. `ss`, `lsof` and `curl` are not on the run's allowlist; this
+script runs under `uv run`, which is.
 
 What it checks. For each `--url`, a TCP connection to every address the URL's
 host resolves to, at the URL's port (80 or 443 when the URL names none): the

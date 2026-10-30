@@ -1,0 +1,16 @@
+[2m[WebServer] [22m127.0.0.1 - - [30/Oct/2026 20:38:05] "GET /app.txt HTTP/1.1" 200 -
+SyntaxError: /home/dev/work/load-failure/helper.mjs: Unterminated string constant. (1:24)
+
+> 1 | export const greeting = 'hello
+    |                         ^
+  2 |
+
+   at app.spec.mjs:1
+
+> 1 | import { test, expect } from '/home/dev/work/load-failure/node_modules/playwright/test.mjs';
+    |                        ^
+  2 | import { greeting } from '../helper.mjs';
+  3 | test('page is served', async ({ request }) => {
+  4 |   const r = await request.get('http://127.0.0.1:47501/app.txt');
+Error: No tests found
+
