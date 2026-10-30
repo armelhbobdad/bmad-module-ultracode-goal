@@ -18,6 +18,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _EXECUTE = _SKILL_ROOT / "references" / "execute.md"
 _FINALIZE = _SKILL_ROOT / "references" / "finalize.md"
@@ -63,21 +65,26 @@ _CHECKS = {
     "says the threshold is not a turn forecast": lambda s: bool(
         re.search(r"not a forecast of turns", s)
     ),
-    # The turns come from the count the gate logged, never the live counter:
-    # a /ucg-resolve close resets or deletes `.budget-<story_id>.json`, and a
-    # later session's responses keep landing on the last story `.current-story`
-    # named, so one real Epic's files read 11 and 12 for rows logged at 7 and 9,
-    # and 1 for a row that escalated at 25.
-    "the tie-break reads the turns each driven row used": lambda s: bool(
+    # The tie-break compares criteria counts and reads no turns, since no
+    # record holds the turns a driven row used. A /ucg-resolve close resets or
+    # deletes `.budget-<story_id>.json`, and a later session's responses keep
+    # landing on the last story `.current-story` named, so one real Epic's
+    # files read 11 and 12 for rows logged at 7 and 9. The count the gate logs
+    # from that file carries both: a row that escalated at 25 logged 1 beside
+    # the verdict that advanced it, after its close reset the file.
+    "the tie-break compares criteria counts and reads no turns": lambda s: bool(
         re.search(
-            r"with the turns each one used as `\.decision-log\.md` logged them beside the verdict that advanced it",
+            r"Tie-break against this Epic's own record: the criteria counts of rows already driven cleanly "
+            r"versus rows already split;",
             s,
         )
+        and re.search(r"The tie-break reads no turn counts\.", s)
     ),
-    "the tie-break never reads the turns from the live counter": lambda s: bool(
-        re.search(r"Read those turns from the log, never from the row's `\.budget-<story_id>\.json`", s)
-        and re.search(r"`/ucg-resolve` resets or deletes that file", s)
+    "says no record holds the turns a driven row used, the logged count included": lambda s: bool(
+        re.search(r"no record holds the turns a driven row used", s)
+        and re.search(r"`/ucg-resolve` resets or deletes its `\.budget-<story_id>\.json`", s)
         and re.search(r"adds each response of a later session to the story `\.current-story` still names", s)
+        and re.search(r"and a count logged from it beside a gate verdict, can hold fewer turns than the row used", s)
     ),
     # The sizing call's keys as `story_sizing.py` prints them: the ratio is the
     # criteria over the ceiling, and the summed `load` is gone.
@@ -147,54 +154,83 @@ def test_the_sizing_rule_claims_no_turn_per_criterion():
     assert "`load`" not in text
 
 
-_TIE_BREAK_SOURCE = (
-    "with the turns each one used as `.decision-log.md` logged them beside the verdict that advanced it "
-    '(its turn-budget outcome, "Record" below), versus rows already split;'
+# The tie-break's turn sources this branch shipped before it read none: the
+# live counter (1fa0c56), then the count logged from it beside the advancing
+# verdict (b753d15), which a close's reset and a later session reach too.
+_LIVE_COUNTER_TIE_BREAK = (
+    "the criteria counts of rows already driven cleanly, with the turns each one used (`turns` in its "
+    "`.budget-<story_id>.json`), versus rows already split; a row matching an already-split parent's shape is "
+    "answered by that precedent."
 )
-_LIVE_COUNTER = " Read those turns from the log, never from the row's `.budget-<story_id>.json`:"
-_NO_COUNT = "A row the log gives no count for offers its criteria count alone."
+_LOGGED_COUNT_TIE_BREAK = (
+    "the criteria counts of rows already driven cleanly, with the turns each one used as `.decision-log.md` "
+    "logged them beside the verdict that advanced it (its turn-budget outcome, \"Record\" below), versus rows "
+    "already split; a row matching an already-split parent's shape is answered by that precedent. Read those "
+    "turns from the log, never from the row's `.budget-<story_id>.json`: `/ucg-resolve` resets or deletes that "
+    "file when it closes a `budget-overrun` or `operator-evidence-owed` escalation, and the Stop hook adds each "
+    "response of a later session to the story `.current-story` still names, so the file no longer holds the "
+    "turns a finished row used. A row the log gives no count for offers its criteria count alone."
+)
+_NO_TURNS_START = "the criteria counts of rows already driven cleanly versus rows already split;"
+_NO_TURNS_END = "can hold fewer turns than the row used or more."
 
 
-def test_the_tie_break_checks_reject_the_live_counter_as_the_source():
-    """The branch first pointed the tie-break at `.budget-<story_id>.json`,
-    which a close resets and a later session inflates; both turn checks must
-    fail on that text."""
+@pytest.mark.parametrize("source", [_LIVE_COUNTER_TIE_BREAK, _LOGGED_COUNT_TIE_BREAK], ids=["live", "logged"])
+def test_the_tie_break_checks_reject_every_turn_source(source):
+    """Both turn sources the branch tried are unreliable: a close resets the
+    counter and a later session adds to it, and the logged count is copied
+    from that counter. Both turn checks must fail on a tie-break that reads
+    either one."""
     section = _sizing_section()
-    assert "(`turns` in its `.budget-<story_id>.json`)" not in section
-    start, end = section.index(_LIVE_COUNTER), section.index(_NO_COUNT) + len(_NO_COUNT)
-    mutant = (section[:start] + section[end:]).replace(
-        _TIE_BREAK_SOURCE,
-        "with the turns each one used (`turns` in its `.budget-<story_id>.json`), versus rows already split;",
-    )
-    assert _TIE_BREAK_SOURCE in section and _TIE_BREAK_SOURCE not in mutant
+    start = section.index(_NO_TURNS_START)
+    end = section.index(_NO_TURNS_END) + len(_NO_TURNS_END)
+    mutant = section[:start] + source + section[end:]
+    assert mutant != section
     unmet = _unmet(mutant)
-    assert "the tie-break reads the turns each driven row used" in unmet
-    assert "the tie-break never reads the turns from the live counter" in unmet
+    assert "the tie-break compares criteria counts and reads no turns" in unmet
+    assert "says no record holds the turns a driven row used, the logged count included" in unmet
 
 
-_RECORD_TURNS = (
+_RECORD_TURNS_FOR_THE_TIE_BREAK = (
     "per-story turn-budget outcomes (beside each gate verdict, the story's `turns` from its "
     "`.budget-<story_id>.json` against `{workflow.max_turns_per_story}`, which the sizing tie-break reads back "
     "once the story is driven)"
 )
+_SIZING_FRAGMENT = _SKILL_ROOT.parents[1] / "changes" / "sizing-counts-criteria.yaml"
 
 
-def _record_logs_the_turns(text: str) -> bool:
-    start = text.index("\n## Record\n")
-    section = re.sub(r"\s+", " ", text[start : text.index("\n## ", start + 1)])
-    return _RECORD_TURNS in section
+def _says_the_tie_break_reads_turns(text: str) -> bool:
+    flat = re.sub(r"\s+", " ", text)
+    return any(
+        claim in flat
+        for claim in (
+            "which the sizing tie-break reads back",
+            "the tie-break now also reads the turns",
+            "with the turns each one used",
+        )
+    )
 
 
-def test_the_record_logs_the_count_the_tie_break_reads():
-    """The tie-break reads a driven row's turns from the log, so the log must
-    hold them, written beside the verdict while the story's counter is its own."""
-    text = _EXECUTE.read_text(encoding="utf-8")
-    assert _record_logs_the_turns(text)
-    # Twin: the bare list item the branch shipped, which says nothing of when
-    # or what the turn-budget outcome is.
-    mutant = text.replace(_RECORD_TURNS, "per-story turn-budget outcomes", 1)
-    assert mutant != text
-    assert not _record_logs_the_turns(mutant)
+def test_no_surface_says_the_tie_break_reads_turns():
+    """The Record section and the change fragment (the CHANGELOG to be) said
+    the tie-break reads a driven row's logged turns, for the very rows whose
+    close reset the counter the log copies."""
+    execute = _EXECUTE.read_text(encoding="utf-8")
+    fragment = _SIZING_FRAGMENT.read_text(encoding="utf-8")
+    assert not _says_the_tie_break_reads_turns(execute)
+    assert not _says_the_tie_break_reads_turns(fragment)
+    assert "reads no turn counts" in re.sub(r"\s+", " ", fragment)
+    # Twins: the Record line and the fragment as b753d15 left them.
+    record = execute.replace("per-story turn-budget outcomes,", _RECORD_TURNS_FOR_THE_TIE_BREAK + ",", 1)
+    assert record != execute
+    assert _says_the_tie_break_reads_turns(record)
+    old_fragment = fragment.replace(
+        "and the tie-break reads no turn counts:",
+        "and the tie-break now also reads the turns this Epic's driven rows used:",
+        1,
+    )
+    assert old_fragment != fragment
+    assert _says_the_tie_break_reads_turns(old_fragment)
 
 
 def test_the_route_precedes_the_loop_it_is_an_alternative_to():

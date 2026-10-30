@@ -26,12 +26,13 @@ The story loop now names the case and pins:
     general or standing delegation is neither;
   - what the move writes depends on the pair: both story files state it when
     both have one; two decomposed children of one parent move a whole AC, and
-    the new split record, both child rows' citations in `sprint-status.yaml`
-    and both children's ATDD checklists carry the changed claim map, since the
-    row is what step 1 hands the dev agent; a child beside a story that has a
-    file, or children of two parents, have no move, so the run escalates for a
-    re-plan; the scaffolded cases move with their clause, and the log names
-    both stories.
+    only one whose every clause is measured, and the new split record, both
+    child rows' citations in `sprint-status.yaml` and both children's ATDD
+    checklists carry the changed claim map, since the row is what step 1 hands
+    the dev agent; an AC that also holds a clause no run measured, a child
+    beside a story that has a file, or children of two parents, have no move,
+    so no note authorizes one and the run escalates for a re-plan; the
+    scaffolded cases move with their clause, and the log names both stories.
 
 execute.md's sidecar section names the kind as a live one, `/ucg-resolve`
 closes it by logging the proposal beside the answer before it deletes the
@@ -119,7 +120,7 @@ _CHECKS = {
         "An **Operator notes** entry given before launch" in p
         and "that names both stories and authorizes moving clauses from the earlier story to the later one" in p
         and "is that ruling for each measured clause it covers" in p
-        and "apply the move without escalating and cite that note" in p
+        and "so where a move fits that clause (below), apply the move without escalating and cite that note" in p
     ),
     "refuses a note naming one story, or a standing delegation": lambda p: (
         "A note that does not name both stories is not that ruling" in p
@@ -151,6 +152,15 @@ _CHECKS = {
         and "a new reconciling run records the split with the changed claim map" in p
         and "the parent's story file stays unedited" in p
     ),
+    # A clause moves only once measured, and between two children only a whole
+    # AC moves, so an AC holding a clause no run measured has no move: moving
+    # it whole on a note would take that clause off the earlier child on no
+    # ruling, and no record of the split can hold a clause alone.
+    "two children move an AC only when each of its clauses is measured": lambda p: (
+        "only a whole claimed AC moves, and only when each of its clauses is so measured" in p
+        and "An AC the earlier child claims that also holds a clause no run so measured has no move to apply: "
+        "that clause may not move, and the AC cannot move without it." in p
+    ),
     # The row is the authority on what a child owes (the sizing section), so a
     # move the split record alone carries still hands the earlier child the
     # moved AC at step 1, and still leaves it out of the later child's trace.
@@ -165,8 +175,12 @@ _CHECKS = {
     "a child beside a filed story, or across parents, gets only a re-plan": lambda p: (
         "Any other pair (a decomposed child beside a story that has a file, or children of two parents) "
         "has no move to apply" in p
-        and "so no note can authorize a move there" in p
         and "Escalate for the earlier story as above, proposing only a re-plan" in p
+    ),
+    # Where no move fits, a pre-launch note is no ruling to apply one, so the
+    # note route's "without escalating" never reaches those pairs.
+    "a note authorizes no move where none fits": lambda p: (
+        "No note can authorize a move where none fits. Escalate for the earlier story as above" in p
     ),
     "moves the scaffolded cases between generatedTestFiles lists": lambda p: (
         "Move each clause's scaffolded cases with it" in p and "`generatedTestFiles`" in p
@@ -269,15 +283,41 @@ def test_it_sits_after_the_narrowing_rule_which_still_escalates():
         ),
         # A mixed pair given the two-children route.
         (
-            "has no move to apply",
+            "has no move to apply either",
             "moves as two children do",
             "a child beside a filed story, or across parents, gets only a re-plan",
         ),
         # A pre-launch note read as authorizing a move no record can hold.
         (
-            "so no note can authorize a move there",
-            "unless a note authorizes the move",
-            "a child beside a filed story, or across parents, gets only a re-plan",
+            "No note can authorize a move where none fits.",
+            "A note can authorize a move where none fits.",
+            "a note authorizes no move where none fits",
+        ),
+        # The note route applied to every pair, a pair with no move included.
+        (
+            "so where a move fits that clause (below), apply the move",
+            "so apply the move",
+            "takes an Operator notes entry naming both stories as the ruling",
+        ),
+        # Two children move an AC whole on a note, a clause no run measured
+        # included (the contradiction round 2 found).
+        (
+            ", and only when each of its clauses is so measured, while the parent's story file stays unedited:",
+            ", while the parent's story file stays unedited:",
+            "two children move an AC only when each of its clauses is measured",
+        ),
+        (
+            "An AC the earlier child claims that also holds a clause no run so measured has no move to apply: "
+            "that clause may not move, and the AC cannot move without it.",
+            "When only one clause of that AC is measured, an Operator notes entry naming both children still "
+            "moves the whole AC, its other clauses included, without escalating.",
+            "two children move an AC only when each of its clauses is measured",
+        ),
+        (
+            " An AC the earlier child claims that also holds a clause no run so measured has no move to apply: "
+            "that clause may not move, and the AC cannot move without it.",
+            "",
+            "two children move an AC only when each of its clauses is measured",
         ),
         # A mixed pair driven on as it stands, with no escalation.
         (
@@ -480,7 +520,10 @@ def test_the_fragment_describes_the_route():
         "`/ucg-resolve` closes that escalation",
         "`generatedTestFiles`",
         "both child rows' criteria citations in `sprint-status.yaml` and both children's ATDD checklists",
-        "A decomposed child coupled with a story that has a file, or with a child of another parent, has no move",
+        "only a whole claimed criterion moves, and only when each of its clauses is so measured.",
+        "A criterion that also holds a clause no run so measured has no move, and neither does a decomposed child "
+        "coupled with a story that has a file, or with a child of another parent: no Operator notes entry can "
+        "authorize one, so the run escalates proposing only a re-plan.",
     ):
         assert token in flat, token
     assert chr(0x2014) not in fragment, "an em dash in the fragment"
