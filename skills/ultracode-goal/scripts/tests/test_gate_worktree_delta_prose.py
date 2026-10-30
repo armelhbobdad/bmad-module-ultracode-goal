@@ -2223,7 +2223,7 @@ _HOOK_REJECTION_SENTENCES = {
         ("**What to check.** - **Older Claude Code.** The hook returns a `deny` de", "b9349b662d21"),
         ("- **A refused settings write.** Preflight writes its hooks and allow rul", "298ba71ea2eb"),
         ("--- title: Troubleshooting description: Maps the real failure modes of a", "74417cea7b2a"),
-        ("Confirm preflight passed it through. ## Every tool call is refused **Sym", "9a5073f5919c"),
+        ("Most read like `PreToolUse:Bash hook error: [<command>]: failed; blockin", "03a6eaa3f853"),
         ("It names each primitive the version lacks. 2.1.295 is the floor, the rel", "d3fb84ee20ae"),
         ("See the cap sections in the [gate model](./gate-model.md). ## Hooks not ", "b86d92214a9b"),
         ("Start from the symptom you observed and follow it to the section that ex", "e7d26b0d82f1"),
