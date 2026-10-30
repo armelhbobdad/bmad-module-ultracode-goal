@@ -1,0 +1,3 @@
+type: docs
+summary: |
+  The README's links to the guides (Getting Started, How It Works, the reference pages and the bmad-loop comparison) now open the documentation site at <https://armelhbobdad.github.io/bmad-module-ultracode-goal/> instead of the Markdown source, on GitHub and on npm alike, and so do the security policy's links to Getting Started, Knowledge-Graph Refresh and Cross-Session Recall. `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `CONTRIBUTORS.md` and `LICENSE` are not on the site, so the README's links to them still open the repository. The site's `llms.txt` index now lists the Cross-Session Recall, Knowledge-Graph Refresh and UCG vs bmad-loop pages, which it left out.

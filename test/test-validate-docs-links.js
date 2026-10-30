@@ -203,10 +203,11 @@ async function main() {
     );
   });
 
-  await testAsync('README.md and changes/README.md are read, resolving from their own folder', async () => {
+  await testAsync('README.md, SECURITY.md and changes/README.md are read, resolving from their own folder', async () => {
     const { cfg } = fixture({
       root: {
         'README.md': '## Verifying a skill\n\n[v](#verifying-a-skill) [x](#nope)\n',
+        'SECURITY.md': '## Hooks\n\n[h](#hooks) [c](CONTRIBUTING.md#the-checks)\n',
         'changes/README.md': '[c](../CONTRIBUTING.md#the-pull-request-check) [w](#which-type)\n\n## Which type\n',
         'CONTRIBUTING.md': '## The check\n',
       },
@@ -217,9 +218,77 @@ async function main() {
       r.issues.map((i) => `${i.file}: ${i.detail}`),
       [
         'README.md: anchor matches no heading in this file: #nope',
+        'SECURITY.md: anchor matches no heading in CONTRIBUTING.md: CONTRIBUTING.md#the-checks',
         `${path.join('changes', 'README.md')}: anchor matches no heading in CONTRIBUTING.md: ../CONTRIBUTING.md#the-pull-request-check`,
       ],
     );
+  });
+
+  await testAsync('a link to the docs site is mapped back to its docs/ page and heading', async () => {
+    const site = 'https://example.com/base/';
+    const { cfg } = fixture(
+      {
+        root: {
+          'README.md': [
+            `[a](${site}) [b](https://example.com/base) [c](${site}guide/) [d](${site}guide/#hook-security) [e](${site}guide)`,
+            `[f](${site}sub/) [g](${site}llms.txt) [h](https://example.com/other/guide/) [i](https://other.test/base/gide/)`,
+            `[x](${site}gide/) [y](${site}guide/#hook-securty) [z](${site}_internal/stability/) [w](${site}..%2FREADME/)`,
+          ].join('\n'),
+        },
+        docs: {
+          'index.md': '# Home\n',
+          'guide.md': '## Hook security\n',
+          'sub/index.md': 'x',
+          '_internal/stability.md': '## Stable\n',
+        },
+      },
+      ['--site-url', site],
+    );
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => `${i.file}: ${i.detail}`),
+      [
+        `README.md: site link names no published page in docs/: ${site}gide/`,
+        `README.md: anchor matches no heading in ${path.join('docs', 'guide.md')}: ${site}guide/#hook-securty`,
+        `README.md: site link names no published page in docs/: ${site}_internal/stability/`,
+        `README.md: site link names no published page in docs/: ${site}..%2FREADME/`,
+      ],
+    );
+  });
+
+  await testAsync('a link to a file on the repository main is mapped back to that file', async () => {
+    const repo = 'https://git.test/owner/repo/';
+    const { cfg } = fixture(
+      {
+        root: { 'SECURITY.md': '## Hooks\n', 'skills/x/references/gate.md': 'g' },
+        docs: {
+          'a.md': [
+            `[s](${repo}blob/main/SECURITY.md#hooks) [t](${repo}tree/main/skills/x/references/) [r](${repo}tree/main)`,
+            `[i](${repo}issues/154) [v](${repo}blob/v1.0.0/OLD.md) [o](https://git.test/owner/other/blob/main/OLD.md)`,
+            `[m](${repo}blob/main/SECURITY.md#hook) [n](${repo}blob/main/CHANGELOG.md) [e](${repo}blob/main/..%2F..%2Fetc%2Fpasswd)`,
+          ].join('\n'),
+        },
+      },
+      ['--repo-url', repo],
+    );
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => i.detail),
+      [
+        `anchor matches no heading in SECURITY.md: ${repo}blob/main/SECURITY.md#hook`,
+        `repository link names no file on this tree: ${repo}blob/main/CHANGELOG.md`,
+        `repository link names no file on this tree: ${repo}blob/main/..%2F..%2Fetc%2Fpasswd`,
+      ],
+    );
+  });
+
+  test('the site and repository links default to where this repository publishes', () => {
+    // GitHub Pages serves a repository's site at <owner>.github.io/<repo>/.
+    const { repository } = require('../package.json');
+    const [, owner, repo] = repository.url.match(/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/);
+    const cfg = resolveConfig([]);
+    assert.strictEqual(cfg.siteUrl, `https://${owner}.github.io/${repo}/`);
+    assert.strictEqual(cfg.repoUrl, `https://github.com/${owner}/${repo}/`);
   });
 
   await testAsync('a root-absolute .md target has its anchor checked', async () => {

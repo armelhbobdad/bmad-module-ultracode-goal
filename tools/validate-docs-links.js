@@ -18,11 +18,13 @@
  * So there are two passes:
  *
  *   1. SOURCE  (docs/ *.md, including docs/_internal/, plus CONTRIBUTING.md,
- *              README.md and, when present, changes/README.md) - every
- *              relative target must exist on disk, and every `#anchor`,
+ *              README.md, SECURITY.md and, when present, changes/README.md) -
+ *              every relative target must exist on disk, and every `#anchor`,
  *              same-file or on a `.md` target, must match a heading id in
- *              that file. Cheap, and catches a typo or a renamed heading
- *              before a build is needed.
+ *              that file. A link to a page of the published site, or to a
+ *              file on the repository's `main`, is mapped back to the file
+ *              here that it shows and checked the same way. Cheap, and
+ *              catches a typo or a renamed heading before a build is needed.
  *   2. BUILT   (build/site/ *.html) - every internal href must resolve to a
  *              real file, and its `#fragment` to an id on that page. This is
  *              the pass that catches plugin bugs, base-path bugs, and anything
@@ -46,6 +48,22 @@ const path = require('node:path');
 const EXTERNAL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
 
 /**
+ * Where this project's docs are published. README.md and SECURITY.md render
+ * away from the site (on GitHub, and README.md on npm too), where
+ * `./docs/x.md` opens the Markdown file, so they link each docs page by its
+ * URL here. The source pass maps such a URL back to the docs/ page it renders
+ * from.
+ */
+const SITE_URL = 'https://armelhbobdad.github.io/bmad-module-ultracode-goal/';
+
+/**
+ * Where this project's repository is shown. The site publishes docs/ alone,
+ * so its pages link any other file (SECURITY.md, a skill reference) by its
+ * view on `main` here. The source pass maps such a URL back to that file.
+ */
+const REPO_URL = 'https://github.com/armelhbobdad/bmad-module-ultracode-goal/';
+
+/**
  * Read a `--flag value` pair out of an argv array.
  *
  * @param {string[]} argv - Arguments to search
@@ -60,13 +78,17 @@ function flagValue(argv, name) {
 /**
  * Resolve where to look, from argv, defaulting to this repository.
  *
- * The directory overrides exist so the checks can be pointed at a fixture
- * tree. Without them every path derives from `__dirname` and the tool can
- * only ever inspect its own repo, which makes it untestable: the logic that
- * decides whether a merge is blocked would itself be unverified.
+ * The directory and URL overrides exist so the checks can be pointed at a
+ * fixture tree. Without them every path derives from `__dirname` and the tool
+ * can only ever inspect its own repo, which makes it untestable: the logic
+ * that decides whether a merge is blocked would itself be unverified.
+ *
+ * The site URL is never read from the SITE_URL environment variable. CI sets
+ * that for the build, and a link a reader follows must name the published
+ * site whatever URL a build was given.
  *
  * @param {string[]} [argv] - Defaults to the real process arguments
- * @returns {{projectRoot: string, docsDir: string, buildDir: string, strict: boolean, verbose: boolean, requireBuild: boolean}} Config
+ * @returns {{projectRoot: string, docsDir: string, buildDir: string, siteUrl: string, repoUrl: string, strict: boolean, verbose: boolean, requireBuild: boolean}} Config
  */
 function resolveConfig(argv = process.argv.slice(2)) {
   const projectRoot = flagValue(argv, '--project-root') ?? path.resolve(__dirname, '..');
@@ -75,6 +97,8 @@ function resolveConfig(argv = process.argv.slice(2)) {
     projectRoot,
     docsDir: flagValue(argv, '--docs-dir') ?? path.join(projectRoot, 'docs'),
     buildDir: flagValue(argv, '--build-dir') ?? path.join(projectRoot, 'build', 'site'),
+    siteUrl: flagValue(argv, '--site-url') ?? SITE_URL,
+    repoUrl: flagValue(argv, '--repo-url') ?? REPO_URL,
     strict: argv.includes('--strict'),
     verbose: argv.includes('--verbose'),
     requireBuild: argv.includes('--require-build'),
@@ -382,11 +406,88 @@ function extractAnchors(content) {
  * Markdown files outside docs/ that the source pass reads too, relative to
  * the project root, each read when present.
  *
- * GitHub is the only place they render, so no build resolves their links: a
- * moved file or a renamed heading leaves them dead with every other check
- * green. Their relative targets resolve from their own folder, as on GitHub.
+ * They render on GitHub (README.md on npm too), never on the site, so no
+ * build resolves their links: a moved file or a renamed heading leaves them
+ * dead with every other check green. Their relative targets resolve from
+ * their own folder, as on GitHub, and their links to the site are mapped back
+ * to docs/ (see `siteSource`).
  */
-const ROOT_DOCS = ['CONTRIBUTING.md', 'README.md', 'changes/README.md'];
+const ROOT_DOCS = ['CONTRIBUTING.md', 'README.md', 'SECURITY.md', 'changes/README.md'];
+
+/**
+ * The path an absolute URL names below a base URL, percent-decoded and
+ * without its outer slashes ('' for the base itself), or null when the URL is
+ * not below that base.
+ *
+ * Parsing resolves `.` and `..` segments first, as a browser does, so a link
+ * that climbs out of the base is not below it. A malformed escape is kept as
+ * written, and then names no file.
+ */
+function pathBelow(href, base) {
+  let url;
+  let root;
+  try {
+    url = new URL(href);
+    root = new URL(base);
+  } catch {
+    return null;
+  }
+  const rootPath = asBase(root.pathname);
+  if (url.origin !== root.origin || !asBase(url.pathname).startsWith(rootPath)) {
+    return null;
+  }
+  const rest = url.pathname.slice(rootPath.length).replaceAll(/^\/+|\/+$/g, '');
+  try {
+    return decodeURIComponent(rest);
+  } catch {
+    return rest;
+  }
+}
+
+/** The file a relative path names inside a folder, or null when it climbs out. */
+function fileBelow(dir, rel) {
+  const root = path.resolve(dir);
+  const file = path.resolve(root, rel);
+  return file === root || file.startsWith(root + path.sep) ? file : null;
+}
+
+/**
+ * The docs/ page a link into the published site renders from, as `{file}`
+ * with `file: null` when no page renders at that route, or null when the href
+ * is no page of the site.
+ *
+ * Routes follow the build: docs/x.md and docs/x/index.md are served at x/,
+ * docs/index.md at the root, and a name starting with `_` is never published.
+ * A route to a file, such as `llms.txt`, is no page and is not checked here.
+ * The link's `#anchor` is checked against GitHub's ids for that page, which
+ * are the site's too except in the two cases `headingToAnchor` names.
+ */
+function siteSource(href, { siteUrl, docsDir }) {
+  const route = pathBelow(href, siteUrl);
+  if (route === null || path.extname(route)) {
+    return null;
+  }
+  if (route.split('/').some((segment) => segment.startsWith('_'))) {
+    return { file: null };
+  }
+  const candidates = [`${route || 'index'}.md`, path.join(route, 'index.md')].map((rel) => fileBelow(docsDir, rel));
+  return { file: candidates.find((file) => file && fs.existsSync(file)) ?? null };
+}
+
+/**
+ * The file a link to the repository's view of `main` shows, as `{file}` with
+ * `file: null` when this tree has no such file, or null when the href is no
+ * such view. Another ref shows a file as it was there, and other pages
+ * (issues, compare, actions) show no file, so neither is checked.
+ */
+function repoSource(href, { repoUrl, projectRoot }) {
+  const view = pathBelow(href, repoUrl)?.match(/^(?:blob|tree)\/main(?:\/(.*))?$/s);
+  if (!view) {
+    return null;
+  }
+  const file = fileBelow(projectRoot, view[1] ?? '');
+  return { file: file && fs.existsSync(file) ? file : null };
+}
 
 /**
  * Check every relative link in the Markdown sources: the target must exist
@@ -395,12 +496,14 @@ const ROOT_DOCS = ['CONTRIBUTING.md', 'README.md', 'changes/README.md'];
  * Any target counts, not only `.md`: a workflow file, a folder or LICENSE is
  * as dead on GitHub when it moves. Anchors are checked on the same file and
  * on `.md` targets; GitHub gives other files line anchors, not heading ids.
+ * An absolute link is checked only when it shows a file of this tree: a page
+ * of the published site, or a file on the repository's `main`.
  *
  * Deliberately does NOT enforce a `./` prefix. The plugin accepts bare links,
  * and GitHub renders them correctly, so requiring the prefix would be style,
  * not correctness. What matters is that the target exists.
  */
-function checkSource({ projectRoot, docsDir }, report) {
+function checkSource({ projectRoot, docsDir, siteUrl = SITE_URL, repoUrl = REPO_URL }, report) {
   const files = [
     ...new Set([
       ...walk(docsDir, new Set(['.md'])),
@@ -426,6 +529,16 @@ function checkSource({ projectRoot, docsDir }, report) {
       const anchor = fragmentOf(href);
 
       if (EXTERNAL.test(href)) {
+        const page = siteSource(href, { siteUrl, docsDir });
+        const shown = page ?? repoSource(href, { repoUrl, projectRoot });
+        if (!shown) {
+          continue;
+        }
+        if (!shown.file) {
+          report(rel, page ? `site link names no published page in docs/: ${href}` : `repository link names no file on this tree: ${href}`);
+        } else if (shown.file.endsWith('.md') && fs.statSync(shown.file).isFile() && !fragmentResolves(anchor, anchorsOf(shown.file))) {
+          report(rel, `anchor matches no heading in ${path.relative(projectRoot, shown.file)}: ${href}`);
+        }
         continue;
       }
       if (!target) {
