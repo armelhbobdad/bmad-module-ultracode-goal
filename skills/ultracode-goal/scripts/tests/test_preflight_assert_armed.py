@@ -126,24 +126,30 @@ def _arm(
     guard: bool = True,
     budget: bool = True,
     env_in_command: bool = True,
+    on_failure: str | None = "block",
+    stop_on_failure: str | None = None,
 ) -> None:
-    """Write a settings.local.json in the real nested shape preflight documents."""
+    """Write a settings.local.json in the real nested shape preflight documents.
+
+    `on_failure` is the guard item's `onFailure` (None leaves the key out, as
+    every arming UCG 3.x or earlier made); `stop_on_failure` puts one on the
+    Stop budget item, where preflight writes none."""
     env_prefix = (
         " ".join(f"{v}=x" for v in _ENV_VARS) + " " if env_in_command else ""
     )
-    pre_group: dict = {
-        "hooks": [{"type": "command", "command": f"{env_prefix}uv run scripts/hooks/guard_pretooluse.py"}]
-    }
+    guard_item: dict = {"type": "command", "command": f"{env_prefix}uv run scripts/hooks/guard_pretooluse.py"}
+    if on_failure is not None:
+        guard_item["onFailure"] = on_failure
+    pre_group: dict = {"hooks": [guard_item]}
     if matcher is not None:
         pre_group["matcher"] = matcher
+    stop_item: dict = {"type": "command", "command": "uv run scripts/hooks/budget_stop.py"}
+    if stop_on_failure is not None:
+        stop_item["onFailure"] = stop_on_failure
     settings = {
         "hooks": {
             "PreToolUse": [pre_group] if guard else [],
-            "Stop": [
-                {"hooks": [{"type": "command", "command": "uv run scripts/hooks/budget_stop.py"}]}
-            ]
-            if budget
-            else [],
+            "Stop": [{"hooks": [stop_item]}] if budget else [],
         }
     }
     claude_dir = root / ".claude"
@@ -244,6 +250,124 @@ def test_bash_only_matcher_fails_with_the_inert_control_reason(tmp_path: Path) -
     assert any("all-tools" in r for r in out["reasons"])
 
 
+# --- arming: the guard's onFailure -------------------------------------------
+# Claude Code 2.1.295+ refuses the tool call when a hook item with
+# `"onFailure": "block"` cannot start, exits with a code other than 0 or 2, or
+# times out. Without the key (every arming UCG 3.x or earlier made) each of
+# those lets the call run unchecked, and a value Claude Code does not accept
+# drops the whole item, so the guard does not run at all.
+
+_ON_FAILURE_REASON = 'PreToolUse guard is not armed with "onFailure": "block" on every item'
+
+
+def _on_failure_reason(out: dict) -> str:
+    matches = [r for r in out["reasons"] if r.startswith(_ON_FAILURE_REASON)]
+    assert len(matches) == 1, out["reasons"]
+    return matches[0]
+
+
+def test_the_armed_guard_reports_its_on_failure_value(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root)
+    assert code == 0 and out["reasons"] == []
+    hooks = out["checks"]["hooks"]
+    assert hooks["guard_on_failure_block"] is True
+    assert hooks["guard_on_failure"] == ["block"]
+
+
+@pytest.mark.parametrize(
+    "value,shown",
+    [
+        pytest.param(None, "missing", id="missing"),
+        pytest.param("Block", '"Block"', id="wrong-case"),
+        pytest.param("continue", '"continue"', id="continue"),
+        pytest.param("BLOCK", '"BLOCK"', id="upper-case"),
+        pytest.param(True, "true", id="not-a-string"),
+    ],
+)
+def test_a_guard_item_without_on_failure_block_is_not_armed(tmp_path: Path, value, shown: str) -> None:
+    """A 3.x arming (no key), a value Claude Code drops the item for, and the
+    one it accepts but that lets a crash through each fail closed, with a
+    reason that names what it found and the re-merge that fixes it."""
+    root = _repo(tmp_path)
+    _arm(root, on_failure=value)
+    code, out = _run(root)
+    assert code == 1 and out["armed"] is False
+    hooks = out["checks"]["hooks"]
+    assert hooks["guard_present"] is True and hooks["matcher_all_tools"] is True
+    assert hooks["guard_on_failure_block"] is False
+    assert hooks["guard_on_failure"] == [value]
+    reason = _on_failure_reason(out)
+    assert f"(found: {shown})" in reason
+    assert "Re-merge the hooks as preflight.md step 5's Hooks bullet says" in reason
+    assert "replace, never append; on a resume purge nothing" in reason
+    # The only reason: nothing else about this arming is wrong.
+    assert len(out["reasons"]) == 1, out["reasons"]
+
+
+def test_on_failure_on_the_stop_hook_alone_does_not_arm_the_guard(tmp_path: Path) -> None:
+    """The key sits on the guard's own item: Claude Code ignores it on Stop,
+    and a copy there says nothing about the PreToolUse guard."""
+    root = _repo(tmp_path)
+    _arm(root, on_failure=None, stop_on_failure="block")
+    code, out = _run(root)
+    assert code == 1
+    assert out["checks"]["hooks"]["guard_on_failure"] == [None]
+    assert "(found: missing)" in _on_failure_reason(out)
+
+
+def test_on_failure_on_the_stop_hook_beside_the_guards_is_no_reason(tmp_path: Path) -> None:
+    """Control: preflight writes none on Stop, but one there is inert, and the
+    assertion reads the guard's items only."""
+    root = _repo(tmp_path)
+    _arm(root, stop_on_failure="continue")
+    code, out = _run(root)
+    assert code == 0 and out["reasons"] == []
+
+
+def test_two_guard_items_one_without_on_failure_is_not_armed(tmp_path: Path) -> None:
+    """A merge that appended instead of replacing leaves a 3.x item beside the
+    fresh one: Claude Code runs both, and the one without the key still lets a
+    crash through. Every guard item must carry it."""
+    root = _repo(tmp_path)
+    _arm(root)
+    path = root / ".claude" / "settings.local.json"
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    fresh = settings["hooks"]["PreToolUse"][0]["hooks"][0]
+    stale = {key: value for key, value in fresh.items() if key != "onFailure"}
+    settings["hooks"]["PreToolUse"].append({"matcher": "*", "hooks": [stale]})
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    code, out = _run(root)
+    assert code == 1 and out["armed"] is False
+    assert out["checks"]["hooks"]["guard_on_failure"] == ["block", None]
+    assert '(found: "block", missing)' in _on_failure_reason(out)
+
+    # Control: the same two items, both carrying it, pass.
+    stale["onFailure"] = "block"
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    code, out = _run(root)
+    assert code == 0 and out["reasons"] == []
+
+
+def test_a_guard_under_stop_with_on_failure_is_still_not_armed(tmp_path: Path) -> None:
+    """The event stays part of the identity: an item that names the guard
+    under hooks.Stop is never run before a tool call, whatever it carries."""
+    root = _repo(tmp_path)
+    _arm(root, guard=False)
+    path = root / ".claude" / "settings.local.json"
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    settings["hooks"]["Stop"][0]["hooks"].append(
+        {"type": "command", "command": "uv run scripts/hooks/guard_pretooluse.py", "onFailure": "block"}
+    )
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    code, out = _run(root)
+    assert code == 1
+    assert out["checks"]["hooks"]["guard_present"] is False
+    assert out["checks"]["hooks"]["guard_on_failure"] == []
+    assert not any(r.startswith(_ON_FAILURE_REASON) for r in out["reasons"])
+
+
 def test_missing_settings_file_is_not_armed(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     code, out = _run(root)
@@ -272,7 +396,11 @@ def test_the_help_and_the_docs_name_the_ucg_story_skills() -> None:
     """The manifest probes UCG's story skills, never BMAD's deprecated shims,
     so text that says "the BMAD story skills" sends an operator to install
     shims that cannot pass it."""
-    proc = subprocess.run([sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True, timeout=60)
+    # A width wide enough that argparse wraps no help line: it breaks a line
+    # after a hyphen, which would split `ucg-create-story` at whatever column
+    # the wording happens to reach.
+    env = {**os.environ, "COLUMNS": "1000"}
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True, timeout=60, env=env)
     assert proc.returncode == 0, proc.stderr
     help_text = " ".join(proc.stdout.split())
     assert "the UCG story skills (ucg-create-story, ucg-dev-story)" in help_text

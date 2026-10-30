@@ -30,8 +30,9 @@
  *   strategy.matrix values for that key (its list and include entries); any
  *   other expression is skipped. A workflow that is not YAML is reported.
  * - The highest of the Claude Code minimums preflight_check.py refuses to
- *   launch below (MIN_GOAL, MIN_WORKFLOWS, MIN_AUTOMEMORY) is not Claude
- *   Code's minimum, or one of the three is missing.
+ *   launch below (MIN_GOAL, MIN_WORKFLOWS, MIN_AUTOMEMORY,
+ *   MIN_HOOK_ONFAILURE) is not Claude Code's minimum, or one of the four is
+ *   missing.
  * - A row of the README "Tested with" table that a tool names (its
  *   tested_with_row) is missing or repeated, or gives a version that is not
  *   one of that tool's tested versions.
@@ -111,7 +112,7 @@ const INSTALL_SMOKE = '.github/workflows/install-smoke.yaml';
 const MATRIX_VALUE = /^\$\{\{\s*matrix\.([A-Za-z_][\w-]*)\s*\}\}$/;
 const PREFLIGHT = 'skills/ultracode-goal/scripts/preflight_check.py';
 // The Claude Code minimums preflight refuses to launch below, one per primitive.
-const PREFLIGHT_MINIMUMS = ['MIN_GOAL', 'MIN_WORKFLOWS', 'MIN_AUTOMEMORY'];
+const PREFLIGHT_MINIMUMS = ['MIN_GOAL', 'MIN_WORKFLOWS', 'MIN_AUTOMEMORY', 'MIN_HOOK_ONFAILURE'];
 // NAME = (major, minor, patch), with an optional type annotation.
 const PREFLIGHT_MINIMUM = /^([A-Z_]+)\s*(?::[^=]*)?=\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/;
 const TESTED_WITH = /^\*\*Tested with:\*\*/;
@@ -615,8 +616,9 @@ function checkWorkflows(root, tools) {
 
 /**
  * The highest of the Claude Code minimums preflight_check.py refuses to
- * launch below (MIN_GOAL, MIN_WORKFLOWS and MIN_AUTOMEMORY, each a
- * (major, minor, patch) tuple) is the Claude Code minimum.
+ * launch below (MIN_GOAL, MIN_WORKFLOWS, MIN_AUTOMEMORY and
+ * MIN_HOOK_ONFAILURE, each a (major, minor, patch) tuple) is the Claude Code
+ * minimum.
  */
 function checkPreflightMinimums(root, tools) {
   const lines = readLines(root, PREFLIGHT);

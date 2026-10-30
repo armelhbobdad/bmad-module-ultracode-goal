@@ -10,7 +10,7 @@
 #   An empty list means no run is recorded yet.
 # - `minimum` starts at a tested version, the only version UCG has evidence
 #   for. It starts lower only where the repository already sets a floor for
-#   a stated reason (Claude Code 2.1.154, BMAD Method 6.2), and `basis` says
+#   a stated reason (Claude Code 2.1.295, BMAD Method 6.2), and `basis` says
 #   which.
 # - A minimum comes down only after a run on an older version passes. It is
 #   never guessed lower.
@@ -47,9 +47,9 @@ tools:
     name: Claude Code
     kind: runtime
     used_for: "**The runtime: non-negotiable.** UCG composes Auto Mode, Auto Memory, and runtime hooks, which only exist in Claude Code, and writes each story's Definition-of-Done as a `/goal`-style condition; the autonomous run cannot execute anywhere else. Preflight refuses to launch below the minimum"
-    minimum: "2.1.154"
+    minimum: "2.1.295"
     tested: ["2.1.301"]
-    basis: The minimum is the highest of the versions preflight_check.py refuses to launch below (its MIN_GOAL, MIN_WORKFLOWS and MIN_AUTOMEMORY, one per Claude Code primitive the run needs). Tested is the README "Tested with" run of 2026-10-16, under --light.
+    basis: The minimum is the highest of the versions preflight_check.py refuses to launch below (its MIN_GOAL, MIN_WORKFLOWS, MIN_AUTOMEMORY and MIN_HOOK_ONFAILURE, one per Claude Code primitive the run needs). It is MIN_HOOK_ONFAILURE, 2.1.295, the release that added a hook's onFailure setting, which preflight sets to block on the PreToolUse guard so that a guard that cannot start, crashes or times out refuses the tool call; older versions ignore the setting and let such a call through. Tested is the README "Tested with" run of 2026-10-16, under --light.
     install_url: https://claude.com/product/claude-code
     tested_with_row: Claude Code
 
