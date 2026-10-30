@@ -57,6 +57,12 @@ const EXTERNAL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
 const SITE_URL = 'https://armelhbobdad.github.io/bmad-module-ultracode-goal/';
 
 /**
+ * The files `tools/build-docs.js` writes into the site beside its pages, each
+ * served at its own route: the two text bundles for LLMs.
+ */
+const SITE_FILES = new Set(['llms.txt', 'llms-full.txt']);
+
+/**
  * Where this project's repository is shown. The site publishes docs/ alone,
  * so its pages link any other file (SECURITY.md, a skill reference) by its
  * view on `main` here. The source pass maps such a URL back to that file.
@@ -452,25 +458,49 @@ function fileBelow(dir, rel) {
 }
 
 /**
- * The docs/ page a link into the published site renders from, as `{file}`
- * with `file: null` when no page renders at that route, or null when the href
- * is no page of the site.
+ * What a link into the published site shows: `{file}` naming the docs/ page
+ * that renders at its route, `{file: null}` when a docs build of this tree
+ * serves nothing there (with `pageAsFile` when the route names a page as a
+ * .md or .html file), or null when the href is not below the site or names a
+ * file the site serves as it is, which has no heading to check.
  *
  * Routes follow the build: docs/x.md and docs/x/index.md are served at x/,
  * docs/index.md at the root, and a name starting with `_` is never published.
- * A route to a file, such as `llms.txt`, is no page and is not checked here.
+ * The build writes each page to an HTML file the site serves too: the page at
+ * x/ to x/index.html, and docs/404.md to 404.html alone, never at 404/. Any
+ * other route with an extension names a file, and the only other files the
+ * site serves are SITE_FILES and those under website/public/, so a link to
+ * x.md or x.html is dead there. Other files the build generates (the sitemap,
+ * the search index) are not linked from these docs, so a link to one is
+ * reported.
  * The link's `#anchor` is checked against GitHub's ids for that page, which
  * are the site's too except in the two cases `headingToAnchor` names.
+ *
+ * This reads this tree's docs/, but the site shows the latest stable release,
+ * not `main` ("The docs site" in docs/_internal/RELEASING.md). So a link to a
+ * page or heading added since that release passes here and 404s, or misses
+ * its anchor, on the site until the next stable release deploys it, and a
+ * page changed since then still shows its released text. That window is
+ * accepted, not checked.
  */
-function siteSource(href, { siteUrl, docsDir }) {
+function siteSource(href, { siteUrl, docsDir, projectRoot }) {
   const route = pathBelow(href, siteUrl);
-  if (route === null || path.extname(route)) {
+  const asIs = route === null ? null : fileBelow(path.join(projectRoot, 'website', 'public'), route);
+  if (route === null || SITE_FILES.has(route) || (asIs && fs.statSync(asIs, { throwIfNoEntry: false })?.isFile())) {
     return null;
   }
-  if (route.split('/').some((segment) => segment.startsWith('_'))) {
+  if (route === '404.html') {
+    const notFound = path.join(docsDir, '404.md');
+    return { file: fs.existsSync(notFound) ? notFound : null };
+  }
+  const page = route.replace(/(?:^|\/)index\.html$/, '');
+  if (/\.(?:md|html)$/i.test(page)) {
+    return { file: null, pageAsFile: true };
+  }
+  if (path.extname(page) || page === '404' || /(?:^|\/)index$/.test(page) || page.split('/').some((segment) => segment.startsWith('_'))) {
     return { file: null };
   }
-  const candidates = [`${route || 'index'}.md`, path.join(route, 'index.md')].map((rel) => fileBelow(docsDir, rel));
+  const candidates = [`${page || 'index'}.md`, path.join(page, 'index.md')].map((rel) => fileBelow(docsDir, rel));
   return { file: candidates.find((file) => file && fs.existsSync(file)) ?? null };
 }
 
@@ -529,13 +559,19 @@ function checkSource({ projectRoot, docsDir, siteUrl = SITE_URL, repoUrl = REPO_
       const anchor = fragmentOf(href);
 
       if (EXTERNAL.test(href)) {
-        const page = siteSource(href, { siteUrl, docsDir });
+        const page = siteSource(href, { siteUrl, docsDir, projectRoot });
         const shown = page ?? repoSource(href, { repoUrl, projectRoot });
         if (!shown) {
           continue;
         }
         if (!shown.file) {
-          report(rel, page ? `site link names no published page in docs/: ${href}` : `repository link names no file on this tree: ${href}`);
+          const hint = page?.pageAsFile ? ' (a page is linked by its route: x/ for docs/x.md)' : '';
+          report(
+            rel,
+            page
+              ? `site link names no page or file a docs build of this tree serves: ${href}${hint}`
+              : `repository link names no file on this tree: ${href}`,
+          );
         } else if (shown.file.endsWith('.md') && fs.statSync(shown.file).isFile() && !fragmentResolves(anchor, anchorsOf(shown.file))) {
           report(rel, `anchor matches no heading in ${path.relative(projectRoot, shown.file)}: ${href}`);
         }

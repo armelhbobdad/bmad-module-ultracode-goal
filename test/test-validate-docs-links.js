@@ -230,8 +230,9 @@ async function main() {
       {
         root: {
           'README.md': [
-            `[a](${site}) [b](https://example.com/base) [c](${site}guide/) [d](${site}guide/#hook-security) [e](${site}guide)`,
-            `[f](${site}sub/) [g](${site}llms.txt) [h](https://example.com/other/guide/) [i](https://other.test/base/gide/)`,
+            `[a](${site}) [b](https://example.com/base) [b2](https://example.com/base#nope) [c](${site}guide/)`,
+            `[d](${site}guide/#hook-security) [e](${site}guide) [f](${site}sub/) [g](${site}llms.txt)`,
+            `[h](https://example.com/other/guide/) [i](https://other.test/base/gide/)`,
             `[x](${site}gide/) [y](${site}guide/#hook-securty) [z](${site}_internal/stability/) [w](${site}..%2FREADME/)`,
           ].join('\n'),
         },
@@ -248,11 +249,63 @@ async function main() {
     assert.deepStrictEqual(
       r.issues.map((i) => `${i.file}: ${i.detail}`),
       [
-        `README.md: site link names no published page in docs/: ${site}gide/`,
+        `README.md: anchor matches no heading in ${path.join('docs', 'index.md')}: https://example.com/base#nope`,
+        `README.md: site link names no page or file a docs build of this tree serves: ${site}gide/`,
         `README.md: anchor matches no heading in ${path.join('docs', 'guide.md')}: ${site}guide/#hook-securty`,
-        `README.md: site link names no published page in docs/: ${site}_internal/stability/`,
-        `README.md: site link names no published page in docs/: ${site}..%2FREADME/`,
+        `README.md: site link names no page or file a docs build of this tree serves: ${site}_internal/stability/`,
+        `README.md: site link names no page or file a docs build of this tree serves: ${site}..%2FREADME/`,
       ],
+    );
+  });
+
+  await testAsync('a site link to a file passes only for a file the site serves', async () => {
+    const site = 'https://example.com/base/';
+    const { cfg } = fixture(
+      {
+        root: {
+          'README.md': [
+            `[l](${site}llms.txt) [f](${site}llms-full.txt) [p](${site}img/logo.svg) [n](${site}404.html)`,
+            `[r](${site}index.html) [g](${site}guide/index.html#hook-security) [s](${site}sub/index.html)`,
+            `[m](${site}guide.md) [ma](${site}guide.md#hook-security) [h](${site}guide.html) [t](${site}llms-ful.txt)`,
+            `[pm](${site}img/nope.svg) [pd](${site}img/) [gi](${site}gide/index.html) [ga](${site}guide/index.html#nope)`,
+            `[o](${site}404/) [i](${site}index/) [si](${site}sub/index/) [ii](${site}index/index.html)`,
+          ].join('\n'),
+          'website/public/img/logo.svg': '<svg/>',
+        },
+        docs: {
+          'index.md': '# Home\n',
+          '404.md': '## Not found\n',
+          'guide.md': '## Hook security\n',
+          'sub/index.md': 'x',
+        },
+      },
+      ['--site-url', site],
+    );
+    const served = 'site link names no page or file a docs build of this tree serves';
+    const asFile = '(a page is linked by its route: x/ for docs/x.md)';
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => `${i.file}: ${i.detail}`),
+      [
+        `README.md: ${served}: ${site}guide.md ${asFile}`,
+        `README.md: ${served}: ${site}guide.md#hook-security ${asFile}`,
+        `README.md: ${served}: ${site}guide.html ${asFile}`,
+        `README.md: ${served}: ${site}llms-ful.txt`,
+        `README.md: ${served}: ${site}img/nope.svg`,
+        `README.md: ${served}: ${site}img/`,
+        `README.md: ${served}: ${site}gide/index.html`,
+        `README.md: anchor matches no heading in ${path.join('docs', 'guide.md')}: ${site}guide/index.html#nope`,
+        `README.md: ${served}: ${site}404/`,
+        `README.md: ${served}: ${site}index/`,
+        `README.md: ${served}: ${site}sub/index/`,
+        `README.md: ${served}: ${site}index/index.html`,
+      ],
+    );
+
+    const bare = fixture({ root: { 'README.md': `[n](${site}404.html)\n` }, docs: { 'index.md': '# Home\n' } }, ['--site-url', site]);
+    assert.deepStrictEqual(
+      (await runQuiet(bare.cfg)).issues.map((i) => i.detail),
+      [`${served}: ${site}404.html`],
     );
   });
 
