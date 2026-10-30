@@ -1,0 +1,42 @@
+✔ limit is pinned (1.960874ms)
+✖ cap holds (2.016157ms)
+
+Interrupted while running:
+
+⚠ t1/b.test.mjs (t1/b.test.mjs:1:1)
+✖ t1/b.test.mjs (4889.992664ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4919.901143
+
+✖ failing tests:
+
+test at t1/a.test.mjs:5:1
+✖ cap holds (2.016157ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  11 !== 10
+  
+      at TestContext.<anonymous> (file:///home/dev/work/interrupted-after-a-pass/t1/a.test.mjs:5:34)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 11,
+    expected: 10,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at t1/b.test.mjs:1:1
+✖ t1/b.test.mjs (4889.992664ms)
+  'Promise resolution is still pending but the event loop has already resolved'

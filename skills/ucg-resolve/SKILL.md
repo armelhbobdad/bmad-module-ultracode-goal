@@ -242,6 +242,21 @@ The two dispositions are genuinely different things, not two names for one:
   and removes the marker (`{ucg-root}/references/gate.md`, "Commit the gate's evidence
   before the next story starts"), on the Epic's last story too, where every row already
   reads `done` and the resume re-enters only for that commit before Finalize.
+  **Closing a `coupled-stories` escalation records the move, and the resumed run makes
+  it.** The sidecar proposes moving clauses the earlier story owes to the later story it
+  names, which narrows the earlier story's AC (`{ucg-root}/references/execute.md`, "Two
+  stories green only together"). When the operator approves the move, as proposed or
+  reworded, write the sidecar's `decision_needed` verbatim into this answer's
+  `.decision-log.md` entry, under both story keys it names, beside the operator's answer
+  and the id you closed, before you delete the sidecar: once the sidecar is gone, that
+  entry is the only copy of the move the resumed run writes into both story files, or for
+  two decomposed children into every record of their split (the split record, both child
+  rows in `sprint-status.yaml` and both ATDD checklists). This
+  surface edits neither story file and moves no test case: the ruling is the operator's,
+  and the resumed run applies it before the earlier story's next commit. An answer that
+  re-plans the rows instead (one story in place of the two, or another order) is the
+  operator's own edit of `sprint-status.yaml` and the story files: record `defer` until
+  they have made it, then `close`.
 - **`defer`** — the decision is not made yet. Record the entry **without clearing
   anything**. The artifact stays exactly where it is, the item stays pending, and the next
   preflight still blocks on it.

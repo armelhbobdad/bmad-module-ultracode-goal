@@ -291,6 +291,8 @@ def test_the_gate_rebuilds_its_worktree_with_commands_the_allowlist_runs():
         "git worktree remove --force /p/_bmad-output/implementation-artifacts/.gate-worktree-4-2",
         "git worktree add /p/_bmad-output/implementation-artifacts/.gate-worktree-4-2 0123abc",
         "uv run /s/scripts/link_worktree_deps.py --project-root /p --worktree /w",
+        # Issue #182: the check for a server the runner would reuse, at setup and after the rebuild.
+        "uv run /s/scripts/probe_servers.py --url http://localhost:3001 --url http://127.0.0.1:3199",
         "git status --porcelain --untracked-files=all",
         "git add tests/unit/a.test.ts",
         # The backfill resume tells a committed backfill from an uncommitted one.

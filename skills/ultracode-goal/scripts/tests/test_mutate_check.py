@@ -642,6 +642,75 @@ def test_a_test_file_jest_or_vitest_cannot_load_is_no_kill(tmp_path, capture):
     assert proc.returncode == 1
 
 
+# --- A runner that could not start its web server ------------------------------
+#
+# Real output of Playwright 1.58.2 (Node 24.21.0, Linux) under a config whose
+# `webServer` entry has `reuseExistingServer: false`, captured outside CI:
+#   playwright-port-already-used             another server held the port
+#   playwright-start-command-failed          the start command exited 1
+#   playwright-start-command-exited-early    the start command exited 0
+#   playwright-start-timed-out               the start command never answered
+# Playwright stops before any test and prints no count (#182: a server that a
+# launcher such as turbo starts outlives the run that started it, so with reuse
+# off each later run of a mutation table found the port taken).
+
+WEB_SERVER_FAILURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_web_server"
+_NO_TEST_RAN = "red, but no test ran - the runner could not start its web server, a harness error, not the observer"
+_WEB_SERVER_CAPTURES = [
+    "playwright-port-already-used",
+    "playwright-start-command-failed",
+    "playwright-start-command-exited-early",
+    "playwright-start-timed-out",
+]
+
+
+@pytest.mark.parametrize("capture", _WEB_SERVER_CAPTURES)
+def test_a_runner_that_could_not_start_its_web_server_ran_no_test(tmp_path, capture):
+    """No test ran, so no test killed the mutant. With no count and no test
+    named, the row read `MISATTRIBUTED` as a missing name, which the gate reads
+    as another test's kill: a mutant no test can tell read killed."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((WEB_SERVER_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="page is served")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NO_TEST_RAN)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("printed", "expected"),
+    [
+        # A test the run names beside the error went red: the kill stands, uncounted.
+        ("  1) page is served FAILED\n", ("KILLED+others", "'page is served' went red; failure count unparseable")),
+        # A count read beside it: some test ran and failed, and it was not this row's.
+        ("  1 failed\n", ("MISATTRIBUTED", "red, but 'page is served' never appears beside a failure token - "
+                                           "whatever failed, it was not the observer this row claims")),
+    ],
+    ids=["named", "counted"],
+)
+def test_a_web_server_error_beside_a_test_that_ran_is_read_by_that_test(tmp_path, printed, expected):
+    """The twin: the error says no test ran only when the run counted none
+    and named none."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    capture = (WEB_SERVER_FAILURES / "playwright-port-already-used.txt").read_text(encoding="utf-8")
+    (project / "capture.txt").write_text(capture + printed, encoding="utf-8", newline="\n")
+    proc = _run_table(project, [_row(expect_red="page is served")])
+    assert _ledger_rows(proc.stdout) == {0: expected}, proc.stdout + proc.stderr
+
+
+def test_a_red_that_names_no_test_and_no_web_server_still_reads_as_a_missing_name(tmp_path):
+    """The other twin: a red that counts and names no test is no web server
+    error unless the runner says it is (a type check that fails, say)."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_text(
+        "src/calc.ts(2,9): error TS1005: ')' expected.\nError: the build failed\n", encoding="utf-8", newline="\n"
+    )
+    proc = _run_table(project, [_row(expect_red="page is served")])
+    assert _ledger_rows(proc.stdout)[0][1].startswith("red, but 'page is served' never appears"), proc.stdout
+
+
 def test_unparseable_count_still_kills_without_the_exactly_one_claim(tmp_path):
     project = _project(tmp_path)
     _custom_checker(
@@ -1190,3 +1259,863 @@ def test_plain_uv_run_works_inside_a_project_with_its_own_pyproject(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "--table" in proc.stdout
     assert not (host / ".venv").exists(), "uv set up the host project"
+
+
+# --- Four more misreads of a count (issue #179) --------------------------------
+#
+# pytest's report (its ERRORS, FAILURES and PASSES sections, its warnings and its
+# short summary) quotes each test's traceback, message and captured output, so a
+# count there is no run's count. Under xdist pytest does not stop at a collection
+# error, so its short summary can be the only sign of one, at a path that holds a
+# space or at a class. One command can run pytest twice. Node's test runner
+# reports a test file whose process failed as a failed test named after the file.
+#
+# The Node captures, each of a mutant to calc.mjs, captured as the jest and
+# vitest ones above (Node 24.21.0, or Node 20.19.5 for the node20 ones):
+#   node-spec-one-of-two, node20-spec-one-of-two, node-tap-one-of-two
+#                       `node --test` over clamp.test.mjs, which the mutant
+#                       (`if (x > hi {`) stops loading, and a passing file
+#   node-spec-alone, node20-tap-alone
+#                       `node --test clamp.test.mjs`
+#   node-spec-kill-beside-load-failure, node-tap-kill-beside-load-failure
+#                       the row's test fails in test/clamp.test.mjs, and
+#                       test/loader.test.mjs fails an assert as it loads
+#   node-spec-test-named-after-a-file
+#                       the row's test, named `calc.mjs`, fails
+#   node-spec-exits-after-its-tests-pass, node-tap-exits-after-its-tests-pass
+#                       clamp.test.mjs's test passes, then a timer the mutant
+#                       adds calls `process.exit(1)`, beside a passing file
+
+_QUOTES_A_COUNT = (
+    "from calc import clamp\n\n\ndef test_clamp_at_the_bound():\n"
+    "    print('summary of the batch: 0 failed')\n    assert clamp(9, 5) == 5\n"
+)
+_IMPORT_TIME = "from calc import clamp\n\nassert clamp(9, 5) == 5\n\n\ndef test_import_time():\n    assert True\n"
+_SETUP_ERROR_KILL = (
+    "import pytest\nfrom calc import clamp\n\n\n@pytest.fixture\ndef bound():\n"
+    "    if clamp(9, 5) != 5:\n        raise RuntimeError('bound')\n    return 5\n\n\n"
+    "def test_clamp_at_the_bound(bound):\n    assert bound == 5\n"
+)
+_UNPARSEABLE = ("KILLED+others", "'test_clamp_at_the_bound' went red; failure count unparseable")
+_EXACTLY = ("KILLED", "exactly 'test_clamp_at_the_bound' went red")
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize("flags", ["-qq", "-qq -n 2"])
+def test_a_count_a_kill_quotes_is_not_its_count(tmp_path, flags, ci):
+    """`-qq` prints no stats line, so the shapes other runners' counts are read
+    by were tried on every other line, and took `0 failed` from what the
+    killing test printed, which pytest quotes in its report: the kill read 0
+    failed, a row that cannot run. No line of pytest's report is read for such
+    a count now, so the kill stands, with its count unknown."""
+    if "-n" in flags:
+        pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_clamp.py": _QUOTES_A_COUNT, "test_other.py": _OTHER})
+    proc = _run_table(project, [_pytest_row(flags, "if False:")], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: _UNPARSEABLE}, proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize("flags", ["-q", "-qq", "-vv", "-q -n 2", "-qq -n 2"])
+def test_a_count_a_collection_error_quotes_is_no_kill(tmp_path, flags, ci):
+    """A module that prints `1 failed lookup` as it is imported, then raises,
+    fails to collect, and pytest quotes the print in its ERRORS section. The
+    stats line counts no failure, since a collection error is none, so the
+    fallback shapes were tried and took `1 failed` from the quote, under plain
+    `-q` too: a kill by a test of another name. It now reads 0 failed."""
+    if "-n" in flags:
+        pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_clamp.py": _AT_THE_BOUND, "test_other.py": _OTHER})
+    (project / "calc.py").write_text(
+        "print('cache warm-up: 1 failed lookup')\n" + _CLAMP, encoding="utf-8", newline="\n"
+    )
+    row = _pytest_row(flags, "if x > hi:")
+    row.update(anchor="def clamp(x, hi):", replacement="raise RuntimeError('warm-up')\n\n\ndef clamp(x, hi):")
+    proc = _run_table(project, [row], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+def _spaced_project(tmp_path: Path, tests: dict[str, str]) -> Path:
+    project = _pytest_project(tmp_path, {"test_other.py": _OTHER})
+    (project / "tests" / "my dir").mkdir()
+    for name, body in tests.items():
+        (project / "tests" / "my dir" / name).write_text(body, encoding="utf-8", newline="\n")
+    return project
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize(
+    "flags", ["-q --tb=no -n 2", "-vv --tb=no -n 2", "-qq --tb=no -n 2", "-q -n 2", "-qq -n 2"]
+)
+def test_a_collection_error_at_a_path_with_a_space_is_no_kill(tmp_path, flags, ci):
+    """Under xdist pytest does not stop at a collection error, and both its
+    `ERROR collecting` header and its short summary entry were read as one
+    word, so neither counted a module under `tests/my dir`: the error stood as
+    a failure, a kill by a test of another name."""
+    pytest.importorskip("xdist")
+    project = _spaced_project(tmp_path, {"test_clamp.py": _AT_THE_BOUND})
+    proc = _run_table(project, [_pytest_row(flags, "if x > hi")], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize("flags", ["-q -n 2", "-q --tb=no -n 2"])
+def test_a_kill_at_a_path_with_a_space_beside_a_collection_error_still_kills(tmp_path, flags, ci):
+    """Beside the row's kill, a module under `tests/my dir` that fails to
+    collect counted as more failures, so the kill read `KILLED+others`."""
+    pytest.importorskip("xdist")
+    project = _spaced_project(tmp_path, {"test_clamp.py": _AT_THE_BOUND, "test_import_time.py": _IMPORT_TIME})
+    proc = _run_table(project, [_pytest_row(flags, "if False:")], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: _EXACTLY}, proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+_IN_A_CLASS_WITH_IDS = (
+    "import pytest\n\nfrom calc import clamp, label\n\n\nclass TestClamp:\n"
+    "    @pytest.mark.parametrize('x', [9], ids=label)\n"
+    "    def test_clamp_at_the_bound(self, x):\n        assert clamp(x, 5) == 5\n"
+)
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize("flags", ["-q --tb=no -n 2", "-vv --tb=no -n 2", "-qq --tb=no -n 2", "-qq -n 2"])
+def test_a_class_pytest_cannot_collect_is_no_kill(tmp_path, flags, ci):
+    """A parametrize `ids` function that raises stops pytest collecting the
+    class, which its short summary lists as `ERROR <path>::TestClamp`. Read as
+    a test's setup error for its `::` id, it counted as a failure, and under
+    `-qq` it kept the short summary from reading as one that lists collection
+    errors only: a kill, by a test of another name or with others."""
+    pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_clamp.py": _IN_A_CLASS_WITH_IDS, "test_other.py": _OTHER})
+    (project / "calc.py").write_text(
+        _CLAMP + "\n\ndef label(x):\n    return f'x{x}'\n", encoding="utf-8", newline="\n"
+    )
+    row = _pytest_row(flags, "if x > hi:")
+    row.update(anchor="return f'x{x}'", replacement="return x.name")
+    proc = _run_table(project, [row], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+_SETUP_ERROR_IN_A_CLASS = (
+    "import pytest\nfrom calc import clamp\n\n\n@pytest.fixture\ndef bound():\n"
+    "    if clamp(9, 5) != 5:\n        raise RuntimeError('bound')\n    return 5\n\n\n"
+    "class TestClamp:\n    def test_clamp_at_the_bound(self, bound):\n        assert bound == 5\n"
+)
+
+
+@pytest.mark.parametrize("flags", ["-q --tb=no -n 2", "-qq --tb=no -n 2"])
+def test_a_setup_error_of_a_test_in_a_class_still_kills(tmp_path, flags):
+    """The twin: a test in a class whose fixture raises is listed as `ERROR
+    <path>::TestClamp::test_clamp_at_the_bound`, an id that ends at the test,
+    and it still kills. Read as a class for the capital letter inside its id,
+    it read 0 failed."""
+    pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_clamp.py": _SETUP_ERROR_IN_A_CLASS, "test_other.py": _OTHER})
+    proc = _run_table(project, [_pytest_row(flags, "if False:")], _ci_env(False))
+    assert _ledger_rows(proc.stdout)[0][0].startswith("KILLED"), proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+def _two_runs_project(tmp_path: Path) -> Path:
+    """tests_a and tests_c each hold a module that fails to collect under the
+    mutant, and tests_b the row's test, whose fixture raises under it."""
+    project = _pytest_project(tmp_path, {})
+    for folder, body in (("tests_a", _IMPORT_TIME), ("tests_b", _SETUP_ERROR_KILL), ("tests_c", _IMPORT_TIME)):
+        (project / folder).mkdir()
+        (project / folder / "test_mod.py").write_text(body, encoding="utf-8", newline="\n")
+        (project / folder / "test_other.py").write_text(
+            _OTHER.replace("test_other", f"test_other_{folder}"), encoding="utf-8", newline="\n"
+        )
+    return project
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize(
+    ("first", "second", "expected"),
+    [
+        ("-q -rN -n 2 tests_a", "-q --tb=no -n 2 tests_c", ("MISATTRIBUTED", _ZERO_FAILED)),
+        ("-q --tb=no -rN tests_a", "-q --tb=no -n 2 tests_c", ("MISATTRIBUTED", _ZERO_FAILED)),
+        ("-qq tests_a", "-q tests_b", _EXACTLY),
+        ("-q tests_a", "-qq tests_b", _UNPARSEABLE),
+        ("-qq tests_a", "-qq tests_b", _UNPARSEABLE),
+        ("-q -n 2 tests_a", "-q -n 2 tests_b", _EXACTLY),
+        ("-q -rN -n 2 tests_a", "-q -rN -n 2 tests_b", _EXACTLY),
+    ],
+    ids=[
+        "disjoint-signs",
+        "disjoint-signs-no-xdist",
+        "qq-then-q",
+        "q-then-qq",
+        "qq-then-qq",
+        "same-signs",
+        "same-signs-no-summary",
+    ],
+)
+def test_two_pytest_runs_count_their_own_collection_errors(tmp_path, first, second, expected, ci):
+    """A command that runs pytest twice had its collection errors counted once
+    across both runs, by the sign of them that showed the most. When the two
+    runs' flags print different signs (only the `ERROR collecting` header, only
+    `Interrupted:`, only the short summary entry), one error stood as a
+    failure, a kill by a test of another name. A `-qq` run, which prints no
+    stats line, had its collection error taken off the other run's kill, or its
+    stop read as the whole command's, so the kill read 0 failed. Each run's
+    collection errors now come off its own stats line, and a `-qq` run that
+    lists a test leaves the count unknown. The last two cases are the twins:
+    two runs that print the same signs were already read right, the second run
+    included when it collects every module, so none of the first run's errors
+    is taken off its kill."""
+    if "-n" in first + second:
+        pytest.importorskip("xdist")
+    project = _two_runs_project(tmp_path)
+    run = f'"{sys.executable}" -m pytest -p no:cacheprovider'
+    row = _pytest_row("-q", "if False:")
+    # `||`, which cmd.exe reads as bash does: the second run starts only when the first fails.
+    row["command"] = f"{run} {first} || {run} {second}"
+    proc = _run_table(project, [row], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: expected}, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize(
+    "capture",
+    ["node-spec-one-of-two", "node-spec-alone", "node-tap-one-of-two", "node20-tap-alone", "node20-spec-one-of-two"],
+)
+def test_a_test_file_node_cannot_load_is_no_kill(tmp_path, capture):
+    """Node's test runner reports a test file it cannot load as a failed test
+    named after the file, counted in its `fail N`, so the row read
+    `MISATTRIBUTED` as a missing name, which the gate reads as another test's
+    kill. That test, located at the file's line 1, column 1, no longer counts:
+    the row reads 0 failed."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="clamp at the bound")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node-spec-kill-beside-load-failure", "clamp at the bound"),
+        ("node-tap-kill-beside-load-failure", "clamp at the bound"),
+        ("node-spec-test-named-after-a-file", "calc.mjs"),
+    ],
+)
+def test_a_node_kill_beside_a_load_failure_is_one_kill(tmp_path, capture, expect_red):
+    """A kill beside a test file Node could not load read `KILLED+others`
+    among 2 failures. The last capture is the twin: a failing test the file
+    declares under a file's name, `calc.mjs`, is located where it is declared,
+    so it still counts as the kill."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red=expect_red)])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", f"exactly {expect_red!r} went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        "node-spec-exits-after-its-tests-pass",
+        "node-tap-exits-after-its-tests-pass",
+        "node-spec-exits-after-a-skipped-test",
+    ],
+)
+def test_a_node_test_file_that_exits_non_zero_after_its_tests_pass_reads_0_failed(tmp_path, capture):
+    """Node reports a test file whose tests pass and whose process then exits
+    non-zero the same way, a failed test named after the file at its line 1,
+    column 1. No test went red, so the row reads 0 failed, a harness error,
+    where it read as a kill by a test of another name. The last capture is
+    the twin of a pass: the row's test is skipped, and no test went red
+    either (a second review of #179's fix, below)."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="clamp at the bound")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.parametrize(
+    ("anchor", "replacement"),
+    [
+        ("LIMIT = 5;", "LIMIT = = 5;"),
+        ("export const FLAG = 'on';", "export const FLAG = 'on';\nprocess.exitCode = 1;"),
+    ],
+    ids=["cannot-load", "exits-non-zero"],
+)
+def test_real_node_test_runner_file_failure_is_no_kill(tmp_path, anchor, replacement):
+    """The real `node --test`, with whatever reporter this Node defaults to,
+    over a test file that cannot load under the mutant, or whose process exits
+    non-zero after its tests pass, beside a passing one."""
+    (tmp_path / "code.mjs").write_text(
+        "export const LIMIT = 5;\nexport const FLAG = 'on';\n", encoding="utf-8", newline="\n"
+    )
+    (tmp_path / "check.test.mjs").write_text(NODE_TEST_FILE, encoding="utf-8", newline="\n")
+    (tmp_path / "other.test.mjs").write_text(
+        "import { test } from 'node:test';\ntest('other passes', () => {});\n", encoding="utf-8", newline="\n"
+    )
+    row = {
+        "file": "code.mjs",
+        "anchor": anchor,
+        "replacement": replacement,
+        "command": "node --test check.test.mjs other.test.mjs",
+        "expect_red": "limit is pinned",
+    }
+    proc = _run_table(tmp_path, [row])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+_FAKE_CARGO = (
+    "import sys\nsys.path.insert(0, '.')\nfrom calc import clamp\n"
+    "if clamp(9, 5) == 5:\n    raise SystemExit(0)\n"
+    "print('test tests::clamp_at_the_bound ... FAILED')\n"
+    "print('test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out')\n"
+    "raise SystemExit(101)\n"
+)
+
+
+def test_a_count_another_runner_prints_after_pytest_is_still_read(tmp_path):
+    """The twin: pytest passes, then a runner whose count only the fallback
+    shapes read fails. Its count lies outside pytest's report, so it is still
+    read: a rule that read no fallback shape once pytest ran read this kill 0
+    failed."""
+    project = _pytest_project(tmp_path, {"test_other.py": _OTHER})
+    (project / "fake_cargo.py").write_text(_FAKE_CARGO, encoding="utf-8", newline="\n")
+    row = _pytest_row("-q", "if False:", expect_red="clamp_at_the_bound")
+    row["command"] += f' && "{sys.executable}" fake_cargo.py'
+    proc = _run_table(project, [row])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'clamp_at_the_bound' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+# --- What a review of #179's fix found -----------------------------------------
+#
+# A parametrized test's id can hold `::` and a capital letter. A Node test file
+# the command's own `timeout` interrupts is counted as cancelled, not failed. A
+# Node test file's process can die during a test, which Node reports the way it
+# reports a file that cannot load. An `=` rule that is not pytest's opened what
+# was read as pytest's report. A `-qq` run's listing sat beside a `0 failed`
+# that a later run or another runner printed.
+#
+# The Node captures (Node 24.21.0, local paths replaced with /home/dev/work):
+#   node-spec-exits-during-a-test, node-tap-exits-during-a-test
+#                       `node --test cli.test.mjs other.test.mjs`: the mutant
+#                       (`args.length === 0` to `!== 0` in cli.mjs) makes the
+#                       test `run reads its file` call `process.exit(2)`
+#   node-spec-heap-runs-out-during-a-test, node-tap-heap-runs-out-during-a-test
+#                       `node --max-old-space-size=64 --test walk.test.mjs`:
+#                       the mutant (`if (depth > MAX_DEPTH) break;` to
+#                       `if (false) break;` in walk.mjs) makes the test
+#                       `depth guard fires` fill the heap
+#   node-spec-load-failure-beside-an-exit
+#                       `node --test cli.test.mjs loader.test.mjs`: the mutant
+#                       (`MODE = 'strict'` to `'loose'` in mode.mjs) makes the
+#                       test `run reads its file` call `process.exit(2)`, and
+#                       loader.test.mjs fail an assert as it loads
+#   node-spec-interrupted-beside-a-kill
+#                       `timeout 5 node --test a.test.mjs b.test.mjs`: the
+#                       mutant (`LIMIT = 5` to `6` in code.mjs) fails the test
+#                       `limit is pinned` in a.test.mjs, and makes b.test.mjs
+#                       loop until the timeout stops node
+
+_NEVER_APPEARS = (
+    "red, but {!r} never appears beside a failure token - whatever failed, it was not the observer this row claims"
+)
+_NAMED_PARAMETER = (
+    "import pytest\nfrom calc import clamp\n\n\n@pytest.fixture\ndef bound():\n"
+    "    if clamp(9, 5) != 5:\n        raise RuntimeError('bound')\n    return 5\n\n\n"
+    "@pytest.mark.parametrize('name', ['App::Models::User'])\n"
+    "def test_clamp_at_the_bound(bound, name):\n    assert bound == 5\n"
+)
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize("flags", ["-q", "-q --tb=no -n 2", "-qq -n 2"])
+def test_a_setup_error_of_a_test_whose_parameter_holds_a_class_path_still_kills(tmp_path, flags, ci):
+    """The twin of the class rule at a parametrized id: pytest lists the kill
+    as `ERROR <path>::test_clamp_at_the_bound[App::Models::User]`, and the part
+    after its last `::`, `User]`, starts with a capital letter. Read as a class
+    pytest could not collect, the kill came off the stats line's `1 error` and
+    read 0 failed, a row that cannot run."""
+    if "-n" in flags:
+        pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_names.py": _NAMED_PARAMETER, "test_other.py": _OTHER})
+    proc = _run_table(project, [_pytest_row(flags, "if False:")], _ci_env(ci))
+    assert _ledger_rows(proc.stdout)[0][0].startswith("KILLED"), proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+def test_a_node_kill_beside_a_file_the_command_interrupts_is_one_kill(tmp_path):
+    """A `timeout` around `node --test` stops a file the mutant makes loop.
+    Node counts that file as cancelled, not in `fail N`, though it reports the
+    file's own test failed at its line 1, column 1. Taken off `fail 1`, which
+    counted only the row's kill, it made the kill read 0 failed, a row that
+    cannot run."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / "node-spec-interrupted-beside-a-kill.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="limit is pinned")])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'limit is pinned' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node-spec-exits-during-a-test", "run reads its file"),
+        ("node-tap-exits-during-a-test", "run reads its file"),
+        ("node-spec-heap-runs-out-during-a-test", "depth guard fires"),
+        ("node-tap-heap-runs-out-during-a-test", "depth guard fires"),
+        ("node-spec-load-failure-beside-an-exit", "run reads its file"),
+    ],
+)
+def test_a_node_test_file_whose_process_dies_during_a_test_reads_as_a_kill(tmp_path, capture, expect_red):
+    """A process that dies during a test (an exit the mutant makes the test
+    reach, a heap the test fills) never reports that test, and Node reports
+    its file as it reports one that cannot load. Taken off the count, it read
+    0 failed, a row that cannot run, though the row's own test went red. Node
+    printed no load error for it, so it counts: the row reads as a kill whose
+    name never appears. In the last capture another file fails to load, and
+    only that file's test comes off the count."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red=expect_red)])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NEVER_APPEARS.format(expect_red))}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_real_node_test_file_that_exits_during_a_test_reads_as_a_kill(tmp_path):
+    """The real `node --test`, with whatever reporter this Node defaults to,
+    over a test file whose test reaches `process.exit(2)` under the mutant,
+    beside a passing one."""
+    (tmp_path / "cli.mjs").write_text(
+        "export function run(args) {\n  if (args.length === 0) {\n    process.exit(2);\n  }\n"
+        "  return `read ${args[0]}`;\n}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (tmp_path / "cli.test.mjs").write_text(
+        "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+        "import { run } from './cli.mjs';\n"
+        "test('run reads its file', () => { assert.equal(run(['a.txt']), 'read a.txt'); });\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (tmp_path / "other.test.mjs").write_text(
+        "import { test } from 'node:test';\ntest('other passes', () => {});\n", encoding="utf-8", newline="\n"
+    )
+    row = {
+        "file": "cli.mjs",
+        "anchor": "if (args.length === 0) {",
+        "replacement": "if (args.length !== 0) {",
+        "command": "node --test cli.test.mjs other.test.mjs",
+        "expect_red": "run reads its file",
+    }
+    proc = _run_table(tmp_path, [row])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NEVER_APPEARS.format("run reads its file"))}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 1
+
+
+# A Node run whose one test passes and prints a banner, as `console.log` writes it.
+_FAKE_NODE = (
+    "import sys\n"
+    "sys.stdout.buffer.write('\\u2714 other passes (0.4ms)\\n=== fixtures seeded ===\\n"
+    "\\u2139 tests 1\\n\\u2139 pass 1\\n\\u2139 fail 0\\n'.encode('utf-8'))\n"
+)
+
+
+@pytest.mark.parametrize("before", ["a-banner", "node-prints-a-banner", "pytest-then-a-banner"])
+def test_a_rule_pytest_did_not_print_hides_no_count(tmp_path, before):
+    """Any `=` rule with text in it opened what was read as pytest's report,
+    with no pytest run at all, so no count after it was read: a script's
+    `===== rust =====` before cargo's count, or `=== fixtures seeded ===` that
+    a passing Node test prints, made cargo's kill read 0 failed or lose its
+    count. Only the rules of pytest's own sections open its report now."""
+    project = _pytest_project(tmp_path, {"test_other.py": _OTHER})
+    (project / "fake_cargo.py").write_text(_FAKE_CARGO, encoding="utf-8", newline="\n")
+    (project / "banner.py").write_text("print('===== rust =====')\n", encoding="utf-8", newline="\n")
+    (project / "fake_node.py").write_text(_FAKE_NODE, encoding="utf-8", newline="\n")
+    run = f'"{sys.executable}"'
+    first = {
+        "a-banner": f"{run} banner.py",
+        "node-prints-a-banner": f"{run} fake_node.py",
+        "pytest-then-a-banner": f"{run} -m pytest -q -p no:cacheprovider tests && {run} banner.py",
+    }[before]
+    row = _pytest_row("-q", "if False:", expect_red="clamp_at_the_bound")
+    row["command"] = f"{first} && {run} fake_cargo.py"
+    proc = _run_table(project, [row])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'clamp_at_the_bound' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "def test_other():\n    print('batch: 2 failed')\n",
+        "import warnings\n\n\ndef test_other():\n    warnings.warn('retry 3 failed')\n",
+    ],
+    ids=["passes-section", "warnings-section"],
+)
+def test_a_count_pytest_quotes_before_another_runner_is_not_read(tmp_path, body):
+    """The twin: a passing test's output, which `-rA` quotes in pytest's
+    PASSES section, and its warning, which the warnings summary quotes, open
+    pytest's report when no failure section comes first, so neither count is
+    read before cargo's."""
+    project = _pytest_project(tmp_path, {"test_other.py": body})
+    (project / "fake_cargo.py").write_text(_FAKE_CARGO, encoding="utf-8", newline="\n")
+    row = _pytest_row("-q -rA", "if False:", expect_red="clamp_at_the_bound")
+    row["command"] += f' && "{sys.executable}" fake_cargo.py'
+    proc = _run_table(project, [row])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'clamp_at_the_bound' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+# Runs pytest once for each argument, in turn, and exits with the worst code,
+# as `;` and `exit $((a|b))` would in bash, but under cmd.exe too.
+_RUN_EACH = (
+    "import subprocess\nimport sys\n\n"
+    "codes = [\n"
+    "    subprocess.call([sys.executable, '-m', 'pytest', '-p', 'no:cacheprovider', *flags.split()])\n"
+    "    for flags in sys.argv[1:]\n"
+    "]\n"
+    "sys.exit(max(codes))\n"
+)
+_PASSING_CARGO = (
+    "print('running 3 tests')\n"
+    "print('test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s')\n"
+)
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize("kill", [_AT_THE_BOUND, _SETUP_ERROR_KILL], ids=["assert", "setup-error"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        'run_each.py "-qq tests_b" "-q tests_c"',
+        'run_each.py "-qq -n 2 tests_b" "-q -n 2 tests_c"',
+        "passing_cargo.py && {pytest} -qq tests_b",
+    ],
+    ids=["qq-then-passing-q", "qq-then-passing-q-xdist", "passing-cargo-then-qq"],
+)
+def test_a_qq_run_that_lists_a_kill_leaves_the_count_unknown(tmp_path, command, kill, ci):
+    """A `-qq` run prints no stats line, so no count holds the kill it lists.
+    A passing `-q` run after it prints no `test session starts` and no report
+    rule, so the `-qq` run's listing was read as the `-q` run's and dropped at
+    its `1 passed`, and a `0 failed` another runner printed was taken for the
+    count: both read the kill 0 failed, a row that cannot run. A `-q` run's
+    progress line now opens a run of its own, and a `-qq` run that lists a
+    test leaves the count unknown whatever else the command printed."""
+    if "-n" in command:
+        pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {})
+    for folder, body in (("tests_b", kill), ("tests_c", _OTHER)):
+        (project / folder).mkdir()
+        (project / folder / f"test_{folder}.py").write_text(body, encoding="utf-8", newline="\n")
+    (project / "run_each.py").write_text(_RUN_EACH, encoding="utf-8", newline="\n")
+    (project / "passing_cargo.py").write_text(_PASSING_CARGO, encoding="utf-8", newline="\n")
+    run = f'"{sys.executable}"'
+    row = _pytest_row("-q", "if False:")
+    row["command"] = f"{run} " + command.format(pytest=f"{run} -m pytest -p no:cacheprovider")
+    proc = _run_table(project, [row], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: _UNPARSEABLE}, proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+# --- What a second review of #179's fix found ----------------------------------
+#
+# A Node test file's own failed test came off `fail N` on evidence from other
+# files: a test of another file whose name held the row's or matched it, a pass
+# mark a test printed, a pass in an earlier run of the command, or the
+# `Node.js v` line of an uncaught error a test's child process printed. Node
+# prints all of one file's lines together, the files in the order of their
+# paths and the file's own test last, so that test is now read only from the
+# lines after the previous file test or run summary, with a load error only as
+# the last of them. A top-level await that never settles stops a file loading
+# too, and an interrupted file whose path holds ` (` was not seen as
+# interrupted.
+#
+# The Node captures (Node 24.21.0, local paths replaced with /home/dev/work),
+# each from the spec reporter (node-spec-*) and with `--test-reporter=tap`
+# (node-tap-*). Unless it says otherwise, the mutant (`args.length === 0` to
+# `!== 0` in cli.mjs) makes the test `run reads its file` in cli.test.mjs call
+# `process.exit(2)`:
+#   *-exits-beside-a-pass-of-the-same-name
+#                       `node --test cli.test.mjs config.test.mjs`: a test of
+#                       config.test.mjs, also named `run reads its file`, passes
+#   *-exits-after-a-pass-of-a-longer-name
+#                       `node --test api.test.mjs cli.test.mjs`: a test of
+#                       api.test.mjs, `run reads its file twice`, passes
+#   node-spec-exits-after-a-printed-pass-mark
+#                       `node --test checklist.test.mjs cli.test.mjs`: a test of
+#                       checklist.test.mjs prints `✔ run reads its file`
+#   *-runs-twice-after-a-pass-of-the-same-name
+#                       `node --test config.test.mjs && node --test cli.test.mjs`
+#   *-exits-after-a-child-process-crash
+#                       `node --test bin.test.mjs cli.test.mjs`: a test of
+#                       bin.test.mjs runs `node bin.mjs --strict` and passes
+#                       when it throws, and that child prints its uncaught error
+#   *-exits-after-its-child-process-crash
+#                       `node --test cli.test.mjs`, with both tests in it
+#   *-exits-during-a-test-beside-a-kill
+#                       `node --test a.test.mjs b.test.mjs`: the mutant
+#                       (`LIMIT = 5` to `6` in limit.mjs) fails `limit is
+#                       pinned` in a.test.mjs and makes a test of b.test.mjs
+#                       call `process.exit(2)`
+#   *-top-level-await-never-settles
+#                       `node --test store.test.mjs other.test.mjs`: the mutant
+#                       (`READY = true` to `false` in db.mjs) leaves pending the
+#                       promise store.test.mjs awaits at its top level
+#   *-imported-top-level-await-never-settles
+#                       the same, with the await at the top level of db.mjs,
+#                       which store.test.mjs imports, for an event the mutant
+#                       renames
+#   node-spec-interrupted-in-a-folder-with-parens
+#                       node-spec-interrupted-beside-a-kill, with both test
+#                       files in a folder `t (1)`
+#   node-spec-interrupted-after-a-pass-in-a-folder-with-parens
+#   node-spec-interrupted-after-a-pass-under-a-root-with-parens
+#   node-spec-interrupted-after-a-pass
+#                       `timeout 5 node --test <a.test.mjs> <b.test.mjs>`: the
+#                       mutant (`CAP = 10` to `11` in code.mjs) fails `cap
+#                       holds`, passes `limit is pinned` in a.test.mjs and makes
+#                       b.test.mjs loop until the timeout stops node, the files
+#                       in `t (1)/`, named by their absolute paths under
+#                       `/home/dev/work/Their Work (3)/app` (as Node 20 names
+#                       them), and in `t1/`
+#   node-spec-exits-after-a-skipped-test
+#                       `node --test skip.test.mjs`: the file skips its one
+#                       test, `clamp at the bound`, and sets
+#                       `process.exitCode = 1`
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        "node-spec-exits-beside-a-pass-of-the-same-name",
+        "node-tap-exits-beside-a-pass-of-the-same-name",
+        "node-spec-exits-after-a-pass-of-a-longer-name",
+        "node-tap-exits-after-a-pass-of-a-longer-name",
+        "node-spec-exits-after-a-printed-pass-mark",
+        "node-spec-runs-twice-after-a-pass-of-the-same-name",
+        "node-tap-runs-twice-after-a-pass-of-the-same-name",
+    ],
+)
+def test_a_node_test_file_that_dies_beside_a_pass_from_elsewhere_reads_as_a_kill(tmp_path, capture):
+    """The row's test counted as reported, and the dying file's own test came
+    off the count, when any test anywhere in the output passed under a name
+    that held the row's: another file's test of the same name or of a longer
+    one, a pass mark a test printed, or a pass in an earlier run of the
+    command. The kill read 0 failed, a row that cannot run. Only a pass of the
+    row's test by its exact name, with the duration Node adds, after the
+    previous file test or run summary takes that test off now: the row reads
+    as a kill whose name never appears."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="run reads its file")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NEVER_APPEARS.format("run reads its file"))}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        "node-spec-exits-after-a-child-process-crash",
+        "node-tap-exits-after-a-child-process-crash",
+        "node-spec-exits-after-its-child-process-crash",
+        "node-tap-exits-after-its-child-process-crash",
+    ],
+)
+def test_a_node_test_file_that_dies_after_a_child_process_crash_reads_as_a_kill(tmp_path, capture):
+    """A test that checks a CLI crashes runs it as a child process, whose
+    uncaught error, its `Node.js v24.21.0` line included, Node prints among the
+    lines of the test's file. Counted as a load error wherever it stood, it
+    took the dying file's test off the count, and the kill read 0 failed. Such
+    an error counts as the file's own now only as the last thing Node prints
+    for the file, directly above its test, as each capture of a file that
+    cannot load has it."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="run reads its file")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NEVER_APPEARS.format("run reads its file"))}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        "node-spec-top-level-await-never-settles",
+        "node-tap-top-level-await-never-settles",
+        "node-spec-imported-top-level-await-never-settles",
+        "node-tap-imported-top-level-await-never-settles",
+    ],
+)
+def test_a_node_test_file_whose_top_level_await_never_settles_is_no_kill(tmp_path, capture):
+    """A top-level await the mutant leaves pending, in the test file or in a
+    module it imports, stops the file loading: no test in it runs, and Node
+    prints a warning in place of an error, exits the file with code 13 and
+    reports it failed. With no `Node.js v` line, it read as a kill whose name
+    never appears; it now reads 0 failed, as a file Node cannot load does."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="store opens")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("capture", "expected"),
+    [
+        ("node-spec-interrupted-in-a-folder-with-parens", ("KILLED", "exactly 'limit is pinned' went red")),
+        (
+            "node-spec-interrupted-after-a-pass-in-a-folder-with-parens",
+            ("MISATTRIBUTED", _NEVER_APPEARS.format("limit is pinned")),
+        ),
+        (
+            "node-spec-interrupted-after-a-pass-under-a-root-with-parens",
+            ("MISATTRIBUTED", _NEVER_APPEARS.format("limit is pinned")),
+        ),
+        ("node-spec-interrupted-after-a-pass", ("MISATTRIBUTED", _NEVER_APPEARS.format("limit is pinned"))),
+    ],
+)
+def test_a_node_file_interrupted_under_a_path_that_holds_a_paren_is_never_taken_off(tmp_path, capture, expected):
+    """Node lists a file it interrupts as `⚠ <path> (<path>:1:1)`. A path that
+    holds ` (` was split at its own ` (`, so the file was not seen as
+    interrupted, and its test, which `fail N` does not count, came off the
+    count: each capture read 0 failed. The last capture is the twin, with no
+    ` (` in its paths, which read right already."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="limit is pinned")])
+    assert _ledger_rows(proc.stdout) == {0: expected}, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize(
+    "capture", ["node-spec-exits-during-a-test-beside-a-kill", "node-tap-exits-during-a-test-beside-a-kill"]
+)
+def test_a_node_test_file_that_dies_beside_another_file_s_kill_is_one_more_red(tmp_path, capture):
+    """Node reports no failed test of a file's own when one of the file's tests
+    failed, so a failure listed above a file's test is another file's. The
+    row's kill in a.test.mjs took b.test.mjs's test, whose process died during
+    a test, off the count, and the row read exactly one red. It reads as the
+    kill among 2 failures now."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="limit is pinned")])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED+others", "'limit is pinned' went red among 2 failures")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+_CLI = (
+    "export function run(args) {\n  if (args.length === 0) {\n    console.error('usage: cli <file>');\n"
+    "    process.exit(2);\n  }\n  return `read ${args[0]}`;\n}\n"
+)
+_RUN_READS_ITS_FILE = "test('run reads its file', () => { assert.equal(run(['a.txt']), 'read a.txt'); });\n"
+_CLI_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { run } from './cli.mjs';\n"
+    + _RUN_READS_ITS_FILE
+)
+_BIN = (
+    "import { run } from './cli.mjs';\n"
+    "if (process.argv[2] === '--strict') throw new Error('strict mode needs a file');\n"
+    "console.log(run(process.argv.slice(2)));\n"
+)
+_BIN_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import { execFileSync } from 'node:child_process';\nimport { run } from './cli.mjs';\n"
+    "test('the bin refuses --strict', () => {\n"
+    "  assert.throws(() => execFileSync(process.execPath, ['bin.mjs', '--strict']));\n});\n"
+)
+_CLI_ROW = {
+    "file": "cli.mjs",
+    "anchor": "if (args.length === 0) {",
+    "replacement": "if (args.length !== 0) {",
+    "expect_red": "run reads its file",
+}
+_STORE_ROW = {"file": "db.mjs", "anchor": "READY = true;", "replacement": "READY = false;", "expect_red": "store opens"}
+_REAL_NODE_FILES = {
+    "a-pass-of-the-same-name": (
+        {
+            "cli.mjs": _CLI,
+            "cli.test.mjs": _CLI_TEST,
+            "config.test.mjs": "import { test } from 'node:test';\ntest('run reads its file', () => {});\n",
+        },
+        "cli.test.mjs config.test.mjs",
+        _CLI_ROW,
+    ),
+    "a-child-process-crash": (
+        {"cli.mjs": _CLI, "cli.test.mjs": _CLI_TEST, "bin.mjs": _BIN, "bin.test.mjs": _BIN_TEST},
+        "bin.test.mjs cli.test.mjs",
+        _CLI_ROW,
+    ),
+    "its-child-process-crash": (
+        {"cli.mjs": _CLI, "cli.test.mjs": _BIN_TEST + _RUN_READS_ITS_FILE, "bin.mjs": _BIN},
+        "cli.test.mjs",
+        _CLI_ROW,
+    ),
+    "a-top-level-await": (
+        {
+            "db.mjs": "export const READY = true;\nexport function connect() {\n"
+            "  return new Promise((resolve) => { if (READY) resolve('db'); });\n}\n",
+            "store.test.mjs": "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+            "import { connect } from './db.mjs';\nconst db = await connect();\n"
+            "test('store opens', () => { assert.equal(db, 'db'); });\n",
+            "other.test.mjs": "import { test } from 'node:test';\ntest('other passes', () => {});\n",
+        },
+        "store.test.mjs other.test.mjs",
+        _STORE_ROW,
+    ),
+}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize("case", list(_REAL_NODE_FILES))
+def test_real_node_test_file_is_read_by_its_own_lines(tmp_path, case, reporter):
+    """The real `node --test`, with each reporter: a file whose test reaches
+    `process.exit(2)` under the mutant, beside a pass of the same name in
+    another file or after a crash of a test's child process, reads as a kill,
+    and a file whose top-level await the mutant leaves pending reads 0
+    failed."""
+    files, paths, row = _REAL_NODE_FILES[case]
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8", newline="\n")
+    row = dict(row, command=f"node --test --test-reporter={reporter} {paths}")
+    proc = _run_table(tmp_path, [row])
+    detail = _ZERO_FAILED if case == "a-top-level-await" else _NEVER_APPEARS.format(row["expect_red"])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", detail)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1

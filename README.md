@@ -62,7 +62,7 @@ The `gate_status` comes straight from TEA's artifact: `gate_eval.py` never re-de
 
 ## Install
 
-Requires [Claude Code](https://claude.com/product/claude-code) >= 2.1.154 (the runtime UCG conducts), [Node.js](https://nodejs.org/) >= 22, [Python](https://www.python.org/) >= 3.11, [uv](https://docs.astral.sh/uv/), plus `git` and `gh` on PATH. The project needs BMAD Method 6 with TEA 1.27.x: TEA 2.0 and later, and BMAD 7, are not supported yet.
+Requires [Claude Code](https://claude.com/product/claude-code) >= 2.1.295 (the runtime UCG conducts), [Node.js](https://nodejs.org/) >= 22, [Python](https://www.python.org/) >= 3.11, [uv](https://docs.astral.sh/uv/), plus `git` and `gh` on PATH. The project needs BMAD Method 6 with TEA 1.27.x: TEA 2.0 and later, and BMAD 7, are not supported yet.
 
 **Tested with:** on 2026-10-16 a two-story Epic reached its Definition-of-Done with the versions below, under the `--light` profile (TEA test-design and the trace gate; the production gate set was not exercised). They are the versions that run used, not minimums.
 
@@ -76,9 +76,9 @@ Requires [Claude Code](https://claude.com/product/claude-code) >= 2.1.154 (the r
 npx bmad-module-ultracode-goal install
 ```
 
-You'll be prompted for a project name and whether to install the learning material; the skill installs for Claude Code. UCG is also available through the Claude plugin marketplace. See [Getting Started](./docs/getting-started.md) for that path.
+You'll be prompted for a project name and whether to install the learning material; the skill installs for Claude Code. UCG is also available through the Claude plugin marketplace. See [Getting Started](https://armelhbobdad.github.io/bmad-module-ultracode-goal/getting-started/#install) for that path.
 
-> **Hook security:** UCG installs `PreToolUse`/`Stop` hooks into your machine-local, gitignored `.claude/settings.local.json` at preflight, never into a committed file. They run zero-dependency Python scripts shipped in the skill. Claude Code treats that file as protected, so take a new Epic through preflight in an attended session (see [Getting Started](./docs/getting-started.md#hook-security)). See [SECURITY.md](SECURITY.md) for exactly what they execute and how to remove them.
+> **Hook security:** UCG installs `PreToolUse`/`Stop` hooks into your machine-local, gitignored `.claude/settings.local.json` at preflight, never into a committed file. They run zero-dependency Python scripts shipped in the skill. Claude Code treats that file as protected, so take a new Epic through preflight in an attended session (see [Getting Started](https://armelhbobdad.github.io/bmad-module-ultracode-goal/getting-started/#hook-security)). See [SECURITY.md](SECURITY.md) for exactly what they execute and how to remove them.
 
 ## Quick Start
 
@@ -91,7 +91,7 @@ Invoke the skill in natural language: "run this epic autonomously," "execute thi
 - `--retro`: run the close-out retrospective (interactive runs offer it anyway; headless runs it only when this flag is passed).
 - `--max-stories N`: drive at most **N** stories in this invocation, then finish normally through the report and the terminal JSON. It bounds the work, not the scope: the Epic's in-scope set is untouched, so the next invocation resumes where this one stopped. `scripts/drive_epic.py` uses it to run one story per process, so a long Epic's context dies with each story.
 
-See [How It Works](./docs/how-it-works.md) for the full six-stage walkthrough, routing conditions, and the headless contract.
+See [How It Works](https://armelhbobdad.github.io/bmad-module-ultracode-goal/how-it-works/) for the full six-stage walkthrough, routing conditions, and the headless contract.
 
 ## How UCG Compares
 
@@ -133,23 +133,23 @@ The JSON it prints is the same object UCG routes on: `verdict`, `gate_status`, a
 
 The docs are organized into three buckets: **Why** (start here), **Try** (do stuff), and **Reference** (look things up):
 
-**Why**: **[Why UltraCode Goal](./docs/why-ultracode-goal.md)**: the problem, the three enforcement layers, and when not to use it.
+**Why**: **[Why UltraCode Goal](https://armelhbobdad.github.io/bmad-module-ultracode-goal/why-ultracode-goal/)**: the problem, the three enforcement layers, and when not to use it.
 
 **Try**
 
-- **[Getting Started](./docs/getting-started.md)**: install, prerequisites, the flags, and your first autonomous run.
-- **[How It Works](./docs/how-it-works.md)**: the six stages, their routing conditions, and the headless five-key emit.
+- **[Getting Started](https://armelhbobdad.github.io/bmad-module-ultracode-goal/getting-started/)**: install, prerequisites, the flags, and your first autonomous run.
+- **[How It Works](https://armelhbobdad.github.io/bmad-module-ultracode-goal/how-it-works/)**: the six stages, their routing conditions, and the headless five-key emit.
 
 **Reference**
 
-- **[Architecture](./docs/architecture.md)**: the conductor model, enforcement layers in depth, and `customize.toml` resolution.
-- **[Gate Model](./docs/gate-model.md)**: how `gate_eval.py` maps `gate_status` to a verdict, and the production AND-signals.
-- **[Health Check](./docs/health-check.md)**: the terminal self-improvement loop: what it sends, privacy, and how to disable it.
-- **[Cross-Session Recall](./docs/cross-session-recall.md)**: the optional run history in a local store UCG owns: what a run reads and writes, the trust model, and how to enable it.
-- **[Knowledge-Graph Refresh](./docs/knowledge-graph-refresh.md)**: the optional graphify integration: preconditions, what it sends where, and what it never touches.
-- **[Operating Tips](./docs/operating-tips.md)**: field notes from real drives: the driver's stop reasons, sequencing by row order, and the verification traps.
-- **[Troubleshooting](./docs/troubleshooting.md)**: real failure modes and their remediations.
-- **[UCG vs bmad-loop](./docs/comparison.md)**: a side-by-side comparison with bmad-code-org's bmad-loop orchestrator.
+- **[Architecture](https://armelhbobdad.github.io/bmad-module-ultracode-goal/architecture/)**: the conductor model, enforcement layers in depth, and `customize.toml` resolution.
+- **[Gate Model](https://armelhbobdad.github.io/bmad-module-ultracode-goal/gate-model/)**: how `gate_eval.py` maps `gate_status` to a verdict, and the production AND-signals.
+- **[Health Check](https://armelhbobdad.github.io/bmad-module-ultracode-goal/health-check/)**: the terminal self-improvement loop: what it sends, privacy, and how to disable it.
+- **[Cross-Session Recall](https://armelhbobdad.github.io/bmad-module-ultracode-goal/cross-session-recall/)**: the optional run history in a local store UCG owns: what a run reads and writes, the trust model, and how to enable it.
+- **[Knowledge-Graph Refresh](https://armelhbobdad.github.io/bmad-module-ultracode-goal/knowledge-graph-refresh/)**: the optional graphify integration: preconditions, what it sends where, and what it never touches.
+- **[Operating Tips](https://armelhbobdad.github.io/bmad-module-ultracode-goal/operating-tips/)**: field notes from real drives: the driver's stop reasons, sequencing by row order, and the verification traps.
+- **[Troubleshooting](https://armelhbobdad.github.io/bmad-module-ultracode-goal/troubleshooting/)**: real failure modes and their remediations.
+- **[UCG vs bmad-loop](https://armelhbobdad.github.io/bmad-module-ultracode-goal/comparison/)**: a side-by-side comparison with bmad-code-org's bmad-loop orchestrator.
 
 Every run that reaches Finalize ends with a self-improvement check that can file a deduplicated GitHub issue with your approval, so **please let runs finish through Finalize**, or [open an issue](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose) directly. If UCG shipped an epic while you slept, a ⭐ helps others find it.
 

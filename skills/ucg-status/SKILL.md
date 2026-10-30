@@ -137,7 +137,7 @@ Three things are worth saying out loud alongside it:
 | re-loops this run | how many times this run re-entered a story, from the heartbeat |
 | profile | the profile the run is on, from the heartbeat |
 | updated | when the heartbeat was last written: this with `phase` is how a reader judges liveness |
-| stories | one row per in-scope story: phase, verdict, attempts, re-loops |
+| stories | one row per in-scope story: phase, verdict, attempts, re-loops; a story that still owes its gate evidence commit or a re-gate says so (see below) |
 | escalations | one block per escalation on disk (see below) |
 | deferred work | every row of the ledger, across every run it has accumulated |
 | decision log tail | the run's own account of itself, last lines - only when `--run-dir` was passed (§1) |
@@ -171,6 +171,39 @@ its own when the heartbeat no longer lists it, and not under escalations.
 A marker and an unreadable sidecar can both be on disk for one story, and the marker wins
 the render, so an `unpromoted` block is worth one directory check before you report the
 typed record as never written.
+
+**A story that still owes its gate evidence commit says so on its row.** When a repo commit
+hook rejects the gate's evidence commit in a way the gate may not answer, the gate
+escalates the story as `evidence-commit-rejected` and writes `.evidence-owed-<story_id>`
+beside the sidecar, listing the paths it left staged. `/ucg-resolve` deletes the sidecar
+when it closes that escalation and leaves the marker, which a resume removes once it has
+made the commit, or once it finds the listed paths committed already, by the operator or
+by a run that stopped between its commit and that removal. The story renders under
+stories as `gate evidence commit owed when its marker was written, after a commit hook
+rejected it: a resume makes the commit, or removes the marker when it finds the paths
+committed already`, with the marker's name and its paths, on that story's row, or on a
+line of its own when the heartbeat no longer lists it. Report the story as advanced at its
+gate with its evidence commit owed when the marker was written: while its
+`evidence-commit-rejected` block still renders under escalations, `/ucg-resolve` closes it
+first, and once the block is gone one resume of the run makes the commit, or finds it made
+and removes the marker without one. The render does not read git, so it does not say
+whether the paths are still staged. While this line renders the Epic is not finished, even
+when every story reads `done` and escalations read `n/a`: it is the state in which
+`drive_epic.py` stops `evidence-owed` rather than `all-done`.
+
+**A story that owes a re-gate says so on its row too.** When `/ucg-resolve` closes an
+`operator-evidence-owed` escalation, it deletes the sidecar and writes
+`.regate-<story_id>`, holding `sha=` the assessed commit and `decision=` the closed id, and
+the gate deletes that marker once the story's next verdict is logged. Until then nothing
+renders under escalations for the story, and a row the heartbeat still lists keeps the
+verdict that escalated it, so the story renders under stories as `re-gate owed: its
+operator-evidence-owed escalation was closed, and no gate verdict was logged since`, with
+the marker's name, its `sha=` and its `decision=`, on that story's row, or on a line of its
+own when the heartbeat no longer lists it. Report the story as waiting on a gate the next
+resume of the run runs: while the `sha=` commit is still `HEAD`, the resume re-gates that
+commit against the operator's records, and once a later commit has moved `HEAD` past it
+those records are stale and the resume routes the story as if the marker were absent. The
+render does not read `HEAD`, so it does not say which of the two holds.
 
 ## Optional diff-viewer affordance
 

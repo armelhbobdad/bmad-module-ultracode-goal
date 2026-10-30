@@ -148,7 +148,7 @@ test('renderTable: one row per tool with its minimum and tested versions, then t
   assert.strictEqual(table.length, 2 + Object.keys(tools).length + 1);
   // A product name reads as it is, a command name in backticks.
   const claude = table.find((row) => row.startsWith('| Claude Code '));
-  assert.match(claude, /\| 2\.1\.154 +\| 2\.1\.301 +\|/);
+  assert.match(claude, /\| 2\.1\.295 +\| 2\.1\.301 +\|/);
   // No minimum reads `none`, and no tested version `not recorded`.
   assert.match(
     table.find((row) => row.startsWith('| `gh` (GitHub CLI)')),
@@ -207,7 +207,7 @@ test('any docs page: "Node ≥ 20", and a Claude Code minimum written in prose',
   const root = makeRoot();
   write(root, 'docs/extra.md', '# Extra\n\nYou need Node ≥ 20.\n\nAnd Claude Code >= 2.1.139.\n');
   expectFinding(root, 'docs/extra.md', 3, /"Node ≥ 20" says 20/);
-  expectFinding(root, 'docs/extra.md', 5, /"Claude Code >= 2\.1\.139" says 2\.1\.139, but the Claude Code minimum .* is 2\.1\.154/);
+  expectFinding(root, 'docs/extra.md', 5, /"Claude Code >= 2\.1\.139" says 2\.1\.139, but the Claude Code minimum .* is 2\.1\.295/);
 });
 
 test('a minimum written as "3.11+" is read too', () => {
@@ -221,10 +221,10 @@ test('the README install line states the Claude Code minimum', () => {
   edit(
     root,
     'README.md',
-    '[Claude Code](https://claude.com/product/claude-code) >= 2.1.154',
+    '[Claude Code](https://claude.com/product/claude-code) >= 2.1.295',
     '[Claude Code](https://claude.com/product/claude-code)',
   );
-  expectFinding(root, 'README.md', 1, /no copy of the Claude Code minimum: the install line must say "Claude Code >= 2\.1\.154"/);
+  expectFinding(root, 'README.md', 1, /no copy of the Claude Code minimum: the install line must say "Claude Code >= 2\.1\.295"/);
 });
 
 test('an install line that no longer states the minimum in a form the check reads', () => {
@@ -411,34 +411,57 @@ test('a workflow that is not YAML: its versions cannot be read', () => {
 
 test('preflight: the highest MIN_ tuple is the Claude Code minimum', () => {
   const root = makeRoot();
-  edit(root, PREFLIGHT, 'MIN_WORKFLOWS = (2, 1, 154)', 'MIN_WORKFLOWS = (2, 1, 200)');
+  edit(root, PREFLIGHT, 'MIN_HOOK_ONFAILURE = (2, 1, 295)', 'MIN_HOOK_ONFAILURE = (2, 1, 300)');
   expectFinding(
     root,
     PREFLIGHT,
-    lineOf(root, PREFLIGHT, 'MIN_WORKFLOWS = (2, 1, 200)'),
-    /preflight refuses to launch below 2\.1\.200 \(MIN_WORKFLOWS\), but the Claude Code minimum .* is 2\.1\.154/,
+    lineOf(root, PREFLIGHT, 'MIN_HOOK_ONFAILURE = (2, 1, 300)'),
+    /preflight refuses to launch below 2\.1\.300 \(MIN_HOOK_ONFAILURE\), but the Claude Code minimum .* is 2\.1\.295/,
+  );
+});
+
+test('preflight: another tuple raised past the highest becomes the minimum', () => {
+  const root = makeRoot();
+  edit(root, PREFLIGHT, 'MIN_WORKFLOWS = (2, 1, 154)', 'MIN_WORKFLOWS = (2, 1, 296)');
+  expectFinding(
+    root,
+    PREFLIGHT,
+    lineOf(root, PREFLIGHT, 'MIN_WORKFLOWS = (2, 1, 296)'),
+    /preflight refuses to launch below 2\.1\.296 \(MIN_WORKFLOWS\), but the Claude Code minimum .* is 2\.1\.295/,
   );
 });
 
 test('preflight: a lower tuple that is not the highest does not move the minimum', () => {
   const root = makeRoot();
   edit(root, PREFLIGHT, 'MIN_GOAL = (2, 1, 139)', 'MIN_GOAL = (2, 1, 140)');
+  edit(root, PREFLIGHT, 'MIN_WORKFLOWS = (2, 1, 154)', 'MIN_WORKFLOWS = (2, 1, 294)');
   const { status, out } = run(root);
   assert.strictEqual(status, 0, out);
 });
 
-test('preflight: a missing one of the three minimums', () => {
+test('preflight: a missing one of the four minimums', () => {
   const root = makeRoot();
   edit(root, PREFLIGHT, 'MIN_AUTOMEMORY = (2, 1, 59)\n', '');
   expectFinding(root, PREFLIGHT, 1, /no MIN_AUTOMEMORY = \(major, minor, patch\) line: the Claude Code minimum has no complete copy/);
   const body = read(root, PREFLIGHT).replaceAll(/^MIN_[A-Z_]+ = .*$/gm, '');
   write(root, PREFLIGHT, body);
-  expectFinding(root, PREFLIGHT, 1, /no MIN_GOAL, MIN_WORKFLOWS, MIN_AUTOMEMORY = /);
+  expectFinding(root, PREFLIGHT, 1, /no MIN_GOAL, MIN_WORKFLOWS, MIN_AUTOMEMORY, MIN_HOOK_ONFAILURE = /);
+});
+
+test('preflight: a missing hook onFailure minimum, the highest of the four', () => {
+  const root = makeRoot();
+  edit(root, PREFLIGHT, 'MIN_HOOK_ONFAILURE = (2, 1, 295)\n', '');
+  expectFinding(root, PREFLIGHT, 1, /no MIN_HOOK_ONFAILURE = \(major, minor, patch\) line: the Claude Code minimum has no complete copy/);
 });
 
 test('preflight: an annotated tuple is read, and another MIN_ tuple is not a Claude Code minimum', () => {
   const root = makeRoot();
-  edit(root, PREFLIGHT, 'MIN_WORKFLOWS = (2, 1, 154)', 'MIN_WORKFLOWS: tuple[int, int, int] = (2, 1, 154)\nMIN_PYTHON = (3, 11, 0)');
+  edit(
+    root,
+    PREFLIGHT,
+    'MIN_HOOK_ONFAILURE = (2, 1, 295)',
+    'MIN_HOOK_ONFAILURE: tuple[int, int, int] = (2, 1, 295)\nMIN_PYTHON = (3, 11, 0)\nMIN_LATER = (2, 1, 400)',
+  );
   const { status, out } = run(root);
   assert.strictEqual(status, 0, out);
 });
@@ -491,7 +514,7 @@ test('no "Tested with" paragraph at all', () => {
 
 test('a hand edit to the table is reported, and --write puts it back', () => {
   const root = makeRoot();
-  edit(root, PREREQUISITES_DOC, '| 2.1.154 |', '| 2.1.100 |');
+  edit(root, PREREQUISITES_DOC, '| 2.1.295 |', '| 2.1.100 |');
   expectFinding(root, PREREQUISITES_DOC, lineOf(root, PREREQUISITES_DOC, START), /run node tools\/tool-requirements\.js --write/);
   const wrote = run(root, ['--write']);
   assert.strictEqual(wrote.status, 0, wrote.out);
@@ -554,7 +577,7 @@ test('schema: a kind that does not exist', () => {
 
 test('schema: a minimum above every tested version', () => {
   const root = makeRoot();
-  edit(root, REQUIREMENTS, 'minimum: "2.1.154"', 'minimum: "2.1.400"');
+  edit(root, REQUIREMENTS, 'minimum: "2.1.295"', 'minimum: "2.1.400"');
   expectFinding(
     root,
     REQUIREMENTS,
@@ -567,7 +590,7 @@ test('schema: Node, Python and Claude Code need a minimum, since the copy checks
   const root = makeRoot();
   edit(root, REQUIREMENTS, 'minimum: "22"', 'minimum: null');
   edit(root, REQUIREMENTS, 'minimum: "3.11"', 'minimum: null');
-  edit(root, REQUIREMENTS, 'minimum: "2.1.154"', 'minimum: null');
+  edit(root, REQUIREMENTS, 'minimum: "2.1.295"', 'minimum: null');
   const lines = read(root, REQUIREMENTS).split('\n');
   const minimumLine = (key) => lines.findIndex((line, index) => index > lines.indexOf(`  ${key}:`) && line.startsWith('    minimum:')) + 1;
   expectFinding(root, REQUIREMENTS, minimumLine('node'), /tools\.node\.minimum must be a version: the copy checks need it/);

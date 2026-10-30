@@ -1,0 +1,11 @@
+[2m[WebServer] [22m127.0.0.1 - - [30/Oct/2026 20:52:52] "GET /app.txt HTTP/1.1" 200 -
+ReferenceError: ok is not defined
+
+   at ../support/routes.mjs:2
+
+  1 | export const appPath = '/app.txt';
+> 2 | export const expectedBody = ok;
+    |                             ^
+  3 |
+    at /home/dev/work/load-failure/e2e/support/routes.mjs:2:29
+

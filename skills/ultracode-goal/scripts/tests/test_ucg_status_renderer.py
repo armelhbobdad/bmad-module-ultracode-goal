@@ -25,6 +25,8 @@ The tests pin those, in the order they can actually break:
     0, while a malformed INVOCATION still exits 2 - the fail-soft-on-sources,
     fail-closed-on-invocation split `gate_trail.py` already draws
   - an unpromoted crash residual renders as unpromoted, and a promoted one does not
+  - a story that still owes its gate evidence commit or a re-gate says so, from
+    the marker that outlives its escalation, and the skill quotes both lines
   - the optional diff-viewer affordance is confined to stdout
   - the skill is registered end to end (13-column CSV row, unique menu code, and
     `validate-skills.js` actually reading this new nested path)
@@ -73,6 +75,11 @@ VALIDATE_SKILLS = REPO_ROOT / "tools" / "validate-skills.js"
 MACHINE = "[machine-derived]"
 UNPROMOTED = "escalation (unpromoted: no gate verdict yet, or the session ended before Execute promoted it)"
 CEILING_NOTE = "turn ceiling reached; the story advanced at its gate, so this is a sizing note and nothing is pending"
+EVIDENCE_OWED = (
+    "gate evidence commit owed when its marker was written, after a commit hook rejected it: "
+    "a resume makes the commit, or removes the marker when it finds the paths committed already"
+)
+REGATE_OWED = "re-gate owed: its operator-evidence-owed escalation was closed, and no gate verdict was logged since"
 VIEWER = "hunk"
 
 MODULE_COLUMN = "UltraCode Goal"
@@ -598,6 +605,250 @@ def test_a_row_that_is_not_done_leaves_the_marker_pending(tmp_path):
     # Twin: the same dropped heartbeat entry with S1's row still in review.
     render = _ceiling_render(tmp_path, None, sprint_row="review")
     assert UNPROMOTED in _escalation_block(render, "S1")
+
+
+# --- a story that still owes its evidence commit or a re-gate (#179) --------------
+
+_SHA = "0123456789abcdef0123456789abcdef01234567"
+_OWED_LINE = f"{EVIDENCE_OWED} (`.evidence-owed-S1`: sprint-status.yaml, trace-S1.md)"
+_REGATE_LINE = f"{REGATE_OWED} (`.regate-S1`: sha={_SHA}, decision=R-7)"
+_EVIDENCE_SIDECAR = {
+    "kind": "evidence-commit-rejected",
+    "source": ".decision-log.md",
+    "decision_needed": "hook lint-staged rejected the evidence commit",
+    "evidence": "trace-S1.md left staged",
+}
+
+
+def _marker_render(tmp_path: Path, files: dict[str, str], *, listed: bool, verdict: str) -> str:
+    """A run whose story S1 got `verdict` at its gate, with `files` written beside
+    its heartbeat. With `listed` False the heartbeat no longer lists S1, as a
+    later invocation's snapshot does once S1 is out of scope."""
+    impl = tmp_path / "impl"
+    impl.mkdir(parents=True)
+    entries = [{"story": "S1", "phase": "gated", "verdict": verdict, "dev_attempts": 1, "reloop_count": 0}]
+    status = {"epic": "e", "story": "S1", "last_verdict": verdict, "stories": entries if listed else []}
+    (impl / "run-status.json").write_text(json.dumps(status), encoding="utf-8")
+    for name, text in files.items():
+        (impl / name).write_text(text, encoding="utf-8")
+    result = _run(["--impl-artifacts", str(impl), "--runs-root", str(tmp_path / "runs"), "--repo", str(tmp_path)])
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def _evidence_owed(tmp_path: Path, *, listed: bool, sidecar: bool = False, marker: bool = True) -> str:
+    """S1 advanced, and a repo commit hook rejected its gate evidence commit. With
+    `sidecar` its `evidence-commit-rejected` escalation is still open; without it
+    `/ucg-resolve` has closed it, which deletes the sidecar and leaves the marker."""
+    files = {"sprint-status.yaml": "development_status:\n  epic-1: done\n  S1: done\n"}
+    if marker:
+        files[".evidence-owed-S1"] = "sprint-status.yaml\ntrace-S1.md\n"
+    if sidecar:
+        files["escalation-S1.json"] = json.dumps(_EVIDENCE_SIDECAR)
+    return _marker_render(tmp_path, files, listed=listed, verdict="advance")
+
+
+def _regate_owed(tmp_path: Path, *, listed: bool, marker: bool = True) -> str:
+    """S1's gate read FAIL on owed operator evidence and escalated it as
+    `operator-evidence-owed`, and `/ucg-resolve` has closed that escalation,
+    which deletes the sidecar and writes `.regate-S1`."""
+    files = {"sprint-status.yaml": "development_status:\n  epic-1: in-progress\n  S1: review\n"}
+    if marker:
+        files[".regate-S1"] = f"sha={_SHA}\ndecision=R-7\n"
+    return _marker_render(tmp_path, files, listed=listed, verdict="escalate")
+
+
+def _stories(render: str) -> list[str]:
+    return render.split("## Stories", 1)[1].split("## Escalations", 1)[0].strip().splitlines()
+
+
+def _escalations(render: str) -> str:
+    return render.split("## Escalations", 1)[1].split("## Deferred work", 1)[0].strip()
+
+
+def test_an_owed_evidence_commit_renders_on_its_story_row(tmp_path):
+    # The escalation is closed, so nothing renders under escalations, and the
+    # marker is the one sign the Epic still owes a commit.
+    render = _evidence_owed(tmp_path, listed=True)
+    stories = _stories(render)
+    assert stories[0].startswith("- S1: phase=gated verdict=advance"), stories
+    assert stories[1] == f"  - {_OWED_LINE}", stories
+    assert _escalations(render) == "- n/a"
+
+
+def test_an_owed_evidence_commit_renders_after_the_heartbeat_drops_the_story(tmp_path):
+    assert _stories(_evidence_owed(tmp_path, listed=False)) == [f"- S1: {_OWED_LINE}"]
+
+
+def test_an_open_evidence_escalation_renders_both(tmp_path):
+    render = _evidence_owed(tmp_path, listed=True, sidecar=True)
+    assert "- kind: evidence-commit-rejected" in _escalation_block(render, "S1")
+    assert f"  - {_OWED_LINE}" in _stories(render)
+
+
+def test_an_owed_regate_renders_on_its_story_row(tmp_path):
+    # The heartbeat still holds the verdict that escalated S1, and with the
+    # sidecar gone nothing else says the story owes a gate.
+    render = _regate_owed(tmp_path, listed=True)
+    stories = _stories(render)
+    assert stories[0].startswith("- S1: phase=gated verdict=escalate"), stories
+    assert stories[1] == f"  - {_REGATE_LINE}", stories
+    assert _escalations(render) == "- n/a"
+
+
+def test_an_owed_regate_renders_after_the_heartbeat_drops_the_story(tmp_path):
+    assert _stories(_regate_owed(tmp_path, listed=False)) == [f"- S1: {_REGATE_LINE}"]
+
+
+def test_an_empty_or_unreadable_marker_still_renders(tmp_path):
+    files = {".evidence-owed-S1": "", ".regate-S1": "garbage\n"}
+    render = _marker_render(tmp_path, files, listed=False, verdict="advance")
+    assert _stories(render) == [
+        f"- S1: {EVIDENCE_OWED} (`.evidence-owed-S1`: n/a)",
+        f"- S1: {REGATE_OWED} (`.regate-S1`: sha=n/a, decision=n/a)",
+    ]
+
+
+def _owed_line_holds_in_both_states(line: str) -> bool:
+    """The evidence-owed line claims nothing the render cannot read. A resume can
+    find `.evidence-owed-<story>` with its paths committed already, by the
+    operator or by a run that stopped between its commit and the marker's
+    removal (references/gate.md), and the render reads no git: so the line says
+    the commit was owed when the marker was written, names both ways a resume
+    settles it, and never says the paths are still staged."""
+    return (
+        "owed when its marker was written" in line
+        and "a resume makes the commit" in line
+        and "or removes the marker when it finds the paths committed already" in line
+        and "staged" not in line
+    )
+
+
+def _committed_already(tmp_path: Path, *, committed: bool) -> str:
+    """S1's evidence-owed render in a repository where the paths the marker lists
+    are committed already, or staged and uncommitted."""
+    repo = tmp_path / "repo"
+    impl = repo / "impl"
+    impl.mkdir(parents=True)
+    status = {"epic": "e", "story": "S1", "last_verdict": "advance", "stories": []}
+    (impl / "run-status.json").write_text(json.dumps(status), encoding="utf-8")
+    (impl / "trace-S1.md").write_text("# trace\n", encoding="utf-8")
+    (impl / ".evidence-owed-S1").write_text("impl/trace-S1.md\n", encoding="utf-8")
+    git = ["git", "-C", str(repo), "-c", "user.email=t@example.com", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "impl/trace-S1.md"], check=True)
+    if committed:
+        subprocess.run([*git, "commit", "-q", "--no-verify", "-m", "evidence"], check=True)
+    result = _run(["--impl-artifacts", str(impl), "--runs-root", str(tmp_path / "runs"), "--repo", str(repo)])
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_the_owed_evidence_line_holds_when_the_paths_are_committed_already(tmp_path):
+    """The render cannot tell the two states apart, so its one line must be true
+    in both: it was the same line saying the paths stay staged in both."""
+    committed = _committed_already(tmp_path / "committed", committed=True)
+    staged = _committed_already(tmp_path / "staged", committed=False)
+    line = _stories(committed)
+    assert line == [f"- S1: {EVIDENCE_OWED} (`.evidence-owed-S1`: impl/trace-S1.md)"], line
+    assert _stories(staged) == line
+    assert _owed_line_holds_in_both_states(line[0])
+
+
+def test_the_both_states_predicate_rejects_the_first_wording():
+    # Twin: the line this branch first shipped said the paths stay staged until
+    # a resume commits them, which is false once they are committed already.
+    first = "gate evidence commit owed: a commit hook rejected it, and its paths stay staged until a resume commits them"
+    assert not _owed_line_holds_in_both_states(first)
+    assert not _owed_line_holds_in_both_states(EVIDENCE_OWED.replace(", or removes the marker", ", and removes the marker"))
+
+
+@pytest.mark.parametrize("listed", [True, False])
+def test_no_marker_renders_no_owed_line(tmp_path, listed):
+    # Twin: the same runs with neither marker on disk say nothing is owed, so
+    # the lines above key on the markers alone.
+    evidence = _evidence_owed(tmp_path / "evidence", listed=listed, marker=False)
+    regate = _regate_owed(tmp_path / "regate", listed=listed, marker=False)
+    for render in (evidence, regate):
+        assert EVIDENCE_OWED not in render and REGATE_OWED not in render
+        stories = _stories(render)
+        assert len(stories) == 1 and stories[0].startswith("- S1: phase=" if listed else "- n/a"), stories
+
+
+def _skill_explains_owed_markers(text: str) -> bool:
+    """The skill names both markers, quotes the line each renders, says where it
+    renders and what it means for the Epic or the story."""
+    flat = re.sub(r"\s+", " ", text)
+    return all(
+        phrase in flat
+        for phrase in (
+            "a story that still owes its gate evidence commit or a re-gate says so (see below)",
+            "writes `.evidence-owed-<story_id>` beside the sidecar, listing the paths it left staged",
+            f"The story renders under stories as `{EVIDENCE_OWED}`, with the marker's name and its paths, on that "
+            "story's row, or on a line of its own when the heartbeat no longer lists it.",
+            "which a resume removes once it has made the commit, or once it finds the listed paths committed already",
+            "Report the story as advanced at its gate with its evidence commit owed when the marker was written",
+            "`/ucg-resolve` closes it first, and once the block is gone one resume of the run makes the commit, or "
+            "finds it made and removes the marker without one. The render does not read git, so it does not say "
+            "whether the paths are still staged.",
+            "While this line renders the Epic is not finished, even when every story reads `done` and escalations "
+            "read `n/a`: it is the state in which `drive_epic.py` stops `evidence-owed` rather than `all-done`.",
+            "writes `.regate-<story_id>`, holding `sha=` the assessed commit and `decision=` the closed id",
+            f"the story renders under stories as `{REGATE_OWED}`, with the marker's name, its `sha=` and its "
+            "`decision=`, on that story's row, or on a line of its own when the heartbeat no longer lists it.",
+            "while the `sha=` commit is still `HEAD`, the resume re-gates that commit against the operator's records, "
+            "and once a later commit has moved `HEAD` past it those records are stale and the resume routes the story "
+            "as if the marker were absent.",
+        )
+    )
+
+
+def test_skill_explains_both_owed_markers():
+    assert _skill_explains_owed_markers(SKILL_MD.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    "opener",
+    [
+        "**A story that still owes its gate evidence commit says so on its row.**",
+        "**A story that owes a re-gate says so on its row too.**",
+    ],
+)
+def test_owed_marker_predicate_rejects_a_dropped_paragraph(opener):
+    text = SKILL_MD.read_text(encoding="utf-8")
+    mutant = "\n\n".join(paragraph for paragraph in text.split("\n\n") if not paragraph.startswith(opener))
+    assert mutant != text, "the mutant must actually drop the paragraph"
+    assert not _skill_explains_owed_markers(mutant)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The first wording of the table row.
+        ("; a story that still owes its gate evidence commit or a re-gate says so (see below)", ""),
+        # A literal that no longer matches the renderer's.
+        ("or removes the marker when it finds the paths committed already`", "`"),
+        ("and no gate verdict was logged since", "and the story is done"),
+        # The first wording: the evidence reported as staged, and a resume that always commits, which a
+        # resume that finds the paths committed already (references/gate.md) does not.
+        ("with its evidence commit owed when the marker was written", "with its evidence not committed"),
+        ("makes the commit, or finds it made and removes the marker without one.", "makes the commit."),
+        (" The render does not read git, so it does not say whether the paths are still staged.", ""),
+        ("which a resume removes once it has made the commit, or once it finds the listed paths committed already",
+         "which the resume that makes the commit removes"),
+        # A resume that commits past an open escalation, and a render read as finished.
+        ("`/ucg-resolve` closes it first, and once the block is gone",
+         "the resume commits at once, and once the block is gone"),
+        ("While this line renders the Epic is not finished", "While this line renders the Epic is finished"),
+        # A stale marker read as the re-gate of a commit the operator's records no longer cover.
+        ("the resume routes the story as if the marker were absent", "the resume re-gates the commit the marker names"),
+    ],
+)
+def test_owed_marker_predicate_rejects_a_changed_rule(old, new):
+    text = re.sub(r"\s+", " ", SKILL_MD.read_text(encoding="utf-8"))
+    mutant = text.replace(old, new)
+    assert mutant != text, "the mutant must actually change the text"
+    assert not _skill_explains_owed_markers(mutant)
 
 
 # --- the optional viewer affordance ------------------------------------------

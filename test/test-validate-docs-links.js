@@ -203,10 +203,11 @@ async function main() {
     );
   });
 
-  await testAsync('README.md and changes/README.md are read, resolving from their own folder', async () => {
+  await testAsync('README.md, SECURITY.md and changes/README.md are read, resolving from their own folder', async () => {
     const { cfg } = fixture({
       root: {
         'README.md': '## Verifying a skill\n\n[v](#verifying-a-skill) [x](#nope)\n',
+        'SECURITY.md': '## Hooks\n\n[h](#hooks) [c](CONTRIBUTING.md#the-checks)\n',
         'changes/README.md': '[c](../CONTRIBUTING.md#the-pull-request-check) [w](#which-type)\n\n## Which type\n',
         'CONTRIBUTING.md': '## The check\n',
       },
@@ -217,8 +218,166 @@ async function main() {
       r.issues.map((i) => `${i.file}: ${i.detail}`),
       [
         'README.md: anchor matches no heading in this file: #nope',
+        'SECURITY.md: anchor matches no heading in CONTRIBUTING.md: CONTRIBUTING.md#the-checks',
         `${path.join('changes', 'README.md')}: anchor matches no heading in CONTRIBUTING.md: ../CONTRIBUTING.md#the-pull-request-check`,
       ],
+    );
+  });
+
+  await testAsync('a link to the docs site is mapped back to its docs/ page and heading', async () => {
+    const site = 'https://example.com/base/';
+    const { cfg } = fixture(
+      {
+        root: {
+          'README.md': [
+            `[a](${site}) [b](https://example.com/base) [b2](https://example.com/base#nope) [c](${site}guide/)`,
+            `[d](${site}guide/#hook-security) [e](${site}guide) [f](${site}sub/) [g](${site}llms.txt)`,
+            `[h](https://example.com/other/guide/) [i](https://other.test/base/gide/)`,
+            `[x](${site}gide/) [y](${site}guide/#hook-securty) [z](${site}_internal/stability/) [w](${site}..%2FREADME/)`,
+          ].join('\n'),
+        },
+        docs: {
+          'index.md': '# Home\n',
+          'guide.md': '## Hook security\n',
+          'sub/index.md': 'x',
+          '_internal/stability.md': '## Stable\n',
+        },
+      },
+      ['--site-url', site],
+    );
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => `${i.file}: ${i.detail}`),
+      [
+        `README.md: anchor matches no heading in ${path.join('docs', 'index.md')}: https://example.com/base#nope`,
+        `README.md: site link names no page or file a docs build of this tree serves: ${site}gide/`,
+        `README.md: anchor matches no heading in ${path.join('docs', 'guide.md')}: ${site}guide/#hook-securty`,
+        `README.md: site link names no page or file a docs build of this tree serves: ${site}_internal/stability/`,
+        `README.md: site link names no page or file a docs build of this tree serves: ${site}..%2FREADME/`,
+      ],
+    );
+  });
+
+  await testAsync('a site link to a file passes only for a file the site serves', async () => {
+    const site = 'https://example.com/base/';
+    const { cfg } = fixture(
+      {
+        root: {
+          'README.md': [
+            `[l](${site}llms.txt) [f](${site}llms-full.txt) [p](${site}img/logo.svg) [n](${site}404.html)`,
+            `[r](${site}index.html) [g](${site}guide/index.html#hook-security) [s](${site}sub/index.html)`,
+            `[m](${site}guide.md) [ma](${site}guide.md#hook-security) [h](${site}guide.html) [t](${site}llms-ful.txt)`,
+            `[pm](${site}img/nope.svg) [pd](${site}img/) [gi](${site}gide/index.html) [ga](${site}guide/index.html#nope)`,
+            `[o](${site}404/) [i](${site}index/) [si](${site}sub/index/) [ii](${site}index/index.html)`,
+            `[ls](${site}llms.txt/) [ps](${site}img/logo.svg/) [ns](${site}404.html/) [gs](${site}guide/index.html/)`,
+            `[o4](${site}404) [ix](${site}index#home) [gx](${site}guide/index#hook-security) [gn](${site}guide/index#nope)`,
+            `[c](${site}..%2F..%2FREADME.md)`,
+          ].join('\n'),
+          'website/public/img/logo.svg': '<svg/>',
+        },
+        docs: {
+          'index.md': '# Home\n',
+          '404.md': '## Not found\n',
+          'guide.md': '## Hook security\n',
+          'sub/index.md': 'x',
+        },
+      },
+      ['--site-url', site],
+    );
+    const served = 'site link names no page or file a docs build of this tree serves';
+    const asFile = '(a page is linked by its route: x/ for docs/x.md)';
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => `${i.file}: ${i.detail}`),
+      [
+        `README.md: ${served}: ${site}guide.md ${asFile}`,
+        `README.md: ${served}: ${site}guide.md#hook-security ${asFile}`,
+        `README.md: ${served}: ${site}guide.html ${asFile}`,
+        `README.md: ${served}: ${site}llms-ful.txt`,
+        `README.md: ${served}: ${site}img/nope.svg`,
+        `README.md: ${served}: ${site}img/`,
+        `README.md: ${served}: ${site}gide/index.html`,
+        `README.md: anchor matches no heading in ${path.join('docs', 'guide.md')}: ${site}guide/index.html#nope`,
+        `README.md: ${served}: ${site}404/`,
+        `README.md: ${served}: ${site}index/`,
+        `README.md: ${served}: ${site}sub/index/`,
+        `README.md: ${served}: ${site}index/index.html`,
+        `README.md: ${served}: ${site}llms.txt/`,
+        `README.md: ${served}: ${site}img/logo.svg/`,
+        `README.md: ${served}: ${site}404.html/`,
+        `README.md: ${served}: ${site}guide/index.html/ ${asFile}`,
+        `README.md: anchor matches no heading in ${path.join('docs', 'guide.md')}: ${site}guide/index#nope`,
+        `README.md: ${served}: ${site}..%2F..%2FREADME.md`,
+      ],
+    );
+
+    const bare = fixture({ root: { 'README.md': `[n](${site}404.html)\n` }, docs: { 'index.md': '# Home\n' } }, ['--site-url', site]);
+    assert.deepStrictEqual(
+      (await runQuiet(bare.cfg)).issues.map((i) => i.detail),
+      [`${served}: ${site}404.html`],
+    );
+  });
+
+  await testAsync('a link to a file on the repository main is mapped back to that file', async () => {
+    const repo = 'https://git.test/owner/repo/';
+    const { cfg } = fixture(
+      {
+        root: { 'SECURITY.md': '## Hooks\n', 'skills/x/references/gate.md': 'g' },
+        docs: {
+          'a.md': [
+            `[s](${repo}blob/main/SECURITY.md#hooks) [t](${repo}tree/main/skills/x/references/) [r](${repo}tree/main)`,
+            `[i](${repo}issues/154) [v](${repo}blob/v1.0.0/OLD.md) [o](https://git.test/owner/other/blob/main/OLD.md)`,
+            `[m](${repo}blob/main/SECURITY.md#hook) [n](${repo}blob/main/CHANGELOG.md) [e](${repo}blob/main/..%2F..%2Fetc%2Fpasswd)`,
+          ].join('\n'),
+        },
+      },
+      ['--repo-url', repo],
+    );
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => i.detail),
+      [
+        `anchor matches no heading in SECURITY.md: ${repo}blob/main/SECURITY.md#hook`,
+        `repository link names no file on this tree: ${repo}blob/main/CHANGELOG.md`,
+        `repository link names no file on this tree: ${repo}blob/main/..%2F..%2Fetc%2Fpasswd`,
+      ],
+    );
+  });
+
+  test('the site and repository links default to where this repository publishes', () => {
+    // GitHub Pages serves a repository's site at <owner>.github.io/<repo>/.
+    const { repository } = require('../package.json');
+    const [, owner, repo] = repository.url.match(/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/);
+    const cfg = resolveConfig([]);
+    assert.strictEqual(cfg.siteUrl, `https://${owner}.github.io/${repo}/`);
+    assert.strictEqual(cfg.repoUrl, `https://github.com/${owner}/${repo}/`);
+  });
+
+  test('the validator names this repository only in its two URL constants, above its code', () => {
+    // A sibling repository keeps a copy of this validator whose code, from
+    // `const fs` on, is this one byte for byte, and this test file too: a
+    // repository's name below that line would make the two copies differ.
+    const { repository } = require('../package.json');
+    const [, owner, repo] = repository.url.match(/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/);
+    const source = fs.readFileSync(path.join(__dirname, '..', 'tools', 'validate-docs-links.js'), 'utf8');
+    const start = source.indexOf("\nconst fs = require('node:fs');\n");
+    assert.ok(start > 0, 'the validator must require node:fs on a line of its own');
+    for (const name of [owner, repo]) {
+      assert.ok(source.slice(0, start).includes(name), `the header must name ${name}`);
+      assert.ok(!source.slice(start).includes(name), `the code from \`const fs\` on must not name ${name}`);
+    }
+  });
+
+  await testAsync('a site link whose path decodes to a NUL byte is reported, not a crash', async () => {
+    const site = 'https://example.com/base/';
+    const { cfg } = fixture(
+      { root: { 'README.md': `[z](${site}x%00y) [y](${site}img/x%00y.svg) [g](${site}gide/)\n` }, docs: { 'index.md': '# Home\n' } },
+      ['--site-url', site],
+    );
+    const served = 'site link names no page or file a docs build of this tree serves';
+    assert.deepStrictEqual(
+      (await runQuiet(cfg)).issues.map((i) => i.detail),
+      [`${served}: ${site}x%00y`, `${served}: ${site}img/x%00y.svg`, `${served}: ${site}gide/`],
     );
   });
 

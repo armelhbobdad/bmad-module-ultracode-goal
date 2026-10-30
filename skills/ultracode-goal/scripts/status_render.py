@@ -6,7 +6,7 @@
 """Render what a run is doing, out of the files that run already produced.
 
 This is the READ side over the spine's own artifacts. It answers "what is this
-run doing right now" from six sources and nothing else:
+run doing right now" from eight sources and nothing else:
 
     | what              | source                                            |
     | heartbeat         | <impl-artifacts>/run-status.json                  |
@@ -14,6 +14,8 @@ run doing right now" from six sources and nothing else:
     | ledger            | the deferred-work ledger                          |
     | escalations       | .escalation-<story>.md and escalation-<story>.json|
     | advanced stories  | <impl-artifacts>/sprint-status.yaml `done` rows   |
+    | evidence owed     | <impl-artifacts>/.evidence-owed-<story>           |
+    | re-gate owed      | <impl-artifacts>/.regate-<story>                  |
     | runs index        | the runs root's per-run folders                   |
 
 STRICTLY READ-ONLY. It starts no run, attaches to no session, and opens no file
@@ -49,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -82,6 +85,30 @@ CEILING_NOTE = "turn ceiling reached; the story advanced at its gate, so this is
 # it with no raw marker beside it - so "never promoted" would be a false account
 # of a run that promoted just fine and then wrote badly.
 UNREADABLE = "escalation (typed record present but unreadable)"
+
+# An advanced story whose gate evidence commit a repo commit hook rejected. The
+# gate escalates it as `evidence-commit-rejected` and leaves
+# `.evidence-owed-<story>`, listing the paths it left staged, until a resume
+# makes the commit, or finds the paths committed already (by the operator, or by
+# a run that stopped between its commit and the marker's removal) and removes it
+# without one. `/ucg-resolve` deletes the sidecar when it closes the escalation
+# and leaves the marker, so from then on the marker is the one sign the commit
+# was owed, and drive_epic.py stops `evidence-owed` on it rather than
+# `all-done`. The render reads no git, so the line says what the marker held
+# when it was written and both ways a resume settles it, never that the paths
+# are still staged.
+EVIDENCE_OWED = (
+    "gate evidence commit owed when its marker was written, after a commit hook rejected it: "
+    "a resume makes the commit, or removes the marker when it finds the paths committed already"
+)
+
+# A story whose `operator-evidence-owed` escalation `/ucg-resolve` closed. The
+# close deletes the sidecar and writes `.regate-<story>`, holding `sha=` the
+# assessed commit and `decision=` the closed id, and the gate deletes the marker
+# once the story's next verdict is logged. Until then the heartbeat still shows
+# the verdict that escalated the story, nothing renders under escalations, and
+# the marker is the one sign the story still owes a gate.
+REGATE_OWED = "re-gate owed: its operator-evidence-owed escalation was closed, and no gate verdict was logged since"
 
 # The typed sidecar's four fields, rendered in this order.
 SIDECAR_FIELDS = ("kind", "source", "decision_needed", "evidence")
@@ -297,6 +324,40 @@ def ceiling_note_only(impl: Path, story: str, advanced: set[str]) -> bool:
     )
 
 
+def owed_notes(impl: Path) -> dict[str, list[str]]:
+    """Each story a marker says still owes work, with one line per marker.
+
+    Both markers outlive the escalation that wrote them, so once `/ucg-resolve`
+    has deleted its sidecar each is the one sign on disk that the story is not
+    finished. The line names the marker and what it holds: for
+    `.evidence-owed-<story>` the paths the gate left staged when it wrote it, one
+    per line in the file, and for `.regate-<story>` its `sha=` and `decision=`
+    values. An empty
+    or unreadable marker still renders, with `n/a` for what it would have named.
+    """
+    owed: dict[str, list[str]] = {}
+    for marker in sorted(impl.glob(".evidence-owed-*")):
+        story = marker.name[len(".evidence-owed-") :]
+        if not story or not marker.is_file():
+            continue
+        paths = [line.strip() for line in (read_text(marker) or "").splitlines() if line.strip()]
+        owed.setdefault(story, []).append(f"{EVIDENCE_OWED} (`{marker.name}`: {', '.join(paths) or NA})")
+    for marker in sorted(impl.glob(".regate-*")):
+        story = marker.name[len(".regate-") :]
+        if not story or not marker.is_file():
+            continue
+        # Read as preflight_check._regate_of reads it, without the git call that
+        # tells a marker naming HEAD from a stale one.
+        text = read_text(marker) or ""
+        values = []
+        for key in ("sha", "decision"):
+            match = re.search(r"^%s=(.*)$" % key, text, re.MULTILINE)
+            value = match.group(1).strip() if match else ""
+            values.append(f"{key}={value or NA}")
+        owed.setdefault(story, []).append(f"{REGATE_OWED} (`{marker.name}`: {', '.join(values)})")
+    return owed
+
+
 def known_runs(runs_root: Path | None) -> list[tuple[str, str]]:
     """Every run folder under the runs root, as (name, status).
 
@@ -428,6 +489,12 @@ def render(
         and story not in listed
         and ceiling_note_only(impl, story, advanced)
     ]
+    # A story that still owes its gate evidence commit, or a re-gate, says so
+    # the same way: on its row, or on a line of its own when it is not listed.
+    owed = owed_notes(impl)
+    unlisted_notes += [
+        f"- {story}: {note}" for story, notes in sorted(owed.items()) if story not in listed for note in notes
+    ]
     if not entries and not unlisted_notes:
         lines.append(f"- {NA}")
     for entry in entries:
@@ -440,6 +507,7 @@ def render(
         )
         if ceiling_note_only(impl, story, advanced):
             lines.append(f"  - {CEILING_NOTE} (`.escalation-{story}.md`)")
+        lines.extend(f"  - {note}" for note in owed.get(story, []))
         sha = gate_trail.baseline_sha(impl, story)
         if sha:
             lines.append(f"  - baseline `{sha}`")

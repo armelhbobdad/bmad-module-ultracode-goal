@@ -317,10 +317,13 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
     #   7. the per-story naming paragraph: TEA 1.27.2's trace writes fixed flat
     #      paths and ignores trace_output, so the run names the per-story paths;
     #   8. the `--story` paragraph, whose old "isolate into a fresh dir" remedy
-    #      now points at that naming step (the rollup refuses an isolated dir).
+    #      now points at that naming step (the rollup refuses an isolated dir);
+    #   9. the heading each gate cycle's entries go under, the one
+    #      `scripts/gate_trail.py` reads a recorded verdict from, which no
+    #      reference named before.
     live = _gate_run_section()
     added = [p for p in _paragraphs(live) if p not in _paragraphs(fixture)]
-    assert len(added) == 8, [p[:60] for p in added]
+    assert len(added) == 9, [p[:60] for p in added]
     assert _print_paragraph(live) in added, "the verdict-print paragraph must be one of them"
     provenance = [p for p in added if "gate-provenance" in p]
     assert len(provenance) == 1, [p[:60] for p in added]
@@ -330,6 +333,8 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
     assert len(commands) == 2, [p[:60] for p in added]
     delta = [p for p in added if "delta cycle profile" in p and "--cycle-profile" in p]
     assert len(delta) == 1, [p[:60] for p in added]
+    heading = [p for p in added if "`### Story <story_id>: gate`" in p]
+    assert len(heading) == 1, [p[:60] for p in added]
 
     # The removed side, asserted rather than commented: the ONLY fixture
     # paragraphs allowed to go missing from the live section are the two

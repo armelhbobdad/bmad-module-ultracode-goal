@@ -173,7 +173,7 @@ def project(tmp_path: Path) -> Path:
 def _report(
     project: Path,
     monkeypatch,
-    version="2.1.200",
+    version="2.1.301",
     protected=("main", "master"),
     profile="production",
 ):
@@ -207,6 +207,7 @@ def test_green_when_fully_prepared(project, monkeypatch):
 def test_green_report_checks_are_populated(project, monkeypatch):
     checks = _report(project, monkeypatch)["checks"]
     assert checks["goal_ok"] and checks["workflows_ok"] and checks["automemory_ok"]
+    assert checks["hook_onfailure_ok"] is True
     assert checks["git_branch"] == "ultracode/epic-7"
     assert checks["git_clean"] is True
     assert checks["framework_present"] is True
@@ -229,20 +230,41 @@ def test_green_invariant_budget_equals_blocker_count(project, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "version,expect_goal,expect_wf,expect_am",
+    "version,expect_goal,expect_wf,expect_am,expect_hf",
     [
-        ("2.1.200", True, True, True),     # all above minimums
-        ("2.1.139", True, False, True),    # exactly /goal min; below workflows
-        ("2.1.154", True, True, True),     # exactly workflows min
-        ("2.1.59", False, False, True),    # exactly auto-memory min; below others
-        ("2.1.0", False, False, False),    # below everything
+        ("2.1.301", True, True, True, True),      # all above minimums
+        ("2.1.295", True, True, True, True),      # exactly the hook onFailure min
+        ("2.1.294", True, True, True, False),     # one below it: no onFailure yet
+        ("2.1.200", True, True, True, False),     # above the old 2.1.154 floor, still below
+        ("2.1.154", True, True, True, False),     # exactly workflows min
+        ("2.1.139", True, False, True, False),    # exactly /goal min; below workflows
+        ("2.1.59", False, False, True, False),    # exactly auto-memory min; below others
+        ("2.1.0", False, False, False, False),    # below everything
+        ("2.2.0", True, True, True, True),        # a later minor
     ],
 )
-def test_version_flags(project, monkeypatch, version, expect_goal, expect_wf, expect_am):
-    checks = _report(project, monkeypatch, version=version)["checks"]
+def test_version_flags(project, monkeypatch, version, expect_goal, expect_wf, expect_am, expect_hf):
+    report = _report(project, monkeypatch, version=version)
+    checks = report["checks"]
     assert checks["goal_ok"] is expect_goal
     assert checks["workflows_ok"] is expect_wf
     assert checks["automemory_ok"] is expect_am
+    assert checks["hook_onfailure_ok"] is expect_hf
+    # Any flag below its minimum is the one cc_version blocker, and nothing else is.
+    every = expect_goal and expect_wf and expect_am and expect_hf
+    assert ("cc_version" in _blocker_ids(report)) is (not every)
+    assert report["green"] is every
+
+
+def test_below_the_hook_onfailure_minimum_alone_names_that_primitive(project, monkeypatch):
+    """2.1.294 has /goal, workflows and auto memory, and drops the hook setting
+    `"onFailure": "block"` silently, so a guard that crashes there lets the
+    call through. The blocker names that primitive and no other."""
+    report = _report(project, monkeypatch, version="2.1.294")
+    blocker = next(b for b in report["blockers"] if b["id"] == "cc_version")
+    assert blocker["detail"] == "Claude Code 2.1.294 is below the minimum for: hook-onFailure>=2.1.295"
+    assert blocker["remediable"] is False
+    assert report["budget"] == 1
 
 
 def test_stale_version_is_a_blocker(project, monkeypatch):
@@ -433,7 +455,7 @@ def test_non_git_dir_is_a_blocker(tmp_path, monkeypatch):
     (bare / "_bmad" / "tea").mkdir(parents=True)
     (bare / "_bmad" / "tea" / "config.yaml").write_text("test_framework: auto\n", encoding="utf-8")
     (bare / "playwright.config.ts").write_text("export default {};\n", encoding="utf-8")
-    monkeypatch.setattr(pf, "_cc_version", lambda: ("2.1.200", (2, 1, 200)))
+    monkeypatch.setattr(pf, "_cc_version", lambda: ("2.1.301", (2, 1, 301)))
     report = pf.build_report(
         project_root=bare.resolve(),
         epic="7",
@@ -776,8 +798,8 @@ def test_tea_flags_parsed_from_yaml(project, monkeypatch):
 
 def test_tea_flags_empty_when_config_absent(project, monkeypatch):
     missing = project / "_bmad" / "tea" / "nope.yaml"
-    parsed = pf._parse_semver("2.1.200")
-    monkeypatch.setattr(pf, "_cc_version", lambda: ("2.1.200", parsed))
+    parsed = pf._parse_semver("2.1.301")
+    monkeypatch.setattr(pf, "_cc_version", lambda: ("2.1.301", parsed))
     report = pf.build_report(
         project_root=project.resolve(),
         epic="7",

@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The `PreToolUse` guard now refuses a tool call when it raises an error while deciding on it, and names the error in the deny, where it used to exit 1 with no decision, which Claude Code reads as no objection, so the call ran unchecked. That covers a hook event that is not a JSON object, a Bash `tool_input` that is not one, JSON nested deeper than Python reads, a `cwd` that is not a string, and any other error no narrower check catches. A Bash input that holds no command (`null` or an empty array) is still read as an empty command, and the guard exits 0 or 2 and nothing else.

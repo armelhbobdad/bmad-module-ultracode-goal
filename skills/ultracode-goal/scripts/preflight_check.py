@@ -15,7 +15,9 @@ mechanically true right now.
 
 What counts as a mechanical blocker (each adds 1 to `budget`):
   - the Claude Code primitives needed for an unattended run are below the
-    minimum versions the run depends on (`/goal`, dynamic workflows, auto memory),
+    minimum versions the run depends on (`/goal`, dynamic workflows, auto memory,
+    and the hook setting `"onFailure": "block"` that makes a guard which cannot
+    run refuse the tool call),
   - no test framework is detected (no playwright/cypress/jest/vitest config,
     no pytest config/conftest.py, and no real package.json `test` script),
   - a story skill the run delegates story creation or implementation to
@@ -49,7 +51,9 @@ Code version, a broken git repo, an unborn HEAD, a missing UCG story skill,
 a missing TEA skill; true-RED items never reach this script).
 
 Version gates (from the grounded constraints in .decision-log.md):
-  /goal >= 2.1.139, dynamic workflows >= 2.1.154, auto memory >= 2.1.59.
+  /goal >= 2.1.139, dynamic workflows >= 2.1.154, auto memory >= 2.1.59,
+  hook onFailure >= 2.1.295 (older versions ignore the key, so a guard that
+  crashes, cannot start or times out lets the call through there).
 
 Output: JSON to stdout. Exit 0 whenever a payload is produced (a non-green
 preflight is a valid result, not an error). Exit 2 is reserved for invocation
@@ -69,11 +73,15 @@ false, epics: []), not an error — rollup still exits 0.
 Resume-manifest mode (`--assert-armed`): the one deterministic read a resumed
 run makes in place of the tool-action-per-fact environment sweep the resume
 rule otherwise costs (references/execute.md, resume). It asserts the epic
-branch, both hooks with the all-tools PreToolUse matcher, the five injected
-hook env vars (accepted from the hook command strings OR the inherited process
-env, both of which preflight step 5 permits), and the UCG story skills (a
-manual deletion between spawns, or an interrupted UCG install or update, can
-remove them), reports the recall latch WITHOUT
+branch, both hooks with the all-tools PreToolUse matcher, `"onFailure":
+"block"` on every guard item (an arming made by UCG 3.x or earlier has none,
+and its resume re-merges the hooks: references/execute.md), each UCG hook
+command splitting, the way the shell splits it, into `<env> uv run <script>`
+(an unquoted path with a space does not, and that hook never starts), the
+five injected hook env vars (accepted from the hook command strings OR the
+inherited process env, both of which preflight step 5 permits), and the UCG
+story skills (a manual deletion between spawns, or an interrupted UCG install
+or update, can remove them), reports the recall latch WITHOUT
 certifying it (re-latching stays a model-owned Stage 1 step on every resume;
 a present latch also reports its `latch_version` and a derived `store_ok`
 colour, red for anything but a green latch v2),
@@ -98,6 +106,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -106,6 +115,10 @@ from pathlib import Path
 MIN_GOAL = (2, 1, 139)
 MIN_WORKFLOWS = (2, 1, 154)
 MIN_AUTOMEMORY = (2, 1, 59)
+# `"onFailure": "block"` on a command hook: a guard that cannot start, exits
+# with a code other than 0 or 2, or times out refuses the call (2.1.295 added
+# it; older versions drop the key silently and let such a call through).
+MIN_HOOK_ONFAILURE = (2, 1, 295)
 
 # Root-level config filenames that signal a scaffolded JS/browser test framework
 # (playwright / cypress / jest / vitest). Pytest and npm-driven harnesses are
@@ -721,6 +734,7 @@ def build_report(
     goal_ok = _meets(cc_ver, MIN_GOAL)
     workflows_ok = _meets(cc_ver, MIN_WORKFLOWS)
     automemory_ok = _meets(cc_ver, MIN_AUTOMEMORY)
+    hook_onfailure_ok = _meets(cc_ver, MIN_HOOK_ONFAILURE)
 
     git_unborn = _git_unborn(project_root)
     git_branch = _git_branch(project_root)
@@ -745,6 +759,7 @@ def build_report(
         "goal_ok": goal_ok,
         "workflows_ok": workflows_ok,
         "automemory_ok": automemory_ok,
+        "hook_onfailure_ok": hook_onfailure_ok,
         "git_branch": git_branch,
         "git_clean": git_clean,
         "git_unborn": git_unborn,
@@ -764,7 +779,7 @@ def build_report(
     # --- Mechanical blockers (each counts toward the budget) ---
 
     # Primitive versions: any one being below minimum blocks the unattended run.
-    if not (goal_ok and workflows_ok and automemory_ok):
+    if not (goal_ok and workflows_ok and automemory_ok and hook_onfailure_ok):
         below = []
         if not goal_ok:
             below.append("/goal>=%d.%d.%d" % MIN_GOAL)
@@ -772,6 +787,8 @@ def build_report(
             below.append("workflows>=%d.%d.%d" % MIN_WORKFLOWS)
         if not automemory_ok:
             below.append("auto-memory>=%d.%d.%d" % MIN_AUTOMEMORY)
+        if not hook_onfailure_ok:
+            below.append("hook-onFailure>=%d.%d.%d" % MIN_HOOK_ONFAILURE)
         detail = (
             "Claude Code %s is below the minimum for: %s"
             % (cc_raw or "(version unreadable)", ", ".join(below))
@@ -931,8 +948,9 @@ _GUARD_SCRIPT = "guard_pretooluse.py"
 _BUDGET_SCRIPT = "budget_stop.py"
 
 
-def _hook_commands(settings: dict) -> list[tuple[str, str | None, str]]:
-    """Every (event, matcher, command) triple nested under hooks.<Event>[].hooks[].
+def _hook_entries(settings: dict) -> list[tuple[str, str | None, dict]]:
+    """Every (event, matcher, inner item) nested under hooks.<Event>[].hooks[]
+    whose item carries a string `command`.
 
     The entries are nested, not top-level (preflight.md's stale-hook bullet
     documents the shape); a malformed layer contributes nothing rather than
@@ -941,7 +959,7 @@ def _hook_commands(settings: dict) -> list[tuple[str, str | None, str]]:
     hooks.Stop is never invoked before a tool call, so an event-blind read would
     certify an arming that enforces nothing.
     """
-    out: list[tuple[str, str | None, str]] = []
+    out: list[tuple[str, str | None, dict]] = []
     hooks = settings.get("hooks")
     if not isinstance(hooks, dict):
         return out
@@ -957,23 +975,77 @@ def _hook_commands(settings: dict) -> list[tuple[str, str | None, str]]:
                 continue
             for entry in inner:
                 if isinstance(entry, dict) and isinstance(entry.get("command"), str):
-                    out.append(
-                        (
-                            event,
-                            matcher if isinstance(matcher, str) else None,
-                            entry["command"],
-                        )
-                    )
+                    out.append((event, matcher if isinstance(matcher, str) else None, entry))
     return out
 
 
+def _hook_commands(settings: dict) -> list[tuple[str, str | None, str]]:
+    """Every (event, matcher, command) triple nested under hooks.<Event>[].hooks[]."""
+    return [(e, m, entry["command"]) for e, m, entry in _hook_entries(settings)]
+
+
+# A leading `NAME=value` word: an assignment the shell applies to the command
+# that follows it, not a command of its own.
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _last_path_part(word: str) -> str:
+    return re.split(r"[/\\]", word)[-1]
+
+
+def _command_problem(command: str, script: str) -> str | None:
+    """Why the shell would not start `script` from this hook command, or None.
+
+    Preflight writes each UCG hook as `<env> uv run '<path to the script>'`:
+    leading NAME=value words, then `uv run` and the script path, with each
+    injected value and the path in single quotes. Claude Code hands the string
+    to a shell, which splits it at every unquoted space, so an unquoted value
+    or path that holds one (a project under `~/My Projects`) makes the rest of
+    it the command the shell runs, or the file `uv run` is given, and the hook
+    never starts. Under the guard's `"onFailure": "block"` every tool call is
+    then refused, and a Stop hook that cannot start is skipped without a word.
+    The command is split with POSIX shell rules (shlex) and never run, so the
+    script path is not opened: a moved skill is not this check's to find.
+    """
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return "its quoting does not parse"
+    index = 0
+    while index < len(words) and _ASSIGNMENT.match(words[index]):
+        index += 1
+    words = words[index:]
+    if not words or _last_path_part(words[0]) not in ("uv", "uv.exe"):
+        return "the shell would run %s as the command, not uv" % (json.dumps(words[0]) if words else "nothing")
+    if len(words) < 2 or words[1] != "run":
+        return "uv is given %s, not run" % (json.dumps(words[1]) if len(words) > 1 else "nothing")
+    index = 2
+    while index < len(words) and words[index].startswith("-"):
+        index += 1
+    if index >= len(words) or _last_path_part(words[index]) != script:
+        return "uv run would be given %s as the script, not a path ending in %s" % (
+            json.dumps(words[index]) if index < len(words) else "nothing",
+            script,
+        )
+    return None
+
+
 def _assert_hooks(project_root: Path) -> dict:
-    """Are both UCG hooks armed, with the PreToolUse matcher in all-tools form?
+    """Are both UCG hooks armed, with the PreToolUse matcher in all-tools form,
+    `"onFailure": "block"` on every guard item, and every UCG hook command one
+    the shell splits into `<env> uv run <script>`?
 
     Matcher assertion mirrors preflight step 5: `*` or an absent matcher key both
     select every tool; anything narrower (the observed `Bash`-only arming) leaves
-    the Cross-Session Recall invariant enforcing nothing. Fail-closed: a missing
-    or unparseable settings file is NOT armed.
+    the Cross-Session Recall invariant enforcing nothing. The failure policy is
+    compared exactly: without the key (every arming UCG 3.x or earlier made) a
+    guard that crashes, cannot start or times out lets the call through, and a
+    value other than "continue" or "block" (`"Block"`) makes Claude Code drop
+    the whole item, so the guard does not run at all. The Stop budget hook's
+    item is not read for it: Claude Code ignores the key on Stop. Each UCG
+    command, the budget hook's too, is read the way the shell splits it
+    (`_command_problem`). Fail-closed: a missing or unparseable settings file
+    is NOT armed.
     """
     settings_path = project_root / ".claude" / "settings.local.json"
     try:
@@ -984,19 +1056,69 @@ def _assert_hooks(project_root: Path) -> dict:
             "guard_present": False,
             "budget_present": False,
             "matcher_all_tools": False,
+            "guard_on_failure_block": False,
+            "guard_on_failure": [],
+            "commands_start_scripts": False,
+            "command_problems": [],
             "ok": False,
         }
-    triples = _hook_commands(settings)
-    guard = [(m, c) for e, m, c in triples if _GUARD_SCRIPT in c and e == "PreToolUse"]
-    budget = [c for e, _, c in triples if _BUDGET_SCRIPT in c and e == "Stop"]
+    entries = _hook_entries(settings)
+    guard = [(m, entry) for e, m, entry in entries if _GUARD_SCRIPT in entry["command"] and e == "PreToolUse"]
+    budget = [entry for e, _, entry in entries if _BUDGET_SCRIPT in entry["command"] and e == "Stop"]
     matcher_ok = bool(guard) and all(m is None or m == "*" for m, _ in guard)
+    # One value per guard item, in file order: None where the key is absent.
+    on_failure = [entry.get("onFailure") for _, entry in guard]
+    on_failure_ok = bool(guard) and all(v == "block" for v in on_failure)
+    # One line per UCG item, in file order, whose command would not start its
+    # script; empty when every one would (or when there is none to read).
+    problems: list[str] = []
+    for event, script, entry in [("PreToolUse", _GUARD_SCRIPT, e) for _, e in guard] + [
+        ("Stop", _BUDGET_SCRIPT, e) for e in budget
+    ]:
+        problem = _command_problem(entry["command"], script)
+        if problem is not None:
+            problems.append("%s under %s: %s" % (script, event, problem))
     return {
         "settings_readable": True,
         "guard_present": bool(guard),
         "budget_present": bool(budget),
         "matcher_all_tools": matcher_ok,
-        "ok": bool(guard) and bool(budget) and matcher_ok,
+        "guard_on_failure_block": on_failure_ok,
+        "guard_on_failure": on_failure,
+        "commands_start_scripts": not problems,
+        "command_problems": problems,
+        "ok": bool(guard) and bool(budget) and matcher_ok and on_failure_ok and not problems,
     }
+
+
+def _on_failure_reason(values: list) -> str:
+    """The named reason for a guard item without `"onFailure": "block"`."""
+    shown = ", ".join("missing" if v is None else json.dumps(v) for v in values)
+    return (
+        'PreToolUse guard is not armed with "onFailure": "block" on every item '
+        "(found: %s): without it a guard that crashes, cannot start or times out "
+        "lets the tool call run unchecked, and a value other than \"continue\" or "
+        '"block" makes Claude Code drop the item, so the guard does not run at '
+        "all. Re-merge the hooks as preflight.md step 5's Hooks bullet says "
+        "(replace, never append; on a resume purge nothing, as execute.md's "
+        "re-assertion sweep says), then assert again" % shown
+    )
+
+
+def _command_reason(problems: list[str]) -> str:
+    """The named reason for a UCG hook command the shell would not start."""
+    return (
+        "UCG hook command does not start its script as written (%s): Claude Code "
+        "runs it through a shell, which splits it at every unquoted space, so a "
+        "path holding one becomes the command the shell runs, or the script uv "
+        "is given, and the hook never starts (Claude Code then refuses every "
+        "tool call under the guard's \"onFailure\": \"block\", and skips a "
+        "budget hook that cannot start without a word). Re-merge the hooks as "
+        "preflight.md step 5's Hooks bullet says, each injected value and the "
+        "script path in single quotes (KEY='value' uv run '<path>'; replace, "
+        "never append; on a resume purge nothing, as execute.md's re-assertion "
+        "sweep says), then assert again" % "; ".join(problems)
+    )
 
 
 def _assert_hook_env(project_root: Path) -> dict:
@@ -1466,6 +1588,10 @@ def build_assert_armed(
                 "PreToolUse matcher is not the all-tools form; the recall "
                 "invariant enforces nothing (preflight.md step 5)"
             )
+        if hooks["guard_present"] and not hooks["guard_on_failure_block"]:
+            reasons.append(_on_failure_reason(hooks["guard_on_failure"]))
+        if hooks["command_problems"]:
+            reasons.append(_command_reason(hooks["command_problems"]))
     if not hook_env["ok"]:
         reasons.append(
             "hook env not fully injected; enforcing hardcoded fallbacks for: %s"
@@ -1522,8 +1648,10 @@ def main(argv: list[str] | None = None) -> int:
         "--assert-armed",
         action="store_true",
         help="Emit only the resume manifest: branch, hooks (incl. the all-tools "
-        "matcher), injected hook env, the UCG story skills (ucg-create-story, "
-        "ucg-dev-story), the recall latch "
+        "matcher, the guard's \"onFailure\": \"block\", and each hook command "
+        "splitting into <env> uv run <script>), injected hook env, "
+        "the UCG story "
+        "skills (ucg-create-story, ucg-dev-story), the recall latch "
         "(reported, never certified), and, with --story, the story's "
         "artifact-derived resume route. Exit 0 iff branch+hooks+env+skills are "
         "armed. When set, --epic, --tea-config, and the mechanical preflight "

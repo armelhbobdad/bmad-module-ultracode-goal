@@ -1,0 +1,29 @@
+file:///home/dev/work/load-failure/calc.mjs:2
+  if (x > hi {
+             ^
+
+SyntaxError: Unexpected token '{'
+    at compileSourceTextModule (node:internal/modules/esm/utils:346:16)
+    at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:146:18)
+    at #translate (node:internal/modules/esm/loader:497:12)
+    at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:544:27)
+
+Node.js v20.19.5
+✖ /home/dev/work/load-failure/clamp.test.mjs (36.298045ms)
+  'test failed'
+
+✔ other passes (1.202643ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 50.485113
+
+✖ failing tests:
+
+test at clamp.test.mjs:1:1
+✖ /home/dev/work/load-failure/clamp.test.mjs (36.298045ms)
+  'test failed'

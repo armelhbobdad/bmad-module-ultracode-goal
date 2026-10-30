@@ -1,0 +1,28 @@
+file:///home/dev/work/exits-after-a-child-process-crash/bin.mjs:2
+if (process.argv[2] === '--strict') throw new Error('strict mode needs a file');
+                                          ^
+
+Error: strict mode needs a file
+    at file:///home/dev/work/exits-after-a-child-process-crash/bin.mjs:2:43
+    at ModuleJob.run (node:internal/modules/esm/module_job:561:25)
+    at async node:internal/modules/esm/loader:647:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.21.0
+✔ the bin refuses --strict (51.889288ms)
+usage: cli <file>
+✖ cli.test.mjs (71.932273ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 141.703929
+
+✖ failing tests:
+
+test at cli.test.mjs:1:1
+✖ cli.test.mjs (71.932273ms)
+  'test failed'

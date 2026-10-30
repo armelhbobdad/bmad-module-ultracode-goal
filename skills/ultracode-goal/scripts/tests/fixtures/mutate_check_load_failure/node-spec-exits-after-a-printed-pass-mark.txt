@@ -1,0 +1,18 @@
+✔ run reads its file
+✔ the checklist prints (2.316306ms)
+usage: cli <file>
+✖ cli.test.mjs (78.43342ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 96.870808
+
+✖ failing tests:
+
+test at cli.test.mjs:1:1
+✖ cli.test.mjs (78.43342ms)
+  'test failed'

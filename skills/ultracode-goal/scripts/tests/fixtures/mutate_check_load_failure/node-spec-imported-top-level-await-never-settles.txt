@@ -1,0 +1,22 @@
+✔ other passes (1.235756ms)
+Warning: Detected unsettled top-level await at file:///home/dev/work/imported-top-level-await-never-settles/db.mjs:4
+await once(bus, 'ready');
+^
+
+
+
+✖ store.test.mjs (66.312485ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 85.839952
+
+✖ failing tests:
+
+test at store.test.mjs:1:1
+✖ store.test.mjs (66.312485ms)
+  'test failed'

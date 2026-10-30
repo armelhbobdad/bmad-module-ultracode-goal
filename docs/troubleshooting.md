@@ -17,7 +17,9 @@ flowchart TD
     G -->|"yes"| GATE["See: gate_eval reports blocked / escalate"]
     G -->|"no"| H{"A commit slipped past a guard"}
     H -->|"yes"| HOOK["See: Hooks not firing"]
-    H -->|"no"| B{"A story stopped re-looping, escalation marker appeared"}
+    H -->|"no"| X{"Every tool call is refused, Read included"}
+    X -->|"yes"| REF["See: Every tool call is refused"]
+    X -->|"no"| B{"A story stopped re-looping, escalation marker appeared"}
     B -->|"yes"| BUD["See: Budget exhausted mid-story"]
     B -->|"no"| R{"Run was interrupted, want to continue"}
     R -->|"yes"| RES["See: Resume after an interruption"]
@@ -25,7 +27,7 @@ flowchart TD
     D -->|"yes"| OPS["See: operating tips, the driver's stop reasons"]
     D -->|"no"| LOG["Read the tail of .decision-log.md"]
     classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
-    class PRE,GATE,HOOK,BUD,RES,OPS,LOG accent
+    class PRE,GATE,HOOK,REF,BUD,RES,OPS,LOG accent
 ```
 
 ## Preflight can't reach budget-zero
@@ -38,7 +40,7 @@ flowchart TD
 
 - **Undecided product or architecture decisions.** An open question, a "TBD"/"TODO: decide" on a load-bearing requirement, a PRD↔ADR contradiction, or a story whose "done" is undefinable. The fix is a human decision; an unattended run guessing it produces confidently wrong work. Resolve the decision in the artifacts, then re-run.
 - **Missing secrets in headless.** Headless never prompts, so a secret that cannot be resolved becomes a RED blocker rather than a question. Provide the secret (out of git) before the headless run, or run attended so preflight can prompt once.
-- **Claude Code below the minimum versions.** The primitive-version blocker is marked non-remediable: the script can't upgrade the host. Update Claude Code.
+- **Claude Code below the minimum versions.** The primitive-version blocker (`cc_version`) is marked non-remediable: the script can't upgrade the host. It names each primitive the version lacks. 2.1.295 is the floor, the release that added the hook setting `"onFailure": "block"` the guard is armed with. Update Claude Code (`claude update`).
 - **A repository with nothing committed.** On a fresh `git init` (or an orphan branch) the `git_unborn` blocker is non-remediable: the run never makes the commit its Epic branch would start from, because that commit would sit outside its only rollback, the Epic branch. Commit a baseline yourself (the BMAD install, the planning artifacts and the project skeleton) on your base branch, a protected branch such as `main` and never an Epic branch, then re-run. If HEAD already names an Epic branch, the blocker's detail gives the command that points it at the base first.
 - **A refused settings write.** Preflight writes its hooks and allow rules into `.claude/settings.local.json`, which Claude Code treats as protected. Under Auto Mode the permission classifier may refuse that write, or let it land and refuse the next calls, as self-modification. The run then stops rather than work around the refusal, and the decision log names the write. Attended, approve it under `/permissions` (on its Recently denied tab) or apply it yourself; the run re-checks the hooks and continues. Headless, there is nobody to approve it, and `/ucg-resolve` is not the way back: take the Epic through preflight attended (see [hook security](./getting-started.md#hook-security)).
 - **Story skills not installed.** The run delegates story creation to `ucg-create-story` and implementation to `ucg-dev-story`, the story skills UCG ships in place of BMAD Method's deprecated `bmad-create-story` and `bmad-dev-story`. UCG's installer copies them beside the `ultracode-goal` skill, so a missing one means a partial or older UCG install, or an install from the plugin marketplace alone, which ships only the `ultracode-goal` skill. The `story_skills` blocker is non-remediable: the run neither installs them nor works around them. Its detail names the fix, `npx bmad-module-ultracode-goal update` from the project root (`install` where UCG was never installed there). BMAD's own shims, installed with `--shims`, do not satisfy it (see [Prerequisites](./getting-started.md#prerequisites)). The same check runs on every resume, so a story skill deleted mid-Epic, by hand or by an install interrupted while it re-copies the UCG skills, stops the next spawn instead of letting it improvise.
@@ -70,6 +72,28 @@ A per-story gate can return `reloop` with a `PASS` gate status when a cap fired 
 - **Older Claude Code.** The hook returns a `deny` decision in the hook JSON and *also* exits 2 with the reason on stderr precisely so older clients that ignore the JSON still block. If neither path fired, the client may not be honoring PreToolUse hooks at all. Update Claude Code.
 - **`settings.local.json` not merged.** The hooks are merged into `{project-root}/.claude/settings.local.json` at preflight, and the skill asserts they are active before going unattended. If the file wasn't merged (or the workspace trust dialog wasn't accepted), the hooks aren't loaded. Re-run preflight; verify the two hook entries are present in the resolved settings.
 - **A `customize.toml` override that silently no-ops.** Both hooks read config from env first and fall back to hardcoded defaults (`main`/`master`, `25`, `ultracode/epic-`). A `protected_branches` or turn-budget override in `customize.toml` only reaches the hook if preflight injected it into the hook env (`ULTRACODE_PROTECTED_BRANCHES`, etc.). If your custom protected branch isn't being guarded, the override didn't reach the enforcement layer. Confirm preflight passed it through.
+
+## Every tool call is refused
+
+**Symptom.** Every tool call the session makes is refused, Read, Edit and Bash alike, and each refusal names the guard's command, `guard_pretooluse.py`. Most read like `PreToolUse:Bash hook error: [<command>]: failed; blocking because onFailure is "block"` (or `timed out; blocking because onFailure is "block"`). When `uv` itself refuses to start the script (the skill was moved or removed, or no Python it can use), the refusal shows `uv`'s own error instead, such as `error: Failed to spawn`, since `uv` then exits 2, which Claude Code reads as a refusal in any case. A headless run stops on the first call.
+
+**What happened.** Preflight arms the PreToolUse guard with `"onFailure": "block"`, so when the guard cannot run, Claude Code refuses the call rather than letting it through unchecked. The guard's matcher covers every tool, so a guard that cannot run refuses every call, including the ones the session would need to repair it. The usual causes:
+
+- **`uv` is not on the `PATH` Claude Code runs hooks with.** The guard runs as `uv run …`, and a shell that cannot find `uv` exits 127. A session started from a shell or launcher with a narrower `PATH` than the one preflight ran in hits this.
+- **The skill was moved or removed.** The guard's command names the script by the path the skill was installed at; an uninstall, or a reinstall to another folder, leaves the command pointing at nothing.
+- **A path with a space, left unquoted in the command.** Claude Code runs the guard's command through a shell, which splits it at every unquoted space. Preflight writes each injected value and the script path in single quotes, so a project or skill folder whose path holds a space (`~/My Projects/app`, say) stays one word. A command written without them hands the rest of that path to the shell as the command to run, and the message names it: `/bin/sh: 1: Projects/app/_bmad-output/implementation-artifacts: not found` on Linux, or the same path followed by `No such file or directory` on macOS.
+- **No Python `uv` can use.** `uv` cannot start a Python the script's header allows.
+- **The guard ran past its timeout.** Claude Code's default for a command hook is 600 seconds; the message then says `timed out`.
+
+A refusal the guard makes itself reads differently: it starts with the guard's own reason (`Commit/push guard: …`, `Protected-branch guard: …`, `UltraCode-Goal guard: …`) and names what to fix. That is the guard deciding, not failing.
+
+**What you do.** Fix it from outside the session, since the session cannot run a tool:
+
+1. Run the guard's command from `.claude/settings.local.json` yourself, in a terminal, to see why it fails (`echo '{}' | <the command>` should exit 0 and print nothing).
+2. Fix what it shows: put `uv` on `PATH`, reinstall the skill (`npx bmad-module-ultracode-goal update`), install a Python the script allows, or put each injected value and the script path in single quotes (`KEY='value' uv run '<path>'`), in the Stop budget hook's command too. From the project root, `uv run '<the skill folder>/scripts/preflight_check.py' --assert-armed --project-root . --impl-artifacts _bmad-output/implementation-artifacts` names every UCG hook command the shell would split (pass your own artifacts folder if you moved it).
+3. Then resume the run. The resume re-checks the hooks and re-arms them if they need it.
+
+If you need the session working before you can fix the cause, remove the guard's item from `.claude/settings.local.json` by hand, as [SECURITY.md](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/SECURITY.md) describes under "How to remove them". The session then runs with no guard at all, and a resume or the next preflight puts the item back, so fix the cause before either.
 
 ## Budget exhausted mid-story
 

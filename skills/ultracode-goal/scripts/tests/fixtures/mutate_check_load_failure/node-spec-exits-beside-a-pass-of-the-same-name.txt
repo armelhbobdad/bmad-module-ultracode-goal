@@ -1,0 +1,17 @@
+usage: cli <file>
+✖ cli.test.mjs (66.82625ms)
+✔ run reads its file (1.485841ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 91.535842
+
+✖ failing tests:
+
+test at cli.test.mjs:1:1
+✖ cli.test.mjs (66.82625ms)
+  'test failed'

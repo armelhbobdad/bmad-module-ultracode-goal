@@ -184,6 +184,19 @@ def test_an_empty_story_marker_still_counts_against_unknown(tmp_path: Path) -> N
     assert json.loads((impl / ".budget-unknown.json").read_text())["turns"] == 1
 
 
+def test_a_story_marker_that_is_not_utf8_still_counts_against_unknown(tmp_path: Path) -> None:
+    """A marker holding bytes that are not UTF-8 raised out of the hook, which
+    exited 1 before it counted the turn, so the ceiling could not see it. It
+    counts as an unreadable marker does now."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_bytes(b"\xff\xfeS1\n")
+    code, out = _run({"hook_event_name": "Stop", "cwd": str(tmp_path)}, tmp_path, _no_story_env(impl, "25"))
+    assert code == 0
+    assert out is None
+    assert json.loads((impl / ".budget-unknown.json").read_text())["turns"] == 1
+
+
 def test_token_env_vars_are_inert(tmp_path: Path) -> None:
     """A conductor that still injects the old token vars changes nothing.
 
@@ -262,7 +275,7 @@ def test_stage_references_drop_token_budget_ceiling() -> None:
         "and must not re-advertise the ceiling via the fallback literal"
     )
     # positive control on the slice itself
-    assert "ULTRACODE_MAX_TURNS={workflow.max_turns_per_story}" in step5
+    assert "ULTRACODE_MAX_TURNS='{workflow.max_turns_per_story}'" in step5
 
     # the re-loop-becomes-escalate rule is what the conductor checks the count against; it stays
     gate = _stage_text("gate")

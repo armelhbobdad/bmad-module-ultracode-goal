@@ -1,0 +1,36 @@
+TAP version 13
+# <--- Last few GCs --->
+# [3314627:0x2243b000]       86 ms: Mark-Compact 38.3 (56.0) -> 37.7 (103.3) MB, pooled: 0 MB, 5.54 / 0.00 ms  (+ 1.8 ms in 268 steps since start of marking, biggest step 0.2 ms, walltime since start of marking 18 ms) (average mu = 0.911, current mu = 0.911[3314627:0x2243b000]      121 ms: Mark-Compact 69.7 (103.3) -> 69.0 (134.8) MB, pooled: 0 MB, 18.02 / 0.00 ms  (average mu = 0.780, current mu = 0.490) allocation failure; scavenge might not succeed
+# FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+# ----- Native stack trace -----
+#  1: 0x931db0  [/usr/local/bin/node]
+#  2: 0x75968e node::OOMErrorHandler(char const*, v8::OOMDetails const&) [/usr/local/bin/node]
+#  3: 0xc70d60  [/usr/local/bin/node]
+#  4: 0xc70e4f  [/usr/local/bin/node]
+#  5: 0xf14725  [/usr/local/bin/node]
+#  6: 0xf2608c  [/usr/local/bin/node]
+#  7: 0xefb543  [/usr/local/bin/node]
+#  8: 0xed1050  [/usr/local/bin/node]
+#  9: 0x13c8948  [/usr/local/bin/node]
+# 10: 0x1add9b6  [/usr/local/bin/node]
+# Subtest: walk.test.mjs
+not ok 1 - walk.test.mjs
+  ---
+  duration_ms: 2045.338169
+  type: 'test'
+  location: '/home/dev/work/heap-runs-out/walk.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: ~
+  signal: 'SIGABRT'
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2060.168587

@@ -1,0 +1,31 @@
+TAP version 13
+# Subtest: other passes
+ok 1 - other passes
+  ---
+  duration_ms: 1.172415
+  type: 'test'
+  ...
+# Warning: Detected unsettled top-level await at file:///home/dev/work/top-level-await-never-settles/store.test.mjs:4
+# const db = await connect();
+#            ^
+# Subtest: store.test.mjs
+not ok 2 - store.test.mjs
+  ---
+  duration_ms: 59.094184
+  type: 'test'
+  location: '/home/dev/work/top-level-await-never-settles/store.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 13
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 86.261884

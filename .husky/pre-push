@@ -1,4 +1,9 @@
 #!/usr/bin/env sh
 
+# A push from a linked worktree hands this hook an absolute GIT_DIR. The
+# tests build throwaway repositories with plain git calls, which would
+# inherit it and write into this repository's config and index instead.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_COMMON_DIR
+
 # Validate everything before commits leave the machine
 npm test

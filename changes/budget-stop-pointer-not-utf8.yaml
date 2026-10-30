@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The turn-budget `Stop` hook now counts a turn against `unknown` when the story pointer (`.current-story`) is not UTF-8, as it already did for a pointer it cannot read. The hook crashed on such a pointer, so the turn went uncounted and the story's turn ceiling never saw it.

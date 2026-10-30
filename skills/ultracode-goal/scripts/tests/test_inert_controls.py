@@ -622,6 +622,19 @@ def test_the_operator_doc_states_the_unit_of_record_and_the_store_rules():
         assert f"run {retired}" not in doc and f"`{retired}` to" not in doc
 
 
+def test_the_operator_doc_keeps_history_per_machine_and_promises_no_shared_store():
+    """A store shared through the repository (#154) is not planned for now, so
+    the guide says history stays on the machine that wrote it, in the store
+    rules and in the known limits alike, and names no follow-up that would
+    share it or prune it."""
+    store = _section(_RECALL_DOC, "## The store")
+    limits = _section(_RECALL_DOC, "## Known limits: be honest")
+    assert "History stays on the machine that wrote it" in store
+    for section in (store, limits):
+        assert "is not planned for now" in section
+        assert "follow-up" not in section and "until [#154]" not in section
+
+
 def test_finalize_names_the_gate_status_for_a_run_that_evaluated_no_gate():
     """A run that blocked before any gate had no value to pass, and the honest
     one, NOT_EVALUATED, used to make the write skip its record."""
