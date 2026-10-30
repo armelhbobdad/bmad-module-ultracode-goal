@@ -131,13 +131,37 @@ def test_duplicate_ids_in_the_parent_list_are_reported() -> None:
 @pytest.mark.parametrize(
     ("ac", "task", "ceiling", "expected"),
     [
-        (10, 3, 25, True),  # load 13 >= 12.5
-        (6, 6, 25, False),  # load 12 < 12.5
+        (13, 0, 25, True),  # 13 criteria >= 12.5
+        (12, 0, 25, False),  # 12 < 12.5
         (1, 1, 25, False),
+        (15, 0, 30, True),  # the line moves with the ceiling: 15 >= 15
+        (14, 0, 30, False),
     ],
 )
-def test_implausibility_threshold_is_half_the_turn_ceiling(ac, task, ceiling, expected) -> None:
+def test_implausibility_threshold_is_half_the_turn_ceiling_in_criteria(ac, task, ceiling, expected) -> None:
     assert mod.size(ac, task, ceiling)["implausible"] is expected
+
+
+@pytest.mark.parametrize(
+    ("ac", "task"),
+    [
+        (9, 7),  # criteria plus tasks 16: flagged before, a row driven whole in 6 turns
+        (12, 13),  # however long the task list, 12 criteria stay under 12.5
+    ],
+)
+def test_tasks_do_not_add_to_the_threshold(ac, task) -> None:
+    """A task list is how the author sliced the work, and it lists steps every
+    row pays (read the skills, run the gates). Added to the criteria it flagged
+    most rows a real project then drove whole."""
+    sized = mod.size(ac, task, 25)
+
+    assert sized["implausible"] is False
+    assert sized["task_count"] == task
+    assert "load" not in sized
+
+
+def test_the_ratio_is_criteria_over_the_ceiling() -> None:
+    assert mod.size(13, 9, 25)["ratio"] == 0.52
 
 
 def test_absent_ceiling_leaves_implausible_undecided_not_false() -> None:
@@ -146,7 +170,8 @@ def test_absent_ceiling_leaves_implausible_undecided_not_false() -> None:
 
     assert sized["implausible"] is None
     assert sized["ratio"] is None
-    assert sized["load"] == 16
+    assert sized["ac_count"] == 8
+    assert sized["task_count"] == 8
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +202,20 @@ def test_sizing_alone_does_not_claim_a_reconciliation_it_never_ran() -> None:
     assert payload is not None
     assert payload["reconciled"] is False
     assert "exactly_once" not in payload
+
+
+def test_the_sizing_call_reads_the_criteria_and_reports_the_tasks() -> None:
+    """The call execute.md runs before a split: 9 criteria and 7 tasks summed to
+    16 and flagged a row that was then driven whole in 6 turns."""
+    acs = ",".join("AC-%d" % n for n in range(1, 10))
+    code, payload = _run("--parent-acs", acs, "--tasks", "7", "--turn-ceiling", "25")
+
+    assert code == 0
+    assert payload is not None
+    assert payload["implausible"] is False
+    assert payload["ratio"] == 0.36
+    assert payload["task_count"] == 7
+    assert "load" not in payload
 
 
 def test_malformed_id_is_a_usage_error_not_a_dropped_token() -> None:

@@ -1,0 +1,6 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  Execute's sizing check now reads a story row's acceptance criteria alone: a row is implausible to drive once its criteria count reaches about half of `max_turns_per_story` (13 at the default 25). It used to add the task count and justify the line as a turn or more per criterion, while the Stop hook counts one turn per response, so it flagged most rows that runs then drove whole in a fraction of the ceiling, and nearly every story cost a recorded override and invited a split nobody needed. Tasks still count as evidence for the tie-break and for an override, and the tie-break now also reads the turns this Epic's driven rows used. `scripts/story_sizing.py` reports `ratio` as criteria over the ceiling and no longer prints `load`.
+issues:
+  - 184

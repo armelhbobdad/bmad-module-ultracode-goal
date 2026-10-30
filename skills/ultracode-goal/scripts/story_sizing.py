@@ -107,17 +107,18 @@ def reconcile(parent_acs: list[str], children: dict[str, list[str]]) -> dict:
 def size(ac_count: int, task_count: int, turn_ceiling: int | None) -> dict:
     """The first-pass implausibility test execute.md states.
 
-    load = AC count + task count; implausible once load reaches roughly half the
-    per-story turn ceiling. With no ceiling supplied the ratio is undecidable, so
-    `implausible` is None -- never False, which would read as "checked, fine".
+    Implausible once the AC count reaches roughly half the per-story turn
+    ceiling. The task count is reported for the tie-break and never added: a
+    task list also holds steps every row pays (reading skills, running gates),
+    and criteria plus tasks flagged most rows a real project then drove whole.
+    With no ceiling supplied the ratio is undecidable, so `implausible` is None
+    -- never False, which would read as "checked, fine".
     """
-    load = ac_count + task_count
     if not turn_ceiling:
         return {
             "ac_count": ac_count,
             "task_count": task_count,
             "turn_ceiling": None,
-            "load": load,
             "ratio": None,
             "implausible": None,
         }
@@ -125,9 +126,8 @@ def size(ac_count: int, task_count: int, turn_ceiling: int | None) -> dict:
         "ac_count": ac_count,
         "task_count": task_count,
         "turn_ceiling": turn_ceiling,
-        "load": load,
-        "ratio": round(load / turn_ceiling, 4),
-        "implausible": load >= turn_ceiling / 2,
+        "ratio": round(ac_count / turn_ceiling, 4),
+        "implausible": ac_count >= turn_ceiling / 2,
     }
 
 
@@ -226,7 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ROW=ACS",
         help="one child row and the parent ACs it claims; repeatable",
     )
-    parser.add_argument("--tasks", type=int, default=0, help="task count on the row")
+    parser.add_argument(
+        "--tasks",
+        type=int,
+        default=0,
+        help="task count on the row; reported for the tie-break, never added to the threshold",
+    )
     parser.add_argument(
         "--turn-ceiling",
         type=int,

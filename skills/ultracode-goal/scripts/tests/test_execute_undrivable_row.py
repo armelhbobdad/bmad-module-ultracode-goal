@@ -45,6 +45,32 @@ _CHECKS = {
     "keys the threshold on the turn ceiling": lambda s: bool(
         re.search(r"implausible against `\{workflow\.max_turns_per_story\}`", s)
     ),
+    # The threshold reads the criteria alone. Criteria plus tasks flagged 25 of
+    # one real Epic's 30 rows and 4 of another's 5, nearly all then driven whole,
+    # so nearly every row cost a recorded override.
+    "counts criteria, not criteria plus tasks, for the threshold": lambda s: bool(
+        re.search(
+            r"acceptance-criteria count reaches roughly half of `\{workflow\.max_turns_per_story\}`",
+            s,
+        )
+    ),
+    "keeps the tasks out of the threshold": lambda s: bool(
+        re.search(r"keep them out of the threshold", s)
+    ),
+    # The Stop hook counts responses, so the turn count follows how a drive
+    # waits. A threshold justified as a turn forecast is justified by a count
+    # the hook does not keep.
+    "says the threshold is not a turn forecast": lambda s: bool(
+        re.search(r"not a forecast of turns", s)
+    ),
+    "the tie-break reads the turns each driven row used": lambda s: bool(
+        re.search(r"with the turns each one used", s)
+    ),
+    # The sizing call's keys as `story_sizing.py` prints them: the ratio is the
+    # criteria over the ceiling, and the summed `load` is gone.
+    "says the sizing call's ratio is the criteria over the ceiling": lambda s: bool(
+        re.search(r"returning `ratio` \(the criteria count over the ceiling\)", s)
+    ),
     "says do not start the story": lambda s: bool(re.search(r"do not start the story", s, re.I)),
     "calls decomposition a legitimate terminal": lambda s: bool(
         re.search(r"legitimate terminal for an invocation", s, re.I)
@@ -95,6 +121,17 @@ def _unmet(section: str) -> list[str]:
 
 def test_execute_states_the_decomposition_route():
     assert _unmet(_sizing_section()) == []
+
+
+def test_the_sizing_rule_claims_no_turn_per_criterion():
+    """The hook counts one turn per response, whatever the response did, so a
+    rule that sizes on "a turn or more per acceptance criterion" sizes on a cost
+    nothing measures: drives of 9 and 13 criteria took 6 and 7 turns, and a
+    3-criterion row driven step by step passed the ceiling twice over."""
+    text = _EXECUTE.read_text(encoding="utf-8")
+    assert "a turn or more per acceptance criterion" not in text
+    assert "AC count plus task count" not in text
+    assert "`load`" not in text
 
 
 def test_the_route_precedes_the_loop_it_is_an_alternative_to():
