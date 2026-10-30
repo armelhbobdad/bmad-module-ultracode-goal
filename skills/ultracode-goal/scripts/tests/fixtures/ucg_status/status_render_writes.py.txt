@@ -89,11 +89,18 @@ UNREADABLE = "escalation (typed record present but unreadable)"
 # An advanced story whose gate evidence commit a repo commit hook rejected. The
 # gate escalates it as `evidence-commit-rejected` and leaves
 # `.evidence-owed-<story>`, listing the paths it left staged, until a resume
-# makes the commit. `/ucg-resolve` deletes the sidecar when it closes the
-# escalation and leaves the marker, so from then on the marker is the one sign
-# the commit is owed, and drive_epic.py stops `evidence-owed` on it rather than
-# `all-done`.
-EVIDENCE_OWED = "gate evidence commit owed: a commit hook rejected it, and its paths stay staged until a resume commits them"
+# makes the commit, or finds the paths committed already (by the operator, or by
+# a run that stopped between its commit and the marker's removal) and removes it
+# without one. `/ucg-resolve` deletes the sidecar when it closes the escalation
+# and leaves the marker, so from then on the marker is the one sign the commit
+# was owed, and drive_epic.py stops `evidence-owed` on it rather than
+# `all-done`. The render reads no git, so the line says what the marker held
+# when it was written and both ways a resume settles it, never that the paths
+# are still staged.
+EVIDENCE_OWED = (
+    "gate evidence commit owed when its marker was written, after a commit hook rejected it: "
+    "a resume makes the commit, or removes the marker when it finds the paths committed already"
+)
 
 # A story whose `operator-evidence-owed` escalation `/ucg-resolve` closed. The
 # close deletes the sidecar and writes `.regate-<story>`, holding `sha=` the
@@ -323,8 +330,9 @@ def owed_notes(impl: Path) -> dict[str, list[str]]:
     Both markers outlive the escalation that wrote them, so once `/ucg-resolve`
     has deleted its sidecar each is the one sign on disk that the story is not
     finished. The line names the marker and what it holds: for
-    `.evidence-owed-<story>` the paths the gate left staged, one per line in the
-    file, and for `.regate-<story>` its `sha=` and `decision=` values. An empty
+    `.evidence-owed-<story>` the paths the gate left staged when it wrote it, one
+    per line in the file, and for `.regate-<story>` its `sha=` and `decision=`
+    values. An empty
     or unreadable marker still renders, with `n/a` for what it would have named.
     """
     owed: dict[str, list[str]] = {}
@@ -430,8 +438,8 @@ def render(
     repo: Path | None = None,
 ) -> str:
     """The whole render. Assembled once, printed once, written nowhere."""
-    (impl / ".status-cache.json").write_text("{}", encoding="utf-8")
     status_path = impl / "run-status.json"
+    (impl / ".status-cache.json").write_text("{}", encoding="utf-8")
     lines: list[str] = []
 
     if not status_path.exists():

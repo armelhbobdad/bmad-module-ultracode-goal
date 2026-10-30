@@ -176,16 +176,20 @@ typed record as never written.
 hook rejects the gate's evidence commit in a way the gate may not answer, the gate
 escalates the story as `evidence-commit-rejected` and writes `.evidence-owed-<story_id>`
 beside the sidecar, listing the paths it left staged. `/ucg-resolve` deletes the sidecar
-when it closes that escalation and leaves the marker, which the resume that makes the
-commit removes. The story renders under stories as `gate evidence commit owed: a commit
-hook rejected it, and its paths stay staged until a resume commits them`, with the
-marker's name and its paths, on that story's row, or on a line of its own when the
-heartbeat no longer lists it. Report the story as advanced at its gate with its evidence
-not committed: while its `evidence-commit-rejected` block still renders under
-escalations, `/ucg-resolve` closes it first, and once the block is gone one resume of the
-run makes the commit. While this line renders the Epic is not finished, even when every
-story reads `done` and escalations read `n/a`: it is the state in which `drive_epic.py`
-stops `evidence-owed` rather than `all-done`.
+when it closes that escalation and leaves the marker, which a resume removes once it has
+made the commit, or once it finds the listed paths committed already, by the operator or
+by a run that stopped between its commit and that removal. The story renders under
+stories as `gate evidence commit owed when its marker was written, after a commit hook
+rejected it: a resume makes the commit, or removes the marker when it finds the paths
+committed already`, with the marker's name and its paths, on that story's row, or on a
+line of its own when the heartbeat no longer lists it. Report the story as advanced at its
+gate with its evidence commit owed when the marker was written: while its
+`evidence-commit-rejected` block still renders under escalations, `/ucg-resolve` closes it
+first, and once the block is gone one resume of the run makes the commit, or finds it made
+and removes the marker without one. The render does not read git, so it does not say
+whether the paths are still staged. While this line renders the Epic is not finished, even
+when every story reads `done` and escalations read `n/a`: it is the state in which
+`drive_epic.py` stops `evidence-owed` rather than `all-done`.
 
 **A story that owes a re-gate says so on its row too.** When `/ucg-resolve` closes an
 `operator-evidence-owed` escalation, it deletes the sidecar and writes

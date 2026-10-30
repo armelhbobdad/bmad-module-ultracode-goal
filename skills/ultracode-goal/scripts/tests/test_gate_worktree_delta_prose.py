@@ -1744,10 +1744,10 @@ _HOOK_REJECTION_SENTENCES = {
     # heading; neither says anything of a hook.
     "ucg-status SKILL.md": (
         ("**A story that still owes its gate evidence commit says so on its row.**", "883232a2fd3c"),
-        ("Report the story as advanced at its gate with its evidence not committed", "88bf86916146"),
+        ("Report the story as advanced at its gate with its evidence commit owed w", "59b5c97c5839"),
         ("The one recency signal is the heartbeat's `Updated` row, and it belongs ", "f6d245c9b78e"),
         ("The render does not read `HEAD`, so it does not say which of the two hol", "8dc561829a92"),
-        ("The story renders under stories as `gate evidence commit owed: a commit ", "e4d4865b3d39"),
+        ("The story renders under stories as `gate evidence commit owed when its m", "8f107ecf7571"),
     ),
     "backfill fragment": (
         ("A repo commit hook that rejects the advance route's evidence commit is a", "a26bde51243e"),
