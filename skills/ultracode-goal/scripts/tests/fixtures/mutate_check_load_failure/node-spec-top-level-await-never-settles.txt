@@ -1,0 +1,22 @@
+✔ other passes (1.053905ms)
+Warning: Detected unsettled top-level await at file:///home/dev/work/top-level-await-never-settles/store.test.mjs:4
+const db = await connect();
+           ^
+
+
+
+✖ store.test.mjs (50.747179ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 84.153413
+
+✖ failing tests:
+
+test at store.test.mjs:1:1
+✖ store.test.mjs (50.747179ms)
+  'test failed'

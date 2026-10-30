@@ -1,0 +1,46 @@
+TAP version 13
+# Subtest: limit is pinned
+not ok 1 - limit is pinned
+  ---
+  duration_ms: 1.454477
+  type: 'test'
+  location: '/home/dev/work/exits-during-a-test-beside-a-kill/a.test.mjs:4:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    6 !== 5
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 5
+  actual: 6
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///home/dev/work/exits-during-a-test-beside-a-kill/a.test.mjs:4:40)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.start (node:internal/test_runner/test:1262:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+  ...
+# Subtest: b.test.mjs
+not ok 2 - b.test.mjs
+  ---
+  duration_ms: 44.595967
+  type: 'test'
+  location: '/home/dev/work/exits-during-a-test-beside-a-kill/b.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 2
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 61.315498

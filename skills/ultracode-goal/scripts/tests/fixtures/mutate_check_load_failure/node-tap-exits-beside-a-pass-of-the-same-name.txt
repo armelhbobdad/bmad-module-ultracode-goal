@@ -1,0 +1,29 @@
+TAP version 13
+# usage: cli <file>
+# Subtest: cli.test.mjs
+not ok 1 - cli.test.mjs
+  ---
+  duration_ms: 70.344207
+  type: 'test'
+  location: '/home/dev/work/exits-beside-a-pass-of-the-same-name/cli.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 2
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: run reads its file
+ok 2 - run reads its file
+  ---
+  duration_ms: 0.996523
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 100.346991

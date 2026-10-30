@@ -85,7 +85,12 @@ both, and its release note is pinned below, each with a mutant twin. A review
 of that fix found that a Node test file whose process exits or crashes during
 a test read 0 failed as well, a gap that could only ever be logged
 `unmeasured`: it reads as a kill again, and the bullet and the release note
-say so.
+say so. A second review found it still read 0 failed on evidence from other
+files (another file's pass of the same name, an uncaught error a test's child
+process printed), and a top-level await that never settles read as a kill:
+each file's test is read only from the lines Node printed after the previous
+one now, and the bullet and the release note name the top-level await, a
+skipped test, and the two such kills that can still read 0 failed.
 
 The status view's skill joined both scans when it learned to render a story
 that still owes its evidence commit (#179): it now tells an operator what a
@@ -3381,9 +3386,11 @@ def test_a_mutant_that_breaks_a_module_is_a_row_that_cannot_run(tmp_path):
 _ZERO_FAILED_CASES = (
     "(a collection or harness error, not a test: a mutant reads this way when pytest then cannot collect a test "
     "module or class or load a conftest.py, or jest, vitest or Node's test runner cannot load a test file, since no "
-    "test in that file or class runs, or when a Node test file's process exits non-zero after the row's test passes, "
-    "and no other test fails; a Node test file's process that exits or crashes during a test, before Node reports the "
-    "row's test, still reads as a kill, since the row's `expect_red` then never appears beside a failure token)"
+    "test in that file or class runs, or when a Node test file's process exits non-zero after the row's test passes "
+    "or is skipped, and no other test fails; a Node test file's process that exits or crashes during a test, before "
+    "Node reports the row's test, still reads as a kill, since the row's `expect_red` then never appears beside a "
+    "failure token, though it can read 0 failed when a test of the same name passes or is skipped in a file Node lists "
+    "before it, or when the last thing Node prints for that file is an uncaught error that a child process printed)"
 )
 # 3.2.0's wording, which named neither a class pytest cannot collect nor Node's test runner.
 _ZERO_FAILED_CASES_BEFORE = (
@@ -3395,18 +3402,28 @@ _NODE_CAPTURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_lo
 
 
 @pytest.mark.parametrize(
-    "capture", ["node-spec-one-of-two", "node20-tap-alone", "node-tap-exits-after-its-tests-pass"]
+    ("capture", "expect_red"),
+    [
+        ("node-spec-one-of-two", "clamp at the bound"),
+        ("node20-tap-alone", "clamp at the bound"),
+        ("node-tap-exits-after-its-tests-pass", "clamp at the bound"),
+        ("node-spec-exits-after-a-skipped-test", "clamp at the bound"),
+        ("node-spec-top-level-await-never-settles", "store opens"),
+        ("node-tap-imported-top-level-await-never-settles", "store opens"),
+    ],
 )
-def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture):
+def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_red):
     """Measured on `mutate_check.py`, over real `node --test` output (#179):
     Node's test runner reports a test file whose process failed, because a
     mutant stops it loading or because its process exits non-zero after the
-    row's test passes, as a failed test named after the file. It read as
-    another test's kill; it now reads 0 failed, which the cannot-run bullet
-    names, Node and the non-zero exit included."""
+    row's test passes or is skipped, as a failed test named after the file. It
+    read as another test's kill; it now reads 0 failed, which the cannot-run
+    bullet names, Node and the non-zero exit included. A second review of that
+    fix found a top-level await the mutant leaves pending read as a kill: no
+    test in that file runs either, and it reads 0 failed too."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
-    status, detail, _ = mutate_check._classify_red(output, "clamp at the bound")
+    status, detail, _ = mutate_check._classify_red(output, expect_red)
     assert status == "MISATTRIBUTED"
     assert _reading(_bound(), status, detail) == "cannot run"
     assert _ZERO_FAILED_CASES in re.sub(r"\s+", " ", _bound())
@@ -3422,11 +3439,18 @@ _ZERO_FAILED_ALL = frozenset(
         "a test file vitest cannot load",
         "a test file Node's test runner cannot load",
         "a Node test file's process that exits non-zero after the row's test passes",
+        "a Node test file's process that exits non-zero after the row's test is skipped",
     }
 )
 _DIES_DURING_A_TEST = (
     "a Node test file's process that exits or crashes during a test, before Node reports the row's test, still "
     "reads as a kill"
+)
+# The two such kills `mutate_check.py` cannot always tell from a harness error (no
+# line says which file a passing test or an error is from), which can read 0 failed.
+_DIES_BUT_READS_0_FAILED = (
+    "though it can read 0 failed when a test of the same name passes or is skipped in a file Node lists before it, or "
+    "when the last thing Node prints for that file is an uncaught error that a child process printed"
 )
 
 
@@ -3458,56 +3482,74 @@ def _reads_zero_failed(para: str) -> set[str]:
         cases.update(f"a test file {runner} cannot load" for runner in re.split(r", | or ", runners.group(1)))
     if "when a Node test file's process exits non-zero after the row's test passes" in text:
         cases.add("a Node test file's process that exits non-zero after the row's test passes")
+    if "when a Node test file's process exits non-zero after the row's test passes or is skipped" in text:
+        cases.add("a Node test file's process that exits non-zero after the row's test is skipped")
     return cases
 
 
 def _keeps_a_dying_process_a_kill(para: str) -> bool:
     """Whether that parenthesis says a Node test file's process that exits or
     crashes during a test, before Node reports the row's test, still reads as
-    a kill, as `mutate_check.py` reads it."""
+    a kill, as `mutate_check.py` reads it, and names the two such kills that
+    can read 0 failed."""
     text = _zero_failed_parenthesis(para)
-    return text is not None and _DIES_DURING_A_TEST in text
+    return text is not None and _DIES_DURING_A_TEST in text and _DIES_BUT_READS_0_FAILED in text
 
 
 def test_the_cannot_run_bullet_names_each_case_that_reads_0_failed():
     """Each harness error `mutate_check.py` reads 0 failed (pinned in
     test_mutate_check.py, the measured ones here too): pytest's module, class
     and conftest.py, a test file jest, vitest or Node cannot load, and a Node
-    test file whose process exits non-zero after the row's test passes. A Node
-    test file whose process dies during a test still reads as a kill."""
+    test file whose process exits non-zero after the row's test passes or is
+    skipped. A Node test file whose process dies during a test still reads as
+    a kill, though two such kills it cannot always tell from a harness
+    error can read 0 failed."""
     assert _reads_zero_failed(_bound()) == _ZERO_FAILED_ALL
     assert _keeps_a_dying_process_a_kill(_bound())
 
 
 _EXIT_CASE = "a Node test file's process that exits non-zero after the row's test passes"
+_SKIP_CASE = "a Node test file's process that exits non-zero after the row's test is skipped"
 
 
 @pytest.mark.parametrize(
     ("old", "new", "dropped", "dying_kill"),
     [
         (_ZERO_FAILED_CASES, _ZERO_FAILED_CASES_BEFORE,
-         {"a test class pytest cannot collect", "a test file Node's test runner cannot load", _EXIT_CASE}, False),
+         {"a test class pytest cannot collect", "a test file Node's test runner cannot load", _EXIT_CASE, _SKIP_CASE},
+         False),
         ("cannot collect a test module or class or load", "cannot collect a test module or load",
          {"a test class pytest cannot collect"}, True),
         ("or jest, vitest or Node's test runner cannot load", "or jest or vitest cannot load",
          {"a test file Node's test runner cannot load"}, True),
-        (", or when a Node test file's process exits non-zero after the row's test passes,", ",", {_EXIT_CASE}, True),
+        (", or when a Node test file's process exits non-zero after the row's test passes or is skipped,", ",",
+         {_EXIT_CASE, _SKIP_CASE}, True),
         # An exit after any test passes, in place of the row's own, read a kill 0 failed.
-        ("after the row's test passes", "after its tests pass", {_EXIT_CASE}, True),
+        ("after the row's test passes", "after its tests pass", {_EXIT_CASE, _SKIP_CASE}, True),
+        (" or is skipped,", ",", {_SKIP_CASE}, True),
         # A load failure beside a real kill read 0 failed too: the kill lost.
         (", and no other test fails;", ";", _ZERO_FAILED_ALL, True),
         # A process that dies during a test read 0 failed, a gap only ever logged `unmeasured`.
         ("; a Node test file's process that exits or crashes during a test, before Node reports the row's test, still "
-         "reads as a kill, since the row's `expect_red` then never appears beside a failure token)", ")", set(), False),
+         "reads as a kill, since the row's `expect_red` then never appears beside a failure token, "
+         + _DIES_BUT_READS_0_FAILED + ")", ")", set(), False),
+        # A second review of #179's fix: the bullet claimed every such kill, the two that can read 0 failed included.
+        (", " + _DIES_BUT_READS_0_FAILED + ")", ")", set(), False),
+        ("when a test of the same name passes or is skipped in a file Node lists before it, or when", "when", set(),
+         False),
+        (", or when the last thing Node prints for that file is an uncaught error that a child process printed)", ")",
+         set(), False),
     ],
-    ids=["3.2.0", "no-class", "no-node", "no-exit", "any-test-passing", "beside-a-kill", "no-crash"],
+    ids=["3.2.0", "no-class", "no-node", "no-exit", "any-test-passing", "no-skip", "beside-a-kill", "no-crash",
+         "every-crash", "no-same-name", "no-child-error"],
 )
 def test_zero_failed_predicate_rejects_a_bullet_that_drops_a_case(old, new, dropped, dying_kill):
     """The twin: the cannot-run bullet as 3.2.0 wrote it, or with one of
     #179's cases dropped, with an exit after any test passes in place of the
-    row's own, without the process that dies during a test, or one that no
-    longer keeps a kill beside a harness error, reads every other case as
-    before and not the one it dropped."""
+    row's own, without the process that dies during a test, with every such
+    process a kill or without one of the two such kills that can read 0
+    failed, or one that no longer keeps a kill beside a harness error, reads
+    every other case as before and not the one it dropped."""
     para = _bound()
     mutant = para.replace(old, new)
     assert mutant != para, "the mutant must actually change the text"
@@ -3521,6 +3563,10 @@ def test_zero_failed_predicate_rejects_a_bullet_that_drops_a_case(old, new, drop
         ("node-spec-exits-during-a-test", "run reads its file"),
         ("node-tap-heap-runs-out-during-a-test", "depth guard fires"),
         ("node-spec-load-failure-beside-an-exit", "run reads its file"),
+        ("node-spec-exits-beside-a-pass-of-the-same-name", "run reads its file"),
+        ("node-tap-exits-after-a-pass-of-a-longer-name", "run reads its file"),
+        ("node-tap-exits-after-a-child-process-crash", "run reads its file"),
+        ("node-spec-exits-after-its-child-process-crash", "run reads its file"),
     ],
 )
 def test_a_node_test_file_that_dies_during_a_test_is_a_kill(capture, expect_red):
@@ -3530,7 +3576,11 @@ def test_a_node_test_file_that_dies_during_a_test_is_a_kill(capture, expect_red)
     and Node reports the file as it reports one that cannot load. A review of
     #179's fix found it read 0 failed, a row that cannot run, so its gap stayed
     open and was logged `unmeasured`; it reads as a kill again, and the
-    cannot-run bullet says so."""
+    cannot-run bullet says so. A second review found it still read 0 failed
+    beside another file's pass of the same or a longer name, and after a test's
+    child process printed an uncaught error (the last four captures): only the
+    lines Node printed after the previous file's test are read now, and a load
+    error only as the last of them."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
     status, detail, _ = mutate_check._classify_red(output, expect_red)
@@ -4429,11 +4479,15 @@ _COUNT_SAYS = (
     "in the same command prints, a `0 failed` included.",
     "Node's test runner reports a test file whose process failed as a failed test named after the file and located at "
     "its line 1, column 1.",
-    "When a mutant stops the file loading (Node prints the error that stopped it), or the file's process exits "
-    "non-zero after the row's own test passes, that test no longer counts, so such a mutant reads 0 failed, a row "
-    "that cannot run,",
+    "When a mutant stops the file loading (Node prints the error that stopped it, or a warning that the file's "
+    "top-level await never settled, as the last thing above that test), or the file's process exits non-zero after "
+    "the row's own test passes or is skipped, that test no longer counts, so such a mutant reads 0 failed, a row that "
+    "cannot run,",
     "A test file whose process exits or crashes during a test, before Node reports the row's test, still reads as a "
     "kill,",
+    # A second review of #179's fix: the two such kills it cannot always tell from a harness error.
+    "though it can read 0 failed when a test of the same name passes or is skipped in a file Node lists before it, "
+    "or when the last thing Node prints for that file is an uncaught error that a child process printed.",
 )
 
 
@@ -4533,8 +4587,9 @@ def test_the_fragments_say_what_the_prose_does():
         ("count", "a collection error at a path that holds a space, and one", "one"),
         ("count", "are taken off its own stats line only", "are taken off its first stats line"),
         ("count", " and a kill no longer reads 0 failed beside a `-qq` run.", ""),
-        ("count", "When a mutant stops the file loading (Node prints the error that stopped it), or the file's "
-         "process exits non-zero after the row's own test passes,", "When a mutant stops the file loading,"),
+        ("count", "When a mutant stops the file loading (Node prints the error that stopped it, or a warning that the "
+         "file's top-level await never settled, as the last thing above that test), or the file's process exits "
+         "non-zero after the row's own test passes or is skipped,", "When a mutant stops the file loading,"),
         ("count", "so such a mutant reads 0 failed, a row that cannot run,", "so such a mutant reads as a kill,"),
         # A review of #179's fix: a banner, a `-qq` run beside another runner, and a process that dies in a test.
         ("count", ", also after a banner such as `===== rust =====`, which opens no report.", "."),
@@ -4543,7 +4598,15 @@ def test_the_fragments_say_what_the_prose_does():
         ("count", "after the row's own test passes", "after its tests pass"),
         ("count", "still reads as a kill,", "now reads 0 failed too,"),
         ("count", " A test file whose process exits or crashes during a test, before Node reports the row's test, "
-         "still reads as a kill, as a pytest test whose process dies does.", ""),
+         "still reads as a kill, as a pytest test whose process dies does, though", " Though"),
+        # A second review of #179's fix: a top-level await, a skipped test, and the two kills that can read 0 failed.
+        ("count", ", or a warning that the file's top-level await never settled, as the last thing above that test",
+         ""),
+        ("count", "passes or is skipped,", "passes,"),
+        ("count", ", though it can read 0 failed when a test of the same name passes or is skipped in a file Node "
+         "lists before it, or when the last thing Node prints for that file is an uncaught error that a child process "
+         "printed.", "."),
+        ("count", "passes or is skipped in a file Node lists", "passes in a file Node lists"),
     ],
 )
 def test_fragment_predicate_rejects_a_sentence_that_contradicts_the_prose(which, old, new):
