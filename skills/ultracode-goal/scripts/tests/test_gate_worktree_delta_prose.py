@@ -8,7 +8,7 @@ tree) and the delta cycle profile's instruction side.
 
 gate_eval.py's delta cap is pinned by test_gate_eval.py; these tests pin what
 no script test can: that gate.md still orders assessors onto a worktree of the
-commit under assessment (with the three caveats that were each a measured
+commit under assessment (with the four caveats that were each a measured
 failure when skipped), and that the delta profile's use is bounded by the
 mechanical attribution fallback rather than judgment.
 
@@ -87,16 +87,29 @@ The status view's skill joined both scans when it learned to render a story
 that still owes its evidence commit (#179): it now tells an operator what a
 rejected evidence commit leaves owed, so its sentences are read against the
 bound like every other surface's.
+
+Then a run showed the worktree itself leaking (#182): Playwright's
+`reuseExistingServer` attached the worktree's browser runs to a dev server
+started from the main tree, so they measured the main tree's source, and a
+source mutation automate wrote into the worktree read `GREEN` with no run
+seeing it, a false gap the rules would backfill or log `unkilled`. The fourth
+caveat checks for such a server with probe_servers.py, gives the worktree its
+own server where a scratch runner config can, and otherwise briefs every
+assessor with the limit and reads a row through that server as one that
+cannot run. Each of those rules is pinned below with a mutant twin.
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import http.server
 import importlib.util
 import re
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -141,6 +154,329 @@ def test_worktree_caveat_untracked_inputs_enumerated():
     section = _worktree_section()
     assert re.search(r"enumerate what the declared gate commands actually read", section)
     assert re.search(r"measures a different harness", section)
+
+
+# --- a server the gate set reuses (#182) ----------------------------------------
+#
+# Playwright's `reuseExistingServer` attached a gate worktree's browser runs to a
+# vite dev server started from the main tree, so they measured the main tree's
+# source, and a source mutation automate wrote into the worktree read `GREEN`
+# without any run seeing it (test_probe_servers.py reproduces that).
+
+_REUSED = "- **A server the gate set reuses does not follow the commit.**"
+_REUSED_SAYS = (
+    "`reuseExistingServer`",
+    "Read each runner config the declared gate commands load, list each URL it may reuse (`http://localhost:<port>` "
+    "for an entry that gives only a port)",
+    "and check them before the first run in the worktree and again after the rebuild, with "
+    "`uv run {skill-root}/scripts/probe_servers.py --url <url>`",
+    "A server that answers is not the gate's to stop.",
+    # The own-server route, where the runner config allows one.
+    "When the runner config lets the worktree's runs have their own server without editing a tracked file, give them "
+    "one:",
+    "to a port the probe reports free, with reuse turned off and the base URL pointed at that port.",
+    "The runner takes it by its config flag (`--config <file>` for Playwright), never by an environment variable set "
+    "in front of the command, which the command's allow rule does not match past.",
+    "Tell every assessor to run the runner with it, a mutation row's `command` included,",
+    # Otherwise the limit, in every brief, automate's included.
+    "Otherwise tell every assessor, automate included, in its brief, which URL answers",
+    "and that no mutation in the worktree reaches it.",
+    "Tell automate, too, that it writes no mutation row whose mutant only a run through that server would load:",
+    "and a risk on a P0 criterion that no such row can measure is one it leaves unmeasured",
+    "Any such row it runs, one behind a carried `gate-gap:` line or a previous backfill included, is a row that "
+    "cannot run, whatever `mutate_check.py` prints",
+    "so it is no gap, no test is backfilled for it and no `unkilled` line is logged from it.",
+)
+
+
+def _caveats(section: str) -> list[str]:
+    """The caveat bullets: the `- **` lines after the sentence that counts them."""
+    lead = re.search(r"(\w+) caveats the setup owes, each a measured failure when skipped:", section)
+    if lead is None:
+        return []
+    block = section[lead.end() :].split("\n\n", 2)[1]
+    return [line for line in block.splitlines() if line.startswith("- **")]
+
+
+def _reused_server_bullet(section: str) -> str:
+    return next((line for line in section.splitlines() if line.startswith(_REUSED)), "")
+
+
+def _owns_a_reused_server(section: str) -> bool:
+    bullet = _reused_server_bullet(section)
+    lead = re.search(r"(\w+) caveats the setup owes", section)
+    return bool(
+        bullet
+        and lead
+        and lead.group(1) == "Four"
+        and len(_caveats(section)) == 4
+        and all(phrase in bullet for phrase in _REUSED_SAYS)
+    )
+
+
+def test_worktree_caveat_a_reused_server_is_probed_and_never_measured_as_the_commit():
+    assert _owns_a_reused_server(_worktree_section())
+
+
+def test_reused_server_predicate_rejects_the_three_caveat_section():
+    """3.2.0's section: three caveats, none naming a process the runner reuses."""
+    section = _worktree_section()
+    bullet = _reused_server_bullet(section)
+    assert bullet
+    pre = section.replace(bullet + "\n", "").replace("Four caveats", "Three caveats")
+    assert len(_caveats(pre)) == 3
+    assert pre != section, "the mutant must actually change the text"
+    assert not _owns_a_reused_server(pre)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # A GREEN through the reused server read by mutate_check.py's word: a false gap, a backfill, an `unkilled`.
+        ("is a row that cannot run, whatever `mutate_check.py` prints", "is read by what `mutate_check.py` prints"),
+        ("so it is no gap, no test is backfilled for it and no `unkilled` line is logged from it.",
+         "so it is a gap like any other."),
+        # Checked once only: a server started after the first check goes unseen by trace, NFR and test review.
+        ("before the first run in the worktree and again after the rebuild", "before the first run in the worktree"),
+        # The operator's server stopped by the run.
+        ("A server that answers is not the gate's to stop.", "Stop a server that answers."),
+        # No own-server route, so every project takes the stated limit.
+        ("give them one:", "say so in the brief:"),
+        # A moved server the runner still reuses, or one reached through an assignment no allow rule matches.
+        ("with reuse turned off and the base URL", "with the base URL"),
+        ("never by an environment variable set in front of the command, which the command's allow rule does not match "
+         "past", "or by setting `BASE_URL` in front of the command"),
+        # Automate's brief without the limit, though it is the assessor that runs the mutants.
+        ("Otherwise tell every assessor, automate included, in its brief,",
+         "Otherwise tell trace, NFR and test review, in their briefs,"),
+        # A fifth caveat added without its count, or this one counted without its bullet.
+        ("Four caveats the setup owes", "Five caveats the setup owes"),
+    ],
+)
+def test_reused_server_predicate_rejects_a_one_clause_mutant(old, new):
+    section = _worktree_section()
+    mutant = section.replace(old, new)
+    assert mutant != section, "the mutant must actually change the text"
+    assert not _owns_a_reused_server(mutant)
+
+
+_REUSED_CANNOT_RUN = (
+    "A row whose mutant only a run through a server the gate set reuses would load cannot run either, whatever "
+    "`mutate_check.py` prints, and the two bullets above do not read it (\"A server the gate set reuses does not "
+    "follow the commit\", under \"Measure the commit, not the working tree\"): that run measures the tree the server "
+    "was started from and never the mutant, so its `GREEN` is no gap, no test is backfilled for it and no `unkilled` "
+    "line is logged from it."
+)
+
+
+def _reading_a_served_row(para: str, status: str, detail: str, through_reused: bool) -> str | None:
+    """How gate.md reads a row: one whose mutant only a run through a reused
+    server would load by the cannot-run bullet, when that bullet names such a
+    row, before the two bullets above it; any other row as `_reading` does."""
+    bullet = next((line for line in para.splitlines() if line.startswith("- A row cannot run when it reads")), "")
+    if through_reused and _REUSED_CANNOT_RUN in re.sub(r"\s+", " ", bullet):
+        return "cannot run"
+    return _reading(para, status, detail)
+
+
+def _served_rows(tmp_path: Path) -> tuple[dict, dict]:
+    """Measured on `mutate_check.py`: one row whose command fetches a page from
+    a server started from another tree (the main tree's dev server), and the
+    same row through a server started from the worktree."""
+    mutate_check = _load_script("mutate_check")
+    main_tree, worktree = tmp_path / "main", tmp_path / "worktree"
+    for tree in (main_tree, worktree):
+        tree.mkdir()
+        (tree / "app.txt").write_text("ok\n", encoding="utf-8", newline="\n")
+    (worktree / "check_app.py").write_text(
+        "import sys\nimport urllib.request\n\n"
+        # No proxy: a request sent through one set in the environment would not reach this machine's 127.0.0.1.
+        "opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
+        "body = opener.open(f'http://127.0.0.1:{sys.argv[1]}/app.txt').read()\n"
+        "if body != b'ok\\n':\n"
+        "    print('FAILED test_app_serves_ok')\n    print('1 failed')\n    sys.exit(1)\n"
+        "print('1 passed')\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    class _Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+    servers = [
+        http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Quiet, directory=str(tree)))
+        for tree in (main_tree, worktree)
+    ]
+    for server in servers:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        reused, own = (
+            mutate_check.run_table(
+                [
+                    {
+                        "file": "app.txt",
+                        "anchor": "ok\n",
+                        "replacement": "broken\n",
+                        "command": f'"{sys.executable}" check_app.py {server.server_address[1]}',
+                        "expect_red": "test_app_serves_ok",
+                    }
+                ],
+                worktree,
+            )[0][0]
+            for server in servers
+        )
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+    return reused, own
+
+
+def test_a_row_through_a_reused_server_is_one_that_cannot_run(tmp_path):
+    """The row through the main tree's server reads `GREEN`, though its mutant
+    never reached the run: read as a gap, it was backfilled, or logged
+    `unkilled` once a backfilled spec read `GREEN` again. It now cannot run,
+    so the gap is measured afresh once and otherwise logged `unmeasured`. The
+    worktree's own server sees the mutant, and that row reads killed."""
+    reused, own = _served_rows(tmp_path)
+    para = _bound()
+    assert reused["status"] == "GREEN", reused
+    assert own["status"].startswith("KILLED"), own
+    assert _reading_a_served_row(para, reused["status"], reused["detail"], through_reused=True) == "cannot run"
+    assert _reading_a_served_row(para, own["status"], own["detail"], through_reused=False) == "killed"
+    assert _REUSED_CANNOT_RUN in re.sub(r"\s+", " ", para)
+    assert _AFRESH_ONCE in re.sub(r"\s+", " ", para)
+
+
+def test_without_the_reused_server_rule_that_row_reads_as_a_false_gap(tmp_path):
+    """The mutant twin, 3.2.0's bullet: the same row reads as a gap."""
+    reused, _ = _served_rows(tmp_path)
+    para = _bound()
+    mutant = para.replace(" " + _REUSED_CANNOT_RUN, "")
+    assert mutant != para, "the mutant must actually change the text"
+    assert _reading_a_served_row(mutant, reused["status"], reused["detail"], through_reused=True) == "gap"
+
+
+_REBUILD_RECHECKS = (
+    "Then check the URLs the gate set may reuse again (\"A server the gate set reuses does not follow the commit\" "
+    "above), and act on what it finds, as that caveat says, before trace, NFR and test review start: a server may "
+    "have started since the first check, one started from the old worktree among them, which outlives the "
+    "worktree's removal."
+)
+
+
+def test_the_rebuild_checks_the_reused_servers_again():
+    assert _REBUILD_RECHECKS in re.sub(r"\s+", " ", _rebuild())
+
+
+def test_rebuild_predicate_rejects_a_rebuild_with_no_second_check():
+    """The mutant twin: a rebuild that checks nothing again lets trace, NFR and
+    test review run through a server started after the first check."""
+    para = _rebuild()
+    mutant = para.replace(" " + _REBUILD_RECHECKS, "")
+    assert mutant != para, "the mutant must actually change the text"
+    assert _REBUILD_RECHECKS not in re.sub(r"\s+", " ", mutant)
+
+
+_HONEST_ABOUT_THE_SERVER = (
+    "When a runner reused a server the gate did not start, the line also names its URL, the folder it ran from when "
+    "the probe could read one, and what it left unmeasured."
+)
+
+
+def _honesty_line(section: str) -> str:
+    return _paragraph(section, "Record in `.decision-log.md`, once per gated story")
+
+
+def test_worktree_honesty_line_names_a_reused_server():
+    assert _HONEST_ABOUT_THE_SERVER in _honesty_line(_worktree_section())
+
+
+def test_honesty_predicate_rejects_a_line_silent_on_the_server():
+    """The mutant twin: unmutated browser evidence through another tree's
+    server, recorded as the worktree's."""
+    section = _worktree_section()
+    mutant = section.replace(" " + _HONEST_ABOUT_THE_SERVER, "")
+    assert mutant != section, "the mutant must actually change the text"
+    assert _HONEST_ABOUT_THE_SERVER not in _honesty_line(mutant)
+
+
+_TIP_SAYS = (
+    "**Stop a dev server before an unattended drive.**",
+    "a mutation the gate writes into the worktree never reaches them.",
+    "The gate checks the URLs a runner config may reuse and never stops a server it did not start:",
+)
+
+
+def _tip_gaps(tips: str) -> list[str]:
+    return [phrase for phrase in _TIP_SAYS if phrase not in re.sub(r"\s+", " ", tips)]
+
+
+def _tips() -> str:
+    return (_REPO_ROOT / "docs" / "operating-tips.md").read_text(encoding="utf-8")
+
+
+def test_the_operating_tips_say_to_stop_a_dev_server_before_a_drive():
+    assert _tip_gaps(_tips()) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("**Stop a dev server before an unattended drive.**", "**A dev server can stay up during a drive.**"),
+        ("and never stops a server it did not start:", "and stops any server that answers:"),
+    ],
+)
+def test_tip_predicate_rejects_a_tip_that_contradicts_the_gate(old, new):
+    tips = _tips()
+    mutant = tips.replace(old, new)
+    assert mutant != tips, "the mutant must actually change the text"
+    assert _tip_gaps(mutant)
+
+
+_REUSED_FRAGMENT_SAYS = (
+    "again after the rebuild",
+    "The new `scripts/probe_servers.py`, run with `uv run`,",
+    "The gate never stops such a server.",
+    "otherwise it tells every assessor, automate included, what the server limits.",
+    "a row it runs through that server reads as one that cannot run, whatever `mutate_check.py` prints, rather than "
+    "as a `GREEN` gap: no test is backfilled for it and no `unkilled` line is logged from it,",
+)
+
+
+def _reused_fragment() -> str:
+    return re.sub(
+        r"\s+", " ", (_REPO_ROOT / "changes" / "gate-worktree-reused-server.yaml").read_text(encoding="utf-8")
+    )
+
+
+def _reused_fragment_gaps(fragment: str) -> list[str]:
+    missing = [phrase for phrase in _REUSED_FRAGMENT_SAYS if phrase not in fragment]
+    if not fragment.startswith("type: fixed"):
+        missing.append("#182 is a fix")
+    return missing
+
+
+def test_the_reused_server_fragment_says_what_the_prose_does():
+    assert _reused_fragment_gaps(_reused_fragment()) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("reads as one that cannot run, whatever `mutate_check.py` prints, rather than as a `GREEN` gap",
+         "reads as a `GREEN` gap"),
+        ("The gate never stops such a server.", "The gate stops such a server."),
+        (", automate included,", ""),
+        ("type: fixed", "type: changed"),
+    ],
+)
+def test_reused_fragment_predicate_rejects_a_sentence_that_contradicts_the_prose(old, new):
+    fragment = _reused_fragment()
+    mutant = fragment.replace(old, new)
+    assert mutant != fragment, "the mutant must actually change the text"
+    assert _reused_fragment_gaps(mutant)
 
 
 def test_worktree_licenses_no_overlap():
@@ -507,6 +843,7 @@ def _gate_surfaces() -> dict[str, str]:
             "alone fragment": (changes / "gate-automate-runs-alone.yaml").read_text(encoding="utf-8"),
             "collection fragment": (changes / "mutate-check-collection-error.yaml").read_text(encoding="utf-8"),
             "count fragment": (changes / "mutate-check-count-misreads.yaml").read_text(encoding="utf-8"),
+            "reused-server fragment": (changes / "gate-worktree-reused-server.yaml").read_text(encoding="utf-8"),
         }
     )
     return surfaces
