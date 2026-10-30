@@ -597,21 +597,26 @@ def verdict_for(gate_status: str | None, recorded: str | None) -> str:
     return gate_eval.GATE_VERDICT.get(gate_status.upper(), gate_status)
 
 
+def _is_gate_heading(match: re.Match[str]) -> bool:
+    """True iff a `_STORY_HEADING` match is the heading `references/gate.md` has
+    the run write before each gate cycle, `### Story <story_id>: gate`."""
+    level, _, tail = match.groups()
+    return level == "###" and bool(_GATE_HEADING_TAIL.fullmatch(tail))
+
+
 def _story_heading_id(match: re.Match[str], keys: set[str]) -> str | None:
     """The story id a `_STORY_HEADING` match names, or None for a prose heading.
 
     Three shapes name a story: an id that starts with a digit, as a numeric
     sprint key does (`7-1`, `92-0a`), the shape this reader has always read; an
     id that is one of `keys`, the keys sprint-status lists, so a letter-prefixed
-    key (`lp-0-1-...`) is read too; and the heading `references/gate.md` has the
-    run write, `### Story <story_id>: gate`, whatever its id. Any other heading
+    key (`lp-0-1-...`) is read too; and the gate-cycle heading
+    (`_is_gate_heading`), whatever its id. Any other heading
     (`### Story committed and re-verified`) is prose, and ends no story's
     entries.
     """
-    level, ident, tail = match.groups()
-    if ident[0].isdigit() or ident in keys:
-        return ident
-    if level == "###" and _GATE_HEADING_TAIL.fullmatch(tail):
+    ident = match.group(2)
+    if ident[0].isdigit() or ident in keys or _is_gate_heading(match):
         return ident
     return None
 
@@ -674,12 +679,16 @@ def recorded_verdicts(decision_log: Path | None, keys: set[str] | None = None) -
     shape puts their verdicts in an earlier story's span, and the Epic-level
     roll-up follows the last story's (`_first_verdict` skips the roll-up, and
     any object whose `reasons` name another story's gate file). A later heading
-    for the same id replaces an earlier one's verdict, and one whose span holds
-    no verdict object drops it, so the trail falls back to the gate artifact
-    rather than show an earlier cycle's verdict. `references/gate.md` ("Run the
-    gate") has the run write `### Story <story_id>: gate` before each gate
-    cycle, so each span is one cycle and a story's last cycle decides its
-    verdict.
+    for the same id whose span holds a verdict object replaces the earlier
+    verdict. `references/gate.md` ("Run the gate") has the run write
+    `### Story <story_id>: gate` before each gate cycle, so a later heading in
+    that shape is a later cycle, and when its span holds no verdict object it
+    drops the earlier one: the trail falls back to the gate artifact rather
+    than show an earlier cycle's verdict, and the story's last cycle decides.
+    Any other later heading for the id (`### Story 7-1: re-loop 1`, a note on
+    what the re-loop owes) is no cycle, so with no verdict object of its own it
+    keeps the verdict before it: a downgraded or capped `reloop` followed by a
+    re-loop's notes must not read as the gate file's mapped `advance`.
 
     Keyed by the heading's id VERBATIM. It used to be keyed by
     `numeric_prefix(...)`, which collapsed every alphanumeric child id of one
@@ -704,7 +713,7 @@ def recorded_verdicts(decision_log: Path | None, keys: set[str] | None = None) -
         verdict = _first_verdict(text[match.end() : end], ident)
         if verdict:
             out[ident] = verdict
-        else:
+        elif _is_gate_heading(match):
             out.pop(ident, None)
     return out
 

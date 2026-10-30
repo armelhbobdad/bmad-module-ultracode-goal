@@ -1566,6 +1566,29 @@ def test_an_open_evidence_commit_rejected_escalation_keeps_advance_and_is_named(
     )
 
 
+def test_an_open_evidence_commit_rejected_escalation_keeps_a_defer(tmp_path):
+    """Guard (passes before the fix too): the `defer` route advances anyway, so
+    its evidence commit can be rejected as well, and the cell keeps `defer`,
+    as finalize.md says, not `advance`."""
+    root = copy_fixture("production", tmp_path)
+    impl = root / "impl-artifacts"
+    gate = root / "test-artifacts" / "traceability" / "gate-decision-7-1.json"
+    gate.write_text(json.dumps({**json.loads(gate.read_text(encoding="utf-8")), "gate_status": "CONCERNS"}))
+    (root / "decision-log.md").write_text(
+        "# Decision log\n\n### Story 7-1: gate\n\n"
+        + _fenced({"verdict": "defer", "gate_status": "CONCERNS", "reasons": ["gate_status CONCERNS -> defer"]}),
+        encoding="utf-8",
+    )
+    _sidecar(impl, "7-1", "evidence-commit-rejected")
+    _sprint(impl, {"7-1": "done", "7-2": "review", "7-3": "review", "7-4": "review"})
+    body = section(_escalation_trail(tmp_path, root, PRODUCTION_STORIES), "7-1")
+    assert {cells[3] for cells in rows(body)} == {"defer"}
+    assert _source_line(body) == (
+        "- Verdict source: recorded in the decision log; the escalation `escalation-7-1.json` "
+        "(kind `evidence-commit-rejected`) is still open, and owes the evidence commit, not a verdict"
+    )
+
+
 def test_a_done_story_ignores_a_leftover_sidecar(tmp_path):
     """A `done` row advanced, so a sidecar an older run left beside it is residue,
     not where the story stopped. Measured on a real project: five `done` stories
@@ -1719,9 +1742,11 @@ def test_the_epic_level_rollup_is_never_a_storys_verdict(tmp_path, own, shown, s
 
 
 def test_a_later_cycle_with_no_readable_verdict_drops_the_earlier_one(tmp_path):
-    """A later heading for the story is a later cycle: with no verdict object
-    under it, the trail falls back to the gate file rather than show the
-    earlier cycle's verdict as the story's."""
+    """A later `### Story <key>: gate` heading is a later cycle: with no verdict
+    object under it, the trail falls back to the gate file rather than show the
+    earlier cycle's verdict as the story's. Twin of
+    `test_a_later_heading_that_is_no_gate_cycle_keeps_the_recorded_verdict`:
+    a reader that never drops reds here, one that drops on every heading there."""
     body = _trail_over(
         tmp_path,
         "# Decision log\n\n### Story 7-1: gate\n\n"
@@ -1730,6 +1755,57 @@ def test_a_later_cycle_with_no_readable_verdict_drops_the_earlier_one(tmp_path):
     )
     assert {row[3] for row in rows(body)} == {"advance"}
     assert _source_line(body) == "- Verdict source: the gate artifact's status, mapped by the gate's own table"
+
+
+_DOWNGRADED = {
+    "verdict": "reloop",
+    "gate_status": "PASS",
+    "nfr_status": "FAIL",
+    "epic_level": False,
+    "reasons": ["gate read from gate-decision-7-1.json", "nfr overallStatus is FAIL", "advance downgraded to reloop"],
+}
+_CAPPED = {
+    "verdict": "reloop",
+    "gate_status": "PASS",
+    "sweep_scope": "scoped",
+    "epic_level": False,
+    "reasons": ["gate read from gate-decision-7-1.json", "sweep scope scoped: verdict capped at reloop"],
+}
+
+
+@pytest.mark.parametrize("recorded", [_DOWNGRADED, _CAPPED], ids=["nfr-downgrade", "sweep-cap"])
+@pytest.mark.parametrize(
+    "later",
+    [
+        "### Story 7-1: re-loop 1\n\nWork bound reached (--max-stories 1): carried over 7-1.\n",
+        "### Story 7-1 re-loop 1 step 0\n\nRe-anchored on the baseline.\n",
+        "#### Story 7-1 - what the re-loop owes\n\n- NFR R-001\n",
+    ],
+    ids=["re-loop-heading", "step-0-heading", "owed-note-heading"],
+)
+def test_a_later_heading_that_is_no_gate_cycle_keeps_the_recorded_verdict(tmp_path, recorded, later):
+    """Only a later `### Story <key>: gate` heading is a later cycle. A re-loop's
+    own heading for the same key, with no verdict object under it, dropped the
+    downgraded or capped `reloop` before it, and the trail showed 7-1's `PASS`
+    gate file mapped to `advance` for a story that had not advanced."""
+    body = _trail_over(tmp_path, "# Decision log\n\n### Story 7-1: gate\n\n" + _fenced(recorded) + later)
+    assert {row[3] for row in rows(body)} == {"reloop"}
+    assert _source_line(body) == "- Verdict source: recorded in the decision log"
+
+
+def test_a_later_heading_that_is_no_gate_cycle_replaces_the_verdict_with_its_own(tmp_path):
+    """Guard (passes before the fix too): a heading of another shape still ends
+    the cycle's entries, so a verdict object under it is the story's latest
+    verdict, as gate.md says."""
+    body = _trail_over(
+        tmp_path,
+        "# Decision log\n\n### Story 7-1: gate\n\n"
+        + _fenced(_PASS)
+        + "### Story 7-1: re-gate after the NFR fix\n\n"
+        + _fenced(_DOWNGRADED),
+    )
+    assert {row[3] for row in rows(body)} == {"reloop"}
+    assert _source_line(body) == "- Verdict source: recorded in the decision log"
 
 
 def test_an_unchanged_later_cycle_still_reads_its_own_fenced_verdict(tmp_path):
@@ -1876,14 +1952,28 @@ def _finalize_escalation_failures(text: str) -> list[str]:
         "closed nor a handoff, beside a `sprint-status.yaml` row that is not `done`) reads "
         "`escalate` instead, gate artifact or not",
         "because the `escalate` route stops after logging the verdict it escalated from",
-        "an open `evidence-commit-rejected` escalation keeps the story's `advance` and is named "
-        "on its verdict-source line",
+        "an `evidence-commit-rejected` escalation `/ucg-resolve` has not closed keeps the verdict the "
+        "story advanced on (`advance`, or `defer`), whatever its row reads, and is named on its "
+        "verdict-source line",
     )
     return [clause for clause in clauses if clause not in body]
 
 
 def test_finalize_says_an_open_escalation_reads_escalate():
     assert _finalize_escalation_failures(FINALIZE.read_text(encoding="utf-8")) == []
+
+
+def test_the_finalize_pin_reds_on_an_evidence_clause_that_names_advance_alone():
+    """Twin: the clause as it read when it named `advance` alone, though the
+    `defer` route advances too and its evidence commit can be rejected."""
+    text = FINALIZE.read_text(encoding="utf-8")
+    old = text.replace(
+        "an `evidence-commit-rejected` escalation `/ucg-resolve` has not closed keeps the verdict the "
+        "story advanced on (`advance`, or `defer`), whatever its row reads,",
+        "an open `evidence-commit-rejected` escalation keeps the story's `advance`",
+    )
+    assert old != text
+    assert len(_finalize_escalation_failures(old)) == 1
 
 
 def test_the_finalize_pin_reds_without_the_sentence():
@@ -1977,8 +2067,10 @@ def _heading_rule_failures(text: str, tmp_path: Path) -> list[str]:
         "gate's roll-up",
         "or from one whose `reasons` say it read another story's gate file",
         "one whose id is a key `sprint-status.yaml` lists, so a prose heading such as `### Story order` ends none",
-        "A later heading for the story replaces what an earlier one's entries recorded, even when no verdict "
-        "object follows it",
+        "A later heading in this shape for the story replaces what an earlier one's entries recorded, even "
+        "when no verdict object follows it",
+        "A later heading of another shape for the story (`### Story <story_id>: re-loop 1`) is no cycle: it "
+        "replaces that verdict only with a verdict object of its own",
         "never an earlier cycle's verdict",
         "never a position such as `Story 2 of 5`",
     ):
@@ -2026,7 +2118,8 @@ def test_the_heading_pin_reds_on_a_heading_only_a_numeric_key_survives(tmp_path)
         "`scripts/gate_trail.py` reads the verdict the run acted on from the first JSON object carrying "
         "`verdict` after such a heading, ",
         "The heading's entries run to the next heading the trail reads as a story's: ",
-        "A later heading for the story replaces what an earlier one's entries recorded, ",
+        "A later heading in this shape for the story replaces what an earlier one's entries recorded, ",
+        "A later heading of another shape for the story (`### Story <story_id>: re-loop 1`) is no cycle: ",
     ],
 )
 def test_the_heading_pin_reds_without_each_reader_sentence(tmp_path, sentence):
@@ -2040,3 +2133,63 @@ def test_the_heading_pin_reds_without_each_reader_sentence(tmp_path, sentence):
     assert cut != paragraph
     failures = _heading_rule_failures(text.replace(paragraph, cut), tmp_path)
     assert failures and all(f.startswith("the rule does not say") for f in failures), failures
+
+
+# ---------------------------------------------------------------------------
+# The release notes. A change fragment becomes the CHANGELOG, so the two the
+# trail's fixes added say what it reads, and what it read before, no more.
+# ---------------------------------------------------------------------------
+
+_CHANGES = SCRIPTS.parents[2] / "changes"
+_FRAGMENT_CLAUSES = {
+    "gate-story-heading.yaml": (
+        # Main read any `Story` heading with a digit-led id, at levels 2 to 4.
+        "the trail found no recorded verdict for a story whose verdict JSON stood under no heading of its own "
+        "reading `Story` and then an id starting with a digit",
+        "A later `### Story <story_id>: gate` heading for the same story replaces what an earlier one recorded",
+        "Any other later heading for the story, such as `### Story <story_id>: re-loop 1`, is no gate cycle, and "
+        "replaces that verdict only with a verdict object of its own.",
+    ),
+    "gate-trail-open-escalation.yaml": (
+        "keeps the verdict the story advanced on (`advance`, or `defer`), whatever its row reads",
+    ),
+}
+
+
+def _fragment_failures(name: str, text: str) -> list[str]:
+    flat = re.sub(r"\s+", " ", text)
+    return [clause for clause in _FRAGMENT_CLAUSES[name] if clause not in flat]
+
+
+@pytest.mark.parametrize("name", sorted(_FRAGMENT_CLAUSES))
+def test_the_trail_fragments_say_what_the_trail_reads(name):
+    assert _fragment_failures(name, (_CHANGES / name).read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "claim", "replaced"),
+    [
+        (
+            "gate-story-heading.yaml",
+            "the trail found no recorded verdict for a story whose verdict JSON stood under no heading of its own "
+            "reading `Story` and then an id starting with a digit",
+            "a log whose stories were headed any other way gave the trail no recorded verdict at all",
+        ),
+        (
+            "gate-story-heading.yaml",
+            "A later `### Story <story_id>: gate` heading for the same story",
+            "A later cycle's heading for the same story",
+        ),
+        (
+            "gate-trail-open-escalation.yaml",
+            "keeps the verdict the story advanced on (`advance`, or `defer`), whatever its row reads",
+            "keeps the story's `advance`",
+        ),
+    ],
+    ids=["no-verdict-before", "drop-on-gate-heading", "evidence-keeps-defer"],
+)
+def test_the_fragment_pin_reds_on_the_claim_it_replaced(name, claim, replaced):
+    """Twin: each fragment with the claim it carried before reds the pin."""
+    text = (_CHANGES / name).read_text(encoding="utf-8")
+    assert claim in text
+    assert _fragment_failures(name, text.replace(claim, replaced))

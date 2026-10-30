@@ -2178,7 +2178,7 @@ _HOOK_REJECTION_SENTENCES = {
     ),
     "finalize.md": (
         ("A run that stopped on an `evidence-commit-rejected` escalation keeps tha", "e2cb75bb035a"),
-        ("A story whose escalation is still open (`escalation-<story_id>.json` on ", "c9a848d0ddf8"),
+        ("A story whose escalation is still open (`escalation-<story_id>.json` on ", "e3f7c53b9b93"),
         ("On a `blocked` run (a story escalated, so the Epic never advanced or the", "b59ae034f8db"),
         ("This hook fires **only on a `blocked` run** (a story escalated, so the E", "168e3ecabf77"),
         ("`status` is `complete` when the Epic-level gate advanced and its evidenc", "db204ac9c025"),
