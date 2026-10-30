@@ -68,16 +68,23 @@ or teardown `error` counts as a failure too. jest's `Test Suites` line and
 vitest's `Test Files` line count files, a test file that failed to load among
 them, so once a `Tests` line was read neither is: a test file jest or vitest
 cannot load runs no test. Node's test runner reports a test file whose process
-failed (the file cannot load, or its process exits non-zero after its tests
-ran) as a failed test of its own, named after the file and located at the
-file's line 1, column 1, and that test does not count either, so a file whose
+failed as a failed test of its own, named after the file and located at the
+file's line 1, column 1. That test does not count when the file could not
+load, which Node shows by printing the error that stopped it, or when the
+row's own test was reported, since that test then ran to its end: a file whose
 tests pass and whose process then exits non-zero reads 0 failed, a harness
-error. An error collecting a test module or a test class does not count
-either: pytest names it with an `ERROR collecting <path>` header and a short
-summary line `ERROR <path>` with no `::` test id (a directory's path when a
-conftest.py in it fails to import) or `ERROR <path>::<Class>`, an id whose
-last part starts with a capital letter, and no test there ran. The path can
-hold a space. Nor does a conftest.py that pytest loads before it collects and
+error. A process that exits or crashes during a test (a `process.exit` the
+mutant reaches, a heap the test fills) reports neither that test nor such an
+error, so while the row's test is not reported the file's test counts, and the
+row reads as a kill, as a pytest test whose process dies does. A file Node
+interrupts, as a `timeout` around the command does, is counted as cancelled,
+not failed, so nothing is taken off for it. An error collecting a test module
+or a test class does not count either: pytest names it with an `ERROR
+collecting <path>` header and a short summary line `ERROR <path>` with no `::`
+test id (a directory's path when a conftest.py in it fails to import) or
+`ERROR <path>::<Class>`, an id whose last part starts with a capital letter and
+that holds no parameters' `[...]`, and no test there ran. The path can hold a
+space. Nor does a conftest.py that pytest loads before it collects and
 cannot import: it writes `ImportError while loading conftest '<path>'.` and
 stops, with no summary, before any test runs. So a mutant that breaks a module
 such a file imports (a dropped colon, say) reads 0 failed rather than a kill.
@@ -86,10 +93,13 @@ two runners does, their counts are added, and the collection errors of each
 pytest run are taken off its own stats line only.
 
 A count in another shape (mocha's `N failing`, cargo's `N failed`) is read
-only when no summary counted a failure, and never from a line inside pytest's
-report, from its first `=` or `!` rule to its stats line: a test's traceback,
-message or captured output there can quote any count, such as a `0 failed` a
-test prints.
+only when no summary counted a failure and no `-qq` run listed a failed test,
+and never from a line inside pytest's report, from the first rule of its own
+sections (ERRORS, FAILURES, PASSES, the warnings, the short summary and the
+rest, or a `!` rule) to its stats line: a test's traceback, message or
+captured output there can quote any count, such as a `0 failed` a test prints.
+Any other `=` rule, such as a banner a script prints before cargo runs, opens
+no report.
 
 A failure word inside the expected name never counts: a test named "fails
 when ..." supplies its own. A line never counts as a failure line when it
@@ -204,19 +214,34 @@ _PYTEST_ERRORS_RE = re.compile(r"\b(\d+) errors?\b")
 # under xdist it does not, and the other modules still run. Under `-qq` with
 # xdist pytest prints neither that line nor a stats line, so a short summary
 # that lists collection errors and no test (no `FAILED` entry, no `ERROR` entry
-# with a test's `::` id) means no test failed.
+# with a test's `::` id) means no test failed. Only a test's id carries its
+# parameters' `[...]`, whose text can hold `::` and a capital letter of its own
+# (`test_x[App::Models::User]`), so an id that holds one never names a class.
 _PYTEST_COLLECTING_RE = re.compile(r"^_+ ERROR collecting (.+?) _+$")
 _PYTEST_SHORT_HEADER_RE = re.compile(r"^=+ short test summary info =+$")
 _PYTEST_SECTION_END_RE = re.compile(r"^(?:=+ .+ =+|!+ .+ !+)$")
+# pytest's report opens at the first of its own sections, each a rule that
+# names it: those that quote a test's traceback, message or captured output
+# (ERRORS, FAILURES and XFAILURES, PASSES and XPASSES, the warnings), the
+# durations and the short summary. pytest alone prints a `!` rule (`Interrupted:
+# N errors during collection`, `stopping after N failures`). Any other `=` rule
+# opens nothing: a task runner's banner, or `=== fixtures seeded ===` that a
+# passing Node test prints, is no sign that pytest ran.
+_PYTEST_REPORT_OPEN_RE = re.compile(
+    r"^(?:=+ (?:ERRORS|X?FAILURES|X?PASSES|warnings summary(?: \(final\))?|slowest (?:\d+ )?durations"
+    r"|short test summary info) =+|!+ .+ !+)$"
+)
 # A short summary entry: its outcome, its path up to a `::` id or the ` - `
 # before its message, and the id.
 _PYTEST_SHORT_ENTRY_RE = re.compile(r"^(FAILED|ERROR) ((?:(?!::| - ).)+)((?:::(?:(?! - ).)+)?)(?: - .*)?$")
 # One command can run pytest twice. A run ends at its stats line, and a `-qq`
 # run, which prints none, where the next run opens: at `test session starts`,
-# or at an ERRORS, FAILURES or short summary rule after its own short summary,
-# since pytest prints each of those before its short summary.
+# at an ERRORS, FAILURES or short summary rule after its own short summary,
+# since pytest prints each of those before its short summary, or at a progress
+# line (`..F  [100%]`), which a `-q` run prints before its report.
 _PYTEST_REPORT_RE = re.compile(r"^=+ (?:ERRORS|FAILURES|short test summary info) =+$")
 _PYTEST_SESSION_RE = re.compile(r"^=+ test session starts =+$")
+_PYTEST_PROGRESS_RE = re.compile(r"^[.,FEsxXuy-]+\s*\[\s*(?:\d+%|\d+/\d+)\]\s*$")
 _PYTEST_INTERRUPTED_RE = re.compile(r"Interrupted: (\d+) errors? during collection")
 # A conftest.py pytest loads before it collects (the rootdir's, say) that fails
 # to import, whatever it raised, stops pytest before any test runs, under xdist
@@ -232,19 +257,33 @@ _PYTEST_STARTUP_CRASH_RE = re.compile(
 )
 
 # Node's test runner runs each test file in a process of its own. When that
-# process fails, as it does when the file cannot load (a mutant that breaks a
-# module it imports) or when it exits non-zero after its tests ran, Node
-# reports a failed test of its own, counted in `fail N`, and names it after the
-# file: U+2716 and the path in the spec reporter, `not ok N - <path>` in TAP,
-# the path relative to the directory node ran in (absolute on Node 20). No test
-# in that file went red. A test of the file's own is located wherever it is
-# declared, so only the runner's test is located at the file's line 1, column
-# 1: `test at <path>:1:1` directly above it in the spec reporter's list of
-# failing tests, `location: '<path>:1:1'` in its TAP block.
+# process fails (the file cannot load, its process exits non-zero after its
+# tests ran, or it dies during a test), Node reports a failed test of its own,
+# counted in `fail N`, and names it after the file: U+2716 and the path in the
+# spec reporter, `not ok N - <path>` in TAP, the path relative to the directory
+# node ran in (absolute on Node 20). A test of the file's own is located
+# wherever it is declared, so only the runner's test is located at the file's
+# line 1, column 1: `test at <path>:1:1` directly above it in the spec
+# reporter's list of failing tests, `location: '<path>:1:1'` in its TAP block.
 _NODE_FAILED_TEST_RE = re.compile(r"^\s*(?:✖|not ok \d+ -) (.+?)(?: \([\d.]+m?s\))?\s*$")
 _NODE_PASSED_TEST_RE = re.compile(r"^\s*ok \d+\b")
 _NODE_SPEC_AT_RE = re.compile(r"^\s*test at (.+):1:1\s*$")
 _NODE_TAP_LOCATION_RE = re.compile(r"^\s*location: '(.+):1:1'\s*$")
+# A test Node reports as it ends, passed, failed or skipped: U+2714, U+2716 or
+# U+FE63 in the spec reporter, `ok N -` or `not ok N -` in TAP. A process that
+# dies during a test reports neither that test nor, unless they ended well
+# before it, the file's other tests.
+_NODE_REPORTED_TEST_RE = re.compile(r"^\s*(?:✔|✖|﹣|(?:not )?ok \d+ -) (.+?)(?: \([\d.]+m?s\))?(?: # .*)?\s*$")
+# A test file that cannot load (a syntax error, a module it cannot find, a
+# throw or a failed assert at its top level) dies of an uncaught error, which
+# Node prints ending with a line that names its own version (behind `#` in
+# TAP). A process that exits or crashes during a test prints no such line.
+_NODE_LOAD_ERROR_RE = re.compile(r"^\s*(?:#\s*)?Node\.js v\d+\.\d+\.\d+\s*$")
+# A test file Node interrupted, as a `timeout` around the command makes it:
+# listed under `Interrupted while running:` as `⚠ <path> (<path>:1:1)`, and
+# counted under `cancelled`, not in `fail N`, though its runner's test is also
+# reported failed.
+_NODE_INTERRUPTED_RE = re.compile(r"^\s*⚠ (.+?) \((.+):1:1\)\s*$")
 
 # Failure-count shapes across the other common runners (mocha, cargo, and any
 # runner whose summary is not one of the above). First match wins; no match
@@ -344,9 +383,13 @@ def _collected_path(token: str, root: Path | None) -> bool:
 
 def _names_a_class(test_id: str) -> bool:
     """Whether a short summary entry's `::` id ends at a class: its last part
-    starts with a capital letter and holds no parameters' `[...]`."""
+    starts with a capital letter, and it holds no parameters' `[...]`, which
+    only a test's id carries and whose text can hold `::` itself
+    (`test_x[App::Models::User]`)."""
+    if "[" in test_id:
+        return False
     last = test_id.rsplit("::", 1)[-1]
-    return bool(last) and last[0].isupper() and "[" not in last
+    return bool(last) and last[0].isupper()
 
 
 def _collection_errors(lines: list[str], root: Path | None = None) -> tuple[int, bool, bool, bool]:
@@ -398,11 +441,21 @@ def _same_file(name: str, location: str) -> bool:
     return name == location or name.endswith("/" + location) or location.endswith("/" + name)
 
 
-def _node_file_failures(lines: list[str]) -> int:
-    """How many of Node's failed tests are the runner's own, one for each test
-    file whose process failed: a failed test named after a file and located at
-    that file's line 1, column 1."""
-    files = set()
+def _node_file_failures(lines: list[str], expect_red: str | None = None) -> int:
+    """How many of the failed tests Node's `fail N` counts are the runner's own
+    and no test's failure. The runner's test for a file whose process failed is
+    named after the file and located at its line 1, column 1. It is no test's
+    failure when the file could not load, one for each load error Node printed,
+    or, all of them, when the row's own test was reported: that test ran to its
+    end, so a process that failed did so outside it, as one that exits non-zero
+    after its tests pass does. Otherwise a process died during a test, before
+    Node reported the row's test, and its runner's test is that test's
+    failure. A file Node interrupted is counted as cancelled, not in `fail N`,
+    so it is never taken off."""
+    files: set[str] = set()
+    interrupted: set[str] = set()
+    reported: set[str] = set()
+    load_errors = 0
     spec_at = None
     tap_failed = None
     for line in lines:
@@ -418,13 +471,24 @@ def _node_file_failures(lines: list[str]) -> int:
             if tap_failed is not None and _same_file(tap_failed, location.group(1)):
                 files.add(tap_failed)
             tap_failed = None
+        test = _NODE_REPORTED_TEST_RE.match(line)
+        if test:
+            reported.add(test.group(1))
+        stopped = _NODE_INTERRUPTED_RE.match(line)
+        if stopped and _same_file(stopped.group(1), stopped.group(2)):
+            interrupted.add(stopped.group(1))
+        if _NODE_LOAD_ERROR_RE.match(line):
+            load_errors += 1
         # The spec reporter's location line sits directly above its test.
         at = _NODE_SPEC_AT_RE.match(line)
         spec_at = at.group(1) if at else None
-    return len(files)
+    counted = len(files - interrupted)
+    if expect_red and any(expect_red in name for name in reported - files):
+        return counted
+    return min(counted, load_errors)
 
 
-def _fail_count(lines: list[str], root: Path | None = None) -> int | None:
+def _fail_count(lines: list[str], root: Path | None = None, expect_red: str | None = None) -> int | None:
     summed: int | None = None
     others: list[str] = []
     tests_read = False
@@ -433,7 +497,7 @@ def _fail_count(lines: list[str], root: Path | None = None) -> int | None:
     # quote any count, so none is read for another runner's count.
     in_report = False
     # Taken off Node's summaries, once in all.
-    node_files = _node_file_failures(lines)
+    node_files = _node_file_failures(lines, expect_red)
     # The current pytest run's lines. Its collection errors are taken off its
     # own stats line only: a command that runs pytest twice, with flags that
     # print different signs of them, does not pool the two runs' counts.
@@ -448,19 +512,18 @@ def _fail_count(lines: list[str], root: Path | None = None) -> int | None:
 
     for line in lines:
         session = _PYTEST_SESSION_RE.match(line)
-        if session or (run_reported and _PYTEST_REPORT_RE.match(line)):
+        if session or (run_reported and (_PYTEST_REPORT_RE.match(line) or _PYTEST_PROGRESS_RE.match(line))):
             # A run that printed no stats line (`-qq`) ends where the next opens.
             close_run()
             run, run_reported = [], False
+            in_report = False
         run.append(line)
         run_reported = run_reported or bool(_PYTEST_SHORT_HEADER_RE.match(line))
         node = _NODE_FAIL_SUMMARY_RE.match(line)
         tests = _TESTS_SUMMARY_RE.match(line)
         pytest_summary = None if tests else _PYTEST_SUMMARY_RE.match(line)
         summary = tests or pytest_summary
-        if session:
-            in_report = False
-        elif not pytest_summary and _PYTEST_SECTION_END_RE.match(line):
+        if not pytest_summary and _PYTEST_REPORT_OPEN_RE.match(line):
             in_report = True
         if node:
             count = int(node.group(1))
@@ -485,6 +548,12 @@ def _fail_count(lines: list[str], root: Path | None = None) -> int | None:
     close_run()
     if summed:
         return summed
+    # A pytest run that printed no stats line (`-qq` prints none, and a
+    # conftest's or a startup plugin's failure none at all) counted none of
+    # the tests its short summary lists as failed, so the count is not known,
+    # whatever count another runner printed beside it (`0 failed` included).
+    if any(listed for _, listed in unsummarised):
+        return None
     # No summary counted a failure: another runner in the same command may
     # have printed its count in a shape not listed above. A `Tests` line has
     # counted the tests jest or vitest ran, so the files line beside it counts
@@ -496,11 +565,6 @@ def _fail_count(lines: list[str], root: Path | None = None) -> int | None:
             match = pattern.search(line)
             if match:
                 return int(match.group(1))
-    # A pytest run that printed no stats line (`-qq` prints none, and a
-    # conftest's or a startup plugin's failure none at all) counted none of
-    # the tests its short summary lists as failed, so the count is not known.
-    if any(listed for _, listed in unsummarised):
-        return None
     # Every such run stopped at a collection error, or at a conftest.py or a
     # startup plugin it could not load, before any test ran, or listed only
     # collection errors: no test failed.
@@ -601,7 +665,7 @@ def _classify_red(output: str, expect_red: str, root: Path | None = None) -> tup
     """(status, detail, is_finding) for a red run. `root` is the directory the
     command ran in, so a bare name in pytest's short summary can be checked."""
     lines = _output_lines(output)
-    count = _fail_count(lines, root)
+    count = _fail_count(lines, root, expect_red)
     if count == 0:
         # A red exit whose own summary counts zero failures is a collection or
         # harness error wearing a red exit code, not the observer firing. It

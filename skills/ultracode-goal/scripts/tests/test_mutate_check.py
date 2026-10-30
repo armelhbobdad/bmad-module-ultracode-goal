@@ -1520,3 +1520,248 @@ def test_a_count_another_runner_prints_after_pytest_is_still_read(tmp_path):
         proc.stdout + proc.stderr
     )
     assert proc.returncode == 0
+
+
+# --- What a review of #179's fix found -----------------------------------------
+#
+# A parametrized test's id can hold `::` and a capital letter. A Node test file
+# the command's own `timeout` interrupts is counted as cancelled, not failed. A
+# Node test file's process can die during a test, which Node reports the way it
+# reports a file that cannot load. An `=` rule that is not pytest's opened what
+# was read as pytest's report. A `-qq` run's listing sat beside a `0 failed`
+# that a later run or another runner printed.
+#
+# The Node captures (Node 24.21.0, local paths replaced with /home/dev/work):
+#   node-spec-exits-during-a-test, node-tap-exits-during-a-test
+#                       `node --test cli.test.mjs other.test.mjs`: the mutant
+#                       (`args.length === 0` to `!== 0` in cli.mjs) makes the
+#                       test `run reads its file` call `process.exit(2)`
+#   node-spec-heap-runs-out-during-a-test, node-tap-heap-runs-out-during-a-test
+#                       `node --max-old-space-size=64 --test walk.test.mjs`:
+#                       the mutant (`if (depth > MAX_DEPTH) break;` to
+#                       `if (false) break;` in walk.mjs) makes the test
+#                       `depth guard fires` fill the heap
+#   node-spec-load-failure-beside-an-exit
+#                       `node --test cli.test.mjs loader.test.mjs`: the mutant
+#                       (`MODE = 'strict'` to `'loose'` in mode.mjs) makes the
+#                       test `run reads its file` call `process.exit(2)`, and
+#                       loader.test.mjs fail an assert as it loads
+#   node-spec-interrupted-beside-a-kill
+#                       `timeout 5 node --test a.test.mjs b.test.mjs`: the
+#                       mutant (`LIMIT = 5` to `6` in code.mjs) fails the test
+#                       `limit is pinned` in a.test.mjs, and makes b.test.mjs
+#                       loop until the timeout stops node
+
+_NEVER_APPEARS = (
+    "red, but {!r} never appears beside a failure token - whatever failed, it was not the observer this row claims"
+)
+_NAMED_PARAMETER = (
+    "import pytest\nfrom calc import clamp\n\n\n@pytest.fixture\ndef bound():\n"
+    "    if clamp(9, 5) != 5:\n        raise RuntimeError('bound')\n    return 5\n\n\n"
+    "@pytest.mark.parametrize('name', ['App::Models::User'])\n"
+    "def test_clamp_at_the_bound(bound, name):\n    assert bound == 5\n"
+)
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize("flags", ["-q", "-q --tb=no -n 2", "-qq -n 2"])
+def test_a_setup_error_of_a_test_whose_parameter_holds_a_class_path_still_kills(tmp_path, flags, ci):
+    """The twin of the class rule at a parametrized id: pytest lists the kill
+    as `ERROR <path>::test_clamp_at_the_bound[App::Models::User]`, and the part
+    after its last `::`, `User]`, starts with a capital letter. Read as a class
+    pytest could not collect, the kill came off the stats line's `1 error` and
+    read 0 failed, a row that cannot run."""
+    if "-n" in flags:
+        pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {"test_names.py": _NAMED_PARAMETER, "test_other.py": _OTHER})
+    proc = _run_table(project, [_pytest_row(flags, "if False:")], _ci_env(ci))
+    assert _ledger_rows(proc.stdout)[0][0].startswith("KILLED"), proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+def test_a_node_kill_beside_a_file_the_command_interrupts_is_one_kill(tmp_path):
+    """A `timeout` around `node --test` stops a file the mutant makes loop.
+    Node counts that file as cancelled, not in `fail N`, though it reports the
+    file's own test failed at its line 1, column 1. Taken off `fail 1`, which
+    counted only the row's kill, it made the kill read 0 failed, a row that
+    cannot run."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / "node-spec-interrupted-beside-a-kill.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red="limit is pinned")])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'limit is pinned' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node-spec-exits-during-a-test", "run reads its file"),
+        ("node-tap-exits-during-a-test", "run reads its file"),
+        ("node-spec-heap-runs-out-during-a-test", "depth guard fires"),
+        ("node-tap-heap-runs-out-during-a-test", "depth guard fires"),
+        ("node-spec-load-failure-beside-an-exit", "run reads its file"),
+    ],
+)
+def test_a_node_test_file_whose_process_dies_during_a_test_reads_as_a_kill(tmp_path, capture, expect_red):
+    """A process that dies during a test (an exit the mutant makes the test
+    reach, a heap the test fills) never reports that test, and Node reports
+    its file as it reports one that cannot load. Taken off the count, it read
+    0 failed, a row that cannot run, though the row's own test went red. Node
+    printed no load error for it, so it counts: the row reads as a kill whose
+    name never appears. In the last capture another file fails to load, and
+    only that file's test comes off the count."""
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    proc = _run_table(project, [_row(expect_red=expect_red)])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NEVER_APPEARS.format(expect_red))}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_real_node_test_file_that_exits_during_a_test_reads_as_a_kill(tmp_path):
+    """The real `node --test`, with whatever reporter this Node defaults to,
+    over a test file whose test reaches `process.exit(2)` under the mutant,
+    beside a passing one."""
+    (tmp_path / "cli.mjs").write_text(
+        "export function run(args) {\n  if (args.length === 0) {\n    process.exit(2);\n  }\n"
+        "  return `read ${args[0]}`;\n}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (tmp_path / "cli.test.mjs").write_text(
+        "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+        "import { run } from './cli.mjs';\n"
+        "test('run reads its file', () => { assert.equal(run(['a.txt']), 'read a.txt'); });\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (tmp_path / "other.test.mjs").write_text(
+        "import { test } from 'node:test';\ntest('other passes', () => {});\n", encoding="utf-8", newline="\n"
+    )
+    row = {
+        "file": "cli.mjs",
+        "anchor": "if (args.length === 0) {",
+        "replacement": "if (args.length !== 0) {",
+        "command": "node --test cli.test.mjs other.test.mjs",
+        "expect_red": "run reads its file",
+    }
+    proc = _run_table(tmp_path, [row])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NEVER_APPEARS.format("run reads its file"))}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 1
+
+
+# A Node run whose one test passes and prints a banner, as `console.log` writes it.
+_FAKE_NODE = (
+    "import sys\n"
+    "sys.stdout.buffer.write('\\u2714 other passes (0.4ms)\\n=== fixtures seeded ===\\n"
+    "\\u2139 tests 1\\n\\u2139 pass 1\\n\\u2139 fail 0\\n'.encode('utf-8'))\n"
+)
+
+
+@pytest.mark.parametrize("before", ["a-banner", "node-prints-a-banner", "pytest-then-a-banner"])
+def test_a_rule_pytest_did_not_print_hides_no_count(tmp_path, before):
+    """Any `=` rule with text in it opened what was read as pytest's report,
+    with no pytest run at all, so no count after it was read: a script's
+    `===== rust =====` before cargo's count, or `=== fixtures seeded ===` that
+    a passing Node test prints, made cargo's kill read 0 failed or lose its
+    count. Only the rules of pytest's own sections open its report now."""
+    project = _pytest_project(tmp_path, {"test_other.py": _OTHER})
+    (project / "fake_cargo.py").write_text(_FAKE_CARGO, encoding="utf-8", newline="\n")
+    (project / "banner.py").write_text("print('===== rust =====')\n", encoding="utf-8", newline="\n")
+    (project / "fake_node.py").write_text(_FAKE_NODE, encoding="utf-8", newline="\n")
+    run = f'"{sys.executable}"'
+    first = {
+        "a-banner": f"{run} banner.py",
+        "node-prints-a-banner": f"{run} fake_node.py",
+        "pytest-then-a-banner": f"{run} -m pytest -q -p no:cacheprovider tests && {run} banner.py",
+    }[before]
+    row = _pytest_row("-q", "if False:", expect_red="clamp_at_the_bound")
+    row["command"] = f"{first} && {run} fake_cargo.py"
+    proc = _run_table(project, [row])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'clamp_at_the_bound' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "def test_other():\n    print('batch: 2 failed')\n",
+        "import warnings\n\n\ndef test_other():\n    warnings.warn('retry 3 failed')\n",
+    ],
+    ids=["passes-section", "warnings-section"],
+)
+def test_a_count_pytest_quotes_before_another_runner_is_not_read(tmp_path, body):
+    """The twin: a passing test's output, which `-rA` quotes in pytest's
+    PASSES section, and its warning, which the warnings summary quotes, open
+    pytest's report when no failure section comes first, so neither count is
+    read before cargo's."""
+    project = _pytest_project(tmp_path, {"test_other.py": body})
+    (project / "fake_cargo.py").write_text(_FAKE_CARGO, encoding="utf-8", newline="\n")
+    row = _pytest_row("-q -rA", "if False:", expect_red="clamp_at_the_bound")
+    row["command"] += f' && "{sys.executable}" fake_cargo.py'
+    proc = _run_table(project, [row])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'clamp_at_the_bound' went red")}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 0
+
+
+# Runs pytest once for each argument, in turn, and exits with the worst code,
+# as `;` and `exit $((a|b))` would in bash, but under cmd.exe too.
+_RUN_EACH = (
+    "import subprocess\nimport sys\n\n"
+    "codes = [\n"
+    "    subprocess.call([sys.executable, '-m', 'pytest', '-p', 'no:cacheprovider', *flags.split()])\n"
+    "    for flags in sys.argv[1:]\n"
+    "]\n"
+    "sys.exit(max(codes))\n"
+)
+_PASSING_CARGO = (
+    "print('running 3 tests')\n"
+    "print('test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s')\n"
+)
+
+
+@pytest.mark.parametrize("ci", [False, True], ids=["no-ci", "ci"])
+@pytest.mark.parametrize("kill", [_AT_THE_BOUND, _SETUP_ERROR_KILL], ids=["assert", "setup-error"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        'run_each.py "-qq tests_b" "-q tests_c"',
+        'run_each.py "-qq -n 2 tests_b" "-q -n 2 tests_c"',
+        "passing_cargo.py && {pytest} -qq tests_b",
+    ],
+    ids=["qq-then-passing-q", "qq-then-passing-q-xdist", "passing-cargo-then-qq"],
+)
+def test_a_qq_run_that_lists_a_kill_leaves_the_count_unknown(tmp_path, command, kill, ci):
+    """A `-qq` run prints no stats line, so no count holds the kill it lists.
+    A passing `-q` run after it prints no `test session starts` and no report
+    rule, so the `-qq` run's listing was read as the `-q` run's and dropped at
+    its `1 passed`, and a `0 failed` another runner printed was taken for the
+    count: both read the kill 0 failed, a row that cannot run. A `-q` run's
+    progress line now opens a run of its own, and a `-qq` run that lists a
+    test leaves the count unknown whatever else the command printed."""
+    if "-n" in command:
+        pytest.importorskip("xdist")
+    project = _pytest_project(tmp_path, {})
+    for folder, body in (("tests_b", kill), ("tests_c", _OTHER)):
+        (project / folder).mkdir()
+        (project / folder / f"test_{folder}.py").write_text(body, encoding="utf-8", newline="\n")
+    (project / "run_each.py").write_text(_RUN_EACH, encoding="utf-8", newline="\n")
+    (project / "passing_cargo.py").write_text(_PASSING_CARGO, encoding="utf-8", newline="\n")
+    run = f'"{sys.executable}"'
+    row = _pytest_row("-q", "if False:")
+    row["command"] = f"{run} " + command.format(pytest=f"{run} -m pytest -p no:cacheprovider")
+    proc = _run_table(project, [row], _ci_env(ci))
+    assert _ledger_rows(proc.stdout) == {0: _UNPARSEABLE}, proc.stdout + proc.stderr
+    assert proc.returncode == 0
