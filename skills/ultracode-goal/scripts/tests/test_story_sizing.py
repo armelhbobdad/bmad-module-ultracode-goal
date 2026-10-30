@@ -131,14 +131,16 @@ def test_duplicate_ids_in_the_parent_list_are_reported() -> None:
 @pytest.mark.parametrize(
     ("ac", "task", "ceiling", "expected"),
     [
-        (13, 0, 25, True),  # 13 criteria >= 12.5
-        (12, 0, 25, False),  # 12 < 12.5
-        (1, 1, 25, False),
+        (13, 5, 25, True),  # 13 criteria >= 12.5
+        (12, 5, 25, False),  # 12 < 12.5, though criteria plus tasks is 17
+        (1, 12, 25, False),  # criteria plus tasks is 13, over the old line
         (15, 0, 30, True),  # the line moves with the ceiling: 15 >= 15
-        (14, 0, 30, False),
+        (14, 3, 30, False),  # 14 < 15, though criteria plus tasks is 17
     ],
 )
 def test_implausibility_threshold_is_half_the_turn_ceiling_in_criteria(ac, task, ceiling, expected) -> None:
+    """Each row under the line carries tasks that would cross it if they were
+    added, so the summed rule fails here as well as in the cases below."""
     assert mod.size(ac, task, ceiling)["implausible"] is expected
 
 

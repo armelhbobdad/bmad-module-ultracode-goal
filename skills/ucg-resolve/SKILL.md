@@ -249,7 +249,9 @@ The two dispositions are genuinely different things, not two names for one:
   reworded, write the sidecar's `decision_needed` verbatim into this answer's
   `.decision-log.md` entry, under both story keys it names, beside the operator's answer
   and the id you closed, before you delete the sidecar: once the sidecar is gone, that
-  entry is the only copy of the move the resumed run writes into both story files. This
+  entry is the only copy of the move the resumed run writes into both story files, or for
+  two decomposed children into every record of their split (the split record, both child
+  rows in `sprint-status.yaml` and both ATDD checklists). This
   surface edits neither story file and moves no test case: the ruling is the operator's,
   and the resumed run applies it before the earlier story's next commit. An answer that
   re-plans the rows instead (one story in place of the two, or another order) is the

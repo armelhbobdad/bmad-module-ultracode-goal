@@ -24,9 +24,14 @@ The story loop now names the case and pins:
     Operator notes entry given before launch that names both stories and
     authorizes the move, or the answer to a `coupled-stories` escalation, and a
     general or standing delegation is neither;
-  - both story files state the move, a decomposed child moves whole ACs through
-    a new split record, the scaffolded cases move with their clause, and the
-    log names both stories.
+  - what the move writes depends on the pair: both story files state it when
+    both have one; two decomposed children of one parent move a whole AC, and
+    the new split record, both child rows' citations in `sprint-status.yaml`
+    and both children's ATDD checklists carry the changed claim map, since the
+    row is what step 1 hands the dev agent; a child beside a story that has a
+    file, or children of two parents, have no move, so the run escalates for a
+    re-plan; the scaffolded cases move with their clause, and the log names
+    both stories.
 
 execute.md's sidecar section names the kind as a live one, `/ucg-resolve`
 closes it by logging the proposal beside the answer before it deletes the
@@ -125,6 +130,7 @@ _CHECKS = {
         and "`kind` `coupled-stories`" in p
         and "`source` the measurement file" in p
         and all(s in p for s in ("both story keys", "each clause", "its measurement", "the wording you propose"))
+        and "(for two decomposed children, the changed claim map)" in p
     ),
     "proposes only a re-plan for a later story outside the run": lambda p: (
         "when the later story is outside this run's scope, propose only a re-plan" in p
@@ -132,20 +138,42 @@ _CHECKS = {
     "applies the ruling only once /ucg-resolve has closed it": lambda p: (
         "Once `/ucg-resolve` has closed it, take the ruling from the entry it logs in `.decision-log.md`" in p
     ),
-    "both story files state the move before the next commit": lambda p: (
-        "Write the ruling into both story files before the earlier story's next commit, each citing it" in p
+    "every record of the move lands before the next commit": lambda p: (
+        "What the move writes depends on the pair, and all of it lands before the earlier story's next commit." in p
+    ),
+    "both story files state the move when both have one": lambda p: (
+        "When both stories have a story file, write the ruling into both story files, each citing it" in p
         and "names the later story's AC that now owns each moved clause" in p
         and "the later story gains each clause as an AC of its own" in p
     ),
-    "a decomposed child moves whole ACs, parent file unedited": lambda p: (
-        "only a whole claimed AC moves" in p
-        and "a new reconciling run that records the split with the changed claim map" in p
+    "two children of one parent move whole ACs, parent file unedited": lambda p: (
+        "Between two decomposed children of one parent, which have no story file, only a whole claimed AC moves" in p
+        and "a new reconciling run records the split with the changed claim map" in p
         and "the parent's story file stays unedited" in p
+    ),
+    # The row is the authority on what a child owes (the sizing section), so a
+    # move the split record alone carries still hands the earlier child the
+    # moved AC at step 1, and still leaves it out of the later child's trace.
+    "the move rewrites both child rows and both checklists": lambda p: (
+        "the same pass rewrites the AC citation in both child rows' comments in `sprint-status.yaml`" in p
+        and "which step 1 takes `claimed_acs` from and the trace is written from" in p
+        and "the AC numbers in both children's `atdd-checklist-<child key>.md` frontmatter" in p
+        and "so no record of the split still gives the earlier child the AC it handed on" in p
+    ),
+    # A child gains no AC of its own and loses only a whole one its parent's
+    # split must still place, so neither side of a mixed pair can record a move.
+    "a child beside a filed story, or across parents, gets only a re-plan": lambda p: (
+        "Any other pair (a decomposed child beside a story that has a file, or children of two parents) "
+        "has no move to apply" in p
+        and "so no note can authorize a move there" in p
+        and "Escalate for the earlier story as above, proposing only a re-plan" in p
     ),
     "moves the scaffolded cases between generatedTestFiles lists": lambda p: (
         "Move each clause's scaffolded cases with it" in p and "`generatedTestFiles`" in p
     ),
-    "logs it under both stories": lambda p: "Log the move under both stories in `.decision-log.md`" in p,
+    "logs it under both stories": lambda p: (
+        "Log the move under both stories in `.decision-log.md`, with the changed claim map for two children" in p
+    ),
 }
 
 
@@ -223,6 +251,59 @@ def test_it_sits_after_the_narrowing_rule_which_still_escalates():
             "Leave each clause's scaffolded cases where they are",
             "moves the scaffolded cases between generatedTestFiles lists",
         ),
+        # Only the split record moves: the earlier child's row still hands it
+        # the moved AC at step 1.
+        (
+            ", and the same pass rewrites the AC citation in both child rows' comments in `sprint-status.yaml`, "
+            "which step 1 takes `claimed_acs` from and the trace is written from, and the AC numbers in both "
+            "children's `atdd-checklist-<child key>.md` frontmatter (`references/define-done.md`), so no record of "
+            "the split still gives the earlier child the AC it handed on.",
+            ".",
+            "the move rewrites both child rows and both checklists",
+        ),
+        # The rows rewritten, the checklists left citing the old map.
+        (
+            "and the AC numbers in both children's `atdd-checklist-<child key>.md` frontmatter",
+            "and leaves each child's ATDD checklist as it is",
+            "the move rewrites both child rows and both checklists",
+        ),
+        # A mixed pair given the two-children route.
+        (
+            "has no move to apply",
+            "moves as two children do",
+            "a child beside a filed story, or across parents, gets only a re-plan",
+        ),
+        # A pre-launch note read as authorizing a move no record can hold.
+        (
+            "so no note can authorize a move there",
+            "unless a note authorizes the move",
+            "a child beside a filed story, or across parents, gets only a re-plan",
+        ),
+        # A mixed pair driven on as it stands, with no escalation.
+        (
+            "Escalate for the earlier story as above, proposing only a re-plan, as for a later story outside this "
+            "run's scope.",
+            "Drive both rows as they stand.",
+            "a child beside a filed story, or across parents, gets only a re-plan",
+        ),
+        # A children's escalation that proposes story-file wording neither child has.
+        (
+            " (for two decomposed children, the changed claim map)",
+            "",
+            "escalates otherwise, with the kind and what it names",
+        ),
+        # The children's records written after the earlier child's next commit.
+        (
+            "and all of it lands before the earlier story's next commit.",
+            "and the children's records follow at their next gate.",
+            "every record of the move lands before the next commit",
+        ),
+        # The decision-log record of the split left on the old map.
+        (
+            ", with the changed claim map for two children",
+            "",
+            "logs it under both stories",
+        ),
     ],
 )
 def test_a_weakened_route_is_caught(old, new, caught_by):
@@ -268,6 +349,10 @@ def _close_bullet(text: str) -> str:
 
 _RESOLVE_CHECKS = {
     "has a close rule for the kind": lambda c: _CLOSE_LEAD in c,
+    "names every record a children's move rewrites": lambda c: (
+        "or for two decomposed children into every record of their split (the split record, both child rows in "
+        "`sprint-status.yaml` and both ATDD checklists)" in c
+    ),
     "logs decision_needed verbatim under both stories before deleting the sidecar": lambda c: (
         "write the sidecar's `decision_needed` verbatim into this answer's `.decision-log.md` entry" in c
         and "under both story keys it names" in c
@@ -315,6 +400,13 @@ def test_ucg_resolve_closes_a_coupled_stories_escalation():
             "record `defer` until they have made it, then `close`",
             "record `close`",
             "closes a re-plan only once the operator made it",
+        ),
+        # A children's move said to be written into story files neither child has.
+        (
+            "into both story files, or for two decomposed children into every record of their split (the split "
+            "record, both child rows in `sprint-status.yaml` and both ATDD checklists).",
+            "into both story files.",
+            "names every record a children's move rewrites",
         ),
     ],
 )
@@ -387,6 +479,8 @@ def test_the_fragment_describes_the_route():
         "A general or standing delegation is not a ruling.",
         "`/ucg-resolve` closes that escalation",
         "`generatedTestFiles`",
+        "both child rows' criteria citations in `sprint-status.yaml` and both children's ATDD checklists",
+        "A decomposed child coupled with a story that has a file, or with a child of another parent, has no move",
     ):
         assert token in flat, token
     assert chr(0x2014) not in fragment, "an em dash in the fragment"
