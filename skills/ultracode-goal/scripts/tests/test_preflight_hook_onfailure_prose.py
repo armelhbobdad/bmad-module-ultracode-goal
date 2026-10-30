@@ -33,7 +33,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -81,6 +83,10 @@ def _items(bullet: str) -> dict[str, dict]:
     return found
 
 
+# How the guard template ends in the bullet: the quoted script path, then the key.
+_GUARD_TAIL = "guard_pretooluse.py'\", \"onFailure\": \"block\"}"
+
+
 def _arms_only_the_guard_with_block(bullet: str) -> bool:
     """The guard template carries exactly "block"; the Stop template none."""
     items = _items(bullet)
@@ -98,7 +104,7 @@ def test_the_hooks_bullet_writes_the_guard_item_with_on_failure_block():
     guard = items["guard_pretooluse.py"]
     assert guard == {
         "type": "command",
-        "command": "<env> uv run {skill-root}/scripts/hooks/guard_pretooluse.py",
+        "command": "<env> uv run '{skill-root}/scripts/hooks/guard_pretooluse.py'",
         "onFailure": "block",
     }
     assert _arms_only_the_guard_with_block(_hooks_bullet())
@@ -106,7 +112,7 @@ def test_the_hooks_bullet_writes_the_guard_item_with_on_failure_block():
 
 def test_the_hooks_bullet_writes_the_stop_item_without_on_failure():
     budget = _items(_hooks_bullet())["budget_stop.py"]
-    assert budget == {"type": "command", "command": "<env> uv run {skill-root}/scripts/hooks/budget_stop.py"}
+    assert budget == {"type": "command", "command": "<env> uv run '{skill-root}/scripts/hooks/budget_stop.py'"}
     flat = _flat(_hooks_bullet())
     assert "the budget hook's item carries no `onFailure` key" in flat
     assert "The Stop budget hook carries no `onFailure`: Claude Code ignores the key on `Stop`" in flat
@@ -116,12 +122,10 @@ def test_the_hooks_bullet_writes_the_stop_item_without_on_failure():
 @pytest.mark.parametrize(
     "old,new",
     [
-        pytest.param('guard_pretooluse.py", "onFailure": "block"}', 'guard_pretooluse.py"}', id="guard-without-it"),
-        pytest.param('guard_pretooluse.py", "onFailure": "block"}', 'guard_pretooluse.py", "onFailure": "Block"}', id="wrong-case"),
-        pytest.param(
-            'guard_pretooluse.py", "onFailure": "block"}', 'guard_pretooluse.py", "onFailure": "continue"}', id="continue"
-        ),
-        pytest.param('budget_stop.py"}', 'budget_stop.py", "onFailure": "block"}', id="on-stop-too"),
+        pytest.param(_GUARD_TAIL, "guard_pretooluse.py'\"}", id="guard-without-it"),
+        pytest.param(_GUARD_TAIL, _GUARD_TAIL.replace('"block"', '"Block"'), id="wrong-case"),
+        pytest.param(_GUARD_TAIL, _GUARD_TAIL.replace('"block"', '"continue"'), id="continue"),
+        pytest.param("budget_stop.py'\"}", "budget_stop.py'\", \"onFailure\": \"block\"}", id="on-stop-too"),
     ],
 )
 def test_the_template_predicate_rejects_a_drifted_template(old: str, new: str):
@@ -140,6 +144,157 @@ def test_the_template_sits_in_the_hooks_bullet_not_merely_in_the_file():
     text = _read(PREFLIGHT)
     bullet = _hooks_bullet(text)
     assert text.count('"onFailure": "block"}') == bullet.count('"onFailure": "block"}') == 1
+
+
+# --- the filled-in templates start their scripts -----------------------------
+# Claude Code hands a hook's command to a shell, which splits it at every
+# unquoted space. Filled in literally under a folder whose name holds a space,
+# an unquoted template hands the rest of the path to the shell as the command
+# to run (exit 127), so the guard never starts and, under "onFailure":
+# "block", every tool call is refused. These tests fill the templates in from
+# the bullet itself, the way a conductor does.
+
+_HOOK_VARS = (
+    "ULTRACODE_PROTECTED_BRANCHES",
+    "ULTRACODE_IMPL_ARTIFACTS",
+    "ULTRACODE_MAX_TURNS",
+    "ULTRACODE_EPIC_BRANCH_PREFIX",
+    "ULTRACODE_TEST_ARTIFACTS",
+)
+_ENV_ENTRY = re.compile(r"^\s*- `(ULTRACODE_[A-Z_]+=[^`]*)`", re.M)
+
+
+def _filled(bullet: str, script: str, root: Path) -> tuple[str, dict[str, str], str]:
+    """(command, expected env, expected script path) for one template, with
+    `<env>` built from the bullet's own env list and every placeholder given a
+    value under `<root>/sp ace`."""
+    spaced = (root / "sp ace").as_posix()
+    values = {
+        "{skill-root}": f"{spaced}/skill",
+        "{workflow.protected_branches}": "main,master",
+        "{workflow.implementation_artifacts}": f"{spaced}/impl",
+        "{workflow.max_turns_per_story}": "25",
+        "{workflow.epic_branch_prefix}": "ultracode/epic-",
+        "<the resolved TEA test-artifacts root>": f"{spaced}/ta",
+    }
+
+    def fill(text: str) -> str:
+        for placeholder, value in values.items():
+            text = text.replace(placeholder, value)
+        return text
+
+    entries = _ENV_ENTRY.findall(bullet)
+    assert [e.split("=", 1)[0] for e in entries] == list(_HOOK_VARS), entries
+    command = fill(_items(bullet)[script]["command"].replace("<env>", " ".join(entries)))
+    expected_env = {
+        "ULTRACODE_PROTECTED_BRANCHES": "main,master",
+        "ULTRACODE_IMPL_ARTIFACTS": f"{spaced}/impl",
+        "ULTRACODE_MAX_TURNS": "25",
+        "ULTRACODE_EPIC_BRANCH_PREFIX": "ultracode/epic-",
+        "ULTRACODE_TEST_ARTIFACTS": f"{spaced}/ta",
+    }
+    return command, expected_env, f"{spaced}/skill/scripts/hooks/{script}"
+
+
+def _unquoted(bullet: str) -> str:
+    """The bullet as 4.0.0's draft wrote it: no quotes in the templates or the
+    env list."""
+    lines = []
+    for line in bullet.splitlines():
+        if line.lstrip().startswith(("- guard: `", "- budget: `", "- `ULTRACODE_")):
+            head, _, tail = line.partition("`")
+            code, _, rest = tail.partition("`")
+            line = f"{head}`{code.replace(chr(39), '')}`{rest}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _run_through_sh(command: str, tmp_path: Path) -> dict | None:
+    """Run the command as Claude Code does, through `sh -c`, with a stub `uv`
+    that records its arguments and the injected env. None when the shell never
+    reached `uv` with them."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    dump = tmp_path / "dump.py"
+    out = tmp_path / "uv-call.json"
+    dump.write_text(
+        "import json, os, sys\n"
+        f"keys = {list(_HOOK_VARS)!r}\n"
+        "with open(os.environ['UCG_STUB_OUT'], 'w', encoding='utf-8') as fh:\n"
+        "    json.dump({'argv': sys.argv[1:], 'env': {k: os.environ.get(k) for k in keys}}, fh)\n",
+        encoding="utf-8",
+    )
+    stub = bin_dir / "uv"
+    stub.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{dump}' \"$@\"\n", encoding="utf-8")
+    stub.chmod(0o755)
+    if out.exists():
+        out.unlink()
+    env = {k: v for k, v in os.environ.items() if k not in _HOOK_VARS}
+    env.update({"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}", "UCG_STUB_OUT": str(out)})
+    proc = subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, env=env, timeout=60)
+    if proc.returncode != 0 or not out.exists():
+        return None
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+_POSIX_SHELL = pytest.mark.skipif(
+    os.name == "nt" or shutil.which("sh") is None, reason="runs the hook command through a POSIX sh"
+)
+
+
+@_POSIX_SHELL
+@pytest.mark.parametrize("script", ["guard_pretooluse.py", "budget_stop.py"])
+def test_each_filled_in_template_starts_its_script_under_a_path_with_a_space(script: str, tmp_path: Path):
+    command, env, path = _filled(_hooks_bullet(), script, tmp_path)
+    call = _run_through_sh(command, tmp_path)
+    assert call is not None, command
+    assert call["argv"] == ["run", path]
+    assert call["env"] == env
+
+
+@_POSIX_SHELL
+@pytest.mark.parametrize("script", ["guard_pretooluse.py", "budget_stop.py"])
+def test_the_unquoted_templates_do_not_start_their_scripts(script: str, tmp_path: Path):
+    """Twin: the sh run tells the shapes apart. Unquoted, the shell runs the
+    rest of the first spaced value as the command and never reaches uv."""
+    bullet = _unquoted(_hooks_bullet())
+    assert "'" not in _items(bullet)[script]["command"]
+    command, _, _ = _filled(bullet, script, tmp_path)
+    assert _run_through_sh(command, tmp_path) is None, command
+
+
+def _command_problem():
+    spec = importlib.util.spec_from_file_location("preflight_check_split", PREFLIGHT_CHECK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module._command_problem
+
+
+@pytest.mark.parametrize("script", ["guard_pretooluse.py", "budget_stop.py"])
+def test_assert_armed_reads_the_filled_in_templates_the_way_the_shell_does(script: str, tmp_path: Path):
+    """The check `--assert-armed` runs passes what the bullet writes and fails
+    the unquoted form, on every platform (it splits, it never runs)."""
+    problem = _command_problem()
+    command, _, _ = _filled(_hooks_bullet(), script, tmp_path)
+    assert problem(command, script) is None
+    unquoted, _, _ = _filled(_unquoted(_hooks_bullet()), script, tmp_path)
+    assert problem(unquoted, script) is not None
+
+
+def test_the_bullet_says_to_quote_and_why():
+    flat = _flat(_hooks_bullet())
+    for clause in (
+        "**Quote each injected value and the script path in single quotes, as the templates do.**",
+        "Claude Code runs the command through a shell, which splits it at every unquoted space.",
+        "as the recall store value is kept (`references/ingest-and-scope.md`)",
+        "write a single quote inside a value as `'\\''`",
+        "`--assert-armed` reads each UCG hook command the way the shell splits it",
+        "each value in single quotes as the templates above write them: `KEY='value' uv run '…'`",
+    ):
+        assert clause in flat, clause
+    no_write = flat[flat.index("A merge that would change nothing makes no write") :]
+    no_write = no_write[: no_write.index("assert instead of writing")]
+    assert "each command quoted as the templates below write it" in no_write
 
 
 # --- what the setting does, and what it costs --------------------------------
@@ -173,7 +328,11 @@ def test_the_no_write_comparison_and_the_assertion_name_the_setting():
     no_write = no_write[: no_write.index("assert instead of writing")]
     assert "the guard item's `\"onFailure\": \"block\"`" in no_write
     assert "every guard item carries `\"onFailure\": \"block\"`" in flat
-    assert "(branch, both hooks under their own events, matcher form, the guard's `onFailure`, injected env," in flat
+    assert (
+        "(branch, both hooks under their own events, matcher form, the guard's `onFailure`, "
+        "how the shell splits each UCG command, injected env," in flat
+    )
+    assert "**and** that each UCG command quotes its injected values and script path." in flat
 
 
 def test_the_crash_sentence_states_the_new_behaviour():
@@ -196,6 +355,10 @@ def test_troubleshooting_names_the_message_and_the_recovery():
     assert 'blocking because onFailure is "block"' in section
     assert "`guard_pretooluse.py`" in section
     assert "Fix it from outside the session" in section
+    # The cause a folder name with a space gives, and what the message shows.
+    assert "**A path with a space, left unquoted in the command.**" in section
+    assert "`/bin/sh: 1: Projects/app/_bmad-output/implementation-artifacts: not found`" in section
+    assert "put each injected value and the script path in single quotes" in section
     assert 'REF["See: Every tool call is refused"]' in text
 
 

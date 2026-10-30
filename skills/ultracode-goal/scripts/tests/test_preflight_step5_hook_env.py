@@ -64,7 +64,7 @@ def _entry_for(block: str, var: str) -> str | None:
 def _states_resolved_source(entry: str) -> bool:
     """True when the entry sources its value from TEA config resolution rather
     than from a workflow scalar that resolution will never fill."""
-    if f"{_ENV_VAR}={{workflow." in entry:
+    if f"{_ENV_VAR}={{workflow." in entry or f"{_ENV_VAR}='{{workflow." in entry:
         return False
     return "_tea_artifacts_root" in entry and "test_artifacts" in entry
 
@@ -132,6 +132,9 @@ def test_step5_test_artifacts_value_matches_tea_resolved_root():
     # never fills) satisfies neither half of the predicate.
     mutant = f"- `{_ENV_VAR}={{workflow.test_artifacts}}` (comma-separated)"
     assert not _states_resolved_source(mutant)
+    # and so does it in the quoted form step 5 writes its values in
+    quoted = f"- `{_ENV_VAR}='{{workflow.test_artifacts}}'` from `_tea_artifacts_root`, test_artifacts"
+    assert not _states_resolved_source(quoted)
 
 
 def test_step5_notes_test_skip_token_is_js_vitest_specific():

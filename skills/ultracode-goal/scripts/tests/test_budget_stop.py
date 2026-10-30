@@ -275,7 +275,7 @@ def test_stage_references_drop_token_budget_ceiling() -> None:
         "and must not re-advertise the ceiling via the fallback literal"
     )
     # positive control on the slice itself
-    assert "ULTRACODE_MAX_TURNS={workflow.max_turns_per_story}" in step5
+    assert "ULTRACODE_MAX_TURNS='{workflow.max_turns_per_story}'" in step5
 
     # the re-loop-becomes-escalate rule is what the conductor checks the count against; it stays
     gate = _stage_text("gate")

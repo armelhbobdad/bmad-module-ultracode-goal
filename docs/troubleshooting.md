@@ -81,6 +81,7 @@ A per-story gate can return `reloop` with a `PASS` gate status when a cap fired 
 
 - **`uv` is not on the `PATH` Claude Code runs hooks with.** The guard runs as `uv run …`, and a shell that cannot find `uv` exits 127. A session started from a shell or launcher with a narrower `PATH` than the one preflight ran in hits this.
 - **The skill was moved or removed.** The guard's command names the script by the path the skill was installed at; an uninstall, or a reinstall to another folder, leaves the command pointing at nothing.
+- **A path with a space, left unquoted in the command.** Claude Code runs the guard's command through a shell, which splits it at every unquoted space. Preflight writes each injected value and the script path in single quotes, so a project or skill folder whose path holds a space (`~/My Projects/app`, say) stays one word. A command written without them hands the rest of that path to the shell as the command to run, and the message names it: `/bin/sh: 1: Projects/app/_bmad-output/implementation-artifacts: not found` on Linux, or the same path followed by `No such file or directory` on macOS.
 - **No Python `uv` can use.** `uv` cannot start a Python the script's header allows.
 - **The guard ran past its timeout.** Claude Code's default for a command hook is 600 seconds; the message then says `timed out`.
 
@@ -89,7 +90,7 @@ A refusal the guard makes itself reads differently: it starts with the guard's o
 **What you do.** Fix it from outside the session, since the session cannot run a tool:
 
 1. Run the guard's command from `.claude/settings.local.json` yourself, in a terminal, to see why it fails (`echo '{}' | <the command>` should exit 0 and print nothing).
-2. Fix what it shows: put `uv` on `PATH`, reinstall the skill (`npx bmad-module-ultracode-goal update`), or install a Python the script allows.
+2. Fix what it shows: put `uv` on `PATH`, reinstall the skill (`npx bmad-module-ultracode-goal update`), install a Python the script allows, or put each injected value and the script path in single quotes (`KEY='value' uv run '<path>'`), in the Stop budget hook's command too. From the project root, `uv run '<the skill folder>/scripts/preflight_check.py' --assert-armed --project-root . --impl-artifacts _bmad-output/implementation-artifacts` names every UCG hook command the shell would split (pass your own artifacts folder if you moved it).
 3. Then resume the run. The resume re-checks the hooks and re-arms them if they need it.
 
 If you need the session working before you can fix the cause, remove the guard's item from `.claude/settings.local.json` by hand, as [SECURITY.md](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/SECURITY.md) describes under "How to remove them". The session then runs with no guard at all, and a resume or the next preflight puts the item back, so fix the cause before either.
