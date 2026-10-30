@@ -7184,18 +7184,26 @@ def test_a_command_the_guard_cannot_classify_is_denied(tmp_path: Path) -> None:
     assert out is None
 
 
-def test_mutant_without_the_classify_catch_lets_a_raising_classifier_through(tmp_path: Path) -> None:
-    """Twin: drop the catch, and the same raising classifier exits 1 with no
-    decision on a protected branch, which the client reads as no objection.
-    That is what makes the catch load-bearing."""
-    catch = _classify_catch(_hook_source())
-    mutant = _write_mutant_multi(
-        tmp_path,
-        "no_classify_catch",
-        [(_CLASSIFY_BODY, _CLASSIFY_RAISES), (catch, "    verbs, unknown = _classify(command)\n")],
-    )
+def test_mutant_without_the_classify_catch_loses_its_reason_then_its_decision(tmp_path: Path) -> None:
+    """Twin: drop the catch, and the same raising classifier is denied only by
+    main()'s catch-all, whose reason says nothing of the git checks the
+    command skipped; that reason is what the classifier's own catch adds.
+    Drop the catch-all too, and the hook exits 1 with no decision on a
+    protected branch, which the client reads as no objection."""
+    src = _hook_source()
+    catch = _classify_catch(src)
+    edits = [(_CLASSIFY_BODY, _CLASSIFY_RAISES), (catch, "    verbs, unknown = _classify(command)\n")]
+    mutant = _write_mutant_multi(tmp_path, "no_classify_catch", edits)
     protected = _protected_repo(tmp_path)
     code, out = _run_mutant_hook(mutant, _bash_event(protected, _V + " -m x"), protected)
+    assert code == 2
+    reason = _reason(out)
+    assert reason.startswith(_CATCH_ALL_PREFIX)
+    assert "(LookupError: mutant: the classifier raised)" in reason
+    assert "Commit/push guard" not in reason
+
+    bare = _write_mutant_multi(tmp_path, "no_classify_catch_no_catch_all", [*edits, _no_catch_all(src)])
+    code, out = _run_mutant_hook(bare, _bash_event(protected, _V + " -m x"), protected)
     assert code == 1
     assert out is None
 
@@ -7265,14 +7273,165 @@ def _checks_catch(src: str) -> str:
     return src[start : end + 1]
 
 
-def test_mutant_without_the_checks_catch_lets_a_raising_check_through(tmp_path: Path) -> None:
-    """Twin: drop the catch around the checks, and the same commit exits 1 with
-    no decision, which the client reads as no objection."""
-    mutant = _write_mutant(tmp_path, "no_checks_catch", _checks_catch(_hook_source()), _CHECKS_CALL)
+def test_mutant_without_the_checks_catch_loses_its_reason_then_its_decision(tmp_path: Path) -> None:
+    """Twin: drop the catch around the checks, and the same commit is denied
+    only by main()'s catch-all, whose reason names neither the git write nor
+    the checks it skipped. Drop the catch-all too, and the commit exits 1
+    with no decision, which the client reads as no objection."""
+    src = _hook_source()
+    edits = [(_checks_catch(src), _CHECKS_CALL)]
+    mutant = _write_mutant_multi(tmp_path, "no_checks_catch", edits)
     repo, env = _nul_listed_repo(tmp_path)
     code, out = _run_mutant_hook(mutant, _commit_event(repo), repo, env)
+    assert code == 2
+    reason = _reason(out)
+    assert reason.startswith(_CATCH_ALL_PREFIX)
+    assert "(ValueError: embedded null byte)" in reason
+    assert "git commit" not in reason
+
+    bare = _write_mutant_multi(tmp_path, "no_checks_catch_no_catch_all", [*edits, _no_catch_all(src)])
+    code, out = _run_mutant_hook(bare, _commit_event(repo), repo, env)
     assert code == 1
     assert out is None
+
+
+# --- Every other error the guard raises denies -------------------------------
+#
+# An error no narrower catch handles ended the hook with exit 1 and no
+# decision, which Claude Code reads as no objection (unless the hook entry
+# carries `"onFailure": "block"`), so the call ran unchecked. main() now
+# denies on any of them and names the error, so the guard exits 0 or 2 only.
+
+_CATCH_ALL_PREFIX = "UltraCode-Goal guard: refusing this tool call, because the guard raised an error"
+_NOT_AN_OBJECT_PREFIX = "UltraCode-Goal guard: refusing this tool call, because the hook event on stdin is a JSON "
+_TOOL_INPUT_PREFIX = "Commit/push guard: refusing this Bash command, because its tool_input is a JSON "
+_DEEP = "[" * 100000 + "]" * 100000
+
+
+def _no_catch_all(src: str) -> tuple[str, str]:
+    """The edit that strips main()'s catch-all, leaving a bare `_decide()`."""
+    start = src.index("    try:\n        _decide()\n")
+    end = src.index("\n\n\ndef _decide(", start)
+    return src[start:end], "    _decide()"
+
+
+def _raw_proc(hook_path: Path, stdin: str, cwd: Path) -> subprocess.CompletedProcess:
+    """Run a copy of the hook on stdin as given, which need not be an object."""
+    return subprocess.run(
+        [sys.executable, str(hook_path)],
+        input=stdin,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=dict(os.environ),
+    )
+
+
+def _bash_raw(cwd: Path, tool_input: str) -> str:
+    return '{"tool_name": "Bash", "tool_input": %s, "cwd": %s}' % (tool_input, json.dumps(str(cwd)))
+
+
+_CRAFTED_STDIN = [
+    pytest.param(lambda cwd: "[]", _NOT_AN_OBJECT_PREFIX + "array, not an object", id="event-array"),
+    pytest.param(lambda cwd: "null", _NOT_AN_OBJECT_PREFIX + "null, not an object", id="event-null"),
+    pytest.param(lambda cwd: '"Bash"', _NOT_AN_OBJECT_PREFIX + "string, not an object", id="event-string"),
+    pytest.param(lambda cwd: "7", _NOT_AN_OBJECT_PREFIX + "number, not an object", id="event-number"),
+    pytest.param(
+        lambda cwd: _bash_raw(cwd, json.dumps(_V + " -m x")),
+        _TOOL_INPUT_PREFIX + "string, not an object",
+        id="tool-input-string",
+    ),
+    pytest.param(
+        lambda cwd: _bash_raw(cwd, json.dumps([_V + " -m x"])),
+        _TOOL_INPUT_PREFIX + "array, not an object",
+        id="tool-input-array",
+    ),
+    pytest.param(lambda cwd: _DEEP, _CATCH_ALL_PREFIX + " while deciding on it (RecursionError: ", id="deep-array"),
+    pytest.param(
+        lambda cwd: _bash_raw(cwd, '{"command": "ls", "x": %s}' % _DEEP),
+        _CATCH_ALL_PREFIX + " while deciding on it (RecursionError: ",
+        id="deep-inside-the-event",
+    ),
+    pytest.param(
+        lambda cwd: '{"tool_name": "Read", "tool_input": {"file_path": "a"}, "cwd": 5}',
+        _CATCH_ALL_PREFIX + " while deciding on it (TypeError: ",
+        id="cwd-not-a-string",
+    ),
+]
+
+
+@pytest.mark.parametrize("stdin,expected", _CRAFTED_STDIN)
+def test_an_event_the_guard_cannot_read_is_denied_with_a_reason(
+    tmp_path: Path, monkeypatch, stdin, expected: str
+) -> None:
+    """Each of these exited 1 with a traceback and no decision, so Claude Code
+    let the call run. Each is denied now: exit 2, the deny JSON on stdout,
+    and the same reason on stderr. A cwd that is not a string fails while
+    the guard locates the implementation artifacts, before the recall
+    gate's own catch, so ULTRACODE_IMPL_ARTIFACTS must be unset to reach it."""
+    monkeypatch.delenv("ULTRACODE_IMPL_ARTIFACTS", raising=False)
+    proc = _raw_proc(HOOK, stdin(tmp_path), tmp_path)
+    assert proc.returncode == 2, proc.stderr
+    decision = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert decision["permissionDecisionReason"].startswith(expected)
+    assert "failing closed" in decision["permissionDecisionReason"]
+    assert decision["permissionDecisionReason"] in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "stdin",
+    [
+        pytest.param("", id="empty-stdin"),
+        pytest.param("{}", id="empty-object"),
+        pytest.param("{not json", id="not-json"),
+        pytest.param('{"tool_name": "Bash", "tool_input": []}', id="bash-input-empty-array"),
+        pytest.param('{"tool_name": "Bash", "tool_input": null}', id="bash-input-null"),
+        pytest.param('{"tool_name": "Read", "tool_input": "a"}', id="read-input-string"),
+    ],
+)
+def test_the_inputs_the_guard_already_decided_on_keep_their_allow(tmp_path: Path, monkeypatch, stdin: str) -> None:
+    """Control: the catch-all changes only what crashed. These never did: an
+    event the guard reads as empty, a Bash input with no command in it, and a
+    tool other than Bash with no latch present, whose input it does not read."""
+    monkeypatch.delenv("ULTRACODE_IMPL_ARTIFACTS", raising=False)
+    proc = _raw_proc(HOOK, stdin, tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ""
+
+
+def test_mutant_without_the_catch_all_ends_with_no_decision(tmp_path: Path, monkeypatch) -> None:
+    """Twin: strip main()'s catch-all, and the deepest of those inputs exits 1
+    with a traceback and nothing on stdout, which the client reads as no
+    objection. The explicit checks for a non-object event and tool_input
+    still deny, so only the catch-all decides on the rest."""
+    monkeypatch.delenv("ULTRACODE_IMPL_ARTIFACTS", raising=False)
+    mutant = _write_mutant(tmp_path, "no_catch_all", *_no_catch_all(_hook_source()))
+    for stdin in (_DEEP, '{"tool_name": "Read", "tool_input": {}, "cwd": 5}'):
+        proc = _raw_proc(mutant, stdin, tmp_path)
+        assert proc.returncode == 1, stdin[:40]
+        assert proc.stdout == ""
+        assert "Traceback" in proc.stderr
+    proc = _raw_proc(mutant, "[]", tmp_path)
+    assert proc.returncode == 2
+    assert _reason(json.loads(proc.stdout)).startswith(_NOT_AN_OBJECT_PREFIX)
+
+
+def test_the_guard_exits_0_or_2_and_nothing_else() -> None:
+    """Every exit the guard makes is a literal 0 (allow) or 2 (deny): an exit
+    code of any other value would read as a hook failure, not a decision."""
+    tree = ast.parse(_hook_source())
+    codes = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            owner = node.func.value
+            if isinstance(owner, ast.Name) and (owner.id, node.func.attr) in {("sys", "exit"), ("os", "_exit")}:
+                assert len(node.args) == 1 and isinstance(node.args[0], ast.Constant), ast.unparse(node)
+                codes.append(node.args[0].value)
+        if isinstance(node, ast.Raise) and node.exc is not None and "SystemExit" in ast.unparse(node.exc):
+            raise AssertionError(f"a raw SystemExit: {ast.unparse(node)}")
+    assert sorted(set(codes)) == [0, 2]
 
 
 # Branch names the platform's decoding cannot read: a byte that is not UTF-8

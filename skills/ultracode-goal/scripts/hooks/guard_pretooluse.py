@@ -85,6 +85,11 @@ Hook contract (reads one JSON object on stdin):
        permissionDecisionReason}} where permissionDecision is "deny" to block.
   Defensive fallback: also exit 2 with the reason on stderr (older clients
   honor exit-code-2-blocks even when they ignore the JSON).
+  Exit codes: 0 (allow, silent) or 2 (deny), never another. An error the
+  guard raises while deciding (an event that is not a JSON object, a Bash
+  tool_input that is not one, JSON nested past Python's recursion limit, or
+  any other) denies the call and names the error, rather than ending the
+  hook with no decision, which Claude Code reads as no objection.
 
 This hook is invoked standalone from settings.local.json. It MUST stay fully
 self-contained: no sibling imports (the shared library lib/mem_common.py et al.
@@ -3490,8 +3495,56 @@ def _mem_gate(event: dict, impl: Path | None) -> None:
         )
 
 
+def _json_kind(value: object) -> str:
+    """The JSON name of a decoded value's type, for a deny reason."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    return "object" if isinstance(value, dict) else type(value).__name__
+
+
 def main() -> None:
+    """Decide on one tool call, and end with exit 0 (allow) or 2 (deny) only.
+
+    An error raised anywhere while deciding, one no narrower catch below
+    handles, denies the call and names the error. Without this catch the hook
+    exits 1 with no decision, which Claude Code reads as no objection unless
+    the hook entry carries `"onFailure": "block"`, and the call runs
+    unchecked. What the guard cannot catch itself (an interpreter that cannot
+    start, an error before this code runs, a timeout) is left to that setting.
+    """
+    try:
+        _decide()
+    except Exception as exc:  # noqa: BLE001  fail closed on the unforeseen
+        detail = " ".join(str(exc).split())[:160]
+        _deny(
+            "UltraCode-Goal guard: refusing this tool call, because the guard "
+            f"raised an error while deciding on it ({type(exc).__name__}: "
+            f"{detail}), so the call was not checked and is refused (failing "
+            "closed) rather than let through unchecked. The error is the "
+            "guard's, not the call's: report it, with the call that met it."
+        )
+
+
+def _decide() -> None:
     event = _read_event()
+    if not isinstance(event, dict):
+        # A JSON value that is not an object: no tool name, input or cwd can
+        # be read from it, so whether the call it stands for is safe cannot
+        # be told.
+        _deny(
+            "UltraCode-Goal guard: refusing this tool call, because the hook "
+            f"event on stdin is a JSON {_json_kind(event)}, not an object, so "
+            "the call it describes cannot be read, and it is refused (failing "
+            "closed) rather than let through unchecked."
+        )
 
     cwd = event.get("cwd")
     impl = _impl_artifacts(cwd)
@@ -3504,7 +3557,19 @@ def main() -> None:
     if event.get("tool_name") != "Bash":
         _allow()
 
-    command = (event.get("tool_input") or {}).get("command") or ""
+    tool_input = event.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        # A tool_input that holds no command (null, an empty array) is the
+        # empty input it always was; any other non-object cannot be read.
+        _deny(
+            "Commit/push guard: refusing this Bash command, because its "
+            f"tool_input is a JSON {_json_kind(tool_input)}, not an object, so "
+            "the command cannot be read for a `git commit` or `git push`, and "
+            "it is refused (failing closed) rather than let past the "
+            "protected-branch, tests-ran, freshness, empty-index and un-skip "
+            "checks."
+        )
+    command = tool_input.get("command") or ""
     if not isinstance(command, str):
         _allow()
 
