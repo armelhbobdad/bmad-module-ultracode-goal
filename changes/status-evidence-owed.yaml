@@ -1,0 +1,5 @@
+type: fixed
+scope: ucg-status
+summary: |
+  `/ucg-status` now shows a story that still owes its gate evidence commit or a re-gate. When a repo commit hook rejects the gate's evidence commit, the gate leaves `.evidence-owed-<story_id>` until a resume makes the commit, and when `/ucg-resolve` closes an `operator-evidence-owed` escalation, it writes `.regate-<story_id>`, which the gate deletes once the story's next verdict is logged. `/ucg-resolve` deletes the escalation's sidecar when it closes it, and the render read neither marker, so from then on it showed nothing pending: every story advanced while `drive_epic.py` stopped with `evidence-owed`, or a story kept the verdict that escalated it with nothing to say it still owed a gate. The story's row, or a line of its own when the heartbeat no longer lists the story, now says what is owed and names the marker, with the paths `.evidence-owed-<story_id>` lists, or the `sha=` and `decision=` that `.regate-<story_id>` holds.
+issues: [179]

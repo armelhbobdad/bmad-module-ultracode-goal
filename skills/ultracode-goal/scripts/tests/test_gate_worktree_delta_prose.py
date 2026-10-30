@@ -82,6 +82,11 @@ test_mutate_check.py. Two of them change what reads 0 failed: a class pytest
 cannot collect, and a test file Node's test runner cannot load or whose
 process exits non-zero after its tests pass. The cannot-run bullet now names
 both, and its release note is pinned below, each with a mutant twin.
+
+The status view's skill joined both scans when it learned to render a story
+that still owes its evidence commit (#179): it now tells an operator what a
+rejected evidence commit leaves owed, so its sentences are read against the
+bound like every other surface's.
 """
 
 from __future__ import annotations
@@ -485,7 +490,8 @@ def _gap_route_sentences(text: str) -> tuple[tuple[str, str], ...]:
 def _gate_surfaces() -> dict[str, str]:
     """Every surface a conductor or a reader takes the gate's routes from: the
     skill's non-negotiables, every stage reference, the docs that describe the
-    gate and the fragments of this change."""
+    gate, the two skills an operator reads a stopped run through and the
+    fragments of this change."""
     docs, changes = _REPO_ROOT / "docs", _REPO_ROOT / "changes"
     surfaces = {ref.name: ref.read_text(encoding="utf-8") for ref in sorted(REFS.glob("*.md"))}
     surfaces.update(
@@ -496,6 +502,7 @@ def _gate_surfaces() -> dict[str, str]:
             "troubleshooting.md": (docs / "troubleshooting.md").read_text(encoding="utf-8"),
             "operating-tips.md": (docs / "operating-tips.md").read_text(encoding="utf-8"),
             "ucg-resolve SKILL.md": (REFS.parent.parent / "ucg-resolve" / "SKILL.md").read_text(encoding="utf-8"),
+            "ucg-status SKILL.md": (REFS.parent.parent / "ucg-status" / "SKILL.md").read_text(encoding="utf-8"),
             "backfill fragment": (changes / "gate-automate-backfill-commit.yaml").read_text(encoding="utf-8"),
             "alone fragment": (changes / "gate-automate-runs-alone.yaml").read_text(encoding="utf-8"),
             "collection fragment": (changes / "mutate-check-collection-error.yaml").read_text(encoding="utf-8"),
@@ -533,6 +540,9 @@ def test_every_sentence_that_puts_a_gap_beside_a_route_is_one_reviewed_against_t
         ("execute.md", "make no commit and take the `decision-pending` route below for that story",
          "make no commit and take the `decision-pending` route below for that story. An `unmeasured` line on a P0 "
          "criterion escalates the story"),
+        # The status view, which an operator reads a stopped run through.
+        ("ucg-status SKILL.md", "stops `evidence-owed` rather than `all-done`.",
+         "stops `evidence-owed` rather than `all-done`. An open P0 `gate-gap:` line on that story re-loops it too."),
     ],
 )
 def test_the_gap_route_scan_covers_every_surface_beyond_gate_md(name, old, new):
@@ -1379,6 +1389,16 @@ _HOOK_REJECTION_SENTENCES = {
         ("Leave the staged evidence and `{workflow.implementation_artifacts}/.evid", "b44b7cb32271"),
         ("When every story advanced and a story's `.evidence-owed-<story_id>` is o", "04dd1f1b7b30"),
     ),
+    # Reviewed: the table's stories row runs into the sentence before the table,
+    # and the hunk paragraph's evidence commit into the sentence before its
+    # heading; neither says anything of a hook.
+    "ucg-status SKILL.md": (
+        ("**A story that still owes its gate evidence commit says so on its row.**", "883232a2fd3c"),
+        ("Report the story as advanced at its gate with its evidence not committed", "88bf86916146"),
+        ("The one recency signal is the heartbeat's `Updated` row, and it belongs ", "f6d245c9b78e"),
+        ("The render does not read `HEAD`, so it does not say which of the two hol", "8dc561829a92"),
+        ("The story renders under stories as `gate evidence commit owed: a commit ", "e4d4865b3d39"),
+    ),
     "backfill fragment": (
         ("A repo commit hook that rejects the advance route's evidence commit is a", "a26bde51243e"),
         ("Before, the backfill waited for the evidence commit after the verdict, s", "383c44c33ef4"),
@@ -1454,6 +1474,12 @@ def test_every_sentence_on_a_hook_rejection_is_one_reviewed_against_the_bound():
         ("SKILL.md", "then goes to Finalize (`references/execute.md`'s resume rule).",
          "then goes to Finalize (`references/execute.md`'s resume rule). A hook that rejects that commit again is "
          "answered in whatever file it names."),
+        # The status view, which an operator reads a stopped run through.
+        ("ucg-status SKILL.md", "stops `evidence-owed` rather than `all-done`.",
+         "stops `evidence-owed` rather than `all-done`. A hook that rejects the resume's commit again is answered in "
+         "whatever file it names, TEA's included."),
+        ("ucg-status SKILL.md", "`/ucg-resolve` closes it first, and once the block is gone",
+         "the operator may make the commit at once, and once the block is gone"),
     ],
 )
 def test_the_hook_rejection_scan_lists_a_sentence_that_breaks_the_bound(name, old, new):
@@ -1515,6 +1541,9 @@ _LAST_STORY_REJECTION = (
      "evidence commit of its last story waits on the operator)"),
     ("finalize.md", "`status` is `complete` when the Epic-level gate advanced and its evidence is committed, or "
      "`blocked` when a story escalated, the last story's `evidence-commit-rejected` included"),
+    # Once `/ucg-resolve` has closed the escalation, the status view reads the marker too.
+    ("ucg-status SKILL.md", "While this line renders the Epic is not finished, even when every story reads `done` and "
+     "escalations read `n/a`: it is the state in which `drive_epic.py` stops `evidence-owed` rather than `all-done`."),
 )
 
 
