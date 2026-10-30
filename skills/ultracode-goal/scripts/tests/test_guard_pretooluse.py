@@ -7229,6 +7229,11 @@ def test_a_story_pointer_that_is_not_utf8_denies_the_commit(tmp_path: Path) -> N
 _NUL_LISTED = "\n  - 'tests/acceptance/a\x00b.spec.ts'"
 
 
+# What a NUL in a path raises, worded per platform: "embedded null byte" on
+# POSIX, "embedded null character" on Windows.
+_NUL_ERROR = r"\(ValueError: embedded null (byte|character)\)"
+
+
 def _nul_listed_repo(tmp_path: Path) -> tuple[Path, dict]:
     repo, impl, tests_root = _production_repo(
         tmp_path,
@@ -7248,7 +7253,7 @@ def test_a_git_write_whose_checks_raise_is_denied(tmp_path: Path) -> None:
     assert code == 2
     reason = _reason(out)
     assert reason.startswith("Commit/push guard: refusing this `git commit`, because checking it raised")
-    assert "(ValueError: embedded null byte)" in reason
+    assert re.search(_NUL_ERROR, reason)
     assert "failing closed" in reason
 
     code, out = _run_hook(_bash_event(repo, "ls -la"), repo, env)
@@ -7286,7 +7291,7 @@ def test_mutant_without_the_checks_catch_loses_its_reason_then_its_decision(tmp_
     assert code == 2
     reason = _reason(out)
     assert reason.startswith(_CATCH_ALL_PREFIX)
-    assert "(ValueError: embedded null byte)" in reason
+    assert re.search(_NUL_ERROR, reason)
     assert "git commit" not in reason
 
     bare = _write_mutant_multi(tmp_path, "no_checks_catch_no_catch_all", [*edits, _no_catch_all(src)])
