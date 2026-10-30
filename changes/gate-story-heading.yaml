@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The gate now writes the heading `### Story <story_id>: gate` in `.decision-log.md` before each gate cycle's entries, with `<story_id>` the sprint-status key, so the gate trail (`gate-trail.md`) reads the verdict the run recorded for each story. No reference named that heading before, and a log whose stories were headed any other way gave the trail no recorded verdict at all: it showed the gate file's status mapped through the gate's table, so a `PASS` the production signals downgraded to `reloop` read `advance`, and a red backfill sweep's `reloop` went unread. The trail reads the first verdict object under a story's heading, and a later cycle's heading for the same story replaces an earlier one's, so the story's last cycle decides.
+issues: [180]

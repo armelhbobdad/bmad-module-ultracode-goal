@@ -18,7 +18,8 @@ this script forms no judgment of its own and produces no verdict:
     | acceptance criterion  | acceptance checklist     | trace report coverage   |
     | planned test          | acceptance checklist     | trace report coverage   |
     | result                | acceptance checklist     | trace report coverage   |
-    | gate verdict          | the recorded verdict, else gate_status mapped   |
+    | gate verdict          | `escalate` while its escalation is open, else   |
+    |                       | the recorded verdict, else gate_status mapped   |
     |                       | through gate_eval.GATE_VERDICT                  |
     | commit                | git log over the story's baseline range         |
 
@@ -27,9 +28,26 @@ unrecognized gate_status is rendered verbatim rather than re-classified, and the
 production AND is NEVER re-applied here: it already ran when the gate decided,
 and re-running it at finalize would be a second, later judgment. When the run
 recorded its own verdict for a story (a fenced JSON object carrying a `verdict`
-key under that story's heading in `.decision-log.md`), that recorded verdict
-wins over the mapped one, because it is what the run actually acted on -
-including any downgrade the gate applied at decision time.
+key under that story's heading in `.decision-log.md`, which
+`references/gate.md` has the run write before each gate cycle as
+`### Story <story_id>: gate`), that recorded verdict wins over the mapped one,
+because it is what the run actually acted on - including any downgrade the gate
+applied at decision time.
+
+A story whose escalation is still open renders `escalate`, whatever verdict the
+log or the gate artifact holds. The `escalate` route stops AFTER logging the
+verdict it escalated from: a FAIL only operator evidence can change, or a
+re-loop past the turn ceiling, leaves `gate_eval.py`'s `reloop` as the only
+verdict JSON in the log, and FAIL maps to `reloop` too, so without this the
+trail showed a story waiting on operator evidence as one owing a code fix. Open
+is read exactly as a resume reads it (`preflight_check._escalation_of`): the
+typed sidecar `escalation-<story>.json` is on disk, its id is not closed, and
+its kind is not a handoff. A story whose sprint-status row reads `done`
+advanced, so a sidecar beside it is not where it stopped: one an older run left
+beside a story that later advanced is residue, and is not rendered. The one
+kind the advance route itself writes, `evidence-commit-rejected`, owes a commit
+and not a verdict: the story keeps the verdict it advanced on, and its
+verdict-source line names the open escalation.
 
 The recorded verdict is honoured ONLY for a story whose own gate artifact
 resolved. A verdict with no artifact behind it - recorded by an earlier
@@ -38,7 +56,10 @@ would render `advance` beside `Gate artifact: n/a` while `gate_eval.py` itself
 would refuse the same story with NOT_EVALUATED -> escalate. The trail must not
 disagree with the gate in the gate's own column, so such a story renders `n/a`
 and its verdict-source line says why. The decision log still holds the verdict;
-what this report declines to do is present it as gated evidence.
+what this report declines to do is present it as gated evidence. An open
+escalation is not bound by this rule: with no artifact the gate returns
+`escalate` too, so the story renders `escalate` and its verdict-source line
+says that no gate artifact resolved.
 
 FAIL-SOFT. Every source is optional. A missing, short or unparseable file
 renders `n/a` in its cell and the synthesis continues. This is the opposite of
@@ -135,6 +156,11 @@ _OVERRIDE_AC_HEADERS = frozenset(_AC_HEADERS - {"id", "acs"})
 
 _STORY_HEADING = re.compile(r"^#{2,4}\s+story\s+([0-9][\w.\-]*)", re.IGNORECASE | re.MULTILINE)
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n(\{.*?\})\s*\n```", re.DOTALL)
+
+# The one escalation kind the gate's advance route writes (references/gate.md,
+# "Commit the gate's evidence before the next story starts"): the story keeps its
+# `advance` verdict, and only the evidence commit is owed.
+EVIDENCE_COMMIT_REJECTED = "evidence-commit-rejected"
 
 
 # --------------------------------------------------------------------------
@@ -559,6 +585,14 @@ def recorded_verdicts(decision_log: Path | None) -> dict[str, str]:
     read as the verdict the run acted on. Prose headings without such a block
     contribute nothing, which is the common case.
 
+    A heading's entries run to the next story heading, so the FIRST verdict
+    object after it is its own: a log whose later stories are headed in another
+    shape puts their verdicts, and the epic roll-up's, in an earlier story's
+    span. A later heading for the same id replaces an earlier one's verdict.
+    `references/gate.md` ("Run the gate") has the run write
+    `### Story <story_id>: gate` before each gate cycle, so each span is one
+    cycle and a story's last cycle decides its verdict.
+
     Keyed by the heading's id VERBATIM. It used to be keyed by
     `numeric_prefix(...)`, which collapsed every alphanumeric child id of one
     epic (`92-0a`, `92-3b`, `92-7f`) into the single bucket `92` — so one story's
@@ -628,6 +662,37 @@ def resolve_recorded_verdicts(recorded: dict[str, str], stories: list[str]) -> d
         ]
         if hits:
             out[story] = recorded[max(hits, key=lambda h: len(_components(h)))]
+    return out
+
+
+def open_escalations(impl_artifacts: Path | None, stories: list[str], repo: Path) -> dict[str, str]:
+    """Each story whose escalation is still open, mapped to its sidecar's kind.
+
+    Imported from `preflight_check.py` rather than re-implemented, so the trail
+    calls a sidecar open exactly when a resume would stop on it. A story whose
+    sprint-status row reads `done` is left out (module docstring), unless its
+    sidecar is the advance route's own `evidence-commit-rejected`. Fail-soft like
+    every other source: no impl-artifacts dir reads as no escalation, and an
+    unreadable sprint-status reads as no row, so an open sidecar still renders
+    `escalate` (never quietly green). An unreadable sidecar is open, as the
+    resume reads it, and its kind renders as `unreadable`.
+    """
+    if impl_artifacts is None:
+        return {}
+    import preflight_check  # noqa: PLC0415  (sibling script, path set above)
+
+    rows: dict[str, str] = {}
+    text = read_text(preflight_check._locate_sprint_status(repo, impl_artifacts))
+    if text:
+        rows = preflight_check._parse_development_status(text)
+    out: dict[str, str] = {}
+    for story in stories:
+        escalation = preflight_check._escalation_of(impl_artifacts, story, repo)
+        if escalation is None or escalation["state"] != "open":
+            continue
+        kind = escalation["kind"] or "unreadable"
+        if kind == EVIDENCE_COMMIT_REJECTED or rows.get(story) != "done":
+            out[story] = kind
     return out
 
 
@@ -732,6 +797,7 @@ def story_section(
     repo: Path,
     recorded: dict[str, str],
     range_end: str | None,
+    escalated: dict[str, str] | None = None,
 ) -> str:
     checklist = checklist_path(test_artifacts, story) if profile == "production" else None
     checklist_text = read_text(checklist)
@@ -749,24 +815,40 @@ def story_section(
     # resolved (module docstring): with no artifact the gate itself would refuse
     # the story, and the trail must not out-vote the gate in the gate's column.
     recorded_verdict = recorded.get(story) if gate_source else None
-    verdict = verdict_for(gate_status, recorded_verdict)
+    # An open escalation is where the run stopped, after logging the verdict it
+    # escalated from, so it outranks that verdict, with or without a gate
+    # artifact (module docstring). An `evidence-commit-rejected` one owes a
+    # commit, not a verdict, so it changes no cell and is only named below.
+    kind = (escalated or {}).get(story)
+    stopped = bool(kind) and kind != EVIDENCE_COMMIT_REJECTED
+    verdict = "escalate" if stopped else verdict_for(gate_status, recorded_verdict)
     start = baseline_sha(impl_artifacts, story)
     commits = commit_cell(repo, start, range_end)
+
+    sidecar = f"`escalation-{story}.json` (kind `{kind}`)"
+    if stopped:
+        source = f"the open escalation {sidecar}"
+        if not gate_source:
+            source += ", and no gate artifact resolved for this story"
+    elif recorded_verdict:
+        source = "recorded in the decision log"
+    elif recorded.get(story):
+        source = (
+            "n/a (the decision log records a verdict, but no gate artifact resolved "
+            "for this story, so it is not rendered as gated evidence)"
+        )
+    else:
+        source = "the gate artifact's status, mapped by the gate's own table"
+    if kind == EVIDENCE_COMMIT_REJECTED:
+        source += (
+            f"; the escalation {sidecar} is still open, and owes the evidence "
+            "commit, not a verdict"
+        )
 
     lines = [f"## Story {story}", ""]
     lines.append(f"- Criteria and planned tests: {criteria_source or NA}")
     lines.append(f"- Gate artifact: {gate_source or NA} (gate status `{gate_status or NA}`)")
-    if recorded_verdict:
-        lines.append("- Verdict source: recorded in the decision log")
-    elif recorded.get(story):
-        lines.append(
-            "- Verdict source: n/a (the decision log records a verdict, but no gate "
-            "artifact resolved for this story, so it is not rendered as gated evidence)"
-        )
-    else:
-        lines.append(
-            "- Verdict source: the gate artifact's status, mapped by the gate's own table"
-        )
+    lines.append(f"- Verdict source: {source}")
     lines.append(f"- Baseline: `{start}`" if start else f"- Baseline: {NA}")
     lines.append("")
     lines.append(_row(list(COLUMNS)))
@@ -805,13 +887,14 @@ def render(
     # full story ids the sections are rendered for and every lookup is exact.
     recorded = resolve_recorded_verdicts(recorded_verdicts(decision_log), stories)
     baselines = {story: baseline_sha(impl_artifacts, story) for story in stories}
+    escalated = open_escalations(impl_artifacts, stories, repo)
 
     header = [
         f"# Gate trail: Epic {epic}",
         "",
         "Synthesized at finalize from the artifacts this run already wrote: the per-story "
         "acceptance checklist (production runs), the trace report, the gate decision file, "
-        "the decision log and the recorded baseline and end commits.",
+        "the decision log, the open escalations and the recorded baseline and end commits.",
         "",
         "It renders the gate's verdicts; it never forms one. A cell whose source artifact "
         f"was absent or unreadable reads `{NA}`.",
@@ -862,6 +945,7 @@ def render(
                 repo=repo,
                 recorded=recorded,
                 range_end=range_end,
+                escalated=escalated,
             )
         )
     return "\n".join(header + sections).rstrip() + "\n"

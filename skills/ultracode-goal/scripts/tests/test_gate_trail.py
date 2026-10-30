@@ -35,6 +35,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 SCRIPT = SCRIPTS / "gate_trail.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "gate_trail"
 FINALIZE = SCRIPTS.parent / "references" / "finalize.md"
+GATE = SCRIPTS.parent / "references" / "gate.md"
 
 PRODUCTION_STORIES = ["7-1", "7-2", "7-3", "7-4"]
 LIGHT_STORIES = ["2-4", "2-6"]
@@ -1429,3 +1430,328 @@ def test_a_trace_report_does_not_buy_a_story_the_shared_summarys_verdict(tmp_pat
     # The two readers now agree about this file, which is the whole point.
     reasons: list[str] = []
     assert gate_eval.load_gate(trace, reasons, "92-7f")["gate_status"] == "NOT_EVALUATED", reasons
+
+
+# ---------------------------------------------------------------------------
+# A story the run escalated renders `escalate`, never the verdict it escalated
+# from. The `escalate` route stops after logging `gate_eval.py`'s `reloop` (a
+# FAIL only operator evidence can change, or a re-loop past the turn ceiling),
+# and FAIL maps to `reloop` too.
+# ---------------------------------------------------------------------------
+
+
+def _sidecar(impl: Path, story: str, kind: str) -> Path:
+    path = impl / f"escalation-{story}.json"
+    path.write_text(
+        json.dumps(
+            {
+                "source": f"trace-{story}.md",
+                "kind": kind,
+                "decision_needed": "record the live result the criterion owes",
+                "evidence": "no record exists",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _sprint(impl: Path, rows_by_key: dict[str, str]) -> None:
+    (impl / "sprint-status.yaml").write_text(
+        "development_status:\n" + "".join(f"  {k}: {v}\n" for k, v in rows_by_key.items()),
+        encoding="utf-8",
+    )
+
+
+def _escalation_trail(tmp_path: Path, root: Path, stories: list[str]) -> str:
+    run_dir = tmp_path / "run"
+    run_trail(
+        run_dir=run_dir,
+        profile="production",
+        stories=stories,
+        impl_artifacts=root / "impl-artifacts",
+        trace_output=root / "test-artifacts" / "traceability",
+        decision_log=root / "decision-log.md",
+        repo=tmp_path,
+    )
+    return (run_dir / "gate-trail.md").read_text(encoding="utf-8")
+
+
+def _source_line(body: str) -> str:
+    return next(ln for ln in body.splitlines() if ln.startswith("- Verdict source:"))
+
+
+def test_an_open_operator_evidence_escalation_renders_escalate_not_reloop(tmp_path):
+    """Measured on a real run: every row of a story that escalated
+    `operator-evidence-owed` read `reloop`, telling the reader it owed a code fix
+    when it owed only an operator's record."""
+    root = copy_fixture("production", tmp_path)
+    impl = root / "impl-artifacts"
+    _sidecar(impl, "7-2", "operator-evidence-owed")
+    _sprint(impl, {"7-1": "done", "7-2": "review", "7-3": "review", "7-4": "review"})
+    log = root / "decision-log.md"
+    log.write_text(
+        log.read_text(encoding="utf-8")
+        + "\n### Story 7-2: gate\n\n```json\n"
+        + json.dumps({"verdict": "reloop", "gate_status": "FAIL", "reasons": ["gate_status FAIL -> reloop"]})
+        + "\n```\n",
+        encoding="utf-8",
+    )
+    text = _escalation_trail(tmp_path, root, PRODUCTION_STORIES)
+    body = section(text, "7-2")
+    assert {row[3] for row in rows(body)} == {"escalate"}
+    assert _source_line(body) == (
+        "- Verdict source: the open escalation `escalation-7-2.json` (kind `operator-evidence-owed`)"
+    )
+    assert "reloop" not in body
+    assert {row[3] for row in rows(section(text, "7-1"))} == {"advance"}
+
+
+def test_an_open_escalation_with_no_gate_artifact_renders_escalate(tmp_path):
+    """`gate_eval.py` returns NOT_EVALUATED -> escalate for a story with no gate
+    artifact, so an open escalation there reads `escalate` too, never `n/a`, and
+    a verdict the log records for it still does not reach the cell."""
+    root = copy_fixture("production", tmp_path)
+    impl = root / "impl-artifacts"
+    _sidecar(impl, "7-5", "budget-overrun")
+    _sprint(impl, {"7-5": "in-progress"})
+    log = root / "decision-log.md"
+    log.write_text(
+        log.read_text(encoding="utf-8")
+        + "\n### Story 7-5: gate\n\n```json\n"
+        + json.dumps({"verdict": "advance", "gate_status": "PASS"})
+        + "\n```\n",
+        encoding="utf-8",
+    )
+    text = _escalation_trail(tmp_path, root, [*PRODUCTION_STORIES, "7-5"])
+    body = section(text, "7-5")
+    assert {row[3] for row in rows(body)} == {"escalate"}
+    assert _source_line(body) == (
+        "- Verdict source: the open escalation `escalation-7-5.json` (kind `budget-overrun`), "
+        "and no gate artifact resolved for this story"
+    )
+    assert "Gate artifact: n/a" in body
+
+
+def test_an_unreadable_sidecar_is_an_open_escalation(tmp_path):
+    """Read as a resume reads it: something escalated, and nothing on disk says it
+    was answered."""
+    root = copy_fixture("production", tmp_path)
+    impl = root / "impl-artifacts"
+    (impl / "escalation-7-2.json").write_text("{not json", encoding="utf-8")
+    text = _escalation_trail(tmp_path, root, PRODUCTION_STORIES)
+    body = section(text, "7-2")
+    assert {row[3] for row in rows(body)} == {"escalate"}
+    assert "(kind `unreadable`)" in _source_line(body)
+
+
+@pytest.mark.parametrize("row", ["done", None], ids=["done-row", "no-sprint-status"])
+def test_an_open_evidence_commit_rejected_escalation_keeps_advance_and_is_named(tmp_path, row):
+    """The advance route writes this kind after the story advanced: only the
+    evidence commit is owed, so the cell keeps `advance` and the source line
+    names the escalation. Keyed on the kind, not on the row, so an unreadable
+    sprint-status still keeps it green."""
+    root = copy_fixture("production", tmp_path)
+    impl = root / "impl-artifacts"
+    _sidecar(impl, "7-1", "evidence-commit-rejected")
+    if row is not None:
+        _sprint(impl, {"7-1": row, "7-2": "review", "7-3": "review", "7-4": "review"})
+    text = _escalation_trail(tmp_path, root, PRODUCTION_STORIES)
+    body = section(text, "7-1")
+    assert {cells[3] for cells in rows(body)} == {"advance"}
+    assert _source_line(body) == (
+        "- Verdict source: the gate artifact's status, mapped by the gate's own table; the "
+        "escalation `escalation-7-1.json` (kind `evidence-commit-rejected`) is still open, and "
+        "owes the evidence commit, not a verdict"
+    )
+
+
+def test_a_done_story_ignores_a_leftover_sidecar(tmp_path):
+    """A `done` row advanced, so a sidecar an older run left beside it is residue,
+    not where the story stopped. Measured on a real project: five `done` stories
+    whose gates resolve sat beside open sidecars."""
+    root = copy_fixture("production", tmp_path)
+    impl = root / "impl-artifacts"
+    _sidecar(impl, "7-2", "budget-overrun")
+    _sprint(impl, {"7-1": "done", "7-2": "done", "7-3": "review", "7-4": "review"})
+    text = _escalation_trail(tmp_path, root, PRODUCTION_STORIES)
+    body = section(text, "7-2")
+    assert {row[3] for row in rows(body)} == {"reloop"}
+    assert "escalation-7-2.json" not in body
+
+
+def test_a_closed_or_handoff_sidecar_is_not_an_open_escalation(tmp_path):
+    """Read as a resume reads it: a closed id is an answered decision's residue,
+    and a handoff hands work over rather than escalating a verdict."""
+    sys.path.insert(0, str(SCRIPTS))
+    import red_ids  # noqa: PLC0415
+
+    root = copy_fixture("production", tmp_path)
+    impl = root / "impl-artifacts"
+    closed = _sidecar(impl, "7-2", "budget-overrun")
+    data = json.loads(closed.read_text(encoding="utf-8"))
+    (impl / ".decisions.json").write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "id": red_ids.mint_id(data["kind"], data["source"], data["decision_needed"]),
+                        "action": "close",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    _sidecar(impl, "7-4", "story-decomposed")
+    _sprint(impl, {"7-1": "done", "7-2": "review", "7-3": "review", "7-4": "review"})
+    text = _escalation_trail(tmp_path, root, PRODUCTION_STORIES)
+    assert {row[3] for row in rows(section(text, "7-2"))} == {"reloop"}
+    assert "escalation-" not in text
+
+
+def test_a_story_heading_never_lends_a_later_storys_verdict(tmp_path):
+    """The FIRST verdict object under a story heading is the story's own.
+
+    A heading's span runs to the next heading the reader matches, and a log whose
+    later stories are headed without the word `Story` puts their verdicts in the
+    earlier story's span. Measured on a real epic: taking the LAST object there
+    rendered one story `advance` on a later story's gate, where its own was
+    `defer`.
+    """
+    log = tmp_path / "decision-log.md"
+    log.write_text(
+        "# Decision log\n\n### Story 7-1 - first\n\n```json\n"
+        + json.dumps({"verdict": "defer", "gate_status": "CONCERNS"})
+        + "\n```\n\n## Session 2\n\n### 7-2 - a later story, headed without the word\n\n```json\n"
+        + json.dumps({"verdict": "advance", "gate_status": "PASS"})
+        + "\n```\n",
+        encoding="utf-8",
+    )
+    recorded = gate_trail.resolve_recorded_verdicts(gate_trail.recorded_verdicts(log), ["7-1", "7-2"])
+    assert recorded == {"7-1": "defer"}
+
+
+def _finalize_escalation_failures(text: str) -> list[str]:
+    match = re.search(r"^## Gate trail\s*$(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+    assert match, "finalize.md has no `## Gate trail` section"
+    body = match.group(1)
+    clauses = (
+        "A story whose escalation is still open (`escalation-<story_id>.json` on disk, neither "
+        "closed nor a handoff, beside a `sprint-status.yaml` row that is not `done`) reads "
+        "`escalate` instead, gate artifact or not",
+        "because the `escalate` route stops after logging the verdict it escalated from",
+        "an open `evidence-commit-rejected` escalation keeps the story's `advance` and is named "
+        "on its verdict-source line",
+    )
+    return [clause for clause in clauses if clause not in body]
+
+
+def test_finalize_says_an_open_escalation_reads_escalate():
+    assert _finalize_escalation_failures(FINALIZE.read_text(encoding="utf-8")) == []
+
+
+def test_the_finalize_pin_reds_without_the_sentence():
+    """Twin: the same check over finalize.md with the sentence cut out."""
+    text = FINALIZE.read_text(encoding="utf-8")
+    start = text.index("A story whose escalation is still open")
+    end = text.index("The production AND ran once", start)
+    assert len(_finalize_escalation_failures(text[:start] + text[end:])) == 3
+
+
+# ---------------------------------------------------------------------------
+# The heading the trail reads a recorded verdict under is one gate.md has the
+# run write. No reference named it before, and a real project's logs matched
+# the reader's heading in none of 118 headings of one epic, so the reader found
+# no recorded verdict at all.
+# ---------------------------------------------------------------------------
+
+_HEADING_RULE = "**Head each gate cycle's entries with the story's key.**"
+
+
+def _run_the_gate(text: str) -> str:
+    start = text.index("## Run the gate")
+    return text[start : text.index("## Route on the verdict", start)]
+
+
+def _heading_paragraph(text: str) -> str | None:
+    return next((p for p in _run_the_gate(text).split("\n\n") if p.startswith(_HEADING_RULE)), None)
+
+
+def _prescribed_heading(text: str) -> str | None:
+    """The heading gate.md's "Run the gate" has the run write before a cycle."""
+    paragraph = _heading_paragraph(text)
+    if paragraph is None:
+        return None
+    match = re.search(r"write the heading `(#{2,4} [^`]*<story_id>[^`]*)`", paragraph)
+    return match.group(1) if match else None
+
+
+def _log_in_the_prescribed_shape(template: str, path: Path) -> Path:
+    """Two stories logged as gate.md prescribes: a re-looped story's two cycles,
+    with Execute's entries between them, then a story whose red backfill sweep
+    re-looped it, then the epic roll-up, which takes no story heading. The
+    stories' own section headings are the shape a real project's logs use."""
+    first, second = "7-2-the-slugged-key", "7-3-another-key"
+
+    def fence(payload: dict) -> str:
+        return "```json\n" + json.dumps(payload) + "\n```\n\n"
+
+    path.write_text(
+        "# Decision log\n\n## Session 1\n\n### 7-2-the-slugged-key (story 1 of 2)\n\n"
+        + template.replace("<story_id>", first)
+        + "\n\ngate-automate: abc1234\n\n"
+        + fence({"verdict": "reloop", "gate_status": "FAIL", "reasons": ["FAIL"]})
+        + "#### Route: reloop\n\n#### Step 0 (re-loop)\n\n"
+        + template.replace("<story_id>", first)
+        + "\n\n"
+        + fence({"verdict": "advance", "gate_status": "PASS", "reasons": []})
+        + "### 7-3-another-key (story 2 of 2)\n\n"
+        + template.replace("<story_id>", second)
+        + "\n\n"
+        + fence({"verdict": "reloop", "reasons": ["the backfill sweep went red"]})
+        + "### Stage 5: Epic-level gate\n\n"
+        + fence({"verdict": "advance", "gate_status": "PASS", "epic_level": True}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _heading_rule_failures(text: str, tmp_path: Path) -> list[str]:
+    template = _prescribed_heading(text)
+    if template is None:
+        return ["gate.md names no heading to write before a gate cycle"]
+    failures = []
+    log = _log_in_the_prescribed_shape(template, tmp_path / "prescribed-log.md")
+    stories = ["7-2-the-slugged-key", "7-3-another-key"]
+    recorded = gate_trail.resolve_recorded_verdicts(gate_trail.recorded_verdicts(log), stories)
+    if recorded != {"7-2-the-slugged-key": "advance", "7-3-another-key": "reloop"}:
+        failures.append(f"the trail reads {recorded} from a log in the prescribed shape")
+    paragraph = _heading_paragraph(text)
+    for clause in (
+        "with `<story_id>` the sprint-status key copied verbatim",
+        "Write it again before each later cycle of the story, a re-gate included.",
+        "never a position such as `Story 2 of 5`",
+    ):
+        if clause not in paragraph:
+            failures.append(f"the rule does not say {clause!r}")
+    return failures
+
+
+def test_gate_prescribes_the_story_heading_the_trail_reads(tmp_path):
+    text = GATE.read_text(encoding="utf-8")
+    assert _prescribed_heading(text) == "### Story <story_id>: gate"
+    assert _heading_rule_failures(text, tmp_path) == []
+
+
+def test_the_heading_pin_reds_when_the_rule_is_removed_or_reshaped(tmp_path):
+    """Twin: the same check reds on gate.md without the rule, and on a rule whose
+    heading drops the word `Story`, the shape a real project's logs used."""
+    text = GATE.read_text(encoding="utf-8")
+    removed = text.replace(_heading_paragraph(text) + "\n\n", "")
+    assert _heading_rule_failures(removed, tmp_path) == [
+        "gate.md names no heading to write before a gate cycle"
+    ]
+    reshaped = text.replace("`### Story <story_id>: gate`", "`### <story_id>: gate`")
+    failures = _heading_rule_failures(reshaped, tmp_path)
+    assert len(failures) == 1 and failures[0].startswith("the trail reads {}"), failures
