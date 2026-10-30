@@ -22,10 +22,10 @@ The store is a folder you name with the `cross_session_recall_store` key.
 - **No default.** The key ships as `""`. An empty or blank value, an unresolved `{...}` token, a literal `$VAR` or `%VAR%` and a relative path all count as unset.
 - **Accepted values.** A `~` path, expanded like `health_check_seen_cache`, such as `~/.ultracode-goal/recall`. An absolute path or a `{project-root}` path works too.
 - **Layout.** Each run gets one file, `<store>/<fingerprint-dir>/runs/<run_id>.jsonl`, holding one JSON line. The file is created once and never rewritten. `<fingerprint-dir>` comes from this repo's fingerprint (its origin and root commit), in a form that is legal on Windows; a repo with no remote gets `local-<hex>`.
-- **Per machine.** Another developer or a CI runner never sees this machine's records. Worktrees and clones of one repo on this machine share the same fingerprint, so they read each other's records. A shared store is a follow-up, tracked in [#154](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/154).
+- **Per machine.** Another developer or a CI runner never sees this machine's records. Worktrees and clones of one repo on this machine share the same fingerprint, so they read each other's records. History stays on the machine that wrote it: a store shared through the repository is not planned for now, and [#154](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/154) records what one would have to get right.
 - **It ignores itself.** When the scripts create the store folder, they write a `.gitignore` holding `*` inside it, so a store inside your workspace leaves `git status` clean. A folder that already existed gets no `.gitignore`.
 - **Give it a folder of its own.** While a run is active, the guard denies every tool call that names the store. A store set to your workspace, to a folder above it, or to a folder that holds the implementation artifacts makes nearly every command there name the store, so they are denied. [SECURITY.md](https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/SECURITY.md) has the detail.
-- **Growth.** The store has no pruning yet. Each run, so each `drive_epic` spawn, adds one small file, and Ingest reads them all. The filter's 120-day horizon hides stale records at read time, except records holding a root cause that two or more runs recorded. Pruning is a follow-up, most naturally with #154.
+- **Growth.** The store has no pruning yet. Each run, so each `drive_epic` spawn, adds one small file, and Ingest reads them all. The filter's 120-day horizon hides stale records at read time, except records holding a root cause that two or more runs recorded.
 
 ## Turning it on
 
@@ -183,7 +183,7 @@ A claude-mem call, a call that names the store, or a call that would change the 
 Recall is deliberately bounded. Treat these as the residuals you are signing up for:
 
 - **A factual advisory still informs reasoning.** Sanitized advisories carry no instruction-shaped, stale, or foreign content and never reach the gate, but a well-formed factual advisory can still inform the model's reasoning. That is the feature, bounded; it is not a side channel into the verdict.
-- **The store is per machine.** Recall across Epics holds on one machine only, until [#154](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/154).
+- **The store is per machine.** Recall across Epics holds on one machine only. A shared store is not planned for now, so another machine, such as a teammate's or a CI runner, never sees this machine's runs.
 - **The store folder follows the fingerprint.** If a repo with no remote gains one, or you work from a shallow clone, new records go to another folder and the earlier ones stop being read.
 - **A record file is plain JSON.** Anyone who can write the store folder can edit one. The reader treats every record as untrusted data and defangs it, but it cannot tell an edited record from a real one.
 - **Redaction is high-precision, not complete.** Secret redaction is pattern matching tuned for precision; it is not a complete data-loss-prevention layer.

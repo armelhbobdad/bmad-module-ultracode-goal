@@ -1,0 +1,4 @@
+type: docs
+summary: |
+  The Cross-Session Recall page no longer says a shared run-history store is on the way. History stays on the machine that wrote it, so another developer or a CI runner never sees this machine's runs, and a store shared through the repository is not planned for now.
+issues: [154]
