@@ -75,7 +75,7 @@ A per-story gate can return `reloop` with a `PASS` gate status when a cap fired 
 
 ## Every tool call is refused
 
-**Symptom.** Every tool call the session makes is refused, Read, Edit and Bash alike, and each refusal reads like `PreToolUse:Bash hook error: [<command>]: failed; blocking because onFailure is "block"` (or `timed out; blocking because onFailure is "block"`), naming the guard's command, `guard_pretooluse.py`. A headless run stops on the first call.
+**Symptom.** Every tool call the session makes is refused, Read, Edit and Bash alike, and each refusal names the guard's command, `guard_pretooluse.py`. Most read like `PreToolUse:Bash hook error: [<command>]: failed; blocking because onFailure is "block"` (or `timed out; blocking because onFailure is "block"`). When `uv` itself refuses to start the script (the skill was moved or removed, or no Python it can use), the refusal shows `uv`'s own error instead, such as `error: Failed to spawn`, since `uv` then exits 2, which Claude Code reads as a refusal in any case. A headless run stops on the first call.
 
 **What happened.** Preflight arms the PreToolUse guard with `"onFailure": "block"`, so when the guard cannot run, Claude Code refuses the call rather than letting it through unchecked. The guard's matcher covers every tool, so a guard that cannot run refuses every call, including the ones the session would need to repair it. The usual causes:
 
