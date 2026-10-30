@@ -12,6 +12,8 @@ satisfied by any prose that merely mentions the guard. Stdlib + pytest only.
 import re
 from pathlib import Path
 
+import pytest
+
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _PREFLIGHT = _SKILL_ROOT / "references" / "preflight.md"
 _BASELINE = (
@@ -123,3 +125,33 @@ def test_over_promising_note_is_rejected():
     )
     assert not re.search(r"narrowed it|not.{0,20}eliminat", over_promising, re.I)
     assert not re.search(r"Write/Edit", over_promising)
+
+
+# Two shapes that fail closed beside the matches-anywhere lanes (issue #179): a
+# long run of exec wrappers, which once crashed the guard, and a command whose
+# reading raises. An operator predicting a deny needs both.
+_FAILS_CLOSED_CLAUSES = (
+    "A segment whose command sits behind a run of more than 32 exec wrappers is read through the "
+    "first 32 only: a `git` anywhere after them counts as both a commit and a push",
+    "a command the guard cannot classify at all, because reading it raised an error, is denied "
+    "outright, whatever it holds",
+)
+
+
+def _lists_the_wrapper_bound_and_the_unreadable_command(note: str) -> bool:
+    return all(clause in note for clause in _FAILS_CLOSED_CLAUSES)
+
+
+def test_note_lists_the_wrapper_bound_and_the_unreadable_command_as_failing_closed():
+    assert _lists_the_wrapper_bound_and_the_unreadable_command(_live_note())
+    # anti-vacuous: the pre-edit bullet carries neither
+    assert not _lists_the_wrapper_bound_and_the_unreadable_command(_baseline_note())
+
+
+@pytest.mark.parametrize("clause", _FAILS_CLOSED_CLAUSES)
+def test_fail_closed_predicate_rejects_a_dropped_clause(clause):
+    """Twin: the predicate rejects the live note with either shape taken out."""
+    note = _live_note()
+    mutant = note.replace(clause, "")
+    assert mutant != note, "the mutant must actually change the text"
+    assert not _lists_the_wrapper_bound_and_the_unreadable_command(mutant)

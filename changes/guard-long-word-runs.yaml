@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The `PreToolUse` guard now reads a Bash command whose segment opens with a long run of `!`, keywords, assignments or other leading words in time linear in its length: a run of a hundred thousand took minutes, and a hook past its timeout lets the call through. A segment that puts more than 32 exec wrappers (`env`, `nice`, `sudo` and the others the guard lists) ahead of a `git` now counts it as both a commit and a push, where a run of about a thousand crashed the hook, which then made no decision and let the command through every git check. Two other crashes now deny instead: a Bash command the guard fails to classify for any other reason is refused on any branch, and a story pointer (`.current-story`) that is not UTF-8 names no story, so the tests-ran check refuses the commit.
+issues: [179]

@@ -2631,9 +2631,7 @@ _SEGMENT_SPLIT = (
     "        for segment in re.split(separators, command):\n"
     "            verbs |= _segment_write_verbs(segment, depth, scope)"
 )
-_PREFIX_STRIP_TEST = (
-    "    while index < len(tokens) and _ASSIGNMENT.match(tokens[index]):"
-)
+_PREFIX_STRIP_TEST = "        if _ASSIGNMENT.match(head):"
 # The quote-aware readings, which split a chained command as well: a mutant
 # that drops the quote-blind splits drops them too, or they alone keep the
 # chained commit denied.
@@ -2691,7 +2689,7 @@ def test_mutant_unconditional_prefix_strip_allows_chained_commit(tmp_path: Path)
     the leading-prefix strip, so `git` itself is consumed as if it were a
     prefix and no segment ever anchors."""
     mutant = _write_mutant(
-        tmp_path, "strip_all", _PREFIX_STRIP_TEST, "    while index < len(tokens):"
+        tmp_path, "strip_all", _PREFIX_STRIP_TEST, "        if True:"
     )
     protected = _protected_repo(tmp_path)
 
@@ -3676,14 +3674,14 @@ def test_quoted_ampersand_in_a_git_value_option_still_denies(tmp_path: Path) -> 
     assert "Protected-branch" in _reason(out)
 
 
-_LEADING_NOISE_CALL = "    tokens = _strip_leading_noise(tokens)"
+_KEYWORD_STRIP_LINE = "        elif head.lower() in _SHELL_KEYWORDS:"
 _AMP_SEPARATOR_LINE = '        r"&&|\\|\\||;|\\||&|\\n|\\r",\n'
 
 
 def test_mutant_without_keyword_stripping_allows_a_compound_write(
     tmp_path: Path,
 ) -> None:
-    """Twin: revert the leading-noise strip and the compound form is ALLOWED.
+    """Twin: drop the keyword strip and the compound form is ALLOWED.
 
     The ALLOW is the point. If the deny survived this mutation, the strip would
     not be what produces it and the tests above would pin nothing.
@@ -3691,8 +3689,8 @@ def test_mutant_without_keyword_stripping_allows_a_compound_write(
     mutant = _write_mutant(
         tmp_path,
         "no_keyword_strip",
-        _LEADING_NOISE_CALL,
-        "    tokens = _strip_assignments(tokens)",
+        _KEYWORD_STRIP_LINE,
+        "        elif False:",
     )
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -6935,3 +6933,225 @@ def test_csr_security_md_carries_the_left_behind_latch_caveat() -> None:
     doc = module.__doc__
     assert "  7. Cross-Session Recall, local run store" in doc
     assert "latch file" in doc
+
+
+# --- #179: long runs of one shell word ----------------------------------------
+# The leading-noise strip dropped one word per pass and copied the rest each
+# time, so a long run of `!` cost time quadratic in its length; and each exec
+# wrapper ahead of a head was read by a recursive call, so a long run of them
+# overflowed Python's recursion limit. A hook past its timeout, and a hook that
+# exits on an exception, both make no decision, and the command goes through.
+
+
+def _quadratic_strip(guard, tokens: list[str]) -> list[str]:
+    """The leading-noise strip as 3.2.0 shipped it, one word per pass with a
+    copy each time: the reference the linear strip must match word for word."""
+    while True:
+        index = 0
+        while index < len(tokens) and guard._ASSIGNMENT.match(tokens[index]):
+            index += 1
+        stripped = tokens[index:]
+        if stripped:
+            head = stripped[0]
+            bare = head.lstrip(guard._GROUP_OPENERS)
+            redirect = guard._REDIRECTION.match(head)
+            if bare != head:
+                stripped = ([bare] + stripped[1:]) if bare else stripped[1:]
+            elif head == "function" and len(stripped) > 1:
+                stripped = stripped[2:]
+            elif head == "coproc" and len(stripped) > 2 and stripped[2] in ("{", "("):
+                stripped = stripped[2:]
+            elif head.lower() in guard._SHELL_KEYWORDS:
+                stripped = stripped[1:]
+            elif redirect:
+                alone = redirect.end() == len(head)
+                target_is_git = alone and len(stripped) > 1 and os.path.basename(stripped[1]).lower() == "git"
+                stripped = stripped[2:] if alone and not target_is_git else stripped[1:]
+            elif head.isdigit() and len(stripped) > 1 and guard._REDIRECTION.match(stripped[1]):
+                stripped = stripped[1:]
+        if stripped == tokens:
+            return stripped
+        tokens = stripped
+
+
+# One word of each kind the strip reads, in the spellings that change its
+# path: keywords in either case, openers alone, glued and nested, assignments,
+# `function` and `coproc` with what follows them, redirections alone and
+# glued, descriptors, and the heads it must stop at.
+_STRIP_VOCABULARY = (
+    "", "!", "if", "IF", "then", "fi", "do", "done", "{", "}", "(", ")", "((", "({", "(git", "({git",
+    "{(", "FOO=1", "(FOO=1", "{FOO=", "a=b", "=x", "function", "Function", "f", "coproc", "Coproc",
+    ">", ">>", "2>&1", ">out", "2", "12", ">&", "2>&", "<<", "<<<", "<", "&>", ">|", "<>", "<&",
+    "git", "/usr/bin/git", "GIT", "commit", "ls", "time", "env", "-p", "--",
+)
+
+
+def test_the_linear_strip_reads_every_word_list_as_the_quadratic_one_did(guard_module) -> None:
+    """Issue #179: the strip moves an index now, and returns exactly what the
+    3.2.0 strip returned: every list of up to three words over the vocabulary,
+    and seeded random lists of four to twelve, without changing its input."""
+    import itertools
+    import random
+
+    lists: list[list[str]] = [
+        list(words) for size in range(4) for words in itertools.product(_STRIP_VOCABULARY, repeat=size)
+    ]
+    rng = random.Random(179)
+    lists += [[rng.choice(_STRIP_VOCABULARY) for _ in range(rng.randint(4, 12))] for _ in range(20_000)]
+    for words in lists:
+        before = list(words)
+        assert guard_module._strip_leading_noise(words) == _quadratic_strip(guard_module, list(words)), words
+        assert words == before, words
+
+
+def test_a_run_of_bang_words_is_linear(guard_module) -> None:
+    """Issue #179: a segment opening with n `!` words cost time quadratic in
+    n, and a hook past its timeout lets the call through. The bound is
+    generous: at this size the strip, the git reading and the rebinding scan
+    took tens of seconds before, and a second or two now."""
+    import time
+
+    n = 50_000
+    start = time.perf_counter()
+    assert guard_module._strip_leading_noise(["!"] * n + ["git", "x"]) == ["git", "x"]
+    assert guard_module._git_writes("! " * n + _V + " -m x") == {"commit"}
+    assert not guard_module._command_rebinds("! " * n + "ls")
+    elapsed = time.perf_counter() - start
+    assert elapsed < 10.0, f"took {elapsed:.1f}s"
+
+
+def test_a_short_run_of_exec_wrappers_is_read_through(guard_module) -> None:
+    """The bound reaches no further than it must: a run of _MAX_WRAPPERS
+    wrappers is read through to its head, and a longer run ahead of a command
+    that is no git still reads as no write."""
+    limit = guard_module._MAX_WRAPPERS
+    assert guard_module._git_writes("env " * limit + _V + " -m x") == {"commit"}
+    assert guard_module._git_writes("nice -n 1 " * limit + _V + " -m x") == {"commit"}
+    assert guard_module._git_writes("env " * (limit + 1) + "ls") == set()
+    assert guard_module._git_writes("env " * (limit + 2) + "ls") == set()
+
+
+def test_a_long_run_of_exec_wrappers_fails_closed(tmp_path: Path, guard_module) -> None:
+    """Issue #179 follow-up: each exec wrapper ahead of the head was read by a
+    recursive call, so a run of about a thousand (`env env ... git commit`)
+    overflowed Python's recursion limit, the hook exited 1 with no decision
+    and the commit went through every git gate. The wrappers are read in a
+    bounded loop now, and past _MAX_WRAPPERS a `git` in what is left counts as
+    both verbs, as it does past the depth cap."""
+    protected = _protected_repo(tmp_path)
+    code, out = _run_hook(_bash_event(protected, "env " * 2000 + _V + " -m x"), protected)
+    assert code == 2
+    assert "Protected-branch" in _reason(out)
+
+    limit = guard_module._MAX_WRAPPERS
+    assert guard_module._git_writes("env " * (limit + 1) + _V + " -m x") == {"commit", "push"}
+    assert guard_module._git_writes("nice " * 5000 + _V + " -m x") == {"commit", "push"}
+    assert guard_module._git_writes("sudo -u u " * 5000 + "git status") == {"commit", "push"}
+
+
+def test_the_wrapper_bound_is_one_constant_beside_the_wrappers(guard_module) -> None:
+    """The git reading and the rebinding scan read one bound, defined with the
+    wrappers it bounds, not in the recall section."""
+    source = HOOK.read_text(encoding="utf-8")
+    assert source.count("\n_MAX_WRAPPERS = ") == 1
+    assert source.index("\n_EXEC_WRAPPERS = ") < source.index("\n_MAX_WRAPPERS = ")
+    assert source.index("\n_MAX_WRAPPERS = ") < source.index("\n_SHELL_WRAPPERS = ")
+    assert guard_module._MAX_WRAPPERS == 32
+
+
+# A classifier that raises: the shape of any exception left on the git path.
+_CLASSIFY_BODY = (
+    "    scope = _CommandScope(command)\n"
+    "    return _command_write_verbs(command, 0, scope), list(scope.unknown)\n"
+)
+_CLASSIFY_RAISES = '    raise LookupError("mutant: the classifier raised")\n'
+_CLASSIFY_CALL = "        verbs, unknown = _classify(command)\n"
+
+
+def _classify_catch(src: str) -> str:
+    """The try/except around the classifier in main(), exactly as it sits there."""
+    start = src.index("    try:\n" + _CLASSIFY_CALL)
+    end = src.index("    if not verbs:\n", start)
+    return src[start:end]
+
+
+def test_a_command_the_guard_cannot_classify_is_denied(tmp_path: Path) -> None:
+    """A classifier that raises would end the hook with no decision, and the
+    command would go through every git gate; the guard denies it instead,
+    whatever it holds and whatever branch it runs on, and names the error."""
+    mutant = _write_mutant(tmp_path, "classify_raises", _CLASSIFY_BODY, _CLASSIFY_RAISES)
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    for command in (_V + " -m x", "git status"):
+        code, out = _run_mutant_hook(mutant, _bash_event(repo, command), repo, env)
+        assert code == 2, command
+        reason = _reason(out)
+        assert reason.startswith("Commit/push guard: refusing this Bash command")
+        assert "(LookupError)" in reason
+        assert "failing closed" in reason
+
+    # Control: the shipped hook lets the same green commit through.
+    code, out = _run_hook(_bash_event(repo, _V + " -m x"), repo, env)
+    assert code == 0
+    assert out is None
+
+
+def test_mutant_without_the_classify_catch_lets_a_raising_classifier_through(tmp_path: Path) -> None:
+    """Twin: drop the catch, and the same raising classifier exits 1 with no
+    decision on a protected branch, which the client reads as no objection.
+    That is what makes the catch load-bearing."""
+    catch = _classify_catch(_hook_source())
+    mutant = _write_mutant_multi(
+        tmp_path,
+        "no_classify_catch",
+        [(_CLASSIFY_BODY, _CLASSIFY_RAISES), (catch, "    verbs, unknown = _classify(command)\n")],
+    )
+    protected = _protected_repo(tmp_path)
+    code, out = _run_mutant_hook(mutant, _bash_event(protected, _V + " -m x"), protected)
+    assert code == 1
+    assert out is None
+
+
+def test_a_story_pointer_that_is_not_utf8_denies_the_commit(tmp_path: Path) -> None:
+    """A `.current-story` holding bytes that are not UTF-8 raised out of the
+    tests-ran gate, so the hook exited 1 with no decision and the commit went
+    through. It now names no story, and the gate denies."""
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    code, out = _run_hook(_bash_event(repo, _V + " -m x"), repo, env)
+    assert code == 0, "control: the readable pointer lets the green commit through"
+
+    (impl / ".current-story").write_bytes(b"\xff\xfeSTORY-1\n")
+    code, out = _run_hook(_bash_event(repo, _V + " -m x"), repo, env)
+    assert code == 2
+    assert "Tests-ran guard" in _reason(out)
+    assert "(unknown)" in _reason(out)
+
+
+# Where SECURITY.md lists the failure behavior, it says what the classifier
+# does with a command it cannot read, and where the wrapper bound starts.
+_SECURITY_CLASSIFY_FAILS_CLOSED = (
+    "The reading of a Bash command that invariants 1 to 5 share fails closed too: a command the guard "
+    "cannot classify, because reading it raised an error, is denied on any branch, and a segment that "
+    "puts more than 32 exec wrappers (`env`, `nice`, `sudo`, and the others) ahead of its command counts "
+    "a `git` after them as both a commit and a push."
+)
+_SECURITY_POINTER_FAILS_CLOSED = "an unreadable marker or story pointer (`.current-story`)"
+
+
+def _security_states_the_classifier_fails_closed(text: str) -> bool:
+    flat = " ".join(text.split())
+    return _SECURITY_CLASSIFY_FAILS_CLOSED in flat and _SECURITY_POINTER_FAILS_CLOSED in flat
+
+
+def test_security_md_lists_the_classifier_and_the_pointer_as_failing_closed() -> None:
+    assert _security_states_the_classifier_fails_closed((_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("clause", [_SECURITY_CLASSIFY_FAILS_CLOSED, _SECURITY_POINTER_FAILS_CLOSED])
+def test_security_predicate_rejects_a_dropped_clause(clause: str) -> None:
+    """Twin: the predicate rejects SECURITY.md with either rule taken out."""
+    live = " ".join((_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8").split())
+    mutant = live.replace(clause, "")
+    assert mutant != live, "the mutant must actually change the text"
+    assert not _security_states_the_classifier_fails_closed(mutant)

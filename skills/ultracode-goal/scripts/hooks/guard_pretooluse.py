@@ -284,9 +284,12 @@ def _current_story(impl: Path | None) -> str | None:
     if impl is not None:
         marker = impl / ".current-story"
         if marker.is_file():
+            # A pointer that cannot be read or decoded names no story, so the
+            # tests-ran gate denies: an exception here would end the hook with
+            # no decision, and the commit would go through.
             try:
                 return marker.read_text(encoding="utf-8").strip() or None
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 return None
     return None
 
@@ -333,6 +336,12 @@ _EXEC_WRAPPERS = frozenset(
         "builtin",
     }
 )
+# The most wrappers read ahead of a segment's head, by the git reading
+# (_token_write_verbs) and by the rebinding scan (_segment_rebinds): a bound,
+# not a behavior anyone should rely on. Past it each fails closed, so a long
+# run of wrappers can neither overflow the stack nor cost time quadratic in
+# its length.
+_MAX_WRAPPERS = 32
 
 # Shells whose `-c` string payload is re-entered as a command in its own right.
 _SHELL_WRAPPERS = frozenset({"sh", "bash", "zsh", "dash"})
@@ -498,14 +507,6 @@ def _tokenize(segment: str) -> list[str]:
     trigger to catch, instead of scattering shlex handling through the caller.
     """
     return shlex.split(segment)
-
-
-def _strip_assignments(tokens: list[str]) -> list[str]:
-    """Drop the leading `VAR=val` prefix, so `FOO=bar git commit` still anchors."""
-    index = 0
-    while index < len(tokens) and _ASSIGNMENT.match(tokens[index]):
-        index += 1
-    return tokens[index:]
 
 
 def _git_subcommand_index(tokens: list[str]) -> int | None:
@@ -809,35 +810,50 @@ def _strip_leading_noise(tokens: list[str]) -> list[str]:
     commit`, `> out git commit`) is no command either. Every strip here can
     only turn an unclassifiable segment into a classifiable one, so this
     direction is fail-closed by construction.
+
+    One pass over the words, moving an index and copying the rest once: a copy
+    per word dropped took time quadratic in a long run of them (a segment that
+    opens with thousands of `!`), and a hook past its timeout lets the call
+    through.
     """
-    while True:
-        stripped = _strip_assignments(tokens)
-        if stripped:
-            head = stripped[0]
-            bare = head.lstrip(_GROUP_OPENERS)
-            redirect = _REDIRECTION.match(head)
-            if bare != head:
-                # `(git commit …)` — opener glued to the command name.
-                stripped = ([bare] + stripped[1:]) if bare else stripped[1:]
-            elif head == "function" and len(stripped) > 1:
-                stripped = stripped[2:]
-            elif head == "coproc" and len(stripped) > 2 and stripped[2] in ("{", "("):
-                stripped = stripped[2:]
-            elif head.lower() in _SHELL_KEYWORDS:
-                stripped = stripped[1:]
-            elif redirect:
-                # An operator alone (`>`, `2>&`) takes the next word as its
-                # target, unless that word is `git`: a quoted punctuation word
-                # (`exec -a ')>' git ci`) reads as an operator here, and the
-                # git after it must not be taken for its target.
-                alone = redirect.end() == len(head)
-                target_is_git = alone and len(stripped) > 1 and os.path.basename(stripped[1]).lower() == "git"
-                stripped = stripped[2:] if alone and not target_is_git else stripped[1:]
-            elif head.isdigit() and len(stripped) > 1 and _REDIRECTION.match(stripped[1]):
-                stripped = stripped[1:]  # the descriptor of `2 >&1`, split by the quote-aware reading
-        if stripped == tokens:
-            return stripped
-        tokens = stripped
+    index, size = 0, len(tokens)
+    # The word at `index`, less any group opener a strip took off its front.
+    head = tokens[0] if tokens else ""
+    while index < size:
+        left = size - index
+        bare = head.lstrip(_GROUP_OPENERS)
+        redirect = _REDIRECTION.match(head)
+        if _ASSIGNMENT.match(head):
+            index += 1
+        elif bare != head:
+            # `(git commit …)`: an opener glued to the command name.
+            if bare:
+                head = bare
+                continue
+            index += 1
+        elif head == "function" and left > 1:
+            index += 2
+        elif head == "coproc" and left > 2 and tokens[index + 2] in ("{", "("):
+            index += 2
+        elif head.lower() in _SHELL_KEYWORDS:
+            index += 1
+        elif redirect:
+            # An operator alone (`>`, `2>&`) takes the next word as its
+            # target, unless that word is `git`: a quoted punctuation word
+            # (`exec -a ')>' git ci`) reads as an operator here, and the
+            # git after it must not be taken for its target.
+            alone = redirect.end() == len(head)
+            target_is_git = alone and left > 1 and os.path.basename(tokens[index + 1]).lower() == "git"
+            index += 2 if alone and not target_is_git else 1
+        elif head.isdigit() and left > 1 and _REDIRECTION.match(tokens[index + 1]):
+            index += 1  # the descriptor of `2 >&1`, split by the quote-aware reading
+        else:
+            break
+        head = tokens[index] if index < size else ""
+    rest = tokens[index:]
+    if rest and rest[0] != head:
+        rest[0] = head
+    return rest
 
 
 def _token_write_verbs(
@@ -847,39 +863,51 @@ def _token_write_verbs(
 
     ``None`` propagates the "cannot honestly read this" signal up to
     :func:`_segment_write_verbs`, which owns the raw segment the fallback needs.
+
+    A loop, not a recursion, over the exec wrappers ahead of the head, and a
+    bounded one, as _segment_rebinds bounds its own: a run of a thousand
+    wrappers overflowed Python's recursion limit, and a hook that exits on an
+    exception makes no decision, so the command went through. Past
+    _MAX_WRAPPERS the reading fails closed as the depth cap does: a `git` in
+    what is left counts as both verbs, and without one the caller scans the
+    segment.
     """
-    tokens = _strip_leading_noise(tokens)
-    if not tokens:
-        return set()
-    head = os.path.basename(tokens[0]).lower()
-    if head == "git":
-        index = _git_subcommand_index(tokens[1:])
-        if index is None:
+    for _ in range(_MAX_WRAPPERS + 1):
+        tokens = _strip_leading_noise(tokens)
+        if not tokens:
             return set()
-        if tokens[1 + index].lower() in _WRITE_VERBS:
-            return {tokens[1 + index].lower()}
-        return _unknown_subcommand_verbs(tokens[1 + index], scope)
-    if head in _SHELL_WRAPPERS:
-        return _shell_payload_verbs(tokens[1:], depth, scope)
-    if head == "eval":
-        # `eval` runs its arguments, joined, as a command of its own, after a
-        # `--` it skips.
-        if depth >= _MAX_SHELL_DEPTH:
-            return set(_UNRESOLVED_VERBS) if any(_GIT_WORD.search(t) for t in tokens) else None
-        args = tokens[2:] if tokens[1:2] == ["--"] else tokens[1:]
-        return _command_write_verbs(" ".join(args), depth + 1, scope)
-    if head in _EXEC_WRAPPERS:
+        head = os.path.basename(tokens[0]).lower()
+        if head == "git":
+            index = _git_subcommand_index(tokens[1:])
+            if index is None:
+                return set()
+            if tokens[1 + index].lower() in _WRITE_VERBS:
+                return {tokens[1 + index].lower()}
+            return _unknown_subcommand_verbs(tokens[1 + index], scope)
+        if head in _SHELL_WRAPPERS:
+            return _shell_payload_verbs(tokens[1:], depth, scope)
+        if head == "eval":
+            # `eval` runs its arguments, joined, as a command of its own, after a
+            # `--` it skips.
+            if depth >= _MAX_SHELL_DEPTH:
+                return set(_UNRESOLVED_VERBS) if any(_GIT_WORD.search(t) for t in tokens) else None
+            args = tokens[2:] if tokens[1:2] == ["--"] else tokens[1:]
+            return _command_write_verbs(" ".join(args), depth + 1, scope)
+        if head not in _EXEC_WRAPPERS:
+            return set()
         # Every wrapper has its own option grammar (`timeout 30 …`, `nice -n 10
         # …`, `sudo -u u …`, `stdbuf -oL …`), and modelling them one by one is
-        # exactly how a LISTED wrapper turns into a fail-open. So hand the rest
-        # of the segment back to this same classifier from the first token that
-        # could start a command — biased toward finding the git, not toward
-        # parsing the wrapper.
+        # exactly how a LISTED wrapper turns into a fail-open. So read the rest
+        # of the segment again from the first token that could start a command,
+        # biased toward finding the git, not toward parsing the wrapper.
         for index in range(1, len(tokens)):
             name = os.path.basename(tokens[index]).lower()
             if name in ("git", "eval") or name in _SHELL_WRAPPERS or name in _EXEC_WRAPPERS:
-                return _token_write_verbs(tokens[index:], depth, scope)
-    return set()
+                tokens = tokens[index:]
+                break
+        else:
+            return set()
+    return set(_UNRESOLVED_VERBS) if any(_GIT_WORD.search(t) for t in tokens) else None
 
 
 def _anywhere_write_verbs(segment: str) -> set[str]:
@@ -1776,7 +1804,6 @@ _REBINDING_KEYWORDS = frozenset({"for", "select", "function", "coproc"})
 # an assignment behind the `time` keyword (`time PATH=...`). `command -v` and
 # `-V` only look a name up and run nothing.
 _CURRENT_SHELL_WRAPPERS = frozenset({"command", "time"})
-_MAX_WRAPPERS = 32
 # Rebinding shapes the word scan in _command_rebinds cannot reach, because it
 # splits a command at blanks and reads only each segment's head. Each changes
 # command lookup or the environment where a bare `NAME=` head does not sit:
@@ -1836,7 +1863,7 @@ _ARITH_COMPARISON = re.compile(r"(?<![A-Za-z0-9_])-(?:eq|ne|lt|le|gt|ge)(?![A-Za
 _SIMPLE_PIECE = re.compile(r"[^;&|\n]+")
 # An assignment whose value OPENS a command substitution, for a name that
 # changes command lookup or the interpreter (the names _EXEMPT_UNSAFE_ASSIGNMENT
-# lists). shlex splits the substitution at its blanks, so _strip_assignments
+# lists). shlex splits the substitution at its blanks, so _strip_leading_noise
 # would eat `PATH=$(printf` and read the rest as a command; this keeps the whole
 # assignment a rebinding (`PATH=$(printf %s /x):$PATH`). The opener must sit
 # right after the `=`, so a markdown code span such as `` `PYTHON_COLORS=0` ``
@@ -3471,7 +3498,21 @@ def main() -> None:
     if not isinstance(command, str):
         _allow()
 
-    verbs, unknown = _classify(command)
+    try:
+        verbs, unknown = _classify(command)
+    except Exception as exc:  # noqa: BLE001  fail closed on the unforeseen
+        # A crash would exit non-zero, which the client reads as no decision,
+        # letting the command past every git gate below. A command the guard
+        # cannot read is refused instead, as a segment it cannot lex is read
+        # toward the deny.
+        _deny(
+            "Commit/push guard: refusing this Bash command, because reading it "
+            f"for a `git commit` or `git push` failed ({type(exc).__name__}): "
+            "whether it runs one cannot be told, so it is refused (failing "
+            "closed) rather than let past the protected-branch, tests-ran, "
+            "freshness, empty-index and un-skip checks. Run it as shorter, "
+            "plainer commands."
+        )
     if not verbs:
         _allow()
     hint = _unknown_hint(unknown)
