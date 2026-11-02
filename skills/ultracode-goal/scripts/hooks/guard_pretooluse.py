@@ -511,13 +511,163 @@ class _CommandScope:
         self.bodies: dict[tuple[str, int], set[str]] = {}
 
 
+class _Lexer(shlex.shlex):
+    """shlex.shlex with a token built in a list, so a long word lexes in
+    linear time.
+
+    The stdlib's read_token adds each character to the token with
+    `self.token += nextchar`, and CPython copies the whole string for every
+    such add to an attribute, so a word of n characters cost time in n
+    squared: a Bash command holding one word of about 2.5 MB kept the guard
+    past Claude Code's 600 s hook timeout, which under the guard item's
+    `"onFailure": "block"` refuses the call. This read_token is the stdlib's
+    (CPython 3.11 to 3.14 ship the same one), branch for branch, with the
+    token kept as a list of characters and joined once at its end; only its
+    debug prints are left out, since the guard never sets `debug`. Every
+    other method is shlex's own, and the tests compare the two readings on
+    generated text.
+    """
+
+    def read_token(self):  # noqa: C901, PLR0912  (the stdlib's state machine, kept whole)
+        quoted = False
+        escapedstate = " "
+        token: list[str] = []
+        while True:
+            if self.punctuation_chars and self._pushback_chars:
+                nextchar = self._pushback_chars.pop()
+            else:
+                nextchar = self.instream.read(1)
+            if nextchar == "\n":
+                self.lineno += 1
+            if self.state is None:
+                token = []  # past end of file
+                break
+            elif self.state == " ":
+                if not nextchar:
+                    self.state = None  # end of file
+                    break
+                elif nextchar in self.whitespace:
+                    if token or (self.posix and quoted):
+                        break  # emit current token
+                    else:
+                        continue
+                elif nextchar in self.commenters:
+                    self.instream.readline()
+                    self.lineno += 1
+                elif self.posix and nextchar in self.escape:
+                    escapedstate = "a"
+                    self.state = nextchar
+                elif nextchar in self.wordchars:
+                    token = [nextchar]
+                    self.state = "a"
+                elif nextchar in self.punctuation_chars:
+                    token = [nextchar]
+                    self.state = "c"
+                elif nextchar in self.quotes:
+                    if not self.posix:
+                        token = [nextchar]
+                    self.state = nextchar
+                elif self.whitespace_split:
+                    token = [nextchar]
+                    self.state = "a"
+                else:
+                    token = [nextchar]
+                    if token or (self.posix and quoted):
+                        break  # emit current token
+                    else:
+                        continue
+            elif self.state in self.quotes:
+                quoted = True
+                if not nextchar:  # end of file
+                    raise ValueError("No closing quotation")
+                if nextchar == self.state:
+                    if not self.posix:
+                        token.append(nextchar)
+                        self.state = " "
+                        break
+                    else:
+                        self.state = "a"
+                elif self.posix and nextchar in self.escape and self.state in self.escapedquotes:
+                    escapedstate = self.state
+                    self.state = nextchar
+                else:
+                    token.append(nextchar)
+            elif self.state in self.escape:
+                if not nextchar:  # end of file
+                    raise ValueError("No escaped character")
+                # In posix shells, only the quote itself or the escape
+                # character may be escaped within quotes.
+                if escapedstate in self.quotes and nextchar != self.state and nextchar != escapedstate:
+                    token.append(self.state)
+                token.append(nextchar)
+                self.state = escapedstate
+            elif self.state in ("a", "c"):
+                if not nextchar:
+                    self.state = None  # end of file
+                    break
+                elif nextchar in self.whitespace:
+                    self.state = " "
+                    if token or (self.posix and quoted):
+                        break  # emit current token
+                    else:
+                        continue
+                elif nextchar in self.commenters:
+                    self.instream.readline()
+                    self.lineno += 1
+                    if self.posix:
+                        self.state = " "
+                        if token or (self.posix and quoted):
+                            break  # emit current token
+                        else:
+                            continue
+                elif self.state == "c":
+                    if nextchar in self.punctuation_chars:
+                        token.append(nextchar)
+                    else:
+                        if nextchar not in self.whitespace:
+                            self._pushback_chars.append(nextchar)
+                        self.state = " "
+                        break
+                elif self.posix and nextchar in self.quotes:
+                    self.state = nextchar
+                elif self.posix and nextchar in self.escape:
+                    escapedstate = "a"
+                    self.state = nextchar
+                elif (
+                    nextchar in self.wordchars
+                    or nextchar in self.quotes
+                    or (self.whitespace_split and nextchar not in self.punctuation_chars)
+                ):
+                    token.append(nextchar)
+                else:
+                    if self.punctuation_chars:
+                        self._pushback_chars.append(nextchar)
+                    else:
+                        self.pushback.appendleft(nextchar)
+                    self.state = " "
+                    if token or (self.posix and quoted):
+                        break  # emit current token
+                    else:
+                        continue
+        result = "".join(token)
+        self.token = ""
+        if self.posix and not quoted and result == "":
+            result = None
+        return result
+
+
 def _tokenize(segment: str) -> list[str]:
     """Split one shell segment into words; raises ValueError on bad quoting.
 
     A named seam on purpose: it gives the fail-closed fallback below a single
     trigger to catch, instead of scattering shlex handling through the caller.
+    It is shlex.split's own reading (posix, split at whitespace, no comments),
+    through _Lexer, so a long word costs time linear in its length.
     """
-    return shlex.split(segment)
+    lexer = _Lexer(segment, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return list(lexer)
 
 
 def _git_subcommand_index(tokens: list[str]) -> int | None:
@@ -763,7 +913,7 @@ def _quoted_segments(command: str) -> list[list[str]]:
     `|` apart (`git ci -m 'fix: a; b'`), and each fragment then tokenizes to
     nothing. shlex in punctuation mode keeps it inside its word.
     """
-    lexer = shlex.shlex(_mask_quoted(command), posix=True, punctuation_chars=_PUNCTUATION)
+    lexer = _Lexer(_mask_quoted(command), posix=True, punctuation_chars=_PUNCTUATION)
     lexer.whitespace = " \t\r"  # a newline is punctuation, so it ends a segment
     lexer.whitespace_split = True
     lexer.commenters = ""  # shlex would start one mid-word; bash does not
@@ -2062,9 +2212,29 @@ def _fold(path: str) -> str:
     return folded
 
 
+# No system opens a path longer than this as written (Linux takes 4096 bytes,
+# macOS 1024, Windows 32767 UTF-16 units), so a longer one names no file and
+# has no symlink to resolve. os.path.realpath walks a path one component at a
+# time and hands the system the whole path so far at each step, which costs
+# time in the square of its length: one Bash word of a few MB spelled as a
+# path (`a/a/a/...`) kept the guard past Claude Code's 600 s hook timeout
+# while a run latch is present.
+_MAX_RESOLVED = 32_768
+
+
 @functools.lru_cache(maxsize=None)
 def _real(path: str) -> str:
-    """os.path.realpath, memoized; the path unchanged when it cannot resolve."""
+    """os.path.realpath, memoized; the path unchanged when it cannot resolve,
+    or when it is longer than any system opens (_MAX_RESOLVED).
+
+    The deny side (_abs_forms, _roots) hands it a path abspath already
+    normalized, so a `..` that brings a long path under the bound is applied
+    first. _is_pinned hands it a path with its `..` steps still in it, and a
+    long one left unresolved is no pinned script, which withholds the
+    exemption: it fails closed.
+    """
+    if len(path) > _MAX_RESOLVED:
+        return path
     try:
         return os.path.realpath(path)
     except (OSError, ValueError, RuntimeError):

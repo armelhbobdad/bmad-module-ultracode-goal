@@ -2570,7 +2570,7 @@ def test_echo_mention_of_git_commit_is_allowed(tmp_path: Path) -> None:
     assert out is None
 
 
-_TOKENIZE_BODY = "    return shlex.split(segment)"
+_TOKENIZE_BODY = "    return list(lexer)"  # _tokenize's last line
 
 
 def test_anchoring_disabled_denies_echo_mention(tmp_path: Path) -> None:
@@ -7532,3 +7532,119 @@ def test_security_predicate_rejects_a_dropped_clause(clause: str) -> None:
     mutant = live.replace(clause, "")
     assert mutant != live, "the mutant must actually change the text"
     assert not _security_states_the_classifier_fails_closed(mutant)
+
+
+# --- #186: one long word -------------------------------------------------------
+# shlex's read_token adds each character to its token with `self.token +=
+# nextchar`, which copies the token every time, so one word of n characters
+# cost time in n squared, and os.path.realpath, which the recall gate runs on
+# every path a command names, hands the system the whole path so far at each
+# of its components. A Bash command holding one word of about 2.5 MB kept the
+# guard past Claude Code's 600 s hook timeout, and under the guard item's
+# "onFailure": "block" Claude Code then refuses the call.
+
+# The characters each lexer reading treats apart: blanks, quotes, the escape,
+# shell punctuation, a `#`, a masked punctuation character as _mask_quoted
+# writes it, and plain word characters.
+_LEX_ALPHABET = (
+    " ", "\t", "\r", "\n", "'", '"', "\\", ";", "&", "|", "(", ")",
+    "<", ">", "#", "", "a", "b", "-", "=", "$", "`", "*",
+)  # fmt: skip
+
+
+def _shlex_reading(text: str, *, punctuation: bool, lexer_class) -> tuple[str, object]:
+    """The words a lexer reads from text, configured as the guard configures
+    it, or the error it raises."""
+    if punctuation:
+        lexer = lexer_class(text, posix=True, punctuation_chars="();<>|&\n")
+        lexer.whitespace = " \t\r"
+    else:
+        lexer = lexer_class(text, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        return "words", list(lexer)
+    except ValueError as exc:
+        return "error", str(exc)
+
+
+def test_the_linear_lexer_reads_every_text_as_shlex_does(guard_module) -> None:
+    """The guard's lexer is shlex's read_token with the token kept in a list.
+    It must read every text exactly as the stdlib's does, in both readings
+    the guard makes (shlex.split's, and the punctuation-mode one that splits
+    segments), words and errors alike: every text of up to four characters
+    over the first ten of the alphabet, and seeded random texts of up to
+    forty over all of it."""
+    import itertools
+    import random
+    import shlex
+
+    texts = ["".join(chars) for size in range(5) for chars in itertools.product(_LEX_ALPHABET[:10], repeat=size)]
+    rng = random.Random(186)
+    texts += ["".join(rng.choice(_LEX_ALPHABET) for _ in range(rng.randint(5, 40))) for _ in range(10_000)]
+    for text in texts:
+        for punctuation in (False, True):
+            ours = _shlex_reading(text, punctuation=punctuation, lexer_class=guard_module._Lexer)
+            theirs = _shlex_reading(text, punctuation=punctuation, lexer_class=shlex.shlex)
+            assert ours == theirs, (text, punctuation)
+    assert guard_module._tokenize("a 'b c' d\\ e") == shlex.split("a 'b c' d\\ e")
+
+
+def test_one_long_word_is_read_in_linear_time(guard_module) -> None:
+    """Issue #186: at this size the stdlib lexer took about a minute for each
+    reading, and these four calls make several. The bound is generous for a
+    slow, busy runner; the readings take seconds."""
+    import time
+
+    n = 1_000_000
+    word = "a" * n
+    start = time.perf_counter()
+    assert guard_module._tokenize(word) == [word]
+    assert guard_module._quoted_segments("echo " + word) == [["echo", word]]
+    assert guard_module._git_writes("echo " + word) == set()
+    assert guard_module._git_writes(_V + " -m '" + word + "'") == {"commit"}
+    elapsed = time.perf_counter() - start
+    assert elapsed < 120.0, f"took {elapsed:.1f}s"
+
+
+def test_a_path_longer_than_any_system_opens_is_not_resolved(guard_module, monkeypatch, tmp_path: Path) -> None:
+    """os.path.realpath on a path of k components hands the system each prefix:
+    time in k times the path's length. Past _MAX_RESOLVED characters no system
+    opens the path, so it is left as written; a shorter one still resolves."""
+    calls: list[str] = []
+    real = os.path.realpath
+
+    def counting(path, *args, **kwargs):
+        calls.append(path)
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(guard_module.os.path, "realpath", counting)
+    bound = guard_module._MAX_RESOLVED
+    long_path = os.path.join(str(tmp_path), *(["a"] * (bound // 2 + 1)))
+    assert len(long_path) > bound
+    assert guard_module._real(long_path) == long_path
+    assert calls == []
+    short_path = str(tmp_path / "a")
+    guard_module._real(short_path)
+    assert calls == [short_path]
+    # A `..` that brings a long path back under the bound is applied first,
+    # by abspath, so the deny side still resolves it.
+    candidate = "a/" * (bound // 2) + "../" * (bound // 2) + "b"
+    forms = guard_module._abs_forms(candidate, str(tmp_path), [], str(tmp_path))
+    resolved = os.path.abspath(str(tmp_path / "b"))
+    assert calls[-1] == resolved
+    assert guard_module._fold(real(resolved)) in forms
+
+
+def test_one_long_path_word_under_a_latch_is_decided_in_time(store_world: _StoreWorld) -> None:
+    """End to end: a Bash word of 1.25 MB spelled as a path, with a run latch
+    present so the recall gate reads it too. It kept the guard past the
+    600 s Claude Code gives a hook; it is decided in seconds now. The bound
+    is half that timeout, generous for a slow, busy runner."""
+    import time
+
+    start = time.perf_counter()
+    code, out = _bash(store_world, "cat " + "a/" * 625_000)
+    elapsed = time.perf_counter() - start
+    assert code == 0, out
+    assert elapsed < 300.0, f"took {elapsed:.1f}s"

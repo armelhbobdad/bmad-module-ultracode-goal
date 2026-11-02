@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The `PreToolUse` guard now reads a Bash command holding one long word in time linear in the word's length. Its shell lexer, and the symlink resolution its Cross-Session Recall check runs on every path a command names, took time in the square of that length, so a single word of about 2.5 MB kept the guard past Claude Code's 600-second hook timeout, and with the guard armed with `"onFailure": "block"` Claude Code refused the call. Such a command is now decided in seconds. A path longer than any system opens (32,768 characters) is compared as written, with no symlink resolved, since it can name no file.
+issues: [186]
