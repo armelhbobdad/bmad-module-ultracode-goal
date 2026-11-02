@@ -3867,7 +3867,12 @@ _ZERO_FAILED_CASES = (
     "Node reports the row's test, still reads as a kill, since the row's `expect_red` then never appears beside a "
     "failure token, though it can read 0 failed when a test whose name holds the row's `expect_red` passes or is "
     "skipped in that file before the process dies or in a file Node lists before it, or when the last thing Node "
-    "prints for that file is an uncaught error that a child process printed)"
+    "prints for that file is an uncaught error that a child process printed; a module that calls `process.exit` "
+    "while a Node test file loads stops the file loading, yet Node prints for it what it prints for a process that "
+    "exits during the file's first test, so it reads as that kill does, and when you delegate automate, tell it to "
+    "write no replacement that makes a module exit while a Node test file loads; and in output that interleaves "
+    "the lines of several runs with no task-runner prefix to tell them apart, a Node test file that cannot load, or "
+    "whose process exits non-zero after the row's test passes, can still read as a kill)"
 )
 # 3.2.0's wording, which named neither a class pytest cannot collect nor Node's test runner.
 _ZERO_FAILED_CASES_BEFORE = (
@@ -4041,12 +4046,12 @@ _SKIP_CASE = "a Node test file's process that exits non-zero after the row's tes
         # A process that dies during a test read 0 failed, a gap only ever logged `unmeasured`.
         ("; a Node test file's process that exits or crashes during a test, before Node reports the row's test, still "
          "reads as a kill, since the row's `expect_red` then never appears beside a failure token, "
-         + _DIES_BUT_READS_0_FAILED + ")", ")", set(), False),
+         + _DIES_BUT_READS_0_FAILED + ";", ";", set(), False),
         # A second review of #179's fix: the bullet claimed every such kill, the two that can read 0 failed included.
-        (", " + _DIES_BUT_READS_0_FAILED + ")", ")", set(), False),
+        (", " + _DIES_BUT_READS_0_FAILED + ";", ";", set(), False),
         ("when a test whose name holds the row's `expect_red` passes or is skipped in that file before the process "
          "dies or in a file Node lists before it, or when", "when", set(), False),
-        (", or when the last thing Node prints for that file is an uncaught error that a child process printed)", ")",
+        (", or when the last thing Node prints for that file is an uncaught error that a child process printed;", ";",
          set(), False),
         # #186: a pass names the row's test as the kill path does, by a name that holds its `expect_red`, and can
         # stand in the dying file itself, so a bullet that names only a test of the same name in another file
@@ -4107,6 +4112,122 @@ def test_a_node_test_file_that_dies_during_a_test_is_a_kill(capture, expect_red)
     assert status == "MISATTRIBUTED"
     assert _reading(_bound(), status, detail) == "killed"
     assert _ZERO_FAILED_CASES in re.sub(r"\s+", " ", _bound())
+
+
+# The Node test files that run no test of their own and still read as a kill (the
+# review of the branch that holds #186's fixes): a module that calls
+# `process.exit` as the file loads, which Node reports as it reports an exit during
+# the file's first test, and output in which several runs' lines interleave with
+# no task-runner prefix, so that another run's lines can land between a file's
+# load error and its test, or another run's summary between the row's pass and
+# it. The bullet said a file Node cannot load reads 0 failed, named neither, and
+# never told automate to keep its replacements off the first, as the reused-server
+# caveat tells it for Playwright.
+_EXITS_AS_IT_LOADS = (
+    "a module that calls `process.exit` while a Node test file loads stops the file loading, yet Node prints for it "
+    "what it prints for a process that exits during the file's first test, so it reads as that kill does"
+)
+_NO_EXIT_AS_IT_LOADS = (
+    "and when you delegate automate, tell it to write no replacement that makes a module exit while a Node test file "
+    "loads"
+)
+_INTERLEAVED_KILLS = (
+    "in output that interleaves the lines of several runs with no task-runner prefix to tell them apart, a Node test "
+    "file that cannot load, or whose process exits non-zero after the row's test passes, can still read as a kill"
+)
+_NODE_LOAD_KILLS = frozenset({"exits as it loads", "automate briefed", "interleaved"})
+_PNPM_ANNOUNCED = re.compile(r"^\S+ test\$ ")
+_PNPM_PREFIX = re.compile(r"^\S+ test: ")
+
+
+def _node_load_kills(para: str) -> set[str]:
+    """What the cannot-run bullet's parenthesis names among the Node test
+    files that run no test and still read as a kill, and whether it tells
+    automate to write no replacement that makes a module exit as one loads."""
+    text = _zero_failed_parenthesis(para)
+    if text is None:
+        return set()
+    named = set()
+    if _EXITS_AS_IT_LOADS in text:
+        named.add("exits as it loads")
+    if _NO_EXIT_AS_IT_LOADS in text:
+        named.add("automate briefed")
+    if _INTERLEAVED_KILLS in text:
+        named.add("interleaved")
+    return named
+
+
+def _unprefixed(output: str) -> str:
+    """A pnpm capture as a command that runs the same packages at once prints
+    it with no prefix on their lines: each prefix removed, and the lines with
+    which pnpm announces each script dropped."""
+    return "".join(
+        _PNPM_PREFIX.sub("", line) for line in output.splitlines(keepends=True) if not _PNPM_ANNOUNCED.match(line)
+    )
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red", "case"),
+    [
+        ("node-spec-exits-as-it-loads", "mode is strict", "exits as it loads"),
+        ("node-tap-exits-as-it-loads", "mode is strict", "exits as it loads"),
+        ("pnpm-node-spec-load-failure-interleaved", "clamp at the bound", "interleaved"),
+        ("pnpm-node-tap-load-failure-interleaved", "clamp at the bound", "interleaved"),
+        ("pnpm-node-spec-exits-after-a-pass-interleaved", "clamp at the bound", "interleaved"),
+        ("pnpm-node-tap-exits-after-a-pass-interleaved", "clamp at the bound", "interleaved"),
+    ],
+)
+def test_a_node_test_file_that_runs_no_test_yet_reads_as_a_kill_is_named(capture, expect_red, case):
+    """Measured on `mutate_check.py`, over real `node --test` output: a
+    module that calls `process.exit` at its top level stops its test file
+    loading, and a file that cannot load, or whose process exits after the
+    row's test passes, does so too when pnpm's lines reach it with their
+    prefixes removed, as a command that runs several packages at once with no
+    prefix prints them. No test in that file ran, yet each reads as a kill,
+    and the cannot-run bullet, which said a file Node's test runner cannot
+    load reads 0 failed, now names each, and tells automate to write no
+    replacement that makes a module exit as a test file loads."""
+    mutate_check = _load_script("mutate_check")
+    output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
+    if case == "interleaved":
+        assert _reading(_bound(), *mutate_check._classify_red(output, expect_red)[:2]) == "cannot run"
+        output = _unprefixed(output)
+    status, detail, _ = mutate_check._classify_red(output, expect_red)
+    assert status == "MISATTRIBUTED"
+    assert _reading(_bound(), status, detail) == "killed"
+    assert case in _node_load_kills(_bound())
+
+
+def test_the_cannot_run_bullet_names_each_node_file_that_runs_no_test_yet_reads_as_a_kill():
+    assert _node_load_kills(_bound()) == _NODE_LOAD_KILLS
+    assert _ZERO_FAILED_CASES in re.sub(r"\s+", " ", _bound())
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "dropped"),
+    [
+        # The branch's wording: neither case, and no brief.
+        ("; " + _EXITS_AS_IT_LOADS + ", " + _NO_EXIT_AS_IT_LOADS + "; and " + _INTERLEAVED_KILLS + ")", ")",
+         _NODE_LOAD_KILLS),
+        ("; " + _EXITS_AS_IT_LOADS + ", " + _NO_EXIT_AS_IT_LOADS + ";", ";", {"exits as it loads", "automate briefed"}),
+        (", " + _NO_EXIT_AS_IT_LOADS, "", {"automate briefed"}),
+        ("so it reads as that kill does", "so it reads 0 failed", {"exits as it loads"}),
+        ("; and " + _INTERLEAVED_KILLS + ")", ")", {"interleaved"}),
+        ("a Node test file that cannot load, or whose process exits non-zero after the row's test passes, can",
+         "a Node test file whose process exits non-zero after the row's test passes can", {"interleaved"}),
+    ],
+    ids=["the-branch", "no-exit-at-load", "no-brief", "exit-at-load-0-failed", "no-interleaving", "no-load-failure"],
+)
+def test_node_load_kill_predicate_rejects_a_bullet_that_drops_one(old, new, dropped):
+    """The twin: the bullet as the branch wrote it, or with one of the two
+    cases dropped or misread, or without the brief, reads every other case as
+    before and not the one it dropped."""
+    para = _bound()
+    mutant = para.replace(old, new)
+    assert mutant != para, "the mutant must actually change the text"
+    assert _node_load_kills(mutant) == _NODE_LOAD_KILLS - dropped
+    assert _reads_zero_failed(mutant) == _ZERO_FAILED_ALL
+    assert _keeps_a_dying_process_a_kill(mutant)
 
 
 def test_a_red_with_no_failed_test_is_a_row_that_cannot_run():
