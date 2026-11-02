@@ -2452,6 +2452,11 @@ _HOOK_REJECTION_SENTENCES = {
         ("When that project fails to build, or its dependencies cannot be resolved", "b48ad9ab6c20"),
         ("Most read like `PreToolUse:Bash hook error: [<command>]: failed; blockin", "03a6eaa3f853"),
         ("It names each primitive the version lacks. 2.1.295 is the floor, the rel", "d3fb84ee20ae"),
+        # Reviewed (#186 review, 4.1.0, final pass): the resume after a Claude
+        # Code update re-arms the hooks of a run UCG 3.x armed, a settings
+        # write a headless session may be refused; nothing of a hook's
+        # rejection of the evidence commit.
+        ("On a run UCG 3.x armed, that resume is also the one that re-arms the hoo", "f128489bf7e7"),
         ("Start from the symptom you observed and follow it to the section that ex", "b8cdcd44aae2"),
         ("A drive that stops before a story's gate logs its verdict can leave one ", "c624e906aef8"),
     ),

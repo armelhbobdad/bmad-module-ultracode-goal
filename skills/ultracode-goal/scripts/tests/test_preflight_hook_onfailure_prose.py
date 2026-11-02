@@ -50,6 +50,7 @@ PREFLIGHT_CHECK = SCRIPTS / "preflight_check.py"
 REPO_ROOT = SCRIPTS.parents[2]
 SECURITY = REPO_ROOT / "SECURITY.md"
 TROUBLESHOOTING = REPO_ROOT / "docs" / "troubleshooting.md"
+GETTING_STARTED = REPO_ROOT / "docs" / "getting-started.md"
 
 
 def _read(path: Path) -> str:
@@ -488,6 +489,20 @@ _OPERATORS_REASON_FIRST = {
         "A resume rewrites the file too when the hooks need re-arming (the first resume after an update to 4.x "
         "does, unless it first escalates a reason that is yours to fix, such as a Claude Code older than 2.1.295)"
     ),
+    # Final pass: Getting started named the first resume after an update as
+    # the one that re-arms, with no exception, and the version floor's bullet
+    # sent the operator back to the resume after `claude update` without
+    # saying that this one makes the protected write.
+    "getting-started.md": (
+        "A resume that finds the hooks need re-arming (the first after an update to 4.x does, unless it first "
+        "escalates a reason that is yours to fix, such as a Claude Code older than 2.1.295; then the resume after "
+        "your fix does) writes the file again: make that resume attended too"
+    ),
+    "troubleshooting.md version floor": (
+        "On a run UCG 3.x armed, that resume is also the one that re-arms the hooks, a write to "
+        "`.claude/settings.local.json`: make it attended, since a headless one may be refused the write (see \"A "
+        "refused settings write\" below)."
+    ),
 }
 
 
@@ -499,6 +514,8 @@ def test_a_resume_re_arms_only_once_no_operators_reason_stands_beside_it(where: 
         "execute.md resume route lead": _flat(_resume_route()),
         "troubleshooting.md": _flat(_read(TROUBLESHOOTING)),
         "troubleshooting.md refused write": _flat(_read(TROUBLESHOOTING)),
+        "getting-started.md": _flat(_read(GETTING_STARTED)),
+        "troubleshooting.md version floor": _flat(_read(TROUBLESHOOTING)),
     }[where]
     assert _OPERATORS_REASON_FIRST[where] in text
     # The sweep's own rule, which these sentences now defer to.
