@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1767,14 +1768,39 @@ def test_a_later_cycle_with_no_readable_verdict_drops_the_earlier_one(tmp_path):
         "### Story 7-1: gate cycle 2",
         "### Story 7-1: gate, cycle 2",
         "### Story 7-1: gate #2",
+        "### Story 7-1: gate - cycle 2",
+        "### Story 7-1: gate \u2013 cycle 2",
+        "### Story 7-1: gate \u2014 cycle 2",
+        "### Story 7-1: gate: cycle 2",
+        "### Story 7-1: gate 2 (after the NFR fix)",
+        "### Story 7-1: gate (2)",
+        "### Story 7-1: re-gate",
+        "## Story 7-1: Regate (cycle 3)",
     ],
-    ids=["level-2", "level-4", "parenthesis", "level-2-parenthesis", "cycle-word", "comma-cycle", "number"],
+    ids=[
+        "level-2",
+        "level-4",
+        "parenthesis",
+        "level-2-parenthesis",
+        "cycle-word",
+        "comma-cycle",
+        "number",
+        "dash-cycle",
+        "en-dash-cycle",
+        "em-dash-cycle",
+        "colon-cycle",
+        "number-then-note",
+        "number-in-parenthesis",
+        "re-gate-alone",
+        "regate-parenthesis",
+    ],
 )
 def test_an_off_shape_later_cycle_heading_drops_the_earlier_verdict(tmp_path, later):
-    """A later cycle written at another heading level, or with a note after
-    `gate`, is still a later cycle. Read as no cycle, it kept the earlier
-    cycle's `reloop` under a cycle that logged no verdict object, so a story
-    whose last cycle advanced read `reloop`."""
+    """A later cycle written at another heading level, as `re-gate`, or with a
+    cycle number or a note that names a cycle after `gate`, is still a later
+    cycle. Read as no cycle, it kept the earlier cycle's `reloop` under a cycle
+    that logged no verdict object, so a story whose last cycle advanced read
+    `reloop`."""
     body = _trail_over(
         tmp_path,
         "# Decision log\n\n### Story 7-1: gate\n\n" + _fenced(_FAIL) + later + "\n\nGate: PASS, verdict advance.\n",
@@ -1795,6 +1821,12 @@ def test_an_off_shape_later_cycle_heading_drops_the_earlier_verdict(tmp_path, la
         "### Story 7-1: gate (cycle 2",
         "### Story 7-2: gate (cycle 2)",
         "## Story 7-2: gate",
+        "### Story 7-1: gate (skipped)",
+        "### Story 7-1: gate (re-loop notes)",
+        "#### Story 7-1: gate (evidence commit)",
+        "### Story 7-1: gate (not re-run yet: NFR fix owed)",
+        "### Story 7-1: gate (AC-3 waived)",
+        "### Story 7-1: gate: 2 ACs still red",
     ],
     ids=[
         "gate-gap",
@@ -1806,19 +1838,54 @@ def test_an_off_shape_later_cycle_heading_drops_the_earlier_verdict(tmp_path, la
         "unclosed-parenthesis",
         "another-story-annotated",
         "another-story-level-2",
+        "note-skipped",
+        "note-re-loop",
+        "note-evidence-commit",
+        "note-not-re-run",
+        "note-with-an-ac-number",
+        "number-then-text",
     ],
 )
 def test_a_heading_that_only_starts_like_a_gate_cycle_keeps_the_verdict(tmp_path, later):
     """Twin of `test_an_off_shape_later_cycle_heading_drops_the_earlier_verdict`:
-    a reader that took any tail starting with `gate`, or any story's cycle
-    heading, as this story's later cycle reds here. Each heading is no cycle
-    of 7-1's, so the downgraded `reloop` before it stands."""
+    a reader that took any tail starting with `gate`, any note in parentheses
+    after it, or any story's cycle heading, as this story's later cycle reds
+    here. Each heading is no cycle of 7-1's, so the downgraded `reloop` before
+    it stands: read as a cycle with no verdict object under it, the heading
+    would turn that `reloop` into the gate file's mapped `advance`."""
     body = _trail_over(
         tmp_path,
         "# Decision log\n\n### Story 7-1: gate\n\n" + _fenced(_DOWNGRADED) + later + "\n\nNotes only.\n",
     )
     assert {row[3] for row in rows(body)} == {"reloop"}
     assert _source_line(body) == "- Verdict source: recorded in the decision log"
+
+
+def test_a_note_heading_after_a_defer_keeps_the_defer(tmp_path):
+    """A `defer` advances the story on a gate file the gate table maps to
+    `advance`, and the evidence commit that follows can be logged under a note
+    heading. Read as a cycle, that heading turned the recorded `defer` into the
+    mapped `advance`."""
+    deferred = {"verdict": "defer", "gate_status": "PASS", "reasons": ["a non-critical review finding deferred"]}
+    body = _trail_over(
+        tmp_path,
+        "# Decision log\n\n### Story 7-1: gate\n\n"
+        + _fenced(deferred)
+        + "#### Story 7-1: gate (evidence commit)\n\nCommitted the gate evidence as abc1234.\n",
+    )
+    assert {row[3] for row in rows(body)} == {"defer"}
+    assert _source_line(body) == "- Verdict source: recorded in the decision log"
+
+
+def test_the_cycle_tail_reads_a_long_blank_run_in_linear_time():
+    """The tail is matched against every story heading of a run's own log. Two
+    blank runs in sequence around an optional separator split a run of n blanks
+    in n ways before failing: 16,000 blanks took 8 s, measured. Read once, the
+    same run takes milliseconds."""
+    tail = ": gate" + " " * 16_000 + "x"
+    started = time.perf_counter()
+    assert gate_trail._GATE_CYCLE_TAIL.fullmatch(tail) is None
+    assert time.perf_counter() - started < 1.0
 
 
 @pytest.mark.parametrize(
@@ -2210,9 +2277,12 @@ def _heading_rule_failures(text: str, tmp_path: Path) -> list[str]:
         "one whose id is a key `sprint-status.yaml` lists, so a prose heading such as `### Story order` ends none",
         "A later heading in this shape for the story replaces what an earlier one's entries recorded, even "
         "when no verdict object follows it",
-        "The trail reads a later heading for the story at another level, or with a note in parentheses or a cycle "
-        "number after `gate` (`## Story <story_id>: gate`, `### Story <story_id>: gate (cycle 2)`), as a later "
-        "cycle too",
+        "The trail reads a later heading for the story as a later cycle too when only its level differs "
+        "(`## Story <story_id>: gate`), or when it says `re-gate` or `regate` for `gate`",
+        "The same holds when `gate` is followed by a cycle number (`2`, `#2` or `cycle 2`) after a blank, a comma, "
+        "a semicolon, a colon or a dash, which a note in parentheses may follow",
+        "and when `gate` is followed by a note in parentheses that says `cycle` or `re-gate`, or holds only a number",
+        "Any other text after `gate` makes the heading no cycle, a note that names no cycle included",
         "A later heading of another shape for the story (`### Story <story_id>: re-loop 1`) is no cycle: it "
         "replaces that verdict only with a verdict object of its own",
         "never an earlier cycle's verdict",
@@ -2263,7 +2333,9 @@ def test_the_heading_pin_reds_on_a_heading_only_a_numeric_key_survives(tmp_path)
         "`verdict` after such a heading, ",
         "The heading's entries run to the next heading the trail reads as a story's: ",
         "A later heading in this shape for the story replaces what an earlier one's entries recorded, ",
-        "The trail reads a later heading for the story at another level, ",
+        "The trail reads a later heading for the story as a later cycle too when only its level differs ",
+        "The same holds when `gate` is followed by a cycle number ",
+        "Any other text after `gate` makes the heading no cycle, ",
         "A later heading of another shape for the story (`### Story <story_id>: re-loop 1`) is no cycle: ",
     ],
 )
@@ -2280,22 +2352,49 @@ def test_the_heading_pin_reds_without_each_reader_sentence(tmp_path, sentence):
     assert failures and all(f.startswith("the rule does not say") for f in failures), failures
 
 
+def _gate_md_heading_examples() -> tuple[list[str], list[str]]:
+    """The headings gate.md gives as a later cycle in another shape, and the
+    ones it gives as no cycle."""
+    paragraph = _heading_paragraph(GATE.read_text(encoding="utf-8"))
+    start = paragraph.index("The trail reads a later heading for the story as a later cycle too")
+    other = paragraph.index("Any other text after `gate` makes the heading no cycle", start)
+    end = paragraph.index(". ", other)
+    pattern = r"`(#{2,4} Story <story_id>: [^`]*)`"
+    return re.findall(pattern, paragraph[start:other]), re.findall(pattern, paragraph[other:end])
+
+
+def _read_under(tmp_path: Path, heading: str) -> dict[str, str]:
+    log = tmp_path / "decision-log.md"
+    log.write_text(
+        "### Story 7-1: gate\n\n" + _fenced(_FAIL) + heading.replace("<story_id>", "7-1") + "\n\nNo verdict.\n",
+        encoding="utf-8",
+    )
+    return gate_trail.recorded_verdicts(log)
+
+
 def test_each_off_shape_heading_gate_md_names_is_read_as_a_later_cycle(tmp_path):
     """The examples gate.md gives of a later cycle in another shape are ones the
     trail reads that way: under each, with no verdict object, the earlier
     cycle's `reloop` is dropped."""
-    paragraph = _heading_paragraph(GATE.read_text(encoding="utf-8"))
-    start = paragraph.index("The trail reads a later heading for the story at another level")
-    sentence = paragraph[start : paragraph.index(". ", start)]
-    examples = re.findall(r"`(#{2,4} Story <story_id>: [^`]*)`", sentence)
-    assert examples == ["## Story <story_id>: gate", "### Story <story_id>: gate (cycle 2)"]
-    for example in examples:
-        log = tmp_path / "decision-log.md"
-        log.write_text(
-            "### Story 7-1: gate\n\n" + _fenced(_FAIL) + example.replace("<story_id>", "7-1") + "\n\nNo verdict.\n",
-            encoding="utf-8",
-        )
-        assert gate_trail.recorded_verdicts(log) == {}, example
+    cycles, _ = _gate_md_heading_examples()
+    assert cycles == [
+        "## Story <story_id>: gate",
+        "### Story <story_id>: re-gate",
+        "### Story <story_id>: gate - cycle 2",
+        "### Story <story_id>: gate (cycle 2)",
+    ]
+    for example in cycles:
+        assert _read_under(tmp_path, example) == {}, example
+
+
+def test_each_heading_gate_md_names_as_no_cycle_keeps_the_verdict(tmp_path):
+    """Twin: the note gate.md gives as no cycle is read that way, so the earlier
+    cycle's `reloop` stands under it. A reader that took any note in
+    parentheses as a cycle reds here."""
+    _, others = _gate_md_heading_examples()
+    assert others == ["### Story <story_id>: gate (skipped)"]
+    for example in others:
+        assert _read_under(tmp_path, example) == {"7-1": "reloop"}, example
 
 
 # ---------------------------------------------------------------------------
