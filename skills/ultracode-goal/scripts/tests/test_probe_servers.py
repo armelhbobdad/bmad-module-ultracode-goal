@@ -363,32 +363,36 @@ def _gone(pid: int) -> bool:
 
 
 @contextlib.contextmanager
-def _left_up(cwd: Path, port: int):
-    """A server a runner left up, from `cwd`: its pid, which is its process group's."""
+def _left_up(cwd: Path, port: int, serve: str = _SERVE):
+    """A server a runner left up, from `cwd`: its pid, which is its process
+    group's, then each pid `serve` prints after `ready`."""
     start = subprocess.Popen(
-        [sys.executable, "-c", _LAUNCHER, _SERVE, str(port)],
+        [sys.executable, "-c", _LAUNCHER, serve, str(port)],
         cwd=cwd,
         start_new_session=True,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         text=True,
     )
-    server = None
+    pids: list[int] = []
     try:
         line = start.stdout.readline().split()
-        if len(line) != 2 or line[1] != "ready":
+        if len(line) < 2 or line[1] != "ready":
             pytest.skip(f"no server started on 127.0.0.1:{port}")
-        server = int(line[0])
+        pids = [int(line[0]), *(int(pid) for pid in line[2:])]
         # The runner's teardown: the start command's process group, with SIGKILL.
         os.killpg(start.pid, signal.SIGKILL)
         start.wait(timeout=10)
-        yield server
+        yield tuple(pids)
     finally:
         if start.poll() is None:
             os.killpg(start.pid, signal.SIGKILL)
             start.wait(timeout=10)
-        if server is not None and not _gone(server):
-            os.killpg(server, signal.SIGKILL)
+        if pids and not _gone(pids[0]):
+            os.killpg(pids[0], signal.SIGKILL)
+        for pid in pids[1:]:
+            if not _gone(pid):
+                os.kill(pid, signal.SIGKILL)
 
 
 def _baseline(tmp_path: Path, age: float = 60.0) -> Path:
@@ -415,7 +419,7 @@ def test_a_server_the_run_left_up_in_the_main_tree_is_stopped(tmp_path, capsys):
     marker = _baseline(tmp_path)
     port = _free_port()
     url = f"http://127.0.0.1:{port}"
-    with _left_up(main_tree, port) as server:
+    with _left_up(main_tree, port) as (server,):
         found = probe_servers.probe([url])
         assert [os.path.realpath(entry["cwd"]) for entry in found["answering"]] == [os.path.realpath(main_tree)]
         code = probe_servers.main(["--url", url, "--stop-since", str(marker), "--root", str(main_tree)])
@@ -437,7 +441,7 @@ def test_a_server_from_a_folder_of_its_own_tree_is_stopped_once_that_folder_is_r
     marker = _baseline(tmp_path)
     port = _free_port()
     url = f"http://127.0.0.1:{port}"
-    with _left_up(worktree, port) as server:
+    with _left_up(worktree, port) as (server,):
         worktree.rmdir()
         code = probe_servers.main(["--url", url, "--stop-since", str(marker), "--root", str(worktree)])
         out = json.loads(capsys.readouterr().out)
@@ -455,7 +459,7 @@ def test_a_host_the_lookup_cannot_encode_after_a_servers_url_stops_nothing(tmp_p
     main_tree.mkdir()
     marker = _baseline(tmp_path)
     port = _free_port()
-    with _left_up(main_tree, port) as server:
+    with _left_up(main_tree, port) as (server,):
         code = probe_servers.main(
             ["--url", f"http://127.0.0.1:{port}", "--url", _UNENCODABLE_HOSTS[-1], "--stop-since", str(marker),
              "--root", str(main_tree)]
@@ -464,6 +468,54 @@ def test_a_host_the_lookup_cannot_encode_after_a_servers_url_stops_nothing(tmp_p
     assert code == 2
     captured = capsys.readouterr()
     assert captured.out == "" and f"REFUSED: {_UNENCODABLE_HOSTS[-1]}: " in captured.err
+
+
+# A server whose forked worker shares its socket and, on SIGTERM, leaves the
+# process group, so the SIGKILL sent to that group misses it. The worker sets
+# its handler before the server says it is ready.
+_SERVE_WITH_A_WORKER_THAT_LEAVES = (
+    "import os, signal, socket, sys, time\n"
+    "s = socket.socket()\n"
+    "s.bind(('127.0.0.1', int(sys.argv[1])))\n"
+    "s.listen()\n"
+    "r, w = os.pipe()\n"
+    "worker = os.fork()\n"
+    "if worker == 0:\n"
+    "    signal.signal(signal.SIGTERM, lambda *_: os.setpgid(0, 0))\n"
+    "    os.write(w, b'1')\n"
+    "    while True:\n"
+    "        time.sleep(600)\n"
+    "os.read(r, 1)\n"
+    "print('ready', worker, flush=True)\n"
+    "time.sleep(600)\n"
+)
+
+
+@_LINUX_ONLY
+def test_a_server_stopped_only_in_part_is_named_with_what_it_stopped(tmp_path, monkeypatch, capsys):
+    """The SIGTERM ends the server and its worker leaves the group, so the
+    SIGKILL misses it: the server it ended is listed under `stopped`, marked
+    `partial`, and the URL, which the worker still answers, under `left`.
+    Before, this read as nothing stopped, and the ended server was named
+    nowhere."""
+    main_tree = tmp_path / "main"
+    main_tree.mkdir()
+    marker = _baseline(tmp_path)
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    monkeypatch.setattr(probe_servers, "_GRACE", 0.5)
+    with _left_up(main_tree, port, _SERVE_WITH_A_WORKER_THAT_LEAVES) as (server, worker):
+        code = probe_servers.main(["--url", url, "--stop-since", str(marker), "--root", str(main_tree)])
+        out = json.loads(capsys.readouterr().out)
+        assert _gone(server) and not _gone(worker)
+    assert code == 1
+    assert [(entry["url"], entry["process_groups"], entry["pids"], entry["partial"]) for entry in out["stopped"]] == [
+        (url, [server], [server], True)
+    ]
+    assert [entry["url"] for entry in out["answering"]] == [url]
+    assert [entry["reason"] for entry in out["left"]] == [
+        f"some of its processes still ran after SIGTERM and SIGKILL (pid {worker})"
+    ]
 
 
 def _left_up_reason(capsys, url: str, marker: Path, root: Path) -> tuple[int, dict]:
@@ -484,7 +536,7 @@ def test_a_server_from_outside_every_root_is_left_up(tmp_path, capsys):
     marker = _baseline(tmp_path)
     port = _free_port()
     url = f"http://127.0.0.1:{port}"
-    with _left_up(elsewhere, port) as server:
+    with _left_up(elsewhere, port) as (server,):
         code, out = _left_up_reason(capsys, url, marker, main_tree)
         assert not _gone(server)
     assert code == 1
@@ -499,7 +551,7 @@ def test_a_server_that_started_before_the_marker_is_left_up(tmp_path, capsys):
     main_tree.mkdir()
     port = _free_port()
     url = f"http://127.0.0.1:{port}"
-    with _left_up(main_tree, port) as server:
+    with _left_up(main_tree, port) as (server,):
         marker = _baseline(tmp_path, age=0.0)
         code, out = _left_up_reason(capsys, url, marker, main_tree)
         assert not _gone(server)
@@ -780,7 +832,8 @@ def test_the_stop_signals_the_group_and_reads_the_url_again(tmp_path, monkeypatc
     assert sent == [(40, signal.SIGTERM)]
     assert out["answering"] == [] and out["left"] == []
     assert out["stopped"] == [
-        {"url": f"http://127.0.0.1:{port}", "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": [40, 41]}
+        {"url": f"http://127.0.0.1:{port}", "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": [40, 41],
+         "partial": False}
     ]
 
 
@@ -799,8 +852,44 @@ def test_a_group_that_does_not_exit_is_left_up_and_said_so(tmp_path, monkeypatch
             [f"http://127.0.0.1:{port}"], stop, proc=proc, kill=lambda group, sig: sent.append((group, sig))
         )
     assert [sig for _, sig in sent] == [signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)]
+    # Nothing exited, so nothing was stopped; the reason names the processes the signals did not end.
     assert out["stopped"] == []
-    assert out["left"][0]["reason"] == "its processes still ran after SIGTERM and SIGKILL"
+    assert out["left"][0]["reason"] == "its processes still ran after SIGTERM and SIGKILL (pids 40, 41)"
+
+
+def test_a_group_stopped_only_in_part_names_the_processes_that_exited(tmp_path, monkeypatch):
+    """A process that leaves its group on SIGTERM outlives the SIGKILL sent to
+    that group: the processes the signals ended are listed under `stopped`,
+    marked `partial`, and the URL under `left` with the ones that still run.
+    Before, a partial stop was reported as nothing stopped."""
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP)
+    monkeypatch.setattr(probe_servers, "_reads_processes", lambda _proc: True)
+    monkeypatch.setattr(probe_servers, "_caller", lambda _proc: _CALLER)
+    monkeypatch.setattr(probe_servers, "_clock_ticks", lambda: _TICKS)
+    monkeypatch.setattr(probe_servers, "_GRACE", 0.1)
+    monkeypatch.setattr(probe_servers, "_listening_inodes", lambda _port, _proc, _reached=None: {"777"})
+    sent = []
+
+    def kill(group, sig):
+        sent.append((group, sig))
+        # The group's leader exits; its worker (41) does not.
+        with contextlib.suppress(FileNotFoundError):
+            (proc / "40" / "stat").unlink()
+
+    with _listener() as sock:
+        port = sock.getsockname()[1]
+        url = f"http://127.0.0.1:{port}"
+        stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+        out = probe_servers.probe([url], stop, proc=proc, kill=kill)
+    assert sent == [(40, signal.SIGTERM), (40, getattr(signal, "SIGKILL", signal.SIGTERM))]
+    assert out["stopped"] == [
+        {"url": url, "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": [40], "partial": True}
+    ]
+    assert [entry["url"] for entry in out["answering"]] == [url]
+    assert out["left"] == [
+        {"url": url, "port": port, "cwd": "/p/apps/web",
+         "reason": "some of its processes still ran after SIGTERM and SIGKILL (pid 41)"}
+    ]
 
 
 def _stop_mode(monkeypatch) -> None:
@@ -948,8 +1037,8 @@ def test_a_server_something_keeps_starting_is_left_up_after_a_bounded_number_of_
     monkeypatch.setattr(probe_servers, "_caller", lambda _proc: _CALLER)
     monkeypatch.setattr(probe_servers, "_clock_ticks", lambda: _TICKS)
     monkeypatch.setattr(probe_servers, "_listening_inodes", lambda _port, _proc, _reached=None: {"777"})
-    # Each stop "succeeds", and the server answers again: a supervisor restarts it.
-    monkeypatch.setattr(probe_servers, "_stop_groups", lambda _proc, _members, _kill=None: True)
+    # Each stop "succeeds" (no process still runs), and the server answers again: a supervisor restarts it.
+    monkeypatch.setattr(probe_servers, "_stop_groups", lambda _proc, _members, _kill=None: [])
     with _listener() as sock:
         port = sock.getsockname()[1]
         stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))

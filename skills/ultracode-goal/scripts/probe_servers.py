@@ -74,7 +74,10 @@ one that holds a process that started it, and it stops nothing for a URL whose
 connection reached an address that is not one of this host's own, since no
 server here took that connection. It sends the group SIGTERM, then SIGKILL to
 what is left after a few seconds, and checks the URL again: a URL that still
-answers is read as above, once more, until a bounded number of stops. On a
+answers is read as above, once more, until a bounded number of stops. A
+process still running after the SIGKILL (one that left its group on the
+SIGTERM, say) leaves the server stopped only in part: the probe names the
+processes that exited and the ones still running, and stops it no more. On a
 system with no /proc to read it stops nothing.
 
 Usage:
@@ -84,13 +87,19 @@ Usage:
 Output: JSON on stdout, `{"answering": [{"url", "port", "cwd"}], "free":
 [<url>, ...]}`. With `--stop-since`, `answering` and `free` say what answers
 once it has stopped what it could, and two keys are added: `stopped`, each
-server it stopped (`{"url", "port", "cwd", "process_groups", "pids"}`), and
-`left`, each URL that still answers with the reason it left that server up
-(`{"url", "port", "cwd", "reason"}`). Exit 0 when no URL answers, 1 when any
-does, and 2 when a URL has no host, a host the lookup cannot encode (an empty
-label, or one over 63 characters), or a port that is not a number from 0 to
-65535, or when the `--stop-since` file cannot be read: every URL and the file
-are read before anything is stopped, so a refusal stops nothing.
+server it stopped, in whole or in part (`{"url", "port", "cwd",
+"process_groups", "pids", "partial"}`: the groups it signalled, the processes
+that exited, and whether any of its processes still ran after the SIGKILL),
+and `left`, each URL that still answers with the reason it left that server
+up (`{"url", "port", "cwd", "reason"}`). A server stopped only in part is
+listed under both, and its `left` reason names the processes still running;
+one none of whose processes exited is listed under `left` alone, its reason
+naming them all, so every process the probe signals is named. Exit 0 when no
+URL answers, 1 when any does, and 2 when a URL has no host, a host the lookup
+cannot encode (an empty label, or one over 63 characters), or a port that is
+not a number from 0 to 65535, or when the `--stop-since` file cannot be read:
+every URL and the file are read before anything is stopped, so a refusal
+stops nothing.
 """
 
 from __future__ import annotations
@@ -415,11 +424,12 @@ def _not_the_runs(
     return None, members
 
 
-def _stop_groups(proc: Path, members: list[_Process], kill=None) -> bool:
+def _stop_groups(proc: Path, members: list[_Process], kill=None) -> list[_Process]:
     """SIGTERM to each process group, then SIGKILL to what is left of it after
-    a grace period: whether every one of `members` has exited. A process is
-    known by its start time as well as its pid, so a pid the system has given
-    to a new process since does not count as one still running."""
+    a grace period: which of `members` still run after both, none when every
+    one has exited. A process is known by its start time as well as its pid,
+    so a pid the system has given to a new process since does not count as one
+    still running."""
     kill = kill or os.killpg
     groups = sorted({member.pgrp for member in members})
 
@@ -442,8 +452,9 @@ def _stop_groups(proc: Path, members: list[_Process], kill=None) -> bool:
         while alive() and time.monotonic() < deadline:
             time.sleep(0.05)
         if not alive():
-            return True
-    return False
+            return []
+    # A process that left its group after the SIGTERM (or one SIGKILL cannot end yet), which the SIGKILL missed.
+    return alive()
 
 
 def _reads_processes(proc: Path) -> bool:
@@ -491,19 +502,29 @@ def probe(urls: list[str], stop: _Stop | None = None, proc: Path | None = None, 
                 members = []
             else:
                 reason, members = _not_the_runs(proc, port, reached, stop, caller, ticks)
-            if reason is None and not _stop_groups(proc, members, kill):
-                reason = "its processes still ran after SIGTERM and SIGKILL"
+            if reason is None:
+                running = _stop_groups(proc, members, kill)
+                exited = [member for member in members if member not in running]
+                # Each process the signals ended is named, those of a server they ended only in part included.
+                if exited:
+                    stopped.append(
+                        {
+                            **entry,
+                            "process_groups": sorted({member.pgrp for member in members}),
+                            "pids": sorted(member.pid for member in exited),
+                            "partial": bool(running),
+                        }
+                    )
+                if running:
+                    pids = sorted(member.pid for member in running)
+                    reason = (
+                        f"{'some of its' if exited else 'its'} processes still ran after SIGTERM and SIGKILL "
+                        f"(pid{'s' if len(pids) > 1 else ''} {', '.join(map(str, pids))})"
+                    )
             if reason is not None:
                 answering.append(entry)
                 left.append({**entry, "reason": reason})
                 break
-            stopped.append(
-                {
-                    **entry,
-                    "process_groups": sorted({member.pgrp for member in members}),
-                    "pids": sorted(member.pid for member in members),
-                }
-            )
     result = {"answering": answering, "free": free}
     if stop is not None:
         result.update(stopped=stopped, left=left)
