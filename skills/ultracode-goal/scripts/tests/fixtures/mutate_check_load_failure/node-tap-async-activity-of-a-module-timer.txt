@@ -1,0 +1,29 @@
+TAP version 13
+# Subtest: quick one
+ok 1 - quick one
+  ---
+  duration_ms: 0.868458
+  type: 'test'
+  ...
+# Error: A resource generated asynchronous activity after the test ended. This activity created the error "Error: module timer" which triggered an uncaughtException event, caught by the test runner.
+# Subtest: res.test.mjs
+not ok 1 - res.test.mjs
+  ---
+  duration_ms: 117.647951
+  type: 'test'
+  location: '/home/dev/work/async-activity/res.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 126.769662

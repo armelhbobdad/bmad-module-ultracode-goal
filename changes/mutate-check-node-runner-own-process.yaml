@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `mutate_check.py` now reads 0 failed, a row that cannot run, when Node's test runner runs no test because the mutant stopped it in its own process, as the gate's reference says a test file Node cannot load reads. Under `node --test --test-isolation=none`, which imports every test file in the runner's own process, Node reports a file that throws as it loads as a failed test named after it, with the error the file threw and no `Node.js v` line, and the row read as a kill; such a test now comes off the failure count, and a test that fails beside it still reads as the kill. A mutant that makes the module `--test-global-setup` names throw stops the runner before any test, with no summary, and read as a kill as well; it now reads 0 failed unless another summary in the output counted a failure, and the gate's reference names that case.

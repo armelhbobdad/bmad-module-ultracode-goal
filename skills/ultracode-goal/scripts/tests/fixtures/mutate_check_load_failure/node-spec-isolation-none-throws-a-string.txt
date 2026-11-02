@@ -1,0 +1,16 @@
+✔ other passes (1.057472ms)
+✖ str.test.mjs (0.196605ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16.995748
+
+✖ failing tests:
+
+test at str.test.mjs:1:1
+✖ str.test.mjs (0.196605ms)
+  'a plain string'

@@ -2598,3 +2598,321 @@ def test_real_node_test_file_that_exits_during_a_test_named_with_a_hash_is_a_kil
     expected = {index: ("MISATTRIBUTED", _NEVER_APPEARS.format(row["expect_red"])) for index, row in enumerate(rows)}
     assert _ledger_rows(proc.stdout) == expected, proc.stdout + proc.stderr
     assert proc.returncode == 1
+
+
+# --- What the final review of the branch that holds #186's fixes found ---------
+#
+# Runs in which no test went red read as a kill. Node reports a test's
+# asynchronous activity after it ended (a timer the test started that throws)
+# on a line that names the test and holds `Error` and `fail`, lists the test
+# passed and fails only the file's process. A file's test came off the count
+# only beside a pass of the row's test, so a second such file read as a kill,
+# and the line itself as the row's failure: a clean `KILLED`. Under
+# `--test-isolation=none` Node imports every test file in its own process and
+# reports one that cannot load as a test whose error is the one the file
+# threw, with no `Node.js v` line, and a global setup that throws stops the
+# runner before any test, with no summary: each read as a kill too.
+#
+# The captures (Node 24.21.0, local paths replaced with /home/dev/work), each
+# from the spec reporter (node-spec-*) and with `--test-reporter=tap`
+# (node-tap-*):
+#   node-*-async-activity-after-tests-in-two-files
+#                       `node --test` over a.test.mjs and b.test.mjs: the
+#                       mutant (`pending.size > 100` to `> 0` in cache.mjs)
+#                       makes the timer `remember` starts throw after each
+#                       file's one test (`remember returns the value`,
+#                       `remember keeps a second key`) passes
+#   node-*-async-rejection-after-the-test-ends
+#                       `node --test rej.test.mjs`: the test `rejects later`
+#                       starts a timer that rejects a promise after it ends
+#   node-*-async-activity-of-a-module-timer
+#                       `node --test res.test.mjs`: a timer the file starts at
+#                       its top level, which no test owns, throws after its one
+#                       test, `quick one`, passes
+#   node-*-exits-after-tests-pass-in-two-files
+#                       `node --test` over a.test.mjs and z.test.mjs: the
+#                       mutant (`process.exitCode = 0;` to `1;` in flush.mjs,
+#                       which both import) makes each file's process exit 1
+#                       after its one test (`flush keeps its value`, `flush
+#                       keeps another value`) passes
+#   node-*-isolation-none-load-failure
+#                       `node --test --test-isolation=none config.test.mjs
+#                       other.test.mjs`: the mutant (`mode = 'strict'` to
+#                       `'loose'` in config.mjs) makes config.mjs throw as
+#                       config.test.mjs imports it
+#   node-*-isolation-none-syntax-error
+#                       the same over syntax.test.mjs, whose clamp.mjs holds
+#                       `if (x > hi {`: Node reports the file after the other
+#                       file's pass
+#   node-*-isolation-none-throws-a-string
+#                       the same over str.test.mjs, which throws a string as
+#                       it loads (`null: 'a plain string'` in TAP)
+#   node-*-isolation-none-kill-beside-a-load-failure
+#                       `node --test --test-isolation=none a.test.mjs
+#                       b.test.mjs`: `cap is pinned` fails in a.test.mjs, and
+#                       limit.mjs throws as b.test.mjs imports it
+#   node-global-setup-throws
+#                       `node --test --test-global-setup=setup.mjs
+#                       db.test.mjs`, either reporter: the mutant (`rows = []`
+#                       in seed.mjs) makes the `seed()` setup.mjs calls throw
+
+
+def _mutate_check_module():
+    spec = importlib.util.spec_from_file_location("mutate_check_final_review", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    "capture", ["node-spec-async-activity-after-tests-in-two-files", "node-tap-async-activity-after-tests-in-two-files"]
+)
+@pytest.mark.parametrize("expect_red", ["remember returns the value", "remember keeps a second key", "remember forgets"])
+def test_node_files_that_report_asynchronous_activity_after_a_test_read_0_failed(tmp_path, capture, expect_red):
+    """Each file's test passes, a timer it started throws after it ends, and
+    each file's process fails. Only the file whose lines reported a pass of
+    the row's test came off the count, so the other read as a kill, and the
+    line that reports the activity, which names the row's test beside
+    `Error` and `fail`, read as its failure: `KILLED`, "exactly ... went red".
+    Each file whose lines report such activity comes off now, whatever test
+    the row names, and the run reads 0 failed."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        "node-spec-async-rejection-after-the-test-ends",
+        "node-tap-async-rejection-after-the-test-ends",
+        "node-spec-async-activity-of-a-module-timer",
+        "node-tap-async-activity-of-a-module-timer",
+    ],
+)
+def test_each_form_of_node_s_report_of_asynchronous_activity_takes_its_file_off(tmp_path, capture):
+    """Node reports a promise rejected after its test ended as it reports a
+    timer that throws then, naming the `unhandledRejection` event, and an
+    error no test owns, such as one a timer the file started at its top level
+    threw, as `A resource generated asynchronous activity after the test
+    ended`. Each fails only the file's process, whatever test the row names:
+    a row that names a test in another file reads 0 failed, where it read as
+    a kill."""
+    proc = _read_capture(tmp_path, capture, "a test in another file")
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize("expect_red", ["remember returns the value", "remember keeps a second key"])
+def test_a_report_of_asynchronous_activity_names_no_failed_test(reporter, expect_red):
+    """The report names a test Node lists as passed, so it is no line that
+    names the row's test beside a failure, whatever count is read."""
+    module = _mutate_check_module()
+    output = (LOAD_FAILURES / f"node-{reporter}-async-activity-after-tests-in-two-files.txt").read_text(encoding="utf-8")
+    lines, _ = module._output_tasks(output)
+    assert any(module._NODE_ASYNC_AFTER_END_RE.match(line) and expect_red in line for line in lines)
+    assert not module._named_in_failure_context(lines, expect_red)
+
+
+@pytest.mark.parametrize(
+    "capture", ["node-spec-exits-after-tests-pass-in-two-files", "node-tap-exits-after-tests-pass-in-two-files"]
+)
+@pytest.mark.parametrize("expect_red", ["flush keeps its value", "flush keeps another value"])
+def test_two_node_files_that_exit_after_their_tests_pass_still_read_as_a_kill(tmp_path, capture, expect_red):
+    """Pinned as it stands, a limit the module docstring and the gate's
+    reference state: Node prints a file whose tests all pass and whose process
+    then exits non-zero just as it prints one whose process dies during a
+    test, so only the file whose lines report a pass of the row's test comes
+    off the count. The other counts, and the row reads as a kill though no
+    test went red. A command that runs only the row's test file reads 0 failed
+    (the real run below)."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NEVER_APPEARS.format(expect_red))}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node-spec-isolation-none-load-failure", "mode is strict"),
+        ("node-tap-isolation-none-load-failure", "mode is strict"),
+        ("node-spec-isolation-none-syntax-error", "clamp at the bound"),
+        ("node-tap-isolation-none-syntax-error", "clamp at the bound"),
+        ("node-spec-isolation-none-throws-a-string", "str runs"),
+        ("node-tap-isolation-none-throws-a-string", "str runs"),
+        ("node-global-setup-throws", "rows are seeded"),
+    ],
+)
+def test_a_node_test_file_that_cannot_load_in_the_runner_s_own_process_reads_0_failed(tmp_path, capture, expect_red):
+    """Under `--test-isolation=none` Node reports a file that threw as it
+    loaded as a test of that file's name, located at its line 1, column 1,
+    with the error the file threw in place of Node's own `test failed` and no
+    `Node.js v` line, and a global setup that throws stops the runner before
+    any test, with only the error and no summary. No test ran in either, and
+    each read as a kill; each reads 0 failed now."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture",
+    ["node-spec-isolation-none-kill-beside-a-load-failure", "node-tap-isolation-none-kill-beside-a-load-failure"],
+)
+def test_a_node_kill_beside_a_file_that_cannot_load_in_the_runner_s_own_process_is_one_kill(tmp_path, capture):
+    """The twin: the file that cannot load comes off `fail 2`, and the test
+    that failed beside it is the one kill."""
+    proc = _read_capture(tmp_path, capture, "cap is pinned")
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'cap is pinned' went red")}, proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+def test_a_kill_another_run_counted_stands_beside_a_global_setup_that_throws(tmp_path):
+    """The twin: a command that runs a suite with a kill, then Node's runner
+    whose global setup throws, reads that suite's kill."""
+    kill = (LOAD_FAILURES / "node-spec-isolation-none-kill-beside-a-load-failure.txt").read_text(encoding="utf-8")
+    setup = (LOAD_FAILURES / "node-global-setup-throws.txt").read_text(encoding="utf-8")
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_text(kill + setup, encoding="utf-8", newline="\n")
+    proc = _run_table(project, [_row(expect_red="cap is pinned")])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'cap is pinned' went red")}, proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+def _node_takes(flag: str) -> bool:
+    """Whether the `node` on PATH lists a command-line flag in its help."""
+    node = shutil.which("node")
+    if node is None:
+        return False
+    return flag in subprocess.run([node, "--help"], capture_output=True, text=True, check=False).stdout
+
+
+_CACHE = (
+    "const pending = new Set();\nexport function remember(key, value) {\n  pending.add(key);\n"
+    "  setTimeout(() => { if (pending.size > 100) throw new Error(`cache overflow at ${key}`); }, 5);\n"
+    "  return value;\n}\n"
+)
+_REMEMBER_TEST = (
+    "import {{ test }} from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import {{ remember }} from './cache.mjs';\n"
+    "test('{name}', () => {{ assert.equal(remember('{key}', 1), 1); }});\n"
+)
+_FLUSH = "export function flush(value) {\n  return value;\n}\nprocess.exitCode = 0;\n"
+_FLUSH_TEST = (
+    "import {{ test }} from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import {{ flush }} from './flush.mjs';\n"
+    "test('{name}', () => {{ assert.equal(flush({value}), {value}); }});\n"
+)
+_CONFIG = (
+    "export const mode = 'strict';\nif (mode !== 'strict') throw new Error('config: unknown mode ' + mode);\n"
+    "export function describeMode() { return mode; }\n"
+)
+_CONFIG_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import { describeMode } from './config.mjs';\n"
+    "test('mode is strict', () => { assert.equal(describeMode(), 'strict'); });\n"
+)
+_SEED = (
+    "const rows = ['a'];\nexport function seed() {\n  if (rows.length === 0) throw new Error('seed: no rows');\n"
+    "  return rows;\n}\n"
+)
+_SEED_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seed } from './seed.mjs';\n"
+    "test('rows are seeded', () => { assert.deepEqual(seed(), ['a']); });\n"
+)
+_OTHER_TEST = "import { test } from 'node:test';\ntest('other passes', () => {});\n"
+_REAL_NODE_FINAL = {
+    "async-activity-in-two-files": (
+        None,
+        {
+            "cache.mjs": _CACHE,
+            "a.test.mjs": _REMEMBER_TEST.format(name="remember returns the value", key="a"),
+            "b.test.mjs": _REMEMBER_TEST.format(name="remember keeps a second key", key="b"),
+        },
+        [
+            ("node --test --test-reporter={reporter} a.test.mjs b.test.mjs", "pending.size > 100", "pending.size > 0",
+             "remember returns the value", None),
+            ("node --test --test-reporter={reporter} a.test.mjs b.test.mjs", "pending.size > 100", "pending.size > 0",
+             "remember keeps a second key", None),
+        ],
+    ),
+    "exits-in-two-files": (
+        None,
+        {
+            "flush.mjs": _FLUSH,
+            "a.test.mjs": _FLUSH_TEST.format(name="flush keeps its value", value=3),
+            "z.test.mjs": _FLUSH_TEST.format(name="flush keeps another value", value=4),
+        },
+        [
+            # The limit: each file but the one with the row's test counts.
+            ("node --test --test-reporter={reporter} a.test.mjs z.test.mjs", "process.exitCode = 0;",
+             "process.exitCode = 1;", "flush keeps its value", "kill"),
+            # The command the gate's reference tells automate to write.
+            ("node --test --test-reporter={reporter} a.test.mjs", "process.exitCode = 0;", "process.exitCode = 1;",
+             "flush keeps its value", None),
+        ],
+    ),
+    "isolation-none": (
+        "--test-isolation",
+        {"config.mjs": _CONFIG, "config.test.mjs": _CONFIG_TEST, "other.test.mjs": _OTHER_TEST},
+        [
+            ("node --test --test-isolation=none --test-reporter={reporter} config.test.mjs other.test.mjs",
+             "export const mode = 'strict';", "export const mode = 'loose';", "mode is strict", None),
+            # The twin: a mutant the test kills.
+            ("node --test --test-isolation=none --test-reporter={reporter} config.test.mjs other.test.mjs",
+             "{ return mode; }", "{ return 'lax'; }", "mode is strict", "KILLED"),
+        ],
+    ),
+    "global-setup": (
+        "--test-global-setup",
+        {
+            "seed.mjs": _SEED,
+            "setup.mjs": "import { seed } from './seed.mjs';\nexport async function globalSetup() { seed(); }\n",
+            "db.test.mjs": _SEED_TEST,
+        },
+        [
+            ("node --test --test-global-setup=setup.mjs --test-reporter={reporter} db.test.mjs",
+             "const rows = ['a'];", "const rows = [];", "rows are seeded", None),
+            # The twin: a mutant the test kills, the setup passing.
+            ("node --test --test-global-setup=setup.mjs --test-reporter={reporter} db.test.mjs",
+             "const rows = ['a'];", "const rows = ['b'];", "rows are seeded", "KILLED"),
+        ],
+    ),
+}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize("case", list(_REAL_NODE_FINAL))
+def test_real_node_run_in_which_no_test_went_red_reads_0_failed(tmp_path, case, reporter):
+    """The real `node --test`, with each reporter: two files whose tests pass
+    and then report asynchronous activity after they ended, a file that cannot
+    load under `--test-isolation=none` and a global setup that throws each
+    read 0 failed, and the twins that a test kills read `KILLED`. Two files
+    whose processes exit non-zero after their tests pass read as a kill (the
+    limit), and the same mutant reads 0 failed under a command that runs only
+    the row's test file."""
+    flag, files, rows = _REAL_NODE_FINAL[case]
+    if flag is not None and not _node_takes(flag):
+        pytest.skip(f"this node does not take {flag}")
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8", newline="\n")
+    module = next(name for name in files if not name.endswith(".test.mjs") and name != "setup.mjs")
+    table = [
+        {"file": module, "anchor": anchor, "replacement": replacement, "command": command.format(reporter=reporter),
+         "expect_red": expect_red}
+        for command, anchor, replacement, expect_red, _ in rows
+    ]
+    readings = {
+        None: lambda name: ("MISATTRIBUTED", _ZERO_FAILED),
+        "kill": lambda name: ("MISATTRIBUTED", _NEVER_APPEARS.format(name)),
+        "KILLED": lambda name: ("KILLED", f"exactly {name!r} went red"),
+    }
+    expected = {index: readings[row[4]](row[3]) for index, row in enumerate(rows)}
+    proc = _run_table(tmp_path, table)
+    assert _ledger_rows(proc.stdout) == expected, proc.stdout + proc.stderr
+    assert proc.returncode == 1

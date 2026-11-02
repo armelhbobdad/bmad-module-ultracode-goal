@@ -1,0 +1,11 @@
+node:internal/test_runner/harness:124
+      throw err;
+      ^
+
+Error: seed: no rows
+    at seed (file:///home/dev/work/global-setup/seed.mjs:3:32)
+    at Object.globalSetup [as globalSetupFunction] (file:///home/dev/work/global-setup/setup.mjs:2:39)
+    at Object.runBootstrap (node:internal/test_runner/harness:92:37)
+    at async runChain (node:internal/test_runner/runner:1129:7)
+
+Node.js v24.21.0

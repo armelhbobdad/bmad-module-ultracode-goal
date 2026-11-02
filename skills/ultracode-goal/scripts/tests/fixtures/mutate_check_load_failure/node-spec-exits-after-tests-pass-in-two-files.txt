@@ -1,0 +1,22 @@
+✔ flush keeps its value (0.782488ms)
+✖ a.test.mjs (53.225283ms)
+✔ flush keeps another value (0.713395ms)
+✖ z.test.mjs (54.744237ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 70.00801
+
+✖ failing tests:
+
+test at a.test.mjs:1:1
+✖ a.test.mjs (53.225283ms)
+  'test failed'
+
+test at z.test.mjs:1:1
+✖ z.test.mjs (54.744237ms)
+  'test failed'
