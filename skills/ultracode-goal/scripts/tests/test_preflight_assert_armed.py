@@ -405,12 +405,14 @@ def test_a_guard_under_stop_with_on_failure_is_still_not_armed(tmp_path: Path) -
 # unquoted space. Preflight writes `<env> uv run '<script>'` with each injected
 # value and the script path in single quotes, so a path with a space stays one
 # word. Unquoted, the rest of that path becomes the command the shell runs (it
-# exits 127) or the file `uv run` is given, so the hook never starts: under the
-# guard's "onFailure": "block" every tool call is refused, and the Stop budget
-# hook silently does not run. The manifest reads each command the way the
-# shell splits it, and never runs it.
+# exits 127) or the file `uv run` is given (uv exits 2), so the hook never
+# starts: under the guard's "onFailure": "block" every tool call is refused. On
+# Stop, exit 127 is a non-blocking error, so the budget hook lets each stop
+# through uncounted, and uv's exit 2 sends each stop back, up to eight times in
+# a row. The manifest reads each command the way the shell splits it, and never
+# runs it.
 
-_SPLIT_REASON = "UCG hook command does not start its script as written"
+_SPLIT_REASON = "UCG hook command would not run its script as preflight writes it"
 
 
 def _split_reason(out: dict) -> str:
@@ -504,8 +506,8 @@ def test_an_unquoted_guard_under_a_path_with_a_space_is_not_armed(
 
 
 def test_an_unquoted_budget_hook_is_not_armed_either(tmp_path: Path) -> None:
-    """A Stop hook that cannot start is skipped without a word: the budget
-    layer is then gone while the arming reads as complete."""
+    """A Stop hook that cannot start counts no turn: the budget layer is then
+    gone while the arming reads as complete."""
     root = _repo(tmp_path)
     _arm(
         root,
@@ -517,6 +519,30 @@ def test_an_unquoted_budget_hook_is_not_armed_either(tmp_path: Path) -> None:
     problems = out["checks"]["hooks"]["command_problems"]
     assert len(problems) == 1 and problems[0].startswith("budget_stop.py under Stop: ")
     assert "budget_stop.py under Stop" in _split_reason(out)
+
+
+def test_the_reason_says_what_each_kind_of_command_costs(tmp_path: Path) -> None:
+    """Review of #186's fix (4.1.0): the reason said every such hook never
+    starts, and that Claude Code skips a budget hook that cannot start without
+    a word. A command handed to a Python does start it, and a budget command
+    uv refuses exits 2, which on Stop sends the stop back (uv 0.12.15, an
+    unquoted script path: "Failed to spawn", exit 2), up to the eight blocks in
+    a row after which Claude Code lets it through."""
+    root = _repo(tmp_path)
+    _arm(
+        root,
+        guard_command="uv run python 'scripts/hooks/guard_pretooluse.py'",
+        budget_command="uv -p 3.12 run 'scripts/hooks/budget_stop.py'",
+    )
+    code, out = _run(root, env=_process_env(root))
+    assert code == 1
+    reason = _split_reason(out)
+    assert "and the hook never starts" not in reason
+    assert "without a word" not in reason
+    assert "A guard command that does not start the guard refuses every tool call" in reason
+    assert "one that prints and exits 0 lets every call through unchecked" in reason
+    assert "A budget command the shell cannot start lets each stop through uncounted" in reason
+    assert "one uv refuses sends each stop back with uv's error, up to eight times in a row" in reason
 
 
 @pytest.mark.parametrize(
@@ -902,6 +928,201 @@ def test_the_value_sets_are_the_ones_uv_0_12_15_takes() -> None:
 )
 def test_a_command_uv_takes_as_written_starts_the_guard(words: str) -> None:
     assert _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py") is None
+
+
+# Review of #186's fix (4.1.0), second pass. Each form below was run as Claude
+# Code runs a hook (`sh -c`, hook JSON on stdin) against uv 0.12.15, beside a
+# script whose header sets `requires-python = ">=3.11"`:
+# - `--frozen` or `--locked` makes uv look for the script's lockfile, which
+#   preflight never writes and the skill does not ship: "Unable to find
+#   lockfile for Python script", exit 2, in a project folder and out of one.
+# - A Python request uv takes runs the script on the Python it selects, the
+#   newest installed one the request admits, with only a warning when the
+#   header does not allow it: `--python 3.10` ran 3.10.21, `-p 3.9` ran 3.9.25
+#   (where the real guard crashes at import, exit 1), `--python '<=3.11'` ran
+#   3.10.21 with no 3.11.0 installed. A request passes only when every Python
+#   it admits meets the minimum, so that it holds on any machine.
+# - uv's parser refuses an empty value for most options, in its own word or
+#   glued (`--package ''`, `--extra=`), exit 2, and takes one for the others.
+@pytest.mark.parametrize(
+    "words,shown",
+    [
+        ("uv run --frozen", 'uv run would find no lockfile for the script, which "--frozen" needs'),
+        ("uv run --locked", 'uv run would find no lockfile for the script, which "--locked" needs'),
+        ("uv run -q --frozen", 'uv run would find no lockfile for the script, which "--frozen" needs'),
+        ("uv run --no-sync --locked", 'uv run would find no lockfile for the script, which "--locked" needs'),
+        ("uv run --frozen --script", 'uv run would find no lockfile for the script, which "--frozen" needs'),
+        # Below the minimum, in each spelling uv reads as a version.
+        ("uv run --python 3.10", 'uv run would let "--python 3.10" select a Python below the 3.11'),
+        ("uv run -p 3.9", 'uv run would let "-p 3.9" select a Python below the 3.11'),
+        ("uv run -p3.10", 'uv run would let "-p 3.10" select a Python below the 3.11'),
+        ("uv run -qp 3.10", 'uv run would let "-p 3.10" select a Python below the 3.11'),
+        ("uv run --python=3.10.21", 'uv run would let "--python 3.10.21" select a Python below the 3.11'),
+        ("uv run --python ' 3.10 '", 'uv run would let "--python 3.10" select a Python below the 3.11'),
+        ("uv run --python 03.10", 'uv run would let "--python 03.10" select a Python below'),
+        ("uv run --python v3.10", 'uv run would let "--python v3.10" select a Python below'),
+        ("uv run --python 310", 'uv run would let "--python 310" select a Python below'),
+        ("uv run --python 39", 'uv run would let "--python 39" select a Python below'),
+        ("uv run --python 3.1", 'uv run would let "--python 3.1" select a Python below'),
+        ("uv run --python 2", 'uv run would let "--python 2" select a Python below'),
+        ("uv run --python cpython@3.10", 'uv run would let "--python cpython@3.10" select a Python below'),
+        ("uv run --python CPython@3.9", 'uv run would let "--python CPython@3.9" select a Python below'),
+        ("uv run --python cpython3.10", 'uv run would let "--python cpython3.10" select a Python below'),
+        ("uv run --python cpython-3.10", 'uv run would let "--python cpython-3.10" select a Python below'),
+        ("uv run --python cp310", 'uv run would let "--python cp310" select a Python below'),
+        ("uv run --python cp-3.10", 'uv run would let "--python cp-3.10" select a Python below'),
+        ("uv run --python python3.10", 'uv run would let "--python python3.10" select a Python below'),
+        ("uv run --python python@3.10", 'uv run would let "--python python@3.10" select a Python below'),
+        ("uv run --python python39", 'uv run would let "--python python39" select a Python below'),
+        ("uv run --python 3.10+gil", 'uv run would let "--python 3.10+gil" select a Python below'),
+        ("uv run --python 3.10t", 'uv run would let "--python 3.10t" select a Python below'),
+        ("uv run --python 3.10rc1", 'uv run would let "--python 3.10rc1" select a Python below'),
+        ("uv run --python pypy3.10", 'uv run would let "--python pypy3.10" select a Python below'),
+        (
+            "uv run --python cpython-3.10-linux-x86_64-gnu",
+            'uv run would let "--python cpython-3.10-linux-x86_64-gnu" select a Python below',
+        ),
+        ("uv run --python '<3.11'", 'uv run would let "--python <3.11" select a Python below'),
+        ("uv run --python '<=3.11'", 'uv run would let "--python <=3.11" select a Python below'),
+        ("uv run --python '==3.10.*'", 'uv run would let "--python ==3.10.*" select a Python below'),
+        ("uv run --python '~=3.10.0'", 'uv run would let "--python ~=3.10.0" select a Python below'),
+        ("uv run --python '>=3.9,<3.11'", 'uv run would let "--python >=3.9,<3.11" select a Python below'),
+        ("uv run --python 'cpython@<3.11'", 'uv run would let "--python cpython@<3.11" select a Python below'),
+        # Admitting one below the minimum is enough: uv picks among what the
+        # machine has installed, not what the header allows.
+        ("uv run --python 3", 'uv run would let "--python 3" select a Python below'),
+        ("uv run --python python3", 'uv run would let "--python python3" select a Python below'),
+        ("uv run --python cpython", 'uv run would let "--python cpython" select a Python below'),
+        ("uv run --python python", 'uv run would let "--python python" select a Python below'),
+        ("uv run --python any", 'uv run would let "--python any" select a Python below'),
+        ("uv run --python '>=3.9'", 'uv run would let "--python >=3.9" select a Python below'),
+        ("uv run --python '>3.10'", 'uv run would let "--python >3.10" select a Python below'),
+        ("uv run --python '~=3.10'", 'uv run would let "--python ~=3.10" select a Python below'),
+        ("uv run --python '<3.12'", 'uv run would let "--python <3.12" select a Python below'),
+        ("uv run --python '!=3.12'", 'uv run would let "--python !=3.12" select a Python below'),
+        # An empty value uv's parser refuses.
+        ("uv run --package ''", 'uv run would not take "" as the value of "--package"'),
+        ("uv run --extra ''", 'uv run would not take "" as the value of "--extra"'),
+        ("uv run --extra=", 'uv run would not take "" as the value of "--extra"'),
+        ("uv run -C ''", 'uv run would not take "" as the value of "-C"'),
+        ("uv run -P ''", 'uv run would not take "" as the value of "-P"'),
+        ("uv run --upgrade-package=", 'uv run would not take "" as the value of "--upgrade-package"'),
+        ("uv --directory '' run", 'uv would not take "" as the value of "--directory"'),
+        ("uv --cache-dir= run", 'uv would not take "" as the value of "--cache-dir"'),
+        ("uv --preview-feature '' run", 'uv would not take "" as the value of "--preview-feature"'),
+        ("uv run --directory ''", 'uv run would not take "" as the value of "--directory"'),
+    ],
+)
+def test_a_command_with_no_lockfile_an_older_python_or_an_empty_value_starts_no_guard(words: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py")
+    assert problem is not None and problem.startswith(shown), problem
+
+
+def test_an_older_python_is_refused_for_the_minimum_it_skips() -> None:
+    """The problem says why a command that may start the guard is rewritten."""
+    problem = _preflight_module()._command_problem(f"uv run --python 3.10 {_GUARD}", "guard_pretooluse.py")
+    assert problem is not None
+    assert "below the 3.11 minimum the script's header sets" in problem
+    assert "uv runs the script on one with only a warning, so that minimum would not hold" in problem
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        # Twins of the refusals above, each run against uv 0.12.15, each
+        # starting the script on a Python the header allows.
+        "uv run --no-frozen",
+        "uv run --no-locked",
+        "uv run --python 3.11",
+        "uv run --python 3.12",
+        "uv run -p 3.12",
+        "uv run -p3.12",
+        "uv run --python=3.12.14",
+        "uv run --python 0312",
+        "uv run --python 3.012",
+        "uv run --python V3.12",
+        "uv run --python 311",
+        "uv run --python 312",
+        "uv run --python cp311",
+        "uv run --python CPython@3.12",
+        "uv run --python cpythonv3.12",
+        "uv run --python cpython-3.12.14-linux-x86_64-gnu",
+        "uv run --python python3.12",
+        "uv run --python python@3.12",
+        "uv run --python 3.12+gil",
+        "uv run --python 3.12-linux",
+        "uv run --python '>=3.11'",
+        "uv run --python '>3.11'",
+        "uv run --python '~=3.11'",
+        "uv run --python '==3.12.*'",
+        "uv run --python '>=3.11,<3.13'",
+        "uv run --python '>= 3.11 , < 3.13'",
+        "uv run --python 'cpython>=3.11'",
+        # No request at all: the header chooses the Python.
+        "uv run --python ''",
+        "uv run --python=",
+        "uv run -p ''",
+        # A path or a program name names no version; not judged.
+        "uv run --python /usr/bin/python3.12",
+        r"uv run --python 'C:\Python312\python.exe'",
+        # An empty value uv takes.
+        "uv run --with ''",
+        "uv run -w ''",
+        "uv run --with-requirements=",
+        "uv run --index-url ''",
+        "uv run -i ''",
+        "uv run -f ''",
+        "uv run --env-file=",
+        "uv --trusted-host '' run",
+        "uv --allow-insecure-host= run",
+    ],
+)
+def test_a_command_with_a_python_the_header_allows_starts_the_guard(words: str) -> None:
+    assert _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py") is None
+
+
+def test_the_python_minimum_is_the_one_each_hook_s_header_sets() -> None:
+    """The minimum a `--python` request is read against is the hooks' own: a
+    header that moves it makes this a value to move with it."""
+    module = _preflight_module()
+    assert module._SCRIPT_PYTHON_MINIMUM == (3, 11)
+    for script in ("guard_pretooluse.py", "budget_stop.py"):
+        text = (SCRIPTS / "hooks" / script).read_text(encoding="utf-8")
+        header = text.split("# /// script\n", 1)[1].split("# ///\n", 1)[0]
+        assert '# requires-python = ">=3.11"\n' in header, script
+
+
+def test_the_options_that_take_an_empty_value_are_the_ones_uv_0_12_15_takes() -> None:
+    """Pinned as measured: every value option of uv's, given an empty value in
+    its own word and glued, on the side of `run` it is taken on. These started
+    the script; every other one exited 2 ("a value is required" or "invalid
+    value ''"). A change here is a change of uv's, to measure again."""
+    module = _preflight_module()
+    assert module._UV_EMPTY_OK == {
+        "--allow-insecure-host", "--default-index", "--env-file", "--extra-index-url", "--find-links", "--index",
+        "--index-url", "--python", "--with", "--with-editable", "--with-requirements",
+    }
+    for option in sorted(module._UV_GLOBAL_VALUES | module._UV_RUN_VALUES):
+        words = f"uv run {option} '' {_GUARD}" if option in module._UV_RUN_VALUES else f"uv {option} '' run {_GUARD}"
+        takes_it = module._UV_ALIASES.get(option, option) in module._UV_EMPTY_OK
+        assert (module._command_problem(words, "guard_pretooluse.py") is None) == takes_it, option
+
+
+def test_a_lockfile_option_or_an_older_python_fails_the_arming(tmp_path: Path) -> None:
+    """End to end: each names its command, under its event."""
+    root = _repo(tmp_path)
+    _arm(
+        root,
+        guard_command="uv run --frozen 'scripts/hooks/guard_pretooluse.py'",
+        budget_command="uv run --python 3.9 'scripts/hooks/budget_stop.py'",
+    )
+    code, out = _run(root, env=_process_env(root))
+    assert code == 1 and out["armed"] is False
+    problems = out["checks"]["hooks"]["command_problems"]
+    assert len(problems) == 2, problems
+    assert problems[0].startswith('guard_pretooluse.py under PreToolUse: uv run would find no lockfile')
+    assert problems[1].startswith('budget_stop.py under Stop: uv run would let "--python 3.9" select a Python below')
+    assert len(out["reasons"]) == 1, out["reasons"]
 
 
 # --- arming: the Claude Code version -----------------------------------------

@@ -1151,6 +1151,44 @@ _UV_CHOICES = {
 # glued `=-0` pass, while `5.0`, `1_000` and ` 5` exit 2.
 _UV_NUMBERS = {"--max-recursion-depth": 4294967295}
 _WHOLE_NUMBER = re.compile(r"[+-]?[0-9]+")
+# The value options uv 0.12.15 takes an empty value for, in its own word
+# (`--with ''`) or glued (`--with=`), by the name uv gives each. Each of the
+# others, given one, exits 2 before uv runs anything ("a value is required",
+# or "invalid value ''"). An empty `--python` asks for no Python, so the
+# script's header chooses it.
+_UV_EMPTY_OK = frozenset(
+    {
+        "--allow-insecure-host", "--default-index", "--env-file", "--extra-index-url", "--find-links", "--index",
+        "--index-url", "--python", "--with", "--with-editable", "--with-requirements",
+    }
+)
+# The options that make `uv run` read the script's lockfile (`<script>.lock`
+# beside it), which preflight never writes and the skill does not ship: uv
+# 0.12.15 exits 2 on either, "Unable to find lockfile for Python script".
+_UV_LOCKFILE_FLAGS = ("--frozen", "--locked")
+# The Python both hooks' headers require (`requires-python = ">=3.11"`), as
+# (major, minor). Given `--python`, uv runs the script on the Python that
+# request selects, the newest installed one it admits, with only a warning
+# when the header does not allow it: uv 0.12.15 ran `--python 3.10` on 3.10.21
+# and `--python '<=3.11'` on 3.10.21 where no 3.11.0 was installed, and on
+# 3.9 the guard crashes at import (exit 1). Which Python a request selects
+# depends on what the machine has installed, so the minimum holds everywhere
+# only for a request whose every Python meets it.
+_SCRIPT_PYTHON_MINIMUM = (3, 11)
+# How uv reads a `--python` request as a version, in any case, trimmed: an
+# optional implementation name, joined by nothing, "@" or "-", then a version
+# (`3.10`, `v3.10.21`, `310`, with a suffix such as `t`, `+gil`, `rc1` or a
+# platform) or a set of specifiers (`>=3.11,<3.13`). A name alone, `any` or
+# `default` asks for any version. A path or a program name names none.
+_PY_IMPLEMENTATION = r"(?:cpython|cp|python|pypy|pp|graalpy|gp|pyodide)"
+_PY_ANY_VERSION = re.compile(r"%s@?|any|default" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII)
+_PY_VERSION = re.compile(
+    r"(?:%s[@-]?)?v?(?P<version>[0-9]+(?:\.[0-9]+){0,2})[a-z0-9_+.-]*" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII
+)
+_PY_SPECIFIERS = re.compile(r"(?:%s@?)?(?P<specifiers>[<>=!~].*)" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII)
+_PY_SPECIFIER = re.compile(
+    r"\s*(?P<operator>===|==|!=|~=|<=|>=|<|>)\s*v?(?P<version>[0-9]+(?:\.[0-9]+)*)(?:\.\*)?\s*", re.ASCII
+)
 # A word that names a Python, by name or by path. `uv run` reads the script's
 # inline metadata (its `# /// script` header) only when it runs the script
 # itself. Handed to `python`, or to any other program, the script runs as that
@@ -1163,16 +1201,68 @@ _WHOLE_NUMBER = re.compile(r"[+-]?[0-9]+")
 _PYTHON = re.compile(r"^python(?:\d+(?:\.\d+)?)?w?(?:\.exe)?$", re.IGNORECASE)
 
 
+def _number(digits: str) -> int:
+    """A run of ASCII digits as a number, one too long for int() to read
+    from a string (past 4300 digits) read as the largest a version holds."""
+    digits = digits.lstrip("0") or "0"
+    return int(digits) if len(digits) <= 9 else 999_999_999
+
+
+def _release(version: str) -> tuple[int, int]:
+    """(major, minor) of a version uv reads, `0` for a minor it leaves out.
+    Without a dot uv reads the first digit as the major (`310` is 3.10,
+    `0312` 3.12). A specifier's version is read the same way, which can only
+    lower its bound (`>=310` reads as 3.10, never as 310)."""
+    if "." not in version:
+        version = version.lstrip("0") or "0"
+        version = version[0] + ("." + version[1:] if len(version) > 1 else "")
+    parts = [_number(part) for part in version.split(".")]
+    return parts[0], parts[1] if len(parts) > 1 else 0
+
+
+def _python_admits_older(request: str) -> bool:
+    """Does this `--python` request admit a Python below the hooks' minimum?
+
+    True for a version below it, a set of specifiers whose lower bound is
+    below it (`<3.12`, `>=3.9`, `!=3.12` set none above it), and a request
+    for any version. False for an empty request, which leaves the choice to
+    the script's header, and for one this cannot read as a version (a path,
+    a program name), which is not judged.
+    """
+    request = request.strip()
+    if not request:
+        return False
+    if _PY_ANY_VERSION.fullmatch(request):
+        return True
+    plain = _PY_VERSION.fullmatch(request)
+    if plain is not None:
+        return _release(plain.group("version")) < _SCRIPT_PYTHON_MINIMUM
+    specified = _PY_SPECIFIERS.fullmatch(request)
+    if specified is None:
+        return False
+    lowest = (0, 0)
+    for specifier in specified.group("specifiers").split(","):
+        clause = _PY_SPECIFIER.fullmatch(specifier)
+        if clause is None:
+            return False
+        if clause.group("operator") not in ("<", "<=", "!="):
+            lowest = max(lowest, _release(clause.group("version")))
+    return lowest < _SCRIPT_PYTHON_MINIMUM
+
+
 def _uv_options(words: list[str], index: int, after_run: bool) -> tuple[int, str | None, list[str]]:
-    """(index of the first word past uv's options, why uv would run no script
-    or None, each option read by the name uv gives it).
+    """(index of the first word past uv's options, why uv would not run the
+    script as its header asks or None, each option read by the name uv gives
+    it).
 
     Before `run` the options are uv's global ones, and `--` there leaves uv no
     command; after it `uv run`'s own join them, and `--` ends them. A short
     cluster (`-qp`) reads letter by letter: a letter that takes a value takes
     the rest of the word, or the next word when it is the last. A value is
-    judged only where uv's parser judges it against a fixed set or as a number
-    (`_UV_CHOICES`, `_UV_NUMBERS`).
+    judged where uv's parser judges it, against a fixed set, as a number or
+    as empty (`_UV_CHOICES`, `_UV_NUMBERS`, `_UV_EMPTY_OK`), and a Python
+    request against the minimum the hooks' headers set
+    (`_SCRIPT_PYTHON_MINIMUM`).
     """
     who = "uv run" if after_run else "uv"
     flags = _UV_GLOBAL_FLAGS | _UV_RUN_FLAGS if after_run else _UV_GLOBAL_FLAGS
@@ -1206,6 +1296,15 @@ def _uv_options(words: list[str], index: int, after_run: bool) -> tuple[int, str
         bad = refuse('not take "%s" as the value of "%s"' % (value, name))
         if separate and value.startswith("-") and value != "-":
             return bad  # uv reads the word as an option
+        option = _UV_ALIASES.get(name, name)
+        if value == "" and option not in _UV_EMPTY_OK:
+            return bad
+        if option == "--python" and _python_admits_older(value):
+            return (
+                'uv run would let "%s %s" select a Python below the %d.%d minimum the script\'s header sets, and '
+                "uv runs the script on one with only a warning, so that minimum would not hold"
+                % ((name, value.strip()) + _SCRIPT_PYTHON_MINIMUM)
+            )
         if name in _UV_CHOICES:
             return None if value in _UV_CHOICES[name] else bad
         if name in _UV_NUMBERS:
@@ -1265,38 +1364,47 @@ def _uv_options(words: list[str], index: int, after_run: bool) -> tuple[int, str
 
 
 def _command_problem(command: str, script: str) -> str | None:
-    """Why the shell would not start `script` from this hook command, or None.
+    """Why `script` would not run from this hook command as preflight writes
+    it, or None.
 
     Preflight writes each UCG hook as `<env> uv run '<path to the script>'`:
     leading NAME=value words, then `uv run` and the script path, with each
     injected value and the path in single quotes. Claude Code hands the string
     to a shell, which splits it at every unquoted space, so an unquoted value
     or path that holds one (a project under `~/My Projects`) makes the rest of
-    it the command the shell runs, or the file `uv run` is given, and the hook
-    never starts. Under the guard's `"onFailure": "block"` every tool call is
-    then refused, and a Stop hook that cannot start is skipped without a word.
-    The command is split with POSIX shell rules (shlex) and never run, so the
-    script path is not opened: a moved skill is not this check's to find.
+    it the command the shell runs (exit 127), or the file `uv run` is given
+    (uv exits 2), and the hook never starts. Under the guard's `"onFailure":
+    "block"` either refuses every tool call. On Stop, exit 127 is a
+    non-blocking error, so each stop goes through uncounted, and exit 2 sends
+    each stop back, up to eight times in a row. The command is split with
+    POSIX shell rules (shlex) and never run, so the script path is not opened:
+    a moved skill is not this check's to find.
 
     uv's options are read as uv reads them (`uv run --python 3.12 <script>`
     starts the script; `_uv_options`). A command uv would refuse, or one where
     it prints a version, help or settings and exits (`uv --version`, `uv run
     --help`), starts nothing: under the guard's key the first refuses every
-    call, and the second's exit 0 reads as no objection. A command that hands
-    the script to a Python (`uv run python <script>`) fails too, since the
-    script then runs without its inline metadata (`_PYTHON`).
+    call, and the second's exit 0 reads as no objection. So does one with
+    `--frozen` or `--locked`, which makes uv look for a lockfile beside the
+    script that preflight never writes (`_UV_LOCKFILE_FLAGS`). A command that
+    hands the script to a Python (`uv run python <script>`) fails too, since
+    the script then runs without its inline metadata (`_PYTHON`), and so does
+    a Python request that admits one below the minimum the script's header
+    sets (`--python 3.10`, `-p 3`, `--python '<3.12'`), since uv runs the
+    script on the Python a request selects with only a warning.
 
-    A value is judged only where uv's parser judges it before it runs
-    anything: against a fixed set (`--color`, `--link-mode`, the others in
-    `_UV_CHOICES`) or as a whole number (`--max-recursion-depth`). The values
-    of the other options take forms this check does not enumerate (a Python
-    request, a path, a URL, a host, a requirement, a package, extra or group
-    name, a date or a span of time, a `KEY=VALUE` setting), so one uv's parser
-    refuses (an empty `--directory ''`, an `--extra` name with a space in it,
-    `-w-x`) passes here, as does one uv refuses only when it runs (a
-    `--python 3.99` it cannot find, `-p-3`). The leading NAME=value words are not read either: what a variable
-    does to uv or Python (`PATH`, `UV_PYTHON`, `PYTHONINSPECT`) is theirs to
-    find when the hook runs.
+    A value is judged where uv's parser judges it before it runs anything:
+    against a fixed set (`--color`, `--link-mode`, the others in
+    `_UV_CHOICES`), as a whole number (`--max-recursion-depth`), or as empty
+    (refused for every option but those in `_UV_EMPTY_OK`). The values of the
+    other options take forms this check does not enumerate (a path, a URL, a
+    host, a requirement, a package, extra or group name, a date or a span of
+    time, a `KEY=VALUE` setting, a Python named by a path or a program name),
+    so one uv's parser refuses (an `--extra` name with a space in it, `-w-x`)
+    passes here, as does one uv refuses only when it runs (a `--python 3.99`
+    it cannot find, `-p-3`). The leading NAME=value words are not read
+    either: what a variable does to uv or Python (`PATH`, `UV_PYTHON`,
+    `UV_FROZEN`, `PYTHONINSPECT`) is theirs to find when the hook runs.
     """
     try:
         words = shlex.split(command)
@@ -1316,6 +1424,12 @@ def _command_problem(command: str, script: str) -> str | None:
     index, problem, read = _uv_options(words, index + 1, after_run=True)
     if problem is not None:
         return problem
+    for flag in _UV_LOCKFILE_FLAGS:
+        if flag in read:
+            return (
+                'uv run would find no lockfile for the script, which "%s" needs and preflight never writes, '
+                "and run no script" % flag
+            )
     # `uv run --script` (or `-s`, or `--gui-script`) runs the word after its
     # options as the script, even when that word is `python`.
     if (
@@ -1413,14 +1527,19 @@ def _on_failure_reason(values: list) -> str:
 
 
 def _command_reason(problems: list[str]) -> str:
-    """The named reason for a UCG hook command the shell would not start."""
+    """The named reason for a UCG hook command that would not run its script
+    as preflight writes it. Each problem says what uv or the shell would do
+    instead; the reason says what that costs under each hook's event."""
     return (
-        "UCG hook command does not start its script as written (%s): Claude Code "
-        "runs it through a shell, which splits it at every unquoted space, so a "
-        "path holding one becomes the command the shell runs, or the script uv "
-        "is given, and the hook never starts (Claude Code then refuses every "
-        "tool call under the guard's \"onFailure\": \"block\", and skips a "
-        "budget hook that cannot start without a word). Re-merge the hooks as "
+        "UCG hook command would not run its script as preflight writes it (%s). "
+        "Claude Code runs a hook command through a shell, which splits it at "
+        "every unquoted space, so a value or path left unquoted becomes the "
+        "command the shell runs, or the script uv is given. A guard command "
+        "that does not start the guard refuses every tool call under its "
+        "\"onFailure\": \"block\", and one that prints and exits 0 lets every "
+        "call through unchecked. A budget command the shell cannot start lets "
+        "each stop through uncounted, and one uv refuses sends each stop back "
+        "with uv's error, up to eight times in a row. Re-merge the hooks as "
         "preflight.md step 5's Hooks bullet says, each injected value and the "
         "script path in single quotes (KEY='value' uv run '<path>'; replace, "
         "never append; on a resume purge nothing, as execute.md's re-assertion "
