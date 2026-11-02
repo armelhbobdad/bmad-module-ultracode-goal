@@ -1,0 +1,5 @@
+type: fixed
+scope: ucg-resolve
+summary: |
+  `/ucg-resolve` now reads a `coupled-stories` escalation that proposes only a re-plan as one with no move to record: whatever the operator rules for it is their own edit of `sprint-status.yaml` and the story files, so it records `defer` until they have made it, then `close`. Execute proposes only a re-plan when the later story is outside the run's scope, when the two stories are a pair no move applies to, or when an acceptance criterion between two decomposed children holds a clause no run measured, but the close rule opened by saying every such sidecar proposes moving clauses.
+issues: [186]
