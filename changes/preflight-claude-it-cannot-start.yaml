@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `preflight_check.py` now reads a `claude` on `PATH` that it cannot start (a file without its execute bit, a script with no `#!` line, or on Windows a file that is no program) as a Claude Code version it cannot read. The fresh preflight then reports its `cc_version` blocker, and `--assert-armed` reports `checks.cc_version` with `read: false`. Before, both stopped with a Python traceback and printed no report, so a resume had no named reasons to act on.
+issues: [186]

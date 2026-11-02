@@ -224,7 +224,8 @@ TEA_RENAMED_PREFIX = "bmad-tea-"
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
-    """Run a command, returning (returncode, stdout, stderr). 127 if not found."""
+    """Run a command, returning (returncode, stdout, stderr). 127 if it cannot
+    be started (not found, no execute bit, no program) or times out."""
     try:
         proc = subprocess.run(
             cmd,
@@ -234,7 +235,7 @@ def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
             timeout=30,
         )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         return 127, "", str(exc)
 
 

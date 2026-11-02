@@ -829,6 +829,35 @@ def test_the_manifest_runs_claude_version_itself(tmp_path: Path, printed: str, a
     assert out["armed"] is armed and (code == 0) is armed, out["reasons"]
 
 
+# Review of #186's fix: the script's command runner caught only a missing
+# program and a timeout. A `claude` it finds but cannot start (no execute
+# bit, a script with no `#!` line, or on Windows a file that is no program)
+# raised, so the manifest ended in a traceback and printed no JSON. The fresh
+# preflight shared that path.
+
+
+def test_a_program_it_cannot_start_reads_as_not_found(tmp_path: Path) -> None:
+    stub = tmp_path / ("claude.exe" if os.name == "nt" else "claude")
+    stub.write_text("echo '2.1.306 (Claude Code)'\n", encoding="utf-8")  # no `#!`, no execute bit
+    code, out, err = _preflight_module()._run([str(stub), "--version"])
+    assert code == 127 and out == "" and err
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the execute bit is a POSIX permission")
+def test_a_claude_on_path_it_cannot_start_is_a_version_it_cannot_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text("#!/bin/sh\necho '2.1.306 (Claude Code)'\n", encoding="utf-8")
+    stub.chmod(0o644)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    module = _preflight_module()
+    assert module._cc_version() == (None, None)
+    assert module._assert_cc_version()["read"] is False
+
+
 def test_missing_settings_file_is_not_armed(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     code, out = _run(root)
