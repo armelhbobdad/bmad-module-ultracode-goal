@@ -1,0 +1,41 @@
+Scope: 2 of 3 workspace projects
+guard test$ node --test $REPORTER guard.test.mjs
+other test$ node --test $REPORTER other.test.mjs
+other test: ✔ other step 0 (8.003989ms)
+other test: ✔ other step 1 (5.495099ms)
+other test: ✔ other step 2 (5.676216ms)
+other test: ✔ other step 3 (4.986013ms)
+other test: ✔ other step 4 (5.380725ms)
+other test: ✔ other step 5 (5.863776ms)
+other test: ✔ other step 6 (5.942172ms)
+guard test: ✖ guard.test.mjs (148.122291ms)
+guard test: ℹ tests 1
+guard test: ℹ suites 0
+guard test: ℹ pass 0
+guard test: ℹ fail 1
+guard test: ℹ cancelled 0
+guard test: ℹ skipped 0
+guard test: ℹ todo 0
+guard test: ℹ duration_ms 163.744092
+guard test: ✖ failing tests:
+guard test: test at guard.test.mjs:1:1
+guard test: ✖ guard.test.mjs (148.122291ms)
+guard test:   'test failed'
+other test: ✔ other step 7 (5.924895ms)
+other test: ✔ other step 8 (6.364299ms)
+other test: ✔ other step 9 (6.538082ms)
+guard test: Failed
+/home/dev/work/pnpm-root-exit/guard:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  guard@0.0.0 test: `node --test $REPORTER guard.test.mjs`
+Exit status 1
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?
+other test: ✔ other step 10 (4.87487ms)
+other test: ✔ other step 11 (5.126543ms)
+other test: ℹ tests 12
+other test: ℹ suites 0
+other test: ℹ pass 12
+other test: ℹ fail 0
+other test: ℹ cancelled 0
+other test: ℹ skipped 0
+other test: ℹ todo 0
+other test: ℹ duration_ms 177.974168

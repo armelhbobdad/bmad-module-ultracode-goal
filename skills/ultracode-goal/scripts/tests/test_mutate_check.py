@@ -12,6 +12,7 @@ counts, so attribution and the exactly-one claim are both exercised for real.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -1082,6 +1083,9 @@ def test_real_node_test_runner_two_runs_add_their_counts(tmp_path):
 #                         each line behind turbo's `guard:test: ` prefix
 #   pnpm-node-spec        pnpm 9.15.9, `pnpm -r test` over two packages, each
 #                         line behind pnpm's `packages/guard test: ` prefix
+#   pnpm-root-node-spec   the same, the packages' folders directly in the
+#                         workspace's, so the prefix is `guard test: `, with
+#                         no `/` (#186's review)
 #   mixed-node-pytest-q   a passing `node --test` run, then `pytest -q`
 #   mixed-node-jest       a passing `node --test` run, then `jest`
 #
@@ -1156,7 +1160,8 @@ def test_real_runner_output_attributes_and_counts_a_kill(tmp_path, run):
     KILLED+others with both counted. Before, jest's default and agent
     reporters read MISATTRIBUTED, jest counted failing files instead of
     failing tests, turbo's or pnpm's prefix hid every count, and a passing
-    Node run before pytest or jest read 0 failed."""
+    Node run before pytest or jest read 0 failed. A pnpm prefix with no `/`
+    hid every count until #186's review."""
     names = _names(run)
     project = _replay_project(tmp_path, run)
     proc = _run_table(
@@ -2181,6 +2186,29 @@ def test_real_node_test_file_is_read_by_its_own_lines(tmp_path, case, reporter):
 #                       `node --test mode.test.mjs other.test.mjs`: the mutant
 #                       (`MODE = 'strict'` to `'loose'`) makes mode.mjs call
 #                       `process.exit(1)` at its top level
+#
+# And from the review of that fix:
+#   pnpm-root-node-*-load-failure-interleaved
+#                       `pnpm -r test` over two packages whose folders sit
+#                       directly in the workspace's, so each line is behind
+#                       `guard test: `, a prefix with no `/`: the mutant makes
+#                       clamp.mjs throw as it loads, after a top-level await,
+#                       and the other package's lines land between the error's
+#                       `Node.js v24.21.0` line and the guard file's test
+#   pnpm-root-node-*-exits-during-a-test-interleaved
+#                       the twin: the mutant makes `clamp at the bound` call
+#                       `process.exit(1)` during the test
+#   node-*-load-failure-in-a-file-named-with-an-apostrophe
+#                       `node --test "it's.test.mjs" other.test.mjs`: the
+#                       mutant (`if (x > hi) {` to `if (x > hi {`) stops
+#                       it's.test.mjs loading, and TAP writes its location in
+#                       `"`
+#   node-tap-load-failure-in-a-file-named-with-two-quote-marks
+#                       the same for `say "it's".test.mjs`, located in
+#                       backticks
+#   node-tap-load-failure-in-a-file-named-with-three-quote-marks
+#                       the same for a"b'c`d.test.mjs, located in `'` with its
+#                       `'` written `\'`
 
 
 def _read_capture(tmp_path: Path, capture: str, expect_red: str):
@@ -2213,6 +2241,56 @@ def test_a_node_file_test_is_read_from_its_own_package_s_lines_when_they_interle
     expected = _ZERO_FAILED if zero_failed else _NEVER_APPEARS.format("clamp at the bound")
     assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", expected)}, proc.stdout + proc.stderr
     assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("capture", "zero_failed"),
+    [
+        ("pnpm-root-node-spec-load-failure-interleaved", True),
+        ("pnpm-root-node-tap-load-failure-interleaved", True),
+        ("pnpm-root-node-spec-exits-during-a-test-interleaved", False),
+        ("pnpm-root-node-tap-exits-during-a-test-interleaved", False),
+    ],
+)
+def test_a_pnpm_prefix_with_no_slash_is_read_as_one(tmp_path, capture, zero_failed):
+    """pnpm's prefix is the package's folder relative to the folder pnpm runs
+    in, and a package whose folder sits directly in it has a prefix with no
+    `/`: `guard test: `. That prefix was never removed, so no line behind it
+    was read as Node prints it, and a file that cannot load read as a kill in
+    every run, its lines interleaved or not. A prefix pnpm announces with
+    its `guard test$ node --test ...` line is now removed and read apart. The
+    twins: a process that exits during the row's test still reads as a kill."""
+    proc = _read_capture(tmp_path, capture, "clamp at the bound")
+    expected = _ZERO_FAILED if zero_failed else _NEVER_APPEARS.format("clamp at the bound")
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", expected)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("printed", "read"),
+    [
+        (
+            ["Uncaught Error: boom", "guard test: ✖ guard.test.mjs"],
+            ["Uncaught Error: boom", "guard test: ✖ guard.test.mjs"],
+        ),
+        (
+            ["guard test$ node --test", "Uncaught Error: boom", "guard test: ✖ guard.test.mjs"],
+            ["guard test$ node --test", "Uncaught Error: boom", "✖ guard.test.mjs"],
+        ),
+        ([". test$ node --test", ". test: ✖ guard.test.mjs"], [". test$ node --test", "✖ guard.test.mjs"]),
+    ],
+    ids=["never-announced", "announced", "the-folder-pnpm-runs-in"],
+)
+def test_a_prefix_with_no_slash_is_removed_only_when_pnpm_announced_it(printed, read):
+    """A line of a test's own output can read `<word> <word>: `, as
+    `Uncaught Error: boom` does, so a prefix with no `/` is removed only when
+    pnpm announced it with `<package dir> <script>$ <command>`, `.` (the
+    folder pnpm runs in) included."""
+    spec = importlib.util.spec_from_file_location("mutate_check_prefix", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    lines, _ = module._output_tasks("\n".join(printed) + "\n")
+    assert lines == read
 
 
 @pytest.mark.parametrize(
@@ -2283,6 +2361,26 @@ def test_a_test_file_outside_the_folder_node_runs_in_is_read(tmp_path, capture):
     file there that could not load was not seen as a file's own test, and
     read as a kill under TAP. The spec reporter's twin locates it by the
     relative path and read right already."""
+    proc = _read_capture(tmp_path, capture, "clamp at the bound")
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        "node-tap-load-failure-in-a-file-named-with-an-apostrophe",
+        "node-tap-load-failure-in-a-file-named-with-two-quote-marks",
+        "node-tap-load-failure-in-a-file-named-with-three-quote-marks",
+        "node-spec-load-failure-in-a-file-named-with-an-apostrophe",
+    ],
+)
+def test_a_tap_location_in_any_quotes_is_read(tmp_path, capture):
+    """TAP quotes a file test's location as JavaScript quotes a string: in
+    `"` when the path holds a `'`, in backticks when it holds both, and in
+    `'` with `\\'` for each `'` when it holds all three. Only `'...'` was
+    read, so a file whose name holds a quote mark that could not load read as
+    a kill under TAP. The spec reporter's twin read right already."""
     proc = _read_capture(tmp_path, capture, "clamp at the bound")
     assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
     assert proc.returncode == 1
@@ -2386,6 +2484,17 @@ _REAL_NODE_186 = {
         {"file": "shared/clamp.mjs", "anchor": "if (x > hi) {", "replacement": "if (x > hi {"},
         ["api clamps at the bound"],
     ),
+    # From the review of #186's fix: TAP locates this file in `"`.
+    "a-file-named-with-an-apostrophe": (
+        {
+            "clamp.mjs": _SHARED_CLAMP,
+            "it's.test.mjs": _CLAMP_TEST,
+            "other.test.mjs": "import { test } from 'node:test';\ntest('other passes', () => {});\n",
+        },
+        'node --test --test-reporter={reporter} "it\'s.test.mjs" other.test.mjs',
+        {"file": "clamp.mjs", "anchor": "if (x > hi) {", "replacement": "if (x > hi {"},
+        ["clamp at the bound"],
+    ),
 }
 
 
@@ -2396,8 +2505,8 @@ def test_real_node_test_file_that_cannot_run_reads_0_failed(tmp_path, case, repo
     """The real `node --test`, with each reporter: a file whose process exits
     non-zero after a test whose name holds the row's passes (behind a TEA tag,
     or with a `#` or `\\` the TAP reporter escapes in it), a file outside the
-    folder node runs in that cannot load, and two runs that each cannot load
-    a file of one name, each read 0 failed."""
+    folder node runs in, or named with an apostrophe, that cannot load, and
+    two runs that each cannot load a file of one name, each read 0 failed."""
     files, command, mutation, names = _REAL_NODE_186[case]
     for name, text in files.items():
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)

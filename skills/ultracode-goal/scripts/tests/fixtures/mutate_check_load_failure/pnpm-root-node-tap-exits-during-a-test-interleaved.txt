@@ -1,0 +1,113 @@
+Scope: 2 of 3 workspace projects
+guard test$ node --test $REPORTER guard.test.mjs
+other test$ node --test $REPORTER other.test.mjs
+other test: TAP version 13
+guard test: TAP version 13
+other test: # Subtest: other step 0
+other test: ok 1 - other step 0
+other test:   ---
+other test:   duration_ms: 8.00817
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 1
+other test: ok 2 - other step 1
+other test:   ---
+other test:   duration_ms: 5.460336
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 2
+other test: ok 3 - other step 2
+other test:   ---
+other test:   duration_ms: 6.061066
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 3
+other test: ok 4 - other step 3
+other test:   ---
+other test:   duration_ms: 4.891114
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 4
+other test: ok 5 - other step 4
+other test:   ---
+other test:   duration_ms: 5.537416
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 5
+other test: ok 6 - other step 5
+other test:   ---
+other test:   duration_ms: 5.976423
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 6
+other test: ok 7 - other step 6
+other test:   ---
+other test:   duration_ms: 5.032546
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 7
+other test: ok 8 - other step 7
+other test:   ---
+other test:   duration_ms: 5.012374
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 8
+other test: ok 9 - other step 8
+other test:   ---
+other test:   duration_ms: 5.272909
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 9
+other test: ok 10 - other step 9
+other test:   ---
+other test:   duration_ms: 5.200134
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 10
+other test: ok 11 - other step 10
+other test:   ---
+other test:   duration_ms: 4.666094
+other test:   type: 'test'
+other test:   ...
+other test: # Subtest: other step 11
+other test: ok 12 - other step 11
+other test:   ---
+other test:   duration_ms: 5.739546
+other test:   type: 'test'
+other test:   ...
+other test: 1..12
+other test: # tests 12
+other test: # suites 0
+other test: # pass 12
+other test: # fail 0
+other test: # cancelled 0
+other test: # skipped 0
+other test: # todo 0
+other test: # duration_ms 155.788104
+guard test: # Subtest: guard.test.mjs
+guard test: not ok 1 - guard.test.mjs
+guard test:   ---
+guard test:   duration_ms: 145.991065
+guard test:   type: 'test'
+guard test:   location: '/home/dev/work/pnpm-root-exit/guard/guard.test.mjs:1:1'
+guard test:   failureType: 'testCodeFailure'
+guard test:   exitCode: 1
+guard test:   signal: ~
+guard test:   error: 'test failed'
+guard test:   code: 'ERR_TEST_FAILURE'
+guard test:   ...
+guard test: 1..1
+guard test: # tests 1
+guard test: # suites 0
+guard test: # pass 0
+guard test: # fail 1
+guard test: # cancelled 0
+guard test: # skipped 0
+guard test: # todo 0
+guard test: # duration_ms 161.229855
+other test: Done
+guard test: Failed
+/home/dev/work/pnpm-root-exit/guard:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  guard@0.0.0 test: `node --test $REPORTER guard.test.mjs`
+Exit status 1
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?

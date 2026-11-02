@@ -134,7 +134,11 @@ Windows, or TAP's `ok N`) or with U+25B6 (spec) or `# Subtest:` (TAP), a
 pytest line that reports `PASSED` or holds only a test id, a source line
 quoted in a jest or vitest code frame, or a line of pytest's PASSES section.
 Colour codes and a task runner's line prefix (turbo's `<package>:<task>: `,
-pnpm's `<package dir> <script>: `) are removed before any line is read.
+pnpm's `<package dir> <script>: `) are removed before any line is read. pnpm's
+package dir can be `.` or hold no `/` (`guard test: `), the shape of a line
+such as `Uncaught Error: boom`, so such a prefix is removed only when pnpm
+announced it, as it does each script it starts, with a line `<package dir>
+<script>$ <command>`.
 
 Exit code: 0 when every row KILLED (with or without +others); 1 when any row
 is GREEN, MISATTRIBUTED, STALE, NOT UNIQUE or UNDECODABLE (each is a finding
@@ -299,7 +303,10 @@ _PYTEST_STARTUP_CRASH_RE = re.compile(
 _NODE_FAILED_TEST_RE = re.compile(r"^\s*(?:✖|not ok \d+ -) (.+?)(?: \([\d.]+m?s\))?\s*$")
 _NODE_PASSED_TEST_RE = re.compile(r"^\s*ok \d+\b")
 _NODE_SPEC_AT_RE = re.compile(r"^\s*test at (.+):1:1\s*$")
-_NODE_TAP_LOCATION_RE = re.compile(r"^\s*location: '(.+):1:1'\s*$")
+# TAP quotes the location as JavaScript quotes a string: in `"` when the path
+# holds a `'`, in backticks when it holds both, and in `'` with each `'` written
+# as `\'` when it holds all three.
+_NODE_TAP_LOCATION_RE = re.compile(r"^\s*location: (['\"`])(.+):1:1\1\s*$")
 # A test Node reports passed or skipped as it ends: U+2714 or U+FE63 and the
 # test's duration in the spec reporter, `ok N -` in TAP. A test's own output can
 # print a pass mark, as a CLI's checklist does, but not the duration, and TAP
@@ -584,7 +591,8 @@ def _node_file_tests(lines: list[str]) -> list[int]:
             tap_failed = None
         location = _NODE_TAP_LOCATION_RE.match(line)
         if location:
-            if tap_failed is not None and _same_file(tap_failed[1], location.group(1)):
+            quote, path = location.groups()
+            if tap_failed is not None and _same_file(tap_failed[1], path.replace("\\" + quote, quote)):
                 found.append(tap_failed[0])
             tap_failed = None
         # The spec reporter's location line sits directly above its test.
@@ -771,6 +779,14 @@ _PYTEST_SECTION_RE = re.compile(r"^=+ (.+?) =+$")
 _TASK_PREFIX_RE = re.compile(
     r"^(?:[\w@.-]+(?:/[\w@.-]+)*:[\w.:-]+|[\w@.-]*(?:/[\w@.-]+)+ [\w.:-]+): "
 )
+# pnpm's package dir is the package's folder relative to the folder pnpm runs
+# in, so a package whose folder sits directly in that folder has a prefix with
+# no `/` (`guard test: `), and that folder itself is `.` (`. test: `). The
+# pattern above wants a `/` in pnpm's, since without one a line such as
+# `Uncaught Error: boom` would read as a prefix. pnpm prints `<package dir>
+# <script>$ <command>` as each script starts, so a prefix that line announces
+# is removed too.
+_PNPM_SCRIPT_RE = re.compile(r"^([\w@.-]+(?:/[\w@.-]+)* [\w.:-]+)\$ \S")
 
 # Colour codes a runner emits when FORCE_COLOR is set or it thinks it has a
 # terminal. Left in, they sit between a line's start and its mark.
@@ -781,11 +797,14 @@ def _output_tasks(output: str) -> tuple[list[str], list[list[str]]]:
     """The output's lines without colour codes or a task runner's prefix, and
     the same lines grouped by the prefix each carried (the lines that carried
     none are one group), each group in the order it was printed."""
+    printed = _ANSI_SGR_RE.sub("", output).splitlines()
+    announced = {found.group(1) + ": " for found in map(_PNPM_SCRIPT_RE.match, printed) if found}
     lines: list[str] = []
     tasks: dict[str, list[str]] = {}
-    for line in _ANSI_SGR_RE.sub("", output).splitlines():
+    for line in printed:
         prefix = _TASK_PREFIX_RE.match(line)
-        key = prefix.group(0) if prefix else ""
+        key = max((each for each in announced if line.startswith(each)), key=len, default="")
+        key = key or (prefix.group(0) if prefix else "")
         line = line[len(key) :]
         lines.append(line)
         tasks.setdefault(key, []).append(line)
