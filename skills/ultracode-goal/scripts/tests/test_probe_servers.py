@@ -762,6 +762,26 @@ def test_a_group_that_does_not_exit_is_left_up_and_said_so(tmp_path, monkeypatch
     assert out["left"][0]["reason"] == "its processes still ran after SIGTERM and SIGKILL"
 
 
+@pytest.mark.parametrize("bad", ["http://", "http://localhost:notaport", "http://localhost:99999"])
+def test_a_bad_url_after_an_answering_one_is_refused_before_anything_is_stopped(tmp_path, monkeypatch, bad):
+    """A refusal prints no JSON, so a server stopped before it would be named
+    nowhere: every URL is read before the first stop."""
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP)
+    monkeypatch.setattr(probe_servers, "_reads_processes", lambda _proc: True)
+    monkeypatch.setattr(probe_servers, "_caller", lambda _proc: _CALLER)
+    monkeypatch.setattr(probe_servers, "_clock_ticks", lambda: _TICKS)
+    monkeypatch.setattr(probe_servers, "_listening_inodes", lambda _port, _proc, _reached=None: {"777"})
+    sent = []
+    with _listener() as sock:
+        port = sock.getsockname()[1]
+        stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+        with pytest.raises(ValueError):
+            probe_servers.probe(
+                [f"http://127.0.0.1:{port}", bad], stop, proc=proc, kill=lambda group, sig: sent.append((group, sig))
+            )
+    assert sent == []
+
+
 def test_a_server_something_keeps_starting_is_left_up_after_a_bounded_number_of_stops(tmp_path, monkeypatch):
     proc = _proc_with(tmp_path, _RUN_LEFT_UP)
     monkeypatch.setattr(probe_servers, "_reads_processes", lambda _proc: True)

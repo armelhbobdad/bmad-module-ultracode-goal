@@ -44,32 +44,34 @@ stay up after them: Execute's step 5 sweep runs the full suite, browser tests
 included, in the main tree right before the gate, and a server its runner
 started through a launcher answers there at the gate's first check, so the
 gate's worktree runs would reuse it (#190). Under a scratch runner config
-whose only start command is a launcher, each run leaves one up on the
-config's port (#186). The gate runs every check above with `--stop-since
-<file>` and `--root`, and once more when the story's gate ends, so those
-servers neither serve the worktree's runs nor pile up over an Epic. With
-them the probe stops each server that answers when /proc shows the run
-started it, and leaves every other one up. A server counts as the run's only
-when every process in its process group belongs to this user, has no
-controlling terminal and started after `<file>` was last written (the gate
+whose only start command is a launcher, each run leaves one up on the config's
+port (#186). The gate runs every check above with `--stop-since <file>` and
+`--root`, and once more before each gate cycle's verdict, so those servers
+neither serve the worktree's runs nor pile up over an Epic. With them the
+probe stops each server that answers when what /proc shows of it matches a
+server the run left up, and leaves every other one up. A server counts as the
+run's only when every process in its process group belongs to this user, has
+no controlling terminal and started after `<file>` was last written (the gate
 passes the story's baseline marker, which Execute writes before any of the
 story's work and a resume keeps, so a server an earlier session started still
 counts); when the process that led its session no longer runs; and when the
-folder it runs from is inside a `--root`. A runner starts its server's
-command in a session of its own, which has no controlling terminal, and ends
-that command when it ends, so a server a launcher ran in a group of its own
-lives on without the process that led its session. A server started from a
-terminal has a controlling terminal while that terminal's shell runs, and the
-shell leads its session. Measured with turbo 2.11.9 and Claude Code 2.1.316
-on Linux: the server turbo left up had no terminal, its session's first
-process was gone and its parent was `systemd --user`; a server started from a
-terminal had one. A server started with `nohup ... &` from a terminal that is
-closed afterwards has neither, so it reads as the run's when it also started
-after the marker and runs from inside a root. The probe never stops its own
-process group, or one that holds a process that started it. It sends the
-group SIGTERM, then SIGKILL to what is left after a few seconds, and checks
-the URL again: a URL that still answers is read as above, once more, until a
-bounded number of stops. On a system with no /proc to read it stops nothing.
+folder it runs from is inside a `--root`. A runner starts its server's command
+in a session of its own, which has no controlling terminal, and ends that
+command when it ends, so a server a launcher ran in a group of its own lives
+on without the process that led its session. A server started from a terminal
+has a controlling terminal while that terminal's shell runs, and the shell
+leads its session. Measured with turbo 2.11.9 and Claude Code 2.1.316 on
+Linux: the server turbo left up had no terminal, its session's first process
+was gone and its parent was `systemd --user`; a server started from a terminal
+had one. These are signs, not proof: a server started with `nohup ... &` from
+a terminal that is closed afterwards, or in the background by a command that
+has since exited, with no terminal, reads as the run's too when it also
+started after the marker and runs from inside a root. The marker can be days
+old, since a resume keeps it. The probe never stops its own process group, or
+one that holds a process that started it. It sends the group SIGTERM, then
+SIGKILL to what is left after a few seconds, and checks the URL again: a URL
+that still answers is read as above, once more, until a bounded number of
+stops. On a system with no /proc to read it stops nothing.
 
 Usage:
     uv run probe_servers.py --url <url> [--url <url> ...]
@@ -82,7 +84,8 @@ server it stopped (`{"url", "port", "cwd", "process_groups", "pids"}`), and
 `left`, each URL that still answers with the reason it left that server up
 (`{"url", "port", "cwd", "reason"}`). Exit 0 when no URL answers, 1 when any
 does, and 2 when a URL has no host, or a port that is not a number from 0 to
-65535, or when the `--stop-since` file cannot be read.
+65535, or when the `--stop-since` file cannot be read: every URL and the file
+are read before anything is stopped, so a refusal stops nothing.
 """
 
 from __future__ import annotations
@@ -421,8 +424,10 @@ def probe(urls: list[str], stop: _Stop | None = None, proc: Path | None = None, 
     readable = stop is not None and _reads_processes(proc)
     caller = _caller(proc) if readable else None
     ticks = _clock_ticks() if readable else 0.0
-    for url in urls:
-        host, port = _host_and_port(url)
+    # Every URL is read before the first stop: a refusal prints no JSON, so a server stopped before it would be
+    # named nowhere.
+    targets = [(url, *_host_and_port(url)) for url in urls]
+    for url, host, port in targets:
         for attempt in range(_STOPS + 1):
             reached = _reached(host, port)
             if reached is None:
@@ -475,7 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--stop-since",
         metavar="FILE",
-        help="Stop each answering server the run can be shown to have started after FILE was last written.",
+        help="Stop each answering server that reads as one the run left up after FILE was last written.",
     )
     parser.add_argument(
         "--root",
