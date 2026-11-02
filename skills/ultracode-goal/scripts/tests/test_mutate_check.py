@@ -2783,6 +2783,28 @@ def test_a_kill_another_run_counted_stands_beside_a_global_setup_that_throws(tmp
     assert proc.returncode == 0
 
 
+@pytest.mark.parametrize(
+    ("capture", "cut_after"),
+    [
+        ("node-spec-isolation-none-load-failure", "✖ config.test.mjs (1.587863ms)"),
+        ("node-tap-isolation-none-load-failure", "  location: '/home/dev/work/isolation-none/config.test.mjs:1:1'"),
+    ],
+)
+def test_a_node_file_test_whose_error_is_cut_off_is_read_as_node_s_own(capture, cut_after):
+    """The sign that a file threw as Node imported it is read only from what
+    Node printed of the file test's error: the spec reporter's line below the
+    test in its list of failing tests, and TAP's whole block, up to the `...`
+    that ends it. Output that ends first says nothing of the error, so the
+    test reads as Node's own `test failed`, as it did before; the whole
+    output reads as a file that threw."""
+    module = _mutate_check_module()
+    output = (LOAD_FAILURES / f"{capture}.txt").read_text(encoding="utf-8")
+    lines, _ = module._output_tasks(output)
+    assert list(module._node_file_tests(lines).values()) == [True]
+    last = len(lines) - lines[::-1].index(cut_after)
+    assert list(module._node_file_tests(lines[:last]).values()) == [False]
+
+
 def _node_takes(flag: str) -> bool:
     """Whether the `node` on PATH lists a command-line flag in its help."""
     node = shutil.which("node")

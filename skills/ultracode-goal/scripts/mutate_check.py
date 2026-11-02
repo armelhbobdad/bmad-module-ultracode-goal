@@ -626,15 +626,18 @@ def _ends_in_a_load_error(own: list[str]) -> bool:
     return len(tail) >= 3 and bool(_NODE_CARET_RE.match(tail[-1]) and _NODE_UNSETTLED_AWAIT_RE.match(tail[-3]))
 
 
-def _tap_block(lines: list[str], start: int) -> list[str]:
-    """The lines of the YAML block TAP writes below a test's line, up to the
-    `...` that ends it."""
+def _tap_block(lines: list[str], start: int) -> list[str] | None:
+    """The lines of the YAML block TAP writes, indented, below a file's test,
+    up to the `...` that ends it, or None when a line that is not indented
+    comes first, or the output ends, so the block was cut short."""
     block: list[str] = []
     for line in lines[start + 1 :]:
-        if _NODE_TAP_BLOCK_END_RE.match(line) or _NODE_FAILED_TEST_RE.match(line) or _NODE_PASSED_TEST_RE.match(line):
-            break
+        if _NODE_TAP_BLOCK_END_RE.match(line):
+            return block
+        if line and not line[0].isspace():
+            return None
         block.append(line)
-    return block
+    return None
 
 
 def _node_file_tests(lines: list[str]) -> dict[int, bool]:
@@ -662,7 +665,7 @@ def _node_file_tests(lines: list[str]) -> dict[int, bool]:
                 if exact or same:
                     claimed = (exact or same)[-1]
                     # The list gives the test's error on the line below it.
-                    error = lines[index + 1].strip() if index + 1 < len(lines) else ""
+                    error = lines[index + 1].strip() if index + 1 < len(lines) else _NODE_TEST_FAILED
                     found[claimed] = error != _NODE_TEST_FAILED
                     reported.remove(claimed)
             else:
@@ -676,8 +679,11 @@ def _node_file_tests(lines: list[str]) -> dict[int, bool]:
         if location:
             quote, path = location.groups()
             if tap_failed is not None and _same_file(tap_failed[1], path.replace("\\" + quote, quote)):
+                # A block cut short says nothing of its error: read as Node's own.
                 block = _tap_block(lines, tap_failed[0])
-                found[tap_failed[0]] = not any(_NODE_TAP_FAILURE_TYPE_RE.match(each) for each in block)
+                found[tap_failed[0]] = block is not None and not any(
+                    _NODE_TAP_FAILURE_TYPE_RE.match(each) for each in block
+                )
             tap_failed = None
         # The spec reporter's location line sits directly above its test.
         at = _NODE_SPEC_AT_RE.match(line)
