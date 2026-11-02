@@ -1285,6 +1285,11 @@ def _assert_cc_version() -> dict:
     cannot give is reported with `read: false` and fails nothing: the fresh
     preflight read one at launch, and a spawn that `drive_epic.py
     --claude-bin` started can lack `claude` on its PATH.
+
+    Like the fresh preflight, it runs the `claude` first on PATH, not the
+    binary that runs the session (nothing documented names that one): with
+    two installs, or a `--claude-bin` that names another, it reads the one on
+    PATH. docs/troubleshooting.md says so where the floor is explained.
     """
     cc_raw, cc_ver = _cc_version()
     below = _below_minimums(cc_ver) if cc_ver is not None else []

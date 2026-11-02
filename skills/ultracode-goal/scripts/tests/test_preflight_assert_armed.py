@@ -829,6 +829,58 @@ def test_the_manifest_runs_claude_version_itself(tmp_path: Path, printed: str, a
     assert out["armed"] is armed and (code == 0) is armed, out["reasons"]
 
 
+# Review of #186's fix: a run armed by UCG 3.x on a Claude Code below the
+# floor fails both the version and the guard's onFailure. The sweep did not
+# say which goes first, so a conductor could make the protected hooks
+# re-merge (refused headless, and useless on a version that ignores the key)
+# and then write one sidecar quoting one of two reasons. The decision-pending
+# paragraph's list of routes that write a sidecar also left the version out.
+
+
+def _operator_reason_goes_first(execute: str) -> bool:
+    flat = " ".join(execute.split())
+    return (
+        "For either, or both, take the sub-skill halt catch-all's route (below) for the story about to be driven: "
+        "write `escalation-<story_id>.json` with `decision_needed` quoting each such reason the `reasons` name, "
+        "then stop." in flat
+        and "When one stands beside other reasons, a hooks reason included, take this route first and fix none of "
+        "the others" in flat
+        and "the skills, Claude Code version, refused-write and turn-ceiling routes in this file each write" in flat
+    )
+
+
+def test_an_operator_s_reason_is_escalated_before_any_other_is_fixed() -> None:
+    assert _operator_reason_goes_first((SCRIPTS.parent / "references" / "execute.md").read_text(encoding="utf-8"))
+
+
+def test_the_operator_first_predicate_rejects_the_pre_review_sweep() -> None:
+    execute = (SCRIPTS.parent / "references" / "execute.md").read_text(encoding="utf-8")
+    flat = " ".join(execute.split())
+    start = flat.index("For either, or both,")
+    end = flat.index("The resume after the operator's fix meets the others again and fixes them then.")
+    pre_review = (
+        flat[:start]
+        + "For either, take the sub-skill halt catch-all's route (below) for the story about to be driven: write "
+        "`escalation-<story_id>.json` with `decision_needed` quoting that reason, then stop."
+        + flat[end + len("The resume after the operator's fix meets the others again and fixes them then.") :]
+    ).replace("the skills, Claude Code version, refused-write", "the skills, refused-write")
+    assert not _operator_reason_goes_first(pre_review)
+    # One clause back at a time: each is load-bearing.
+    assert not _operator_reason_goes_first(flat.replace(", Claude Code version, refused-write", ", refused-write"))
+    assert not _operator_reason_goes_first(flat.replace("take this route first and fix none of the others", "x"))
+
+
+def test_troubleshooting_says_which_claude_the_version_check_reads() -> None:
+    """The check runs the `claude` first on PATH, as the fresh preflight does,
+    and an update takes effect only when Claude Code next starts."""
+    text = " ".join((SCRIPTS.parents[2] / "docs" / "troubleshooting.md").read_text(encoding="utf-8").split())
+    assert (
+        "Update Claude Code, then resume in a new session, since an update takes effect only when Claude Code "
+        "next starts" in text
+    )
+    assert "Both checks run the `claude` first on `PATH`, not the binary the session runs on." in text
+
+
 # Review of #186's fix: the script's command runner caught only a missing
 # program and a timeout. A `claude` it finds but cannot start (no execute
 # bit, a script with no `#!` line, or on Windows a file that is no program)

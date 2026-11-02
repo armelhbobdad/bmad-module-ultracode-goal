@@ -2360,6 +2360,10 @@ _HOOK_REJECTION_SENTENCES = {
         ("The hook itself only records and warns (a Stop hook **cannot force `/goa", "e875fa4537ca"),
         ("Treat a hook rejection exactly as step 5 treats a post-commit red: remed", "90ca77631228"),
         ("Unlike the baseline, **this marker is refreshed, not preserved**: step 5", "6428639f8eb2"),
+        # Reviewed (#186 review): an operator's reason on a resume goes before a
+        # hooks re-merge, a settings write the permission layer may refuse; the
+        # resume stops, and nothing of a hook's rejection of the evidence commit.
+        ("When one stands beside other reasons, a hooks reason included, take this", "b29df6d0f3c8"),
     ),
     "finalize.md": (
         # Reviewed: it now names the verdict the story advanced on, `advance` or
