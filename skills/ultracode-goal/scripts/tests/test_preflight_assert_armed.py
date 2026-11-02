@@ -165,13 +165,36 @@ def _arm(
     )
 
 
+# The manifest reads the Claude Code version with `claude --version`. A test
+# must not depend on whichever `claude` the machine has, or on none, so `_run`
+# loads the script as a module and replaces its version reader with one that
+# returns `claude_version`, the way test_preflight_check.py monkeypatches it,
+# then calls its main() in the child process. The real reader is exercised
+# by its own test below, with a stub `claude` on PATH.
+_SUPPORTED_CLAUDE = "2.1.306 (Claude Code)"
+_BOOT = (
+    "import importlib.util, json, sys\n"
+    "spec = importlib.util.spec_from_file_location('preflight_check', sys.argv[1])\n"
+    "module = importlib.util.module_from_spec(spec)\n"
+    "spec.loader.exec_module(module)\n"
+    "raw = json.loads(sys.argv[2])\n"
+    "module._cc_version = lambda: (raw, module._parse_semver(raw) if raw else None)\n"
+    "sys.exit(module.main(sys.argv[3:]))\n"
+)
+
+
 def _run(
     root: Path,
     *extra: str,
     impl: Path | None = None,
     env: dict | None = None,
     timeout: float | None = None,
+    claude_version: str | None = _SUPPORTED_CLAUDE,
+    real_version_reader: bool = False,
 ) -> tuple[int, dict]:
+    """Run --assert-armed as a resume does. `claude_version` is what the
+    version reader returns (None for a `claude` it cannot run), unless
+    `real_version_reader` keeps the script's own reader."""
     impl_dir = impl if impl is not None else root / "impl"
     impl_dir.mkdir(exist_ok=True)
     # Start from the real environment (Windows needs SystemRoot et al.), then
@@ -190,10 +213,12 @@ def _run(
     base_env.update({"HOME": str(home), "USERPROFILE": str(home)})
     if env:
         base_env.update(env)
+    launch = [sys.executable, str(SCRIPT)]
+    if not real_version_reader:
+        launch = [sys.executable, "-c", _BOOT, str(SCRIPT), json.dumps(claude_version)]
     proc = subprocess.run(
         [
-            sys.executable,
-            str(SCRIPT),
+            *launch,
             "--assert-armed",
             "--project-root",
             str(root),
@@ -512,6 +537,44 @@ def test_an_unquoted_budget_hook_is_not_armed_either(tmp_path: Path) -> None:
         pytest.param(
             "uv run 'scripts/hooks/guard_pretooluse.py.bak'", "uv run would be given", id="another-file"
         ),
+        # Twins of the option and interpreter forms below: the same words
+        # with the script missing, or put where an option's value goes, or
+        # run as a module or a command string, start nothing.
+        pytest.param(
+            "uv run --python 3.12 --with 'scripts/hooks/guard_pretooluse.py'",
+            "uv run would be given nothing",
+            id="option-value-then-nothing",
+        ),
+        pytest.param(
+            "uv run --python 'scripts/hooks/guard_pretooluse.py'",
+            "uv run would be given nothing",
+            id="script-as-an-option-value",
+        ),
+        pytest.param(
+            "uv run -qp 'scripts/hooks/guard_pretooluse.py'",
+            "uv run would be given nothing",
+            id="script-as-a-clustered-option-value",
+        ),
+        pytest.param("uv --directory run 'scripts/hooks/guard_pretooluse.py'", "uv is given", id="run-as-a-value"),
+        pytest.param(
+            "ULTRACODE_HOOK=guard_pretooluse.py uv run python", "python would be given nothing", id="python-alone"
+        ),
+        pytest.param(
+            "uv run python -m 'scripts/hooks/guard_pretooluse.py'", "python would run a module", id="python-module"
+        ),
+        pytest.param(
+            "uv run python -c 'scripts/hooks/guard_pretooluse.py'",
+            "python would run a command string",
+            id="python-command-string",
+        ),
+        pytest.param(
+            "uv run python -X 'scripts/hooks/guard_pretooluse.py'",
+            "python would be given nothing",
+            id="script-as-a-python-option-value",
+        ),
+        pytest.param(
+            "uv run -m 'scripts/hooks/guard_pretooluse.py'", "uv run would run a module", id="uv-run-module"
+        ),
     ],
 )
 def test_a_guard_command_that_would_not_start_the_guard_is_not_armed(
@@ -536,6 +599,27 @@ def test_a_guard_command_that_would_not_start_the_guard_is_not_armed(
             "ULTRACODE_IMPL_ARTIFACTS='/srv/it'\\''s here/impl' uv run \"/srv/it's here/guard_pretooluse.py\"",
             id="a-quote-inside-a-value",
         ),
+        # Issue #186: an option of uv's that takes a value, in its own word or
+        # glued, and the script handed to a Python interpreter, each start the
+        # script. They read as commands that would not, so a resume rewrote them.
+        pytest.param("uv run --python 3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="python-option-value"),
+        pytest.param("uv run -p 3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="short-python-option"),
+        pytest.param("uv run --python=3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="glued-long-value"),
+        pytest.param("uv run -p3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="glued-short-value"),
+        pytest.param("uv run -qp 3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="clustered-short-value"),
+        pytest.param(
+            "uv run --with pyyaml --no-project --python 3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'",
+            id="several-options",
+        ),
+        pytest.param("uv --directory /srv/p run '/srv/p/scripts/hooks/guard_pretooluse.py'", id="option-before-run"),
+        pytest.param("uv run -- '/srv/p/scripts/hooks/guard_pretooluse.py'", id="end-of-options"),
+        pytest.param("uv run python '/srv/p/scripts/hooks/guard_pretooluse.py'", id="uv-run-python"),
+        pytest.param("uv run python3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="uv-run-python3-12"),
+        pytest.param(
+            "uv run --python 3.12 python -X utf8 -u '/srv/p/scripts/hooks/guard_pretooluse.py'",
+            id="python-with-its-own-options",
+        ),
+        pytest.param("uv run /usr/bin/python3 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="python-by-path"),
     ],
 )
 def test_a_guard_command_the_shell_splits_as_written_is_armed(tmp_path: Path, command: str) -> None:
@@ -545,6 +629,117 @@ def test_a_guard_command_the_shell_splits_as_written_is_armed(tmp_path: Path, co
     _arm(root, guard_command=command)
     code, out = _run(root, env=_process_env(root))
     assert out["reasons"] == [] and code == 0, out["reasons"]
+
+
+# --- arming: the Claude Code version -----------------------------------------
+# Issue #186: the guard's `"onFailure": "block"` does nothing before Claude
+# Code 2.1.295, which ignores the key, and a fresh preflight refuses to launch
+# below it. A resume never ran `claude --version`, so a run in flight on an
+# older Claude Code re-armed with the key and the assertion passed.
+
+_VERSION_REASON = "Claude Code "
+
+
+def _version_reason(out: dict) -> str:
+    matches = [r for r in out["reasons"] if r.startswith(_VERSION_REASON)]
+    assert len(matches) == 1, out["reasons"]
+    return matches[0]
+
+
+def test_a_claude_code_below_the_floor_is_not_armed(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root, claude_version="2.1.294 (Claude Code)")
+    assert code == 1 and out["armed"] is False
+    version = out["checks"]["cc_version"]
+    assert version == {
+        "version": "2.1.294 (Claude Code)",
+        "read": True,
+        "minimum": "2.1.295",
+        "below": ["hook-onFailure>=2.1.295"],
+        "ok": False,
+    }
+    reason = _version_reason(out)
+    # The same words the fresh preflight's cc_version blocker uses, then why
+    # a resume stops on it rather than fixing it.
+    assert reason.startswith("Claude Code 2.1.294 (Claude Code) is below the minimum for: hook-onFailure>=2.1.295")
+    assert '"onFailure": "block"' in reason
+    assert "claude update" in reason
+    assert "A resume does not fix this" in reason
+    assert "Escalate the story about to be driven" in reason
+    # Every other fact about this arming holds.
+    assert len(out["reasons"]) == 1, out["reasons"]
+    assert out["checks"]["hooks"]["ok"] is True
+
+
+def test_a_claude_code_below_every_floor_names_each(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root, claude_version="2.1.50")
+    assert code == 1
+    assert out["checks"]["cc_version"]["below"] == [
+        "/goal>=2.1.139",
+        "workflows>=2.1.154",
+        "auto-memory>=2.1.59",
+        "hook-onFailure>=2.1.295",
+    ]
+
+
+@pytest.mark.parametrize("version", ["2.1.295 (Claude Code)", "2.1.316 (Claude Code)", "2.2.0", "3.0.0"])
+def test_a_claude_code_at_or_past_the_floor_is_armed(tmp_path: Path, version: str) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root, claude_version=version)
+    assert out["reasons"] == [] and code == 0, out["reasons"]
+    assert out["checks"]["cc_version"]["ok"] is True
+    assert out["checks"]["cc_version"]["below"] == []
+
+
+@pytest.mark.parametrize("version", [None, "Claude Code (dev build)"])
+def test_a_version_it_cannot_read_is_reported_and_fails_nothing(tmp_path: Path, version: str | None) -> None:
+    """A spawn `drive_epic.py --claude-bin` started may have no `claude` on its
+    PATH, and its fresh preflight read the version at launch: an unreadable
+    version is reported, and the resume goes on."""
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root, claude_version=version)
+    assert out["reasons"] == [] and code == 0, out["reasons"]
+    assert out["checks"]["cc_version"] == {
+        "version": version,
+        "read": False,
+        "minimum": "2.1.295",
+        "below": [],
+        "ok": True,
+    }
+
+
+def test_a_version_below_the_floor_never_flips_a_failed_arming_green(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root, on_failure=None)
+    code, out = _run(root, claude_version="2.1.200")
+    assert code == 1
+    assert len(out["reasons"]) == 2, out["reasons"]
+    _version_reason(out)
+    _on_failure_reason(out)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the stub `claude` is a POSIX shell script")
+@pytest.mark.parametrize(
+    "printed,armed", [("2.1.294 (Claude Code)", False), ("2.1.295 (Claude Code)", True)]
+)
+def test_the_manifest_runs_claude_version_itself(tmp_path: Path, printed: str, armed: bool) -> None:
+    """End to end with the script's own reader: it runs the `claude` on PATH."""
+    root = _repo(tmp_path)
+    _arm(root)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text(f"#!/bin/sh\necho '{printed}'\n", encoding="utf-8")
+    stub.chmod(0o755)
+    path = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+    code, out = _run(root, env={"PATH": path}, real_version_reader=True)
+    assert out["checks"]["cc_version"]["version"] == printed
+    assert out["armed"] is armed and (code == 0) is armed, out["reasons"]
 
 
 def test_missing_settings_file_is_not_armed(tmp_path: Path) -> None:
@@ -590,7 +785,10 @@ def test_the_help_and_the_docs_name_the_ucg_story_skills() -> None:
     doc = " ".join(SCRIPT.read_text(encoding="utf-8").split())
     assert "the UCG story skills (a manual deletion between spawns" in doc
     step5 = " ".join(preflight_md.read_text(encoding="utf-8").split())
-    assert "injected env, and the UCG story skills `ucg-create-story` and `ucg-dev-story`) in one read" in step5
+    assert (
+        "injected env, the UCG story skills `ucg-create-story` and `ucg-dev-story`, and the Claude Code version "
+        "against step 1's minimums) in one read" in step5
+    )
 
 
 def test_an_unexpandable_config_dir_still_emits_the_manifest(tmp_path: Path) -> None:

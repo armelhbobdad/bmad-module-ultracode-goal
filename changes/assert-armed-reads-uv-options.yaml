@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `preflight_check.py --assert-armed` now reads a UCG hook command whose `uv run` carries an option with a value (`uv run --python 3.12 '<script>'`, or `-p 3.12`) or hands the script to a Python interpreter (`uv run python '<script>'`) as a command that starts its script. It read the option's value or the interpreter as the script, reported the command in `checks.hooks.command_problems`, and a resume then rewrote it to the form preflight writes. A command that would run a module (`python -m`, or `uv run -m`, which it passed before) or a command string (`python -c`) fails, and the problem names it.
+issues: [186]

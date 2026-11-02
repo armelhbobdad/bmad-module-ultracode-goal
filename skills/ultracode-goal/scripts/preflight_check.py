@@ -79,9 +79,12 @@ and its resume re-merges the hooks: references/execute.md), each UCG hook
 command splitting, the way the shell splits it, into `<env> uv run <script>`
 (an unquoted path with a space does not, and that hook never starts), the
 five injected hook env vars (accepted from the hook command strings OR the
-inherited process env, both of which preflight step 5 permits), and the UCG
+inherited process env, both of which preflight step 5 permits), the UCG
 story skills (a manual deletion between spawns, or an interrupted UCG install
-or update, can remove them), reports the recall latch WITHOUT
+or update, can remove them), and the Claude Code version against the
+minimums step 1 enforces (`checks.cc_version`: below 2.1.295 Claude Code
+ignores the guard's "onFailure", and a version `claude --version` cannot
+give is reported with `read: false` and fails nothing), reports the recall latch WITHOUT
 certifying it (re-latching stays a model-owned Stage 1 step on every resume;
 a present latch also reports its `latch_version` and a derived `store_ok`
 colour, red for anything but a green latch v2),
@@ -91,7 +94,8 @@ decision-pending (an open escalation-<story>.json, which outranks the rest),
 story-boundary (no baseline), gate-owed (committed, green, un-gated, which
 requires --trace-output evidence and never fires without it; or a re-gate owed,
 a .regate-<story> marker naming HEAD), or mid-story.
-Exit 0 iff branch+hooks+env+skills are armed; the latch, the tracked fact and
+Exit 0 iff branch+hooks+env+skills are armed and the Claude Code version is
+not below a minimum; the latch, the tracked fact and
 the story block never move the exit code, because they inform model-owned actions rather than certify
 them.
 
@@ -119,6 +123,14 @@ MIN_AUTOMEMORY = (2, 1, 59)
 # with a code other than 0 or 2, or times out refuses the call (2.1.295 added
 # it; older versions drop the key silently and let such a call through).
 MIN_HOOK_ONFAILURE = (2, 1, 295)
+# Each minimum by the name the cc_version blocker and the resume manifest give
+# it, in the order they list them.
+_CC_MINIMUMS = (
+    ("/goal", MIN_GOAL),
+    ("workflows", MIN_WORKFLOWS),
+    ("auto-memory", MIN_AUTOMEMORY),
+    ("hook-onFailure", MIN_HOOK_ONFAILURE),
+)
 
 # Root-level config filenames that signal a scaffolded JS/browser test framework
 # (playwright / cypress / jest / vitest). Pytest and npm-driven harnesses are
@@ -244,6 +256,16 @@ def _cc_version() -> tuple[str | None, tuple[int, int, int] | None]:
 
 def _meets(version: tuple[int, int, int] | None, minimum: tuple[int, int, int]) -> bool:
     return version is not None and version >= minimum
+
+
+def _below_minimums(version: tuple[int, int, int] | None) -> list[str]:
+    """Each minimum the version does not meet, as `<name>>=<minimum>`."""
+    return ["%s>=%d.%d.%d" % (name, *minimum) for name, minimum in _CC_MINIMUMS if not _meets(version, minimum)]
+
+
+def _cc_version_detail(cc_raw: str | None, below: list[str]) -> str:
+    """The cc_version blocker's words, which the resume manifest's reason opens with."""
+    return "Claude Code %s is below the minimum for: %s" % (cc_raw or "(version unreadable)", ", ".join(below))
 
 
 def _git(args: list[str], project_root: Path) -> tuple[int, str]:
@@ -780,19 +802,7 @@ def build_report(
 
     # Primitive versions: any one being below minimum blocks the unattended run.
     if not (goal_ok and workflows_ok and automemory_ok and hook_onfailure_ok):
-        below = []
-        if not goal_ok:
-            below.append("/goal>=%d.%d.%d" % MIN_GOAL)
-        if not workflows_ok:
-            below.append("workflows>=%d.%d.%d" % MIN_WORKFLOWS)
-        if not automemory_ok:
-            below.append("auto-memory>=%d.%d.%d" % MIN_AUTOMEMORY)
-        if not hook_onfailure_ok:
-            below.append("hook-onFailure>=%d.%d.%d" % MIN_HOOK_ONFAILURE)
-        detail = (
-            "Claude Code %s is below the minimum for: %s"
-            % (cc_raw or "(version unreadable)", ", ".join(below))
-        )
+        detail = _cc_version_detail(cc_raw, _below_minimums(cc_ver))
         blockers.append(
             {
                 "id": "cc_version",
@@ -993,6 +1003,70 @@ def _last_path_part(word: str) -> str:
     return re.split(r"[/\\]", word)[-1]
 
 
+# The options of uv, and of `uv run`, that take their value in the next word
+# when it is not glued on (`--python 3.12`; `--python=3.12` and `-p3.12` are
+# one word), as `uv run --help` lists them (uv 0.12). Read as flags, the value
+# took the script's place, and a command that starts the script failed.
+_UV_VALUE_SHORT = frozenset("pwifPC")
+_UV_VALUE_LONG = frozenset(
+    {
+        "--allow-insecure-host", "--cache-dir", "--color", "--config-file", "--config-setting",
+        "--config-settings-package", "--default-index", "--directory", "--env-file", "--exclude-newer",
+        "--exclude-newer-package", "--extra", "--extra-index-url", "--find-links", "--fork-strategy",
+        "--group", "--index", "--index-strategy", "--index-url", "--keyring-provider", "--link-mode",
+        "--no-binary-package", "--no-build-isolation-package", "--no-build-package", "--no-editable-package",
+        "--no-extra", "--no-group", "--no-sources-package", "--only-group", "--package", "--prerelease",
+        "--prerelease-package", "--project", "--python", "--python-platform", "--refresh-package",
+        "--reinstall-package", "--resolution", "--upgrade-group", "--upgrade-package", "--with",
+        "--with-editable", "--with-requirements",
+    }
+)
+# `uv run -m <name>` runs a module, not a script file.
+_UV_RUNS_OTHER = {"m": "a module", "--module": "a module"}
+# A Python interpreter `uv run` may be given the script through
+# (`uv run python <script>`), by name or by path.
+_PYTHON = re.compile(r"^python(?:\d+(?:\.\d+)?)?w?(?:\.exe)?$", re.IGNORECASE)
+# Python's options that take a value (`-X utf8`), and the two that end its
+# options with something to run other than a script file.
+_PYTHON_VALUE_SHORT = frozenset("XW")
+_PYTHON_VALUE_LONG = frozenset({"--check-hash-based-pycs"})
+_PYTHON_RUNS_OTHER = {"m": "a module", "c": "a command string"}
+_NO_STOPS: dict[str, str] = {}
+
+
+def _past_options(
+    words: list[str], index: int, value_short: frozenset[str], value_long: frozenset[str], stops: dict[str, str]
+) -> tuple[int, str | None]:
+    """(index of the first word that is no option, what a stop option runs).
+
+    A short cluster (`-qp`) reads letter by letter: a letter that takes a
+    value takes the rest of the word, or the next word when it is the last.
+    `--` ends the options. A letter in `stops` (`-m`) runs something other
+    than a script, and the second item names it.
+    """
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            return index + 1, None
+        if not word.startswith("-") or word == "-":
+            return index, None
+        if word.startswith("--"):
+            name = word.split("=", 1)[0]
+            if name in stops:
+                return index, stops[name]
+            index += 2 if name in value_long and "=" not in word else 1
+            continue
+        for position, letter in enumerate(word[1:], start=1):
+            if letter in stops:
+                return index, stops[letter]
+            if letter in value_short:
+                if position == len(word) - 1:
+                    index += 1  # its value is the next word
+                break
+        index += 1
+    return index, None
+
+
 def _command_problem(command: str, script: str) -> str | None:
     """Why the shell would not start `script` from this hook command, or None.
 
@@ -1006,6 +1080,10 @@ def _command_problem(command: str, script: str) -> str | None:
     then refused, and a Stop hook that cannot start is skipped without a word.
     The command is split with POSIX shell rules (shlex) and never run, so the
     script path is not opened: a moved skill is not this check's to find.
+
+    uv's options are read with their values (`uv run --python 3.12 <script>`),
+    and a Python interpreter `uv run` is given the script through (`uv run
+    python <script>`) starts it too.
     """
     try:
         words = shlex.split(command)
@@ -1017,13 +1095,21 @@ def _command_problem(command: str, script: str) -> str | None:
     words = words[index:]
     if not words or _last_path_part(words[0]) not in ("uv", "uv.exe"):
         return "the shell would run %s as the command, not uv" % (json.dumps(words[0]) if words else "nothing")
-    if len(words) < 2 or words[1] != "run":
-        return "uv is given %s, not run" % (json.dumps(words[1]) if len(words) > 1 else "nothing")
-    index = 2
-    while index < len(words) and words[index].startswith("-"):
-        index += 1
+    index, _ = _past_options(words, 1, _UV_VALUE_SHORT, _UV_VALUE_LONG, _NO_STOPS)
+    if index >= len(words) or words[index] != "run":
+        return "uv is given %s, not run" % (json.dumps(words[index]) if index < len(words) else "nothing")
+    index, other = _past_options(words, index + 1, _UV_VALUE_SHORT, _UV_VALUE_LONG, _UV_RUNS_OTHER)
+    if other is not None:
+        return "uv run would run %s, not a script" % other
+    runner = "uv run"
+    if index < len(words) and _PYTHON.match(_last_path_part(words[index])):
+        runner = "python"
+        index, other = _past_options(words, index + 1, _PYTHON_VALUE_SHORT, _PYTHON_VALUE_LONG, _PYTHON_RUNS_OTHER)
+        if other is not None:
+            return "python would run %s, not a script" % other
     if index >= len(words) or _last_path_part(words[index]) != script:
-        return "uv run would be given %s as the script, not a path ending in %s" % (
+        return "%s would be given %s as the script, not a path ending in %s" % (
+            runner,
             json.dumps(words[index]) if index < len(words) else "nothing",
             script,
         )
@@ -1155,6 +1241,42 @@ def _assert_story_skills(project_root: Path) -> dict:
     installed = _story_skills_installed(project_root)
     missing = [s for s, present in installed.items() if not present]
     return {"installed": installed, "missing": missing, "ok": not missing}
+
+
+def _assert_cc_version() -> dict:
+    """The Claude Code version a resume runs on, against the minimums a fresh
+    preflight's cc_version blocker enforces.
+
+    Below 2.1.295 Claude Code ignores the guard's `"onFailure": "block"`, so a
+    run in flight that re-arms on an older one passes every hook check while a
+    guard that cannot run lets the call through. A version `claude --version`
+    cannot give is reported with `read: false` and fails nothing: the fresh
+    preflight read one at launch, and a spawn that `drive_epic.py
+    --claude-bin` started can lack `claude` on its PATH.
+    """
+    cc_raw, cc_ver = _cc_version()
+    below = _below_minimums(cc_ver) if cc_ver is not None else []
+    return {
+        "version": cc_raw,
+        "read": cc_ver is not None,
+        "minimum": "%d.%d.%d" % max(minimum for _, minimum in _CC_MINIMUMS),
+        "below": below,
+        "ok": not below,
+    }
+
+
+def _cc_version_reason(version: dict) -> str:
+    """The named reason for a Claude Code below the minimums."""
+    return (
+        "%s. Claude Code before %s ignores the guard's \"onFailure\": \"block\", "
+        "so a guard that cannot start, crashes or times out lets the tool call "
+        "run unchecked, and a fresh preflight refuses to launch below it. A "
+        "resume does not fix this: updating Claude Code (claude update) is the "
+        "operator's call, and a session keeps the version it started with. "
+        "Escalate the story about to be driven, as execute.md's re-assertion "
+        "sweep says for a skills failure"
+        % (_cc_version_detail(version["version"], version["below"]), version["minimum"])
+    )
 
 
 def _assert_branch(
@@ -1558,11 +1680,13 @@ def build_assert_armed(
     hooks = _assert_hooks(project_root)
     hook_env = _assert_hook_env(project_root)
     skills = _assert_story_skills(project_root)
+    cc_version = _assert_cc_version()
     checks: dict = {
         "branch": branch,
         "hooks": hooks,
         "hook_env": hook_env,
         "skills": skills,
+        "cc_version": cc_version,
         "latch": _read_latch(impl_artifacts, run_id),
         # Reported, never a reason to fail: a resumed session has no step-1
         # report, and execute.md's ignored-tree rule keys on this fact.
@@ -1599,7 +1723,9 @@ def build_assert_armed(
         )
     if not skills["ok"]:
         reasons.append(_story_skills_detail(project_root, skills["missing"]))
-    armed = branch["ok"] and hooks["ok"] and hook_env["ok"] and skills["ok"]
+    if not cc_version["ok"]:
+        reasons.append(_cc_version_reason(cc_version))
+    armed = branch["ok"] and hooks["ok"] and hook_env["ok"] and skills["ok"] and cc_version["ok"]
     return {"armed": armed, "checks": checks, "reasons": reasons}
 
 
@@ -1651,11 +1777,14 @@ def main(argv: list[str] | None = None) -> int:
         "matcher, the guard's \"onFailure\": \"block\", and each hook command "
         "splitting into <env> uv run <script>), injected hook env, "
         "the UCG story "
-        "skills (ucg-create-story, ucg-dev-story), the recall latch "
+        "skills (ucg-create-story, ucg-dev-story), the Claude Code version "
+        "(claude --version, against the minimums the cc_version blocker "
+        "enforces), the recall latch "
         "(reported, never certified), and, with --story, the story's "
         "artifact-derived resume route. Exit 0 iff branch+hooks+env+skills are "
-        "armed. When set, --epic, --tea-config, and the mechanical preflight "
-        "checks do not run.",
+        "armed and the version is not below a minimum (one it cannot read "
+        "fails nothing). When set, --epic, --tea-config, and the other "
+        "mechanical preflight checks do not run.",
     )
     parser.add_argument(
         "--story",
