@@ -2314,11 +2314,11 @@ def test_a_pass_of_a_test_whose_name_holds_the_row_s_takes_the_file_s_test_off(t
     row may leave out the `[P0]` tag TEA puts in front of a name. The pass
     that takes a file's test off the count had to name the test exactly, so
     such a row read as a kill when its file exited after the test passed. It
-    now matches the name as the kill path does. The last two captures are
-    #179's: a pass of `run reads its file twice`, listed before a file that
-    dies, now reads 0 failed as well, since the row's name names that test
-    too, and a row that cannot run is measured again where a false kill
-    would close its gap."""
+    now takes any name that holds the row's `expect_red`. The last two
+    captures are #179's: a pass of `run reads its file twice`, listed before a
+    file that dies, now reads 0 failed as well, since the row's name names
+    that test too, and a row that cannot run is measured again where a false
+    kill would close its gap."""
     proc = _read_capture(tmp_path, capture, expect_red)
     assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
     assert proc.returncode == 1

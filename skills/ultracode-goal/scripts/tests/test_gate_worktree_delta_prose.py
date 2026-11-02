@@ -3954,8 +3954,8 @@ _DIES_DURING_A_TEST = (
 )
 # The two such kills `mutate_check.py` cannot always tell from a harness error (no
 # line says which file a passing test or an error is from), which can read 0 failed.
-# Since #186 the pass is of any test whose name holds the row's `expect_red`, as
-# the kill path matches it, in the dying file too.
+# Since #186 the pass is of any test whose name holds the row's `expect_red`, in
+# the dying file too, where it was only a test of that exact name.
 _DIES_BUT_READS_0_FAILED = (
     "though it can read 0 failed when a test whose name holds the row's `expect_red` passes or is skipped in that file "
     "before the process dies or in a file Node lists before it, or when the last thing Node prints for that file is "
@@ -4053,7 +4053,7 @@ _SKIP_CASE = "a Node test file's process that exits non-zero after the row's tes
          "dies or in a file Node lists before it, or when", "when", set(), False),
         (", or when the last thing Node prints for that file is an uncaught error that a child process printed;", ";",
          set(), False),
-        # #186: a pass names the row's test as the kill path does, by a name that holds its `expect_red`, and can
+        # #186: a pass names the row's test by any name that holds its `expect_red`, and can
         # stand in the dying file itself, so a bullet that names only a test of the same name in another file
         # claims as kills the rows that read 0 failed.
         (_DIES_BUT_READS_0_FAILED, _DIES_BUT_READS_0_FAILED_BY_ITS_NAME, set(), False),
@@ -4102,10 +4102,10 @@ def test_a_node_test_file_that_dies_during_a_test_is_a_kill(capture, expect_red)
     process printed an uncaught error (the middle three captures): only the
     lines Node printed after the previous file's test are read now, and a load
     error only as the last of them. A pass of a longer name, which that review
-    kept a kill, names the row's test as the kill path does since #186, so it
-    reads 0 failed (the test below). The last capture is #186's: pnpm prints
-    another package's lines among the dying file's, and the file still reads
-    as a kill."""
+    kept a kill, counts as a pass of the row's test since #186, as any name that
+    holds the row's `expect_red` does, so it reads 0 failed (the test below).
+    The last capture is #186's: pnpm prints another package's lines among the
+    dying file's, and the file still reads as a kill."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
     status, detail, _ = mutate_check._classify_red(output, expect_red)
