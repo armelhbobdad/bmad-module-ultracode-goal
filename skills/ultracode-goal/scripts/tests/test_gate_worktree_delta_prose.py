@@ -2343,7 +2343,10 @@ _EVIDENCE_COMMIT = re.compile(r"evidence commit|evidence-commit|\.evidence-owed"
 _HOOK_REJECTION_SENTENCES = {
     "execute.md": (
         ("**A commit can also be rejected by something that is NOT the guard, and ", "0f2c634952fd"),
-        ("**A hooks reason is fixed in place, not by a return to Stage 2.** When t", "ce0d320951ba"),
+        # Reviewed (#186 review, 4.1.0): the hooks re-merge a resume makes now
+        # waits behind an operator's reason, which escalates first; a settings
+        # write, and nothing of a hook's rejection of the evidence commit.
+        ("**A hooks reason is fixed in place, not by a return to Stage 2.** When t", "a178c4791343"),
         ("**Commit at green** (one implementation commit per green story; the gate", "50b2448580e8"),
         ("A fix that writes `.claude/settings.local.json` (a hook, its env, the al", "9df5f7b5d3f4"),
         ("Before the next story's step 0, also check whether the last advanced sto", "88ce12f730cc"),
@@ -2425,8 +2428,9 @@ _HOOK_REJECTION_SENTENCES = {
         ("- **A refused settings write.** Preflight writes its hooks and allow rul", "298ba71ea2eb"),
         ("--- title: Troubleshooting description: Maps the real failure modes of a", "74417cea7b2a"),
         # Reviewed (#186): the same refused settings write on a resume; no
-        # hook's rejection of the evidence commit.
-        ("A resume rewrites the file too when the hooks need re-arming (the first ", "e507cf59b477"),
+        # hook's rejection of the evidence commit. Reviewed again (4.1.0) when
+        # it gained the operator's reason that escalates before that write.
+        ("A resume rewrites the file too when the hooks need re-arming (the first ", "bf3d8f2d3b0c"),
         # Reviewed (#186 review): a missing budget script, whose uv exit 2 a Stop
         # hook reads as a block on stopping; no hook's rejection of the evidence commit.
         ("The budget hook's command points at nothing too, and `uv` exits 2 when i", "428357f0c82f"),

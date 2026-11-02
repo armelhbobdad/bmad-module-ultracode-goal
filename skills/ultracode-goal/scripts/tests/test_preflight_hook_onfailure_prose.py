@@ -425,6 +425,59 @@ def test_the_preflight_bullet_hands_a_resume_to_that_route():
     )
 
 
+# Review of #186's fix (4.1.0): a run UCG 3.x armed on a Claude Code below
+# 2.1.295 meets the missing key and the version together, and the sweep takes
+# the escalation route first and fixes none of the others (a hooks re-merge
+# writes a protected file a headless session may be refused). Each sentence
+# that sends that first resume, or any resume with a hooks reason, to
+# re-merge says so where it says it, since a conductor or an operator that
+# reads it alone would otherwise make the write.
+_OPERATORS_REASON_FIRST = {
+    "preflight.md Hooks bullet": (
+        "the re-assertion sweep), unless a reason that is the operator's to fix stands beside it (a skills failure, "
+        "or a Claude Code below the minimum): that resume escalates the story it was about to drive first, and the "
+        "resume after the operator's fix re-merges."
+    ),
+    "execute.md resume route": (
+        "meets this reason and re-arms here, unless a reason that is the operator's to fix (a skills failure, or a "
+        "Claude Code below the minimum) stands beside it: the paragraph above takes the escalation route first, and "
+        "the resume after the operator's fix re-arms here."
+    ),
+    # The route's own lead, which orders the re-merge for every hooks reason.
+    "execute.md resume route lead": (
+        "or injected env that is missing) and no reason that is the operator's to fix stands beside them (the "
+        "paragraph above escalates that one first), apply `references/preflight.md` step 5's **Hooks** bullet alone"
+    ),
+    "troubleshooting.md": (
+        "The resume re-checks the hooks and re-arms them if they need it, unless it also finds a reason that is "
+        "yours to fix, a missing story skill or a Claude Code older than 2.1.295: it then escalates the story it "
+        "was about to drive first, and re-arms the hooks on the resume after you fix that."
+    ),
+    # The refused settings write, which names the first resume after an update.
+    "troubleshooting.md refused write": (
+        "A resume rewrites the file too when the hooks need re-arming (the first resume after an update to 4.x "
+        "does, unless it first escalates a reason that is yours to fix, such as a Claude Code older than 2.1.295)"
+    ),
+}
+
+
+@pytest.mark.parametrize("where", sorted(_OPERATORS_REASON_FIRST))
+def test_a_resume_re_arms_only_once_no_operators_reason_stands_beside_it(where: str):
+    text = {
+        "preflight.md Hooks bullet": _flat(_hooks_bullet()),
+        "execute.md resume route": _flat(_resume_route()),
+        "execute.md resume route lead": _flat(_resume_route()),
+        "troubleshooting.md": _flat(_read(TROUBLESHOOTING)),
+        "troubleshooting.md refused write": _flat(_read(TROUBLESHOOTING)),
+    }[where]
+    assert _OPERATORS_REASON_FIRST[where] in text
+    # The sweep's own rule, which these sentences now defer to.
+    assert (
+        "When one stands beside other reasons, a hooks reason included, take this route first and fix none of the "
+        "others" in _flat(_read(EXECUTE))
+    )
+
+
 def test_the_assert_armed_reason_names_the_same_route():
     """The conductor reads the reason first: it names the bullet and the rules."""
     spec = importlib.util.spec_from_file_location("preflight_check_onfailure", PREFLIGHT_CHECK)
