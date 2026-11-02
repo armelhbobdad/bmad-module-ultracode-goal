@@ -321,6 +321,62 @@ def test_a_story_id_holding_a_path_separator_counts_against_unknown(tmp_path: Pa
     assert "separator" in proc.stderr.decode("utf-8", "replace")
 
 
+# A file name holds at most 255 bytes (NAME_MAX on Linux and macOS), and the
+# longest name the hook writes is the turn-ceiling marker's, 15 bytes more
+# than the story id: `.escalation-<id>.md`.
+_LONGEST_ID_BYTES = 255 - len(".escalation-.md")
+
+
+@pytest.mark.parametrize("source", ["pointer", "env"])
+@pytest.mark.parametrize(
+    "story",
+    [
+        pytest.param("1-1-" + "a" * 246, id="250-bytes"),
+        pytest.param("1-1-" + "a" * (_LONGEST_ID_BYTES - 3), id="one-byte-past-the-marker"),
+        pytest.param("1-1-" + "é" * 119, id="121-characters-242-bytes"),
+    ],
+)
+def test_a_story_id_too_long_for_a_file_name_counts_against_unknown(tmp_path: Path, story: str, source: str) -> None:
+    """The counter and the marker are named after the story id, and an id
+    too long for either name was never counted: the counter could not be read
+    or written (ENAMETOOLONG), every turn was lost with a note on stderr, and
+    the ceiling never fired. Such an id names no story it can count, as a
+    NUL's or a separator's does, so the turn counts against `unknown`. The
+    length is the file system's, in bytes, not in characters."""
+    assert len(os.fsencode(f".escalation-{story}.md")) > 255
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = _no_story_env(impl, "1")
+    if source == "pointer":
+        (impl / ".current-story").write_text(story + "\n", encoding="utf-8")
+    else:
+        env["ULTRACODE_STORY_ID"] = story
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "unknown") == 1
+    assert (impl / ".escalation-unknown.md").is_file()
+    assert "systemMessage" in json.loads(proc.stdout)
+    assert "too long for a file name" in proc.stderr.decode("utf-8", "replace")
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="a 255-character name passes the 260-character path limit Windows may keep"
+)
+def test_the_longest_story_id_a_marker_name_holds_counts_as_itself(tmp_path: Path) -> None:
+    """The twin at the bound: an id whose marker name is 255 bytes long is
+    counted against itself, and its marker is written at the ceiling."""
+    story = "1-1-" + "a" * (_LONGEST_ID_BYTES - 4)
+    assert len(os.fsencode(f".escalation-{story}.md")) == 255
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = {**_no_story_env(impl, "1"), "ULTRACODE_STORY_ID": story}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, story) == 1
+    assert (impl / f".escalation-{story}.md").is_file()
+    assert not (impl / ".budget-unknown.json").exists()
+
+
 # --- A link or a special file at the counter's or the marker's name ----------
 # The hook read and wrote its counter and its marker by name, following a
 # symlink there, so one to a file outside the state dir had that file's

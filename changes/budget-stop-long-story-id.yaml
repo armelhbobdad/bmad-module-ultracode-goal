@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The turn-budget `Stop` hook now counts a turn against `unknown` when the story id (`ULTRACODE_STORY_ID` or `.current-story`) is too long for a file name, which is when its turn-ceiling marker's name, `.escalation-<story>.md`, would pass 255 bytes, and says so on stderr. Such a story was never counted: its counter `.budget-<story>.json` could not be read or written, every turn was lost, and its turn ceiling never fired.

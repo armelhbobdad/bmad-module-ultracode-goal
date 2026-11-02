@@ -35,7 +35,9 @@ An empty or unreadable marker (one that is not UTF-8 included) still counts
 against "unknown", because a story may be in flight behind it, and so does a
 story id that holds a NUL byte, which no counter's file name can, or a slash
 or a backslash, which would name the counter and the turn-ceiling marker in
-another folder (outside the state dir, with `..` steps after it).
+another folder (outside the state dir, with `..` steps after it), or that is
+too long for a file name: the marker's name, the longer of the two, would
+pass 255 bytes.
 
 The hook reads and writes only a regular file at the counter's and the
 marker's names. It opens the counter without following a symlink at its name
@@ -89,6 +91,10 @@ from pathlib import Path
 from typing import NoReturn
 
 DEFAULT_MAX_TURNS = 25
+
+# The longest file name, in bytes: NAME_MAX on Linux and macOS. Windows takes
+# 255 UTF-16 units, so a name within 255 UTF-8 bytes fits there too.
+_NAME_MAX = 255
 
 # Open the counter without following a symlink at its name or waiting on a
 # FIFO there, where the system has the flags (Windows has neither, nor FIFOs,
@@ -177,7 +183,24 @@ def _current_story(impl: Path | None) -> str | None:
             "counting the turn against unknown"
         )
         return "unknown"
+    if sid and not _fits_a_file_name(f".escalation-{sid}.md"):
+        # The marker's name is two bytes longer than the counter's, so an id
+        # that fits it fits both. Past it, the counter could not be read or
+        # written, and the ceiling never fired.
+        _warn(
+            f"the story id is too long for a file name: its turn-ceiling marker's name would pass "
+            f"{_NAME_MAX} bytes; counting the turn against unknown"
+        )
+        return "unknown"
     return sid or None
+
+
+def _fits_a_file_name(name: str) -> bool:
+    """Whether the system can spell name as a file name of at most _NAME_MAX bytes."""
+    try:
+        return len(os.fsencode(name)) <= _NAME_MAX
+    except UnicodeError:  # a character the file system encoding has no bytes for
+        return False
 
 
 def _regular_or_absent(path: Path) -> bool:
