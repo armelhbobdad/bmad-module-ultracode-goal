@@ -268,8 +268,9 @@ The two dispositions are genuinely different things, not two names for one:
   and removes the marker (`{ucg-root}/references/gate.md`, "Commit the gate's evidence
   before the next story starts"), on the Epic's last story too, where every row already
   reads `done` and the resume re-enters only for that commit before Finalize.
-  **Closing a `coupled-stories` escalation records the move, and the resumed run makes
-  it.** The sidecar proposes moving clauses the earlier story owes to the later story it
+  **Closing a `coupled-stories` escalation records a proposed move, and the resumed run
+  makes it; a re-plan is the operator's own edit.**
+  The sidecar proposes moving clauses the earlier story owes to the later story it
   names, which narrows the earlier story's AC, or it proposes only a re-plan, where no
   move fits: the later story is outside the run's scope, the two stories are a pair no
   move applies to (a decomposed child beside a story that has a file, or children of two

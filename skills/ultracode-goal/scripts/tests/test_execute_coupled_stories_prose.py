@@ -61,7 +61,10 @@ _FRAGMENT = _REPO_ROOT / "changes" / "execute-coupled-stories.yaml"
 
 _LEAD = "**Two stories green only together: move the clauses in writing, never share a commit.**"
 _NARROWING = "**Get an AC narrowed in writing before committing a case that pins behaviour it forbids.**"
-_CLOSE_LEAD = "**Closing a `coupled-stories` escalation records the move, and the resumed run makes it.**"
+_CLOSE_LEAD = (
+    "**Closing a `coupled-stories` escalation records a proposed move, and the resumed run makes it; a re-plan "
+    "is the operator's own edit.**"
+)
 
 
 def _norm(text: str) -> str:
@@ -473,6 +476,13 @@ def test_ucg_resolve_closes_a_coupled_stories_escalation():
             "they have made it, then `close`.",
             "",
             "records no move for a re-plan-only sidecar",
+        ),
+        # The lead as it read before: every close records a move, a re-plan-only
+        # sidecar included, though it has none.
+        (
+            "records a proposed move, and the resumed run makes it; a re-plan is the operator's own edit.**",
+            "records the move, and the resumed run makes it.**",
+            "has a close rule for the kind",
         ),
         # A children's move said to be written into story files neither child has.
         (
