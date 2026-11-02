@@ -7697,12 +7697,73 @@ def test_a_run_of_links_to_dot_past_the_bound_still_reaches_the_store(store_worl
     resolved path stays at the cwd however often `s/` repeats, so v4.0.0
     still followed L after 17,000 of them, and `mkdir -p` walks it the same
     way. Resolving only the first _MAX_RESOLVED characters as written would
-    miss L."""
+    miss L. It is the store rule that refuses them, having followed L, not
+    the cap on lookups below."""
     _symlink_or_skip(store_world.cwd / "s", Path("."))
     _symlink_or_skip(store_world.cwd / "L", store_world.store)
     for count in (16_000, 17_000):
         code, out = _bash(store_world, "mkdir -p " + "s/" * count + "L/a")
-        _assert_latch_denied(code, out, store_world.latch)
+        reason = _assert_latch_denied(code, out, store_world.latch)
+        assert f"names the recall store {store_world.store}" in reason
+
+
+# Review finding GB-PERF: each lookup hands the system the path resolved so
+# far, and a link to `.` keeps that path as deep as the system looks up, so a
+# run of such links behind some 2,000 real folders cost about 70 s a MB, and a
+# word of a few MB outlasted the hook's 600 s. A path past the bound that takes
+# more than _MAX_LONG_LOOKUPS lookups is refused instead, unresolved.
+_LOOKUP_CAP_DENY = (
+    "names a path longer than 32,768 characters whose symlinks keep it short (a run of "
+    "links to `.`, say), so resolving it takes more than 32,768 lookups and could "
+    "outlast the hook's timeout"
+)
+
+
+@_POSIX_WALK
+def test_a_long_path_stops_resolving_at_the_lookup_cap(guard_module, monkeypatch, tmp_path: Path) -> None:
+    """_real_long counts every name each stretch hands realpath, the path
+    resolved so far included, and raises _TooManyLookups rather than hand it
+    more than _MAX_LONG_LOOKUPS; a path within the cap still resolves whole."""
+    _symlink_or_skip(tmp_path / "s", Path("."))
+    real = os.path.realpath
+    expected = real(str(tmp_path / "x"))
+    handed: list[int] = []
+
+    def counting(path: str) -> str:
+        handed.append(len([name for name in path.split(os.sep) if name]))
+        return real(path)
+
+    monkeypatch.setattr(guard_module.os.path, "realpath", counting)
+    cap = guard_module._MAX_LONG_LOOKUPS
+    assert cap == guard_module._MAX_RESOLVED == 32_768
+    within = os.path.join(str(tmp_path), *(["s"] * 17_000), "x")
+    assert guard_module._real(within) == expected
+    assert sum(handed) <= cap
+    handed.clear()
+    past = os.path.join(str(tmp_path), *(["s"] * 40_000), "x")
+    with pytest.raises(guard_module._TooManyLookups):
+        guard_module._real(past)
+    assert sum(handed) <= cap
+
+
+@_POSIX_WALK
+def test_a_long_path_past_the_lookup_cap_is_denied(store_world: _StoreWorld) -> None:
+    """End to end, under a latch: 40,000 `s/`, with `s` a link to `.`, would
+    take more lookups than the cap, so the call is refused, failing closed,
+    though the path ends in a missing file and not in the store. With no
+    latch the guard resolves nothing and lets it through."""
+    _symlink_or_skip(store_world.cwd / "s", Path("."))
+    command = "cat " + "s/" * 40_000 + "x"
+    reason = _assert_latch_denied(*_bash(store_world, command), store_world.latch)
+    assert _LOOKUP_CAP_DENY in reason
+    assert "refused (failing closed)" in reason
+    store_world.latch.unlink()
+    _assert_allowed(*_bash(store_world, command))
+    for text in (
+        (_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8"),
+        (_REPO_ROOT / "changes" / "guard-long-word-linear.yaml").read_text(encoding="utf-8"),
+    ):
+        assert "so that resolving it takes more than 32,768 lookups" in " ".join(text.split())
 
 
 def _v4_0_0_real(path: str) -> str:

@@ -2232,12 +2232,32 @@ def _fold(path: str) -> str:
 # it, in stretches no longer than this.
 _MAX_RESOLVED = 32_768
 
+# The most lookups _real_long makes for one path: twice as many as realpath
+# makes for the names of a path within _MAX_RESOLVED, which holds at most half
+# as many names as it has characters, since a name and its separator take
+# two. Each realpath call on a stretch looks up every name of the path it is
+# handed, the path resolved so far again and then the stretch, and each
+# lookup hands the system the whole path up to that name. A link to `.` keeps
+# the resolved path short however often it repeats, and as deep as the system
+# looks up (on Linux some 2,000 folders, each walked again by every lookup),
+# so the time a run of them took grew with its length at about 70 s a MB, and
+# a word of a few MB could outlast the hook's timeout. A path that would take
+# more lookups than this is refused, unresolved (_TooManyLookups).
+_MAX_LONG_LOOKUPS = _MAX_RESOLVED
+
+
+class _TooManyLookups(Exception):
+    """A path longer than _MAX_RESOLVED whose links keep it short past
+    _MAX_LONG_LOOKUPS lookups. Nothing catches it short of _mem_gate, which
+    runs the checks that resolve paths only while a run latch is present, and
+    refuses the call (failing closed)."""
+
 
 @functools.lru_cache(maxsize=None)
 def _real(path: str) -> str:
     """os.path.realpath, memoized; the path unchanged when it cannot resolve.
     A path longer than _MAX_RESOLVED gets realpath's answer from _real_long,
-    in time linear in its length."""
+    in time linear in its length, or raises _TooManyLookups."""
     try:
         if len(path) > _MAX_RESOLVED:
             return _real_long(path)
@@ -2258,7 +2278,9 @@ def _real_long(path: str) -> str:
     it or of any longer path succeeds, and the rest is kept as written. It is
     the path resolved so far that is measured, not the path as written: a
     link to `.` keeps the resolved path short however often it repeats, and
-    realpath follows a link after it.
+    realpath follows a link after it. Rather than make more than
+    _MAX_LONG_LOOKUPS lookups, counting the names of the path resolved so far
+    that each stretch looks up again, it raises _TooManyLookups.
 
     Windows looks a path up whole, never one longer than a written path can
     be, so there the first stretch is resolved and the rest kept: that finds
@@ -2274,7 +2296,7 @@ def _real_long(path: str) -> str:
         return os.path.realpath(path)
     names = [name for name in names if name and name != os.curdir]
     resolved = drive + sep
-    done = 0
+    done = lookups = 0
     while done < len(names):
         size, end = len(resolved), done
         while end < len(names) and size + len(sep) + len(names[end]) <= _MAX_RESOLVED:
@@ -2282,6 +2304,9 @@ def _real_long(path: str) -> str:
             end += 1
         if end == done:
             break
+        lookups += resolved.count(sep) + end - done
+        if lookups > _MAX_LONG_LOOKUPS:
+            raise _TooManyLookups(f"{lookups:,} lookups for a {len(path):,}-character path")
         resolved = os.path.realpath(_joined(resolved, names[done:end]))
         done = end
         if os.name == "nt":
@@ -3716,6 +3741,17 @@ def _mem_gate(event: dict, impl: Path | None) -> None:
         return
     try:
         _latch_gate(event, state_path)
+    except _TooManyLookups:
+        _latch_deny(
+            state_path,
+            f"refusing this {event.get('tool_name')} call, because it names a "
+            f"path longer than {_MAX_RESOLVED:,} characters whose symlinks keep "
+            "it short (a run of links to `.`, say), so resolving it takes more "
+            f"than {_MAX_LONG_LOOKUPS:,} lookups and could outlast the hook's "
+            "timeout: whether the path reaches the recall store or claude-mem's "
+            "files cannot be told, and the call is refused (failing closed). "
+            "Spell the path without the repeated links.",
+        )
     except Exception as exc:  # noqa: BLE001  fail closed on the unforeseen
         # A crash would exit non-zero, which the client reads as no decision,
         # letting the call through. A present latch means deny instead.
