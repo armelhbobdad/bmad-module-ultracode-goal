@@ -33,11 +33,13 @@ the caller's own. Two servers can listen on one port, a stale worktree's on
 `::1` beside the main tree's on `127.0.0.1`, say, so only a socket that could
 have taken that connection counts: one at the address it reached, or at that
 family's wildcard address (`0.0.0.0`, or `::`, which takes IPv4 connections
-too). The folder is `null` on another system, when /proc does not say, or
-when those sockets are not all held from one folder by processes it can read,
-since it cannot tell then which of them took the connection. A server whose
-folder has since been removed (one started from a gate worktree the rebuild
-replaced) reads with the ` (deleted)` suffix Linux gives it.
+too). The folder is `null` on another system, when the address the
+connection reached is not one of this host's own (a container's, say), since
+no socket here took it, when /proc does not say, or when those sockets are
+not all held from one folder by processes it can read, since it cannot tell
+then which of them took the connection. A server whose folder has since been
+removed (one started from a gate worktree the rebuild replaced) reads with
+the ` (deleted)` suffix Linux gives it.
 
 Stopping a server the run started. A server the run's own runs started can
 stay up after them: Execute's step 5 sweep runs the full suite, browser tests
@@ -68,10 +70,12 @@ a terminal that is closed afterwards, or in the background by a command that
 has since exited, with no terminal, reads as the run's too when it also
 started after the marker and runs from inside a root. The marker can be days
 old, since a resume keeps it. The probe never stops its own process group, or
-one that holds a process that started it. It sends the group SIGTERM, then
-SIGKILL to what is left after a few seconds, and checks the URL again: a URL
-that still answers is read as above, once more, until a bounded number of
-stops. On a system with no /proc to read it stops nothing.
+one that holds a process that started it, and it stops nothing for a URL whose
+connection reached an address that is not one of this host's own, since no
+server here took that connection. It sends the group SIGTERM, then SIGKILL to
+what is left after a few seconds, and checks the URL again: a URL that still
+answers is read as above, once more, until a bounded number of stops. On a
+system with no /proc to read it stops nothing.
 
 Usage:
     uv run probe_servers.py --url <url> [--url <url> ...]
@@ -159,6 +163,29 @@ def _reached(host: str, port: int) -> tuple[int, bytes] | None:
             # An address family this system cannot open (IPv6 switched off).
             continue
     return None
+
+
+def _lands_here(reached: tuple[int, bytes]) -> bool:
+    """Whether a connection to the reached address lands on this host: a
+    socket bound to it here takes one made to it. Only an address of this
+    host's own can be bound, unless Linux's `ip_nonlocal_bind` lets any one be,
+    so the bound socket must also take the connection."""
+    family, packed = reached
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as server, socket.socket(family, socket.SOCK_STREAM) as client:
+            server.bind((socket.inet_ntop(family, packed), 0))
+            server.listen(1)
+            server.settimeout(_TIMEOUT)
+            client.settimeout(_TIMEOUT)
+            client.connect(server.getsockname())
+            # Taken by the bound socket: a connection to another host's address leaves this one. The peer it names
+            # is not compared with the client's address, which a NAT rule can rewrite (Docker's MASQUERADE does for a
+            # connection to its bridge's address).
+            server.accept()[0].close()
+            return True
+    except OSError:
+        # Another host's address (EADDRNOTAVAIL), or one a connection to never reached the socket bound to it.
+        return False
 
 
 def _proc_address(hex_address: str) -> bytes:
@@ -443,13 +470,22 @@ def probe(urls: list[str], stop: _Stop | None = None, proc: Path | None = None, 
             if reached is None:
                 free.append(url)
                 break
-            entry = {"url": url, "port": port, "cwd": _cwd_of_listener(port, proc, reached)}
+            # A connection that reached another host's address (a container's, say) was taken by no socket here, though
+            # one here listens on every address at that port.
+            here = _lands_here(reached)
+            entry = {"url": url, "port": port, "cwd": _cwd_of_listener(port, proc, reached) if here else None}
             if stop is None:
                 answering.append(entry)
                 break
             if not readable:
                 reason = "this system has no Linux /proc to read the server's processes from, so it stops nothing"
                 members: list[_Process] = []
+            elif not here:
+                reason = (
+                    f"it answered at {socket.inet_ntop(*reached)}, which is not an address of this host, so no process "
+                    "here took the connection"
+                )
+                members = []
             elif attempt == _STOPS:
                 reason = f"it answered again after {_STOPS} stops, so something keeps starting it"
                 members = []

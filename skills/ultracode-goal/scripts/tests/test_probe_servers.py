@@ -642,13 +642,15 @@ _RUN_LEFT_UP = (
 )
 
 
-def _proc_with(tmp_path: Path, processes) -> Path:
+def _proc_with(tmp_path: Path, processes, listening: str = "0100007F") -> Path:
+    """`processes` in a /proc whose one listening socket, port 3001 at `listening` (127.0.0.1 unless given, as
+    /proc/net/tcp prints it), inode 777, the ones marked `holds` hold."""
     proc = tmp_path / "proc"
     (proc / "net").mkdir(parents=True)
     (proc / "stat").write_text(f"cpu  1 2 3\nbtime {_BOOT}\n", encoding="ascii")
     header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
     (proc / "net" / "tcp").write_text(
-        header + "   0: 0100007F:0BB9 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 777\n",
+        header + f"   0: {listening}:0BB9 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 777\n",
         encoding="ascii",
     )
     (proc / "net" / "tcp6").write_text(header, encoding="ascii")
@@ -806,6 +808,114 @@ def _stop_mode(monkeypatch) -> None:
     monkeypatch.setattr(probe_servers, "_reads_processes", lambda _proc: True)
     monkeypatch.setattr(probe_servers, "_caller", lambda _proc: _CALLER)
     monkeypatch.setattr(probe_servers, "_clock_ticks", lambda: _TICKS)
+
+
+_ELSEWHERE = (socket.AF_INET, socket.inet_pton(socket.AF_INET, "192.0.2.1"))
+
+
+def test_an_address_of_this_host_takes_a_connection_and_another_hosts_does_not():
+    assert probe_servers._lands_here(_V4)
+    assert probe_servers._lands_here((socket.AF_INET, bytes(4)))
+    # 192.0.2.1 is TEST-NET-1 (RFC 5737), no host's own address.
+    assert not probe_servers._lands_here(_ELSEWHERE)
+
+
+@pytest.mark.parametrize(("taken", "here"), [(False, False), (True, True)], ids=["never-taken", "taken"])
+def test_an_address_that_binds_is_this_hosts_only_when_the_bound_socket_takes_a_connection(monkeypatch, taken, here):
+    """Linux's `ip_nonlocal_bind` lets another host's address be bound, and a
+    connection made to it then reaches that host, which may answer: only the
+    bound socket taking it shows the address is this host's. The twin: one
+    that takes it."""
+
+    class _Bound:
+        def __init__(self, *_args):
+            self.address = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def bind(self, address):
+            self.address = address
+
+        def getsockname(self):
+            return (self.address[0], 40000)
+
+        def listen(self, _backlog):
+            pass
+
+        def settimeout(self, _timeout):
+            pass
+
+        def connect(self, _address):
+            pass
+
+        def accept(self):
+            if not taken:
+                raise TimeoutError("timed out")
+            return _Bound(), ("192.0.2.1", 50000)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(probe_servers.socket, "socket", _Bound)
+    assert probe_servers._lands_here(_ELSEWHERE) is here
+
+
+@pytest.mark.skipif(not socket.has_ipv6, reason="no IPv6")
+def test_ipv6_loopback_is_this_hosts_own():
+    try:
+        _listener(socket.AF_INET6, "::1").close()
+    except OSError:
+        pytest.skip("::1 cannot be bound here")
+    assert probe_servers._lands_here(_V6)
+
+
+@pytest.mark.parametrize(("reached", "stops"), [(_ELSEWHERE, False), (_V4, True)], ids=["elsewhere", "here"])
+def test_a_url_that_reached_another_hosts_address_stops_no_server_here(tmp_path, monkeypatch, reached, stops):
+    """A URL whose host resolves to a container's address, say, answered from
+    there: a server of the run's here listening on every address at that port
+    never took the connection. It is left up, and the URL listed under `left`
+    with the reason; before, it was stopped and named as the URL's server.
+    The twin reaches 127.0.0.1, where that server does take it."""
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP, listening="00000000")
+    _stop_mode(monkeypatch)
+    answers = [True]
+    monkeypatch.setattr(probe_servers, "_reached", lambda _host, _port: reached if answers[0] else None)
+    sent = []
+
+    def kill(group, sig):
+        sent.append((group, sig))
+        for pid in (40, 41):
+            (proc / str(pid) / "stat").unlink()
+        answers[0] = False
+
+    url = "http://192.0.2.1:3001"
+    stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+    out = probe_servers.probe([url], stop, proc=proc, kill=kill)
+    if stops:
+        assert sent == [(40, signal.SIGTERM)]
+        assert [entry["pids"] for entry in out["stopped"]] == [[40, 41]]
+        return
+    assert sent == [] and out["stopped"] == []
+    assert out["answering"] == [{"url": url, "port": 3001, "cwd": None}]
+    assert out["left"] == [
+        {"url": url, "port": 3001, "cwd": None,
+         "reason": "it answered at 192.0.2.1, which is not an address of this host, so no process here took the "
+                   "connection"}
+    ]
+
+
+@pytest.mark.parametrize(("reached", "cwd"), [(_ELSEWHERE, None), (_V4, "/p/apps/web")], ids=["elsewhere", "here"])
+def test_a_url_that_reached_another_hosts_address_names_no_folder_here(tmp_path, monkeypatch, reached, cwd):
+    """Without the stop flags too: the folder of a server here listening on
+    every address is not the folder of the one that answered elsewhere."""
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP, listening="00000000")
+    monkeypatch.setattr(probe_servers, "_reached", lambda _host, _port: reached)
+    out = probe_servers.probe(["http://192.0.2.1:3001"], proc=proc)
+    assert out == {"answering": [{"url": "http://192.0.2.1:3001", "port": 3001, "cwd": cwd}], "free": []}
 
 
 @pytest.mark.parametrize(
