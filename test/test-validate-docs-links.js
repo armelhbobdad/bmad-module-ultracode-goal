@@ -25,6 +25,7 @@ const {
   checkBuilt,
   headingToAnchor,
   extractAnchors,
+  sitePages,
 } = require('../tools/validate-docs-links.js');
 
 let passed = 0;
@@ -285,27 +286,29 @@ async function main() {
       ['--site-url', site],
     );
     const served = 'site link names no page or file a docs build of this tree serves';
-    const asFile = '(a page is linked by its route: x/ for docs/x.md)';
+    const guide = `(the site serves ${path.join('docs', 'guide.md')} at guide/)`;
+    const home = `(the site serves ${path.join('docs', 'index.md')} at its root)`;
+    const notFound = `(the site serves ${path.join('docs', '404.md')} at 404.html)`;
     const r = await runQuiet(cfg);
     assert.deepStrictEqual(
       r.issues.map((i) => `${i.file}: ${i.detail}`),
       [
-        `README.md: ${served}: ${site}guide.md ${asFile}`,
-        `README.md: ${served}: ${site}guide.md#hook-security ${asFile}`,
-        `README.md: ${served}: ${site}guide.html ${asFile}`,
+        `README.md: ${served}: ${site}guide.md ${guide}`,
+        `README.md: ${served}: ${site}guide.md#hook-security ${guide}`,
+        `README.md: ${served}: ${site}guide.html ${guide}`,
         `README.md: ${served}: ${site}llms-ful.txt`,
         `README.md: ${served}: ${site}img/nope.svg`,
         `README.md: ${served}: ${site}img/`,
         `README.md: ${served}: ${site}gide/index.html`,
         `README.md: anchor matches no heading in ${path.join('docs', 'guide.md')}: ${site}guide/index.html#nope`,
-        `README.md: ${served}: ${site}404/`,
-        `README.md: ${served}: ${site}index/`,
-        `README.md: ${served}: ${site}sub/index/`,
-        `README.md: ${served}: ${site}index/index.html`,
+        `README.md: ${served}: ${site}404/ ${notFound}`,
+        `README.md: ${served}: ${site}index/ ${home}`,
+        `README.md: ${served}: ${site}sub/index/ (the site serves ${path.join('docs', 'sub', 'index.md')} at sub/)`,
+        `README.md: ${served}: ${site}index/index.html ${home}`,
         `README.md: ${served}: ${site}llms.txt/`,
         `README.md: ${served}: ${site}img/logo.svg/`,
-        `README.md: ${served}: ${site}404.html/`,
-        `README.md: ${served}: ${site}guide/index.html/ ${asFile}`,
+        `README.md: ${served}: ${site}404.html/ ${notFound}`,
+        `README.md: ${served}: ${site}guide/index.html/ ${guide}`,
         `README.md: anchor matches no heading in ${path.join('docs', 'guide.md')}: ${site}guide/index#nope`,
         `README.md: ${served}: ${site}..%2F..%2FREADME.md`,
       ],
@@ -316,6 +319,147 @@ async function main() {
       (await runQuiet(bare.cfg)).issues.map((i) => i.detail),
       [`${served}: ${site}404.html`],
     );
+  });
+
+  test('each page is served at the route a real build of the site gave it', () => {
+    // Every route below is the one `astro build` (Astro 5.18.2, Starlight
+    // 0.37.7) wrote for the same file, in a build of this exact tree. Each
+    // segment of a page's path is slugged as a heading is: lowercased, with
+    // dots and most punctuation dropped and a space made a hyphen.
+    const { cfg } = fixture({
+      docs: {
+        'index.md': '# Home\n',
+        '404.md': '# Not found\n',
+        'FAQ.md': '# FAQ\n',
+        'release-v3.2.md': '# Release\n',
+        'nested/Folder Name/Page.md': '# Page\n',
+        'Sub.Dir/Index.md': '# Sub\n',
+        'Mixed/INDEX.md': '# Mixed\n',
+        'x/index.md': '# X\n',
+        'v1.0/notes.v2.md': '# Notes\n',
+        'Café.md': '# Cafe\n',
+        'e\u0301te\u0301.md': '# Ete\n',
+        'a+b c.md': '# Plus\n',
+        'snake_case.md': '# Snake\n',
+        'fm-slug.md': '---\ntitle: Custom\nslug: custom/Route.Two\n---\n\n# Custom\n',
+        '_hidden.md': '# Hidden\n',
+        '_internal/RELEASING.md': '# Releasing\n',
+        '.dotfile.md': '# Dot\n',
+        'UPPER.MD': '# Upper\n',
+        'assets/logo.svg': '<svg/>',
+      },
+    });
+    // The file name is shown in NFC because a macOS HFS+ volume stores names
+    // decomposed. The route is not normalized here: it must come out in NFC.
+    const pages = sitePages(cfg.docsDir);
+    assert.deepStrictEqual(
+      [...pages]
+        .map(([route, page]) => `${route} <- ${path.relative(cfg.docsDir, page.file).split(path.sep).join('/').normalize()}`)
+        .sort(),
+      [
+        ' <- index.md',
+        '404 <- 404.md',
+        'ab-c <- a+b c.md',
+        'café <- Café.md',
+        'custom/Route.Two <- fm-slug.md',
+        'été <- été.md',
+        'faq <- FAQ.md',
+        'mixed <- Mixed/INDEX.md',
+        'nested/folder-name/page <- nested/Folder Name/Page.md',
+        'release-v32 <- release-v3.2.md',
+        'snake_case <- snake_case.md',
+        'subdir <- Sub.Dir/Index.md',
+        'v10/notesv2 <- v1.0/notes.v2.md',
+        'x <- x/index.md',
+      ].sort(),
+    );
+  });
+
+  await testAsync('a site link names a page by the route the site makes from its file name', async () => {
+    // The site serves docs/FAQ.md at faq/, so FAQ/ is a 404 there however
+    // the file is spelled, and a dotted name loses its dots.
+    const site = 'https://example.com/base/';
+    const { cfg } = fixture(
+      {
+        root: {
+          'README.md': [
+            `[a](${site}faq/) [b](${site}faq/#common-questions) [c](${site}faq) [d](${site}faq/index.html)`,
+            `[e](${site}release-v32/) [f](${site}guides/getting-started/#first-run) [g](${site}subdir/)`,
+            `[h](${site}FAQ/) [i](${site}release-v3.2/) [j](${site}Guides/Getting%20Started/) [k](${site}Sub.Dir/)`,
+            `[l](${site}faq/#nope) [m](${site}FAQ.md) [n](${site}faq.md) [o](${site}guides/)`,
+          ].join('\n'),
+        },
+        docs: {
+          'index.md': '# Home\n',
+          'FAQ.md': '## Common questions\n',
+          'release-v3.2.md': '# Release\n',
+          'Guides/Getting Started.md': '## First run\n',
+          'Sub.Dir/Index.md': '# Sub\n',
+        },
+      },
+      ['--site-url', site],
+    );
+    const served = 'site link names no page or file a docs build of this tree serves';
+    const faq = `(the site serves ${path.join('docs', 'FAQ.md')} at faq/)`;
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => `${i.file}: ${i.detail}`),
+      [
+        `README.md: ${served}: ${site}FAQ/ ${faq}`,
+        `README.md: ${served}: ${site}release-v3.2/ (the site serves ${path.join('docs', 'release-v3.2.md')} at release-v32/)`,
+        `README.md: ${served}: ${site}Guides/Getting%20Started/ (the site serves ${path.join('docs', 'Guides', 'Getting Started.md')} at guides/getting-started/)`,
+        `README.md: ${served}: ${site}Sub.Dir/ (the site serves ${path.join('docs', 'Sub.Dir', 'Index.md')} at subdir/)`,
+        `README.md: anchor matches no heading in ${path.join('docs', 'FAQ.md')}: ${site}faq/#nope`,
+        `README.md: ${served}: ${site}FAQ.md ${faq}`,
+        `README.md: ${served}: ${site}faq.md ${faq}`,
+        `README.md: ${served}: ${site}guides/`,
+      ],
+    );
+  });
+
+  await testAsync('a slug in front matter replaces the route made from the file name', async () => {
+    const site = 'https://example.com/base/';
+    const { cfg } = fixture(
+      {
+        root: {
+          'README.md': [
+            `[a](${site}custom/Route.Two/#part) [b](${site}quoted/) [c](${site}single/) [d](${site}commented/)`,
+            `[e](${site}empty/) [f](${site}null/) [g](${site}custom/route.two/) [h](${site}fm/) [i](${site}custom/Route.Two/#nope)`,
+          ].join('\n'),
+        },
+        docs: {
+          'fm.md': '---\ntitle: Custom\nslug: custom/Route.Two\n---\n\n## Part\n',
+          'q.md': '---\nslug: "quoted"\n---\n',
+          's.md': "---\nslug: 'single'\n---\n",
+          'c.md': '---\nslug: commented # a comment\n---\n',
+          'empty.md': "---\nslug: ''\n---\n",
+          'null.md': '---\nslug: ~\n---\n',
+          'body.md': 'slug: not-front-matter\n',
+          'nested.md': '---\nextra:\n  slug: inner\n---\n',
+        },
+      },
+      ['--site-url', site],
+    );
+    const served = 'site link names no page or file a docs build of this tree serves';
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => i.detail),
+      [
+        `${served}: ${site}custom/route.two/`,
+        `${served}: ${site}fm/ (the site serves ${path.join('docs', 'fm.md')} at custom/Route.Two/)`,
+        `anchor matches no heading in ${path.join('docs', 'fm.md')}: ${site}custom/Route.Two/#nope`,
+      ],
+    );
+    assert.deepStrictEqual([...sitePages(cfg.docsDir).keys()].sort(), [
+      'body',
+      'commented',
+      'custom/Route.Two',
+      'empty',
+      'nested',
+      'null',
+      'quoted',
+      'single',
+    ]);
   });
 
   await testAsync('a link to a file on the repository main is mapped back to that file', async () => {
