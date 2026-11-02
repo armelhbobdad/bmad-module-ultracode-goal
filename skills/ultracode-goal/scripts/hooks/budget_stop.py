@@ -32,8 +32,10 @@ A Stop with no current story at all (no ULTRACODE_STORY_ID and no
 hooks are armed) is not a story's turn: nothing is counted and nothing is
 written, so the hook never leaves a stray .budget-unknown.json in the tree.
 An empty or unreadable marker (one that is not UTF-8 included) still counts
-against "unknown", because a story may be in flight behind it, and so does one
-that holds a NUL byte, which no counter's file name can.
+against "unknown", because a story may be in flight behind it, and so does a
+story id that holds a NUL byte, which no counter's file name can, or a slash
+or a backslash, which would name the counter and the turn-ceiling marker in
+another folder (outside the state dir, with `..` steps after it).
 
 The hook exits 0 whatever it is given. Claude Code ignores `onFailure` on
 Stop, so a budget hook that exited 1 would only print a hook error, and the
@@ -139,6 +141,16 @@ def _current_story(impl: Path | None) -> str | None:
     if "\0" in sid:
         # Neither the counter nor the marker could be named after it.
         _warn("the story id holds a NUL byte, which no file name can; counting the turn against unknown")
+        return "unknown"
+    if "/" in sid or "\\" in sid:
+        # The counter and the marker are named after it inside impl, and a
+        # separator would put them in another folder: with `..` steps after
+        # it, outside impl. A backslash is a separator on Windows only, but
+        # no story id holds one, so it counts the same way everywhere.
+        _warn(
+            "the story id holds a path separator, which would name its counter in another folder; "
+            "counting the turn against unknown"
+        )
         return "unknown"
     return sid or None
 

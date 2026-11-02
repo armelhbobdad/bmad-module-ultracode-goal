@@ -284,6 +284,39 @@ def test_a_nul_story_at_its_ceiling_still_exits_zero(tmp_path: Path) -> None:
     assert "systemMessage" in json.loads(proc.stdout)
 
 
+@pytest.mark.parametrize("source", ["pointer", "env"])
+@pytest.mark.parametrize(
+    "story",
+    [
+        pytest.param("x/../../../escaped", id="dotdot"),
+        pytest.param("/../../escaped-abs", id="leading-slash"),
+        pytest.param("1/2", id="slash"),
+        pytest.param("x\\..\\..\\..\\escaped", id="backslash"),
+    ],
+)
+def test_a_story_id_holding_a_path_separator_counts_against_unknown(tmp_path: Path, story: str, source: str) -> None:
+    """The counter and the turn-ceiling marker are named after the story id
+    inside the state dir, so an id holding a separator named them in another
+    folder: `x/../../../escaped` wrote `<project>/escaped.json`, and
+    `<project>/escaped.md` at the ceiling (a backslash does so on Windows).
+    Such an id names no story it can count, so the turn counts against
+    `unknown`, as a NUL's does, and nothing is written anywhere else."""
+    project = tmp_path / "proj"
+    impl = project / "_bmad-output" / "implementation-artifacts"
+    impl.mkdir(parents=True)
+    env = _no_story_env(impl, "1")
+    if source == "pointer":
+        (impl / ".current-story").write_text(story + "\n", encoding="utf-8")
+    else:
+        env["ULTRACODE_STORY_ID"] = story
+    before = set(tmp_path.rglob("*"))
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(project)}), project, env)
+    assert proc.returncode == 0, proc.stderr
+    assert set(tmp_path.rglob("*")) - before == {impl / ".budget-unknown.json", impl / ".escalation-unknown.md"}
+    assert _turns(impl, "unknown") == 1
+    assert "separator" in proc.stderr.decode("utf-8", "replace")
+
+
 @pytest.mark.parametrize(
     "state",
     [

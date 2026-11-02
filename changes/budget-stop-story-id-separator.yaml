@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The turn-budget `Stop` hook now counts a turn against `unknown` when the story id (`ULTRACODE_STORY_ID` or `.current-story`) holds a `/` or a `\`, and says so on stderr. The hook names the turn counter `.budget-<story>.json` and the turn-ceiling marker `.escalation-<story>.md` after the story id inside the implementation artifacts folder, so such an id put them in another folder, and with `..` steps in it outside that folder: with the default folder, `x/../../../escaped` wrote `escaped.json` at the project root, and `escaped.md` beside it at the turn ceiling.
