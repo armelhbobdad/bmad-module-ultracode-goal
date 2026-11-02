@@ -1075,12 +1075,14 @@ function checkLlmsIndex({ buildDir }, report) {
       continue; // external link, not a site route
     }
     checked += 1;
+    // A route ending in `/` (or the root) resolves to its index.html alone,
+    // any other to its index.html or the file it names. A folder is not a
+    // file, so one without an index.html resolves to nothing, as on GitHub
+    // Pages.
     const route = url.pathname.slice(rootPath.length);
-    const candidates =
-      route === ''
-        ? [path.join(buildDir, 'index.html')]
-        : [path.join(buildDir, route.replace(/\/$/, ''), 'index.html'), path.join(buildDir, route)];
-    if (!candidates.some((candidate) => fs.existsSync(candidate))) {
+    const index = path.join(buildDir, route, 'index.html');
+    const candidates = route === '' || route.endsWith('/') ? [index] : [index, path.join(buildDir, route)];
+    if (!candidates.some((candidate) => isFile(candidate))) {
       report(
         'build/site/llms.txt',
         `links a route that resolves to nothing: ${target} (looked for ${candidates

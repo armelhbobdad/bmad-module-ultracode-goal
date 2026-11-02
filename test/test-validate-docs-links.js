@@ -1015,6 +1015,44 @@ async function main() {
     assert.deepStrictEqual(issues, []);
   });
 
+  test('an llms.txt route to a directory without index.html is reported', () => {
+    // GitHub Pages serves a folder only from its index.html, so img/ is a 404
+    // there although build/site/img/ exists.
+    const { cfg } = fixture({
+      build: {
+        'llms.txt': [
+          'Documentation: https://x.io/base',
+          '',
+          '- [Dir](https://x.io/base/img/)',
+          '- [Bare](https://x.io/base/img)',
+          '- [Deep](https://x.io/base/img/icons/)',
+          '- [Page](https://x.io/base/ok/)',
+          '- [PageBare](https://x.io/base/ok)',
+          '- [File](https://x.io/base/img/logo.svg)',
+          '- [FileSlash](https://x.io/base/img/logo.svg/)',
+          '',
+        ].join('\n'),
+        'img/logo.svg': '<svg/>',
+        'img/icons/a.svg': '<svg/>',
+        'ok/index.html': page('<p>ok</p>'),
+      },
+    });
+    const issues = [];
+    assert.strictEqual(
+      checkLlmsIndex(cfg, (file, detail) => issues.push(detail)),
+      7,
+    );
+    assert.deepStrictEqual(
+      issues.map((detail) => detail.replace(/ \(looked for .*\)$/, '')),
+      [
+        'links a route that resolves to nothing: https://x.io/base/img/',
+        'links a route that resolves to nothing: https://x.io/base/img',
+        'links a route that resolves to nothing: https://x.io/base/img/icons/',
+        'links a route that resolves to nothing: https://x.io/base/img/logo.svg/',
+      ],
+    );
+  });
+
   test('no llms.txt or no Documentation header checks nothing and reports nothing', () => {
     const bare = fixture({ build: { 'index.html': page('<p>hi</p>') } });
     assert.strictEqual(
