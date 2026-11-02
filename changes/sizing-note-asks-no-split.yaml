@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The sizing note a story gets when it advances at its gate with its turn count at or past `max_turns_per_story` now records the turns its drive spent, and no longer says that a story of that shape should be split smaller next time. Sizing reads a row's acceptance criteria, never its turns, so the note asked the next run for a split the sizing rule would not make.
+issues: [186]

@@ -220,6 +220,52 @@ def test_the_sizing_call_reads_the_criteria_and_reports_the_tasks() -> None:
     assert "load" not in payload
 
 
+EXECUTE = SCRIPT.parents[1] / "references" / "execute.md"
+
+
+def _execute_sizing_call() -> list[str]:
+    """The sizing call execute.md shows for before the split, its placeholders
+    filled: argv after the script path."""
+    text = " ".join(EXECUTE.read_text(encoding="utf-8").split())
+    start = text.index("Before the split, call it with")
+    call = text[text.index("`uv run {skill-root}/scripts/story_sizing.py", start) + 1 :]
+    call = call[: call.index("`")]
+    filled = (
+        call.replace("'<the row's ACs>'", "AC-1,AC-2,AC-3")
+        .replace("<n>", "4")
+        .replace("{workflow.max_turns_per_story}", "25")
+    )
+    argv = filled.split()
+    assert argv[:3] == ["uv", "run", "{skill-root}/scripts/story_sizing.py"], argv
+    return argv[3:]
+
+
+def test_the_sizing_call_execute_md_shows_runs_the_sizing_half() -> None:
+    """execute.md showed only the reconciling call and said to drop `--child`
+    for the sizing call; that call kept `--parent` and `--record`, which need a
+    child, and exited 2. The sizing call it shows now is one the script runs."""
+    argv = _execute_sizing_call()
+    assert not {"--child", "--parent", "--record"} & set(argv), argv
+    code, payload = _run(*argv)
+    assert code == 0
+    assert payload is not None
+    assert payload["reconciled"] is False
+    assert payload["ac_count"] == 3
+
+
+def test_the_reconciling_call_without_its_children_is_a_usage_error(tmp_path: Path) -> None:
+    """Twin: the reconciling call execute.md shows, with its `--child` rows
+    dropped as the old sentence said, is refused (exit 2, no JSON)."""
+    code, payload = _run(
+        "--parent", "7-1", "--record", str(tmp_path), "--parent-acs", "AC-1,AC-2", "--tasks", "4", "--turn-ceiling", "25"
+    )
+    assert code == 2
+    assert payload is None
+    assert "Called without `--child` before the split it does the sizing half only" not in EXECUTE.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_malformed_id_is_a_usage_error_not_a_dropped_token() -> None:
     """A dropped typo would surface as an AC nobody claimed: a false failure."""
     code, payload = _run("--parent-acs", "AC-1, oops!", "--child", "a=AC-1")

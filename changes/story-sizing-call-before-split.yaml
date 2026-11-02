@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  Execute now shows the `story_sizing.py` call that sizes a row before a split: `--parent-acs`, `--tasks` and `--turn-ceiling`, with no `--child`, `--parent` or `--record`. It showed only the call that reconciles a split and said to drop `--child` for the sizing half, which left `--record` in the command, and `--record` with no `--child` is a usage error (exit 2).
+issues: [186]

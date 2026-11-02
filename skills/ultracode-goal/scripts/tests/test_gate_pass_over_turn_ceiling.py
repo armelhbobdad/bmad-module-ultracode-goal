@@ -65,6 +65,37 @@ def test_gate_pass_predicate_rejects_a_single_dropped_clause(clause):
     assert not _gate_pass_wins(mutant)
 
 
+# Sizing reads a row's criteria, never its turns (execute.md, "Sizing: a story
+# too large to drive"), so the note a passing story gets must not ask the next
+# run to split a row of the same shape.
+_NOTE_NOW = (
+    "; Finalize's run report carries it. The note records the turns the drive spent, and never says a row of "
+    "this shape should be split: sizing reads a row's criteria, never its turns (\"Sizing: a story too large "
+    "to drive\" above), and the turns follow how the drive waited."
+)
+_NOTE_BEFORE = (
+    ", and saying that a story of this shape should be split smaller next time; Finalize's run report carries it."
+)
+
+
+def _note_asks_no_split(section: str) -> bool:
+    return _NOTE_NOW in section and not re.search(r"split smaller|should be split(?! *:)", section)
+
+
+def test_the_sizing_note_asks_for_no_split():
+    assert _note_asks_no_split(_promotion(_read("execute.md")))
+
+
+def test_the_sizing_note_pin_reds_on_the_note_that_asked_for_a_split():
+    """Twin: the note as it read while sizing still weighed turns."""
+    section = _promotion(_read("execute.md"))
+    mutant = section.replace(_NOTE_NOW, _NOTE_BEFORE)
+    assert mutant != section, "the mutant must actually change the text"
+    assert not _note_asks_no_split(mutant)
+    # The new sentence kept, with the old request added back beside it.
+    assert not _note_asks_no_split(section.replace(_NOTE_NOW, _NOTE_NOW + " It should be split smaller next time."))
+
+
 _PING_DEFERS = "A marker whose story the gate advanced is never promoted or pinged"
 
 
