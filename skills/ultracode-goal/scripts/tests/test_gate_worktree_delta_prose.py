@@ -2414,7 +2414,10 @@ _HOOK_REJECTION_SENTENCES = {
         ("What it cannot catch itself (an interpreter or `uv` that cannot start, a", "f6c954ccd14a"),
         ("Without it each of those lets the call run unchecked, because Claude Cod", "b8668e309a48"),
         ("Written out, with `<env>` the `KEY='value'` prefix the env bullet below ", "a4897c01949e"),
-        ("`--assert-armed` reads each UCG hook command the way the shell splits it", "e1e405c199e5"),
+        # Reviewed (#186 review, 4.1.0, final pass): what the check fails in a
+        # hook command as written, a shell operator or redirection now too; it
+        # answers no hook's rejection and says nothing of the evidence commit.
+        ("`--assert-armed` reads each UCG hook command the way the shell splits it", "90a8208b2811"),
     ),
     "SKILL.md": (
         ("An Epic whose stories all read `done` while a story's `.evidence-owed-<s", "a5bb6b9a9f94"),

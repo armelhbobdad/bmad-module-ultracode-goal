@@ -700,12 +700,7 @@ def test_a_guard_command_the_shell_splits_as_written_is_armed(tmp_path: Path, co
     assert out["reasons"] == [] and code == 0, out["reasons"]
 
 
-# Review of #186's fix: once uv's options were read, a command that hands the
-# script to an option which prints and exits read as one that starts it,
-# though 12e0a9d refused `uv --version run`. Each form below was run against
-# uv 0.12.15: it exits without running the script (0, or 2 for `uv run -V`,
-# which uv run does not take). The read is in-process, so the many forms cost
-# no subprocess.
+# The read is in-process, so the many forms below cost no subprocess.
 _GUARD = "'/srv/p/scripts/hooks/guard_pretooluse.py'"
 
 
@@ -714,6 +709,186 @@ def _preflight_module():
     return _load("preflight_check")
 
 
+# Review of #186's fix (4.1.0), final pass. The check read each leading word
+# as an assignment after shlex had taken its quotes off, and read `<`, `>`,
+# `||`, `;` and `&` as words. The shell does neither: a word whose name or "="
+# is quoted is no assignment, so the shell runs it as the command (dash and
+# bash both exit 127, "KEY=v w: not found"), and an operator runs more than
+# the script or redirects it. Through dash and bash, with a stub uv that
+# prints a verdict and exits 2: `< /dev/null` and `&` handed the script an
+# empty stdin in place of the hook event, `|| true`, `; true` and a second
+# line exited 0, `> /dev/null` dropped the verdict, `2>&1` moved the reason
+# into it, and `KEY=v; uv run` ran uv without KEY. A comment that starts a
+# word ends the command there and changes nothing. 4.0.0 passed each of these.
+_QUOTED_ASSIGNMENT = "the shell would run %s as the command, not uv, since a word whose name or \"=\" is quoted is no assignment"
+
+
+@pytest.mark.parametrize(
+    "command,shown",
+    [
+        (f"'ULTRACODE_IMPL_ARTIFACTS=/My Projects/x' uv run {_GUARD}", '"ULTRACODE_IMPL_ARTIFACTS=/My Projects/x"'),
+        (f'"ULTRACODE_IMPL_ARTIFACTS=/My Projects/x" uv run {_GUARD}', '"ULTRACODE_IMPL_ARTIFACTS=/My Projects/x"'),
+        (f'ULTRACODE_IMPL_ARTIFACTS"=/x" uv run {_GUARD}', '"ULTRACODE_IMPL_ARTIFACTS=/x"'),
+        (f"\\ULTRACODE_MAX_TURNS=25 uv run {_GUARD}", '"ULTRACODE_MAX_TURNS=25"'),
+        (f"ULTRACODE_MAX_TURN'S'=25 uv run {_GUARD}", '"ULTRACODE_MAX_TURNS=25"'),
+        # After an assignment the shell does take, a quoted one still runs.
+        (f"ULTRACODE_MAX_TURNS='25' 'ULTRACODE_IMPL_ARTIFACTS=/x' uv run {_GUARD}", '"ULTRACODE_IMPL_ARTIFACTS=/x"'),
+    ],
+)
+def test_a_quoted_assignment_is_the_command_the_shell_runs(command: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(command, "guard_pretooluse.py")
+    assert problem == _QUOTED_ASSIGNMENT % shown, problem
+
+
+@pytest.mark.parametrize(
+    "command,shown",
+    [
+        # Input from elsewhere than the hook event.
+        (f"uv run {_GUARD} < /dev/null", '"< /dev/null"'),
+        (f"uv run {_GUARD} <<EOF\n{{}}\nEOF", '"<<EOF"'),
+        # Output, or the reason, sent elsewhere than where Claude Code reads it.
+        (f"uv run {_GUARD} > /dev/null", '"> /dev/null"'),
+        (f"uv run {_GUARD} >>/tmp/log", '">>/tmp/log"'),
+        (f"uv run {_GUARD} 2>&1", '"2>&1"'),
+        (f"uv run {_GUARD} 2>/dev/null", '"2>/dev/null"'),
+        (f"uv run {_GUARD} &>/dev/null", '"&>/dev/null"'),
+        (f"uv run {_GUARD} >| x", '">| x"'),
+        (f"< /dev/null uv run {_GUARD}", '"< /dev/null"'),
+    ],
+)
+def test_a_redirection_is_refused(command: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(command, "guard_pretooluse.py")
+    assert problem is not None and problem.startswith("the shell would read %s as a redirection" % shown), problem
+
+
+@pytest.mark.parametrize(
+    "command,shown",
+    [
+        (f"uv run {_GUARD} || true", '"||"'),
+        (f"uv run {_GUARD} ; true", '";"'),
+        (f"uv run {_GUARD}; exit 0", '";"'),
+        (f"uv run {_GUARD} && true", '"&&"'),
+        (f"uv run {_GUARD} &", '"&"'),
+        (f"uv run {_GUARD} | cat", '"|"'),
+        (f"uv run {_GUARD} |& cat", '"|&"'),
+        (f"uv run {_GUARD}\ntrue", '"\\n"'),
+        (f"uv run {_GUARD} > /dev/null || true", '"> /dev/null"'),  # the first operator is named
+        # Before the script too: `KEY=v;` sets a variable uv never sees.
+        (f"ULTRACODE_MAX_TURNS=25; uv run {_GUARD}", '";"'),
+        (f"cd /srv && uv run {_GUARD}", '"&&"'),
+        (f"(uv run {_GUARD})", '"("'),
+    ],
+)
+def test_a_control_operator_is_refused(command: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(command, "guard_pretooluse.py")
+    assert problem is not None and problem.startswith("the shell would read %s as" % shown), problem
+    if not shown.startswith('">'):
+        assert problem.startswith("the shell would read %s as a control operator" % shown), problem
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The template preflight writes, and the twins of the refusals above:
+        # each starts the script with the hook event, under dash and bash.
+        pytest.param(f"ULTRACODE_IMPL_ARTIFACTS='/My Projects/x' uv run {_GUARD}", id="quoted-value"),
+        pytest.param(f'ULTRACODE_IMPL_ARTIFACTS="/My Projects/x" uv run {_GUARD}', id="double-quoted-value"),
+        pytest.param(f"ULTRACODE_IMPL_ARTIFACTS=/My\\ Projects/x uv run {_GUARD}", id="escaped-space"),
+        pytest.param(f"ULTRACODE_MAX_TURNS= uv run {_GUARD}", id="empty-value"),
+        # The form 4.0.0 armed: unquoted, with no space to split.
+        pytest.param(
+            "ULTRACODE_PROTECTED_BRANCHES=main,master ULTRACODE_MAX_TURNS=25 "
+            "uv run /srv/skill/scripts/hooks/guard_pretooluse.py",
+            id="4-0-0-form",
+        ),
+        # Operator characters inside quotes, or escaped, are part of a word.
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS='a|b>c;d&e' uv run " + _GUARD, id="operators-quoted"),
+        pytest.param('ULTRACODE_IMPL_ARTIFACTS="(a) <b>" uv run ' + _GUARD, id="operators-double-quoted"),
+        pytest.param("uv run /srv/a\\;b/scripts/hooks/guard_pretooluse.py", id="operator-escaped"),
+        pytest.param("uv run '/srv/a#b/guard_pretooluse.py'", id="hash-in-a-word"),
+        # A comment that starts a word ends the command and changes nothing.
+        pytest.param(f"uv run {_GUARD} # armed by hand", id="trailing-comment"),
+        # A line continuation joins its two lines into one word.
+        pytest.param("uv run /srv/p/scripts/hooks/guard_pre\\\ntooluse.py", id="line-continuation"),
+    ],
+)
+def test_a_command_with_its_operators_quoted_starts_the_guard(command: str) -> None:
+    assert _preflight_module()._command_problem(command, "guard_pretooluse.py") is None
+
+
+def test_a_wholly_quoted_arming_is_not_armed(tmp_path: Path) -> None:
+    """End to end, the finding's arming: every value quoted with its name.
+    Each hook var reads as set in the command, and the command starts no
+    hook."""
+    root = _repo(tmp_path)
+    env = " ".join(f"'{var}=x'" for var in _ENV_VARS)
+    _arm(
+        root,
+        guard_command=f"{env} uv run 'scripts/hooks/guard_pretooluse.py'",
+        budget_command=f"{env} uv run 'scripts/hooks/budget_stop.py'",
+    )
+    code, out = _run(root)
+    assert code == 1 and out["armed"] is False
+    problems = out["checks"]["hooks"]["command_problems"]
+    assert [p.split(": ", 1)[0] for p in problems] == ["guard_pretooluse.py under PreToolUse", "budget_stop.py under Stop"]
+    assert all('the shell would run "ULTRACODE_PROTECTED_BRANCHES=x" as the command, not uv' in p for p in problems)
+
+
+def _through_sh(command: str, tmp_path: Path) -> tuple[int, dict | None]:
+    """(exit code, what a stub uv recorded) for the command run as Claude
+    Code runs a hook, through `sh -c` with the event on stdin. The stub
+    records its argv and stdin, prints a verdict and exits 2, as the guard
+    does on a refusal."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    record = tmp_path / "uv-call.json"
+    dump = tmp_path / "dump.py"
+    dump.write_text(
+        "import json, os, sys\n"
+        "data = {'argv': sys.argv[1:], 'stdin': sys.stdin.read()}\n"
+        "with open(os.environ['UCG_STUB_OUT'], 'w', encoding='utf-8') as fh:\n"
+        "    json.dump(data, fh)\n"
+        "print('{\"decision\": \"deny\"}')\n"
+        "sys.exit(2)\n",
+        encoding="utf-8",
+    )
+    stub = bin_dir / "uv"
+    stub.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{dump}' \"$@\"\n", encoding="utf-8")
+    stub.chmod(0o755)
+    if record.exists():
+        record.unlink()
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}", "UCG_STUB_OUT": str(record)}
+    proc = subprocess.run(["sh", "-c", command], input='{"event": 1}', capture_output=True, text=True, env=env, timeout=60)
+    return proc.returncode, json.loads(record.read_text(encoding="utf-8")) if record.exists() else None
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("sh") is None, reason="runs the hook command through a POSIX sh")
+@pytest.mark.parametrize(
+    "command,starts",
+    [
+        # Each refusal above, as the shell runs it: the script never starts,
+        # never reads the event, or its exit code is not what Claude Code reads.
+        (f"'ULTRACODE_MAX_TURNS=25' uv run {_GUARD}", False),
+        (f"uv run {_GUARD} < /dev/null", False),
+        (f"uv run {_GUARD} || true", False),
+        (f"uv run {_GUARD} ; true", False),
+        # Their twins start it with the event and keep its exit code.
+        (f"ULTRACODE_MAX_TURNS='25' uv run {_GUARD}", True),
+        (f"uv run {_GUARD} # armed by hand", True),
+    ],
+)
+def test_the_shell_runs_each_form_as_the_check_reads_it(command: str, starts: bool, tmp_path: Path) -> None:
+    code, call = _through_sh(command, tmp_path)
+    ran = code == 2 and call is not None and call["argv"][-1].endswith("guard_pretooluse.py") and call["stdin"]
+    assert bool(ran) is starts, (code, call)
+    assert (_preflight_module()._command_problem(command, "guard_pretooluse.py") is None) is starts
+
+
+# Review of #186's fix: once uv's options were read, a command that hands the
+# script to an option which prints and exits read as one that starts it,
+# though 12e0a9d refused `uv --version run`. Each form below was run against
+# uv 0.12.15: it exits without running the script (0, or 2 for `uv run -V`,
+# which uv run does not take).
 @pytest.mark.parametrize(
     "words,shown",
     [

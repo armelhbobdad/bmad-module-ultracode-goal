@@ -77,9 +77,11 @@ branch, both hooks with the all-tools PreToolUse matcher, `"onFailure":
 "block"` on every guard item (an arming made by UCG 3.x or earlier has none,
 and its resume re-merges the hooks: references/execute.md), each UCG hook
 command splitting, the way the shell splits it, into `<env> uv run <script>`
-(an unquoted path with a space does not, and that hook never starts), the
-five injected hook env vars (accepted from the hook command strings OR the
-inherited process env, both of which preflight step 5 permits), the UCG
+(an unquoted path with a space, or an assignment quoted with its name, does
+not, and that hook never starts; a shell operator or redirection fails it
+too), the five injected hook env vars (accepted from the hook command
+strings OR the inherited process env, both of which preflight step 5
+permits), the UCG
 story skills (a manual deletion between spawns, or an interrupted UCG install
 or update, can remove them), and the Claude Code version against the
 minimums step 1 enforces (`checks.cc_version`: below 2.1.295 Claude Code
@@ -110,7 +112,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -996,12 +997,118 @@ def _hook_commands(settings: dict) -> list[tuple[str, str | None, str]]:
 
 
 # A leading `NAME=value` word: an assignment the shell applies to the command
-# that follows it, not a command of its own.
+# that follows it, not a command of its own. It is read on the word as written:
+# the shell takes a word for one only when its name and its "=" are unquoted
+# (`KEY='a b'` is one; `'KEY=a b'`, `"KEY=a b"`, `KEY"=v"` and `\KEY=v` are
+# the command dash and bash run, and exit 127 for).
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# The operators a shell reads outside quotes, longest first: those that end a
+# command or join it to another (POSIX sh's, a newline, and bash's `|&`), and
+# those that redirect its input or output (POSIX sh's, and bash's `&>`, `&>>`
+# and `<<<`). Claude Code runs a hook command through a shell, so any of them
+# makes the hook more than `<env> uv run <script>`.
+_CONTROL_OPERATORS = frozenset({"&&", "||", ";;", "|&", ";", "&", "|", "(", ")", "\n"})
+_SHELL_OPERATORS = tuple(
+    sorted(
+        _CONTROL_OPERATORS | {"<<<", "<<-", "&>>", "<<", ">>", "<&", ">&", "<>", ">|", "&>", "<", ">"},
+        key=len,
+        reverse=True,
+    )
+)
 
 
 def _last_path_part(word: str) -> str:
     return re.split(r"[/\\]", word)[-1]
+
+
+def _shell_tokens(command: str) -> list[tuple[str, str, str, int, int]] | None:
+    """The command's tokens as a POSIX shell reads them, or None when its
+    quoting does not parse (a quote left open).
+
+    Each is (kind, text, raw, start, end): kind "word", with its text the word
+    once its quotes and escapes are removed and raw the word as written, or
+    "control" or "redirect" for an operator, with a redirection's file
+    descriptor (`2>`) in it. start and end place the token in `command`.
+    Single quotes keep everything to the next one; in double quotes a
+    backslash escapes only `$`, a backtick, `"`, `\\` and a newline; outside
+    them it escapes the next character, and a backslash before a newline joins
+    the two lines. A `#` that starts a word starts a comment, to the end of
+    the line. Nothing is expanded: a `$NAME` stays as written.
+    """
+    tokens: list[tuple[str, str, str, int, int]] = []
+    text: list[str] = []
+    raw: list[str] = []
+    start = -1  # where the word under way starts; -1 while there is none
+    index, size = 0, len(command)
+
+    def flush(end: int) -> None:
+        nonlocal start
+        if start >= 0:
+            tokens.append(("word", "".join(text), "".join(raw), start, end))
+            text.clear()
+            raw.clear()
+            start = -1
+
+    while index < size:
+        char = command[index]
+        if start < 0 and char == "#":
+            newline = command.find("\n", index)
+            index = size if newline < 0 else newline
+            continue
+        if char in " \t":
+            flush(index)
+            index += 1
+            continue
+        if char == "\\" and command.startswith("\\\n", index):
+            index += 2
+            continue
+        operator = next((o for o in _SHELL_OPERATORS if command.startswith(o, index)), None)
+        if operator is not None:
+            begin = index
+            # A redirection's file descriptor: digits alone, right before it.
+            if operator not in _CONTROL_OPERATORS and start >= 0 and re.fullmatch(r"[0-9]+", "".join(raw)):
+                begin, start = start, -1
+                text.clear()
+                raw.clear()
+            flush(index)
+            kind = "control" if operator in _CONTROL_OPERATORS else "redirect"
+            tokens.append((kind, command[begin : index + len(operator)], operator, begin, index + len(operator)))
+            index += len(operator)
+            continue
+        if start < 0:
+            start = index
+        if char == "\\":
+            escaped = command[index + 1 : index + 2]
+            text.append(escaped or "\\")  # a backslash that ends the command stays
+            raw.append(command[index : index + 2])
+            index += 2
+        elif char == "'":
+            close = command.find("'", index + 1)
+            if close < 0:
+                return None
+            text.append(command[index + 1 : close])
+            raw.append(command[index : close + 1])
+            index = close + 1
+        elif char == '"':
+            cursor = index + 1
+            while cursor < size and command[cursor] != '"':
+                if command[cursor] == "\\" and command[cursor + 1 : cursor + 2] in ("$", "`", '"', "\\", "\n"):
+                    if command[cursor + 1] != "\n":
+                        text.append(command[cursor + 1])
+                    cursor += 2
+                    continue
+                text.append(command[cursor])
+                cursor += 1
+            if cursor >= size:
+                return None
+            raw.append(command[index : cursor + 1])
+            index = cursor + 1
+        else:
+            text.append(char)
+            raw.append(char)
+            index += 1
+    flush(size)
+    return tokens
 
 
 # How uv reads the options of a hook command, as uv 0.12.15 defines them (the
@@ -1376,9 +1483,21 @@ def _command_problem(command: str, script: str) -> str | None:
     (uv exits 2), and the hook never starts. Under the guard's `"onFailure":
     "block"` either refuses every tool call. On Stop, exit 127 is a
     non-blocking error, so each stop goes through uncounted, and exit 2 sends
-    each stop back, up to eight times in a row. The command is split with
-    POSIX shell rules (shlex) and never run, so the script path is not opened:
-    a moved skill is not this check's to find.
+    each stop back, up to eight times in a row. The command is read as a
+    POSIX shell reads it (`_shell_tokens`) and never run, so the script path
+    is not opened: a moved skill is not this check's to find.
+
+    A leading word is an assignment only as the shell takes one, with its
+    name and "=" unquoted: `'KEY=a b'` is the command the shell runs. A
+    control operator (`;`, `&`, `&&`, `||`, `|`, a newline, a parenthesis)
+    or a redirection (`<`, `>`, `2>&1`) outside quotes fails the command,
+    before or after the script: preflight writes none, and with one the
+    script may read no hook event (`< /dev/null`, or `&`, which hands it an
+    empty stdin), its verdict or reason may not reach Claude Code (`>
+    /dev/null`, `2>&1`), or its exit code may be another command's (`||
+    true`, `; true`). Even a harmless one (`&& true`) is read as a problem,
+    since the re-merge that answers it costs nothing. A comment that starts a
+    word ends the command there, as it does in the shell.
 
     uv's options are read as uv reads them (`uv run --python 3.12 <script>`
     starts the script; `_uv_options`). A command uv would refuse, or one where
@@ -1402,18 +1521,38 @@ def _command_problem(command: str, script: str) -> str | None:
     time, a `KEY=VALUE` setting, a Python named by a path or a program name),
     so one uv's parser refuses (an `--extra` name with a space in it, `-w-x`)
     passes here, as does one uv refuses only when it runs (a `--python 3.99`
-    it cannot find, `-p-3`). The leading NAME=value words are not read
-    either: what a variable does to uv or Python (`PATH`, `UV_PYTHON`,
-    `UV_FROZEN`, `PYTHONINSPECT`) is theirs to find when the hook runs.
+    it cannot find, `-p-3`). The values of the leading NAME=value words are
+    not read either: what a variable does to uv or Python (`PATH`,
+    `UV_PYTHON`, `UV_FROZEN`, `PYTHONINSPECT`) is theirs to find when the hook
+    runs, and so is what the shell expands (`$HOME`, a command substitution in
+    backticks).
     """
-    try:
-        words = shlex.split(command)
-    except ValueError:
+    tokens = _shell_tokens(command)
+    if tokens is None:
         return "its quoting does not parse"
+    for position, (kind, shown, _, _, _) in enumerate(tokens):
+        if kind == "control":
+            return (
+                "the shell would read %s as a control operator, so the command would be more than <env> uv run "
+                "<script>, and the exit code and output Claude Code reads need not be the script's" % json.dumps(shown)
+            )
+        if kind == "redirect":
+            target = tokens[position + 1] if position + 1 < len(tokens) else None
+            if target is not None and target[0] == "word":
+                shown = command[tokens[position][3] : target[4]]
+            return (
+                "the shell would read %s as a redirection, so the script would not read the hook event Claude "
+                "Code sends, or what it writes would not reach Claude Code where it reads it" % json.dumps(shown)
+            )
     index = 0
-    while index < len(words) and _ASSIGNMENT.match(words[index]):
+    while index < len(tokens) and _ASSIGNMENT.match(tokens[index][2]):
         index += 1
-    words = words[index:]
+    words = [word for _, word, _, _, _ in tokens[index:]]
+    if words and _ASSIGNMENT.match(words[0]):
+        return (
+            'the shell would run %s as the command, not uv, since a word whose name or "=" is quoted is no '
+            "assignment" % json.dumps(words[0])
+        )
     if not words or _last_path_part(words[0]) not in ("uv", "uv.exe"):
         return "the shell would run %s as the command, not uv" % (json.dumps(words[0]) if words else "nothing")
     index, problem, _ = _uv_options(words, 1, after_run=False)

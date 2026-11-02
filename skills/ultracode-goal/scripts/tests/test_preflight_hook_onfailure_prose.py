@@ -290,8 +290,18 @@ def test_the_bullet_says_to_quote_and_why():
         "write a single quote inside a value as `'\\''`",
         "`--assert-armed` reads each UCG hook command the way the shell splits it",
         "each value in single quotes as the templates above write them: `KEY='value' uv run '…'`",
+        # Final pass: the name quoted with its value, and an operator, which
+        # the check now reads as the shell does.
+        "Quote the value alone, never its name with it: the shell runs `'KEY=a b'` as the command.",
+        "or that holds a shell operator or redirection (`;`, `||`, `&`, `<`, `2>&1`) outside quotes.",
     ):
         assert clause in flat, clause
+    problem = _command_problem()
+    assert problem("'KEY=a b' uv run '/srv/guard_pretooluse.py'", "guard_pretooluse.py") is not None
+    assert problem("KEY='a b' uv run '/srv/guard_pretooluse.py'", "guard_pretooluse.py") is None
+    for operator in (";", "||", "&", "<", "2>&1"):
+        command = "uv run '/srv/guard_pretooluse.py' %s x" % operator
+        assert problem(command, "guard_pretooluse.py") is not None, command
     no_write = flat[flat.index("A merge that would change nothing makes no write") :]
     no_write = no_write[: no_write.index("assert instead of writing")]
     assert "each command quoted as the templates below write it" in no_write
