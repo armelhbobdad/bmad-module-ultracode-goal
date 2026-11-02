@@ -31,12 +31,19 @@ Which folder. For a URL that answers, the folder the process listening where
 the connection landed runs from, read from /proc on Linux when the process is
 the caller's own. Two servers can listen on one port, a stale worktree's on
 `::1` beside the main tree's on `127.0.0.1`, say, so only a socket that could
-have taken that connection counts: one at the address it reached, or at that
-family's wildcard address (`0.0.0.0`, or `::`, which takes IPv4 connections
-too). A connection to the unspecified address (`0.0.0.0`, `::`) reaches the
-family's loopback address, and one to an IPv4-mapped address
-(`::ffff:127.0.0.1`) the IPv4 address it maps, as Linux routes them, so the
-probe reads it there. The folder is `null`
+have taken that connection counts, in the order Linux looks for one: at the
+address it reached (for IPv4, an IPv4 socket before an IPv4-mapped one), then
+at that family's wildcard address (`0.0.0.0`, `::`), then, for IPv4, at `::`,
+which takes IPv4 connections unless it sets IPV6_V6ONLY. /proc does not show
+that flag, but a `::` socket that takes IPv4 connections shares a port with an
+IPv4 socket only under SO_REUSEPORT, and then the IPv4 one at the address or
+at `0.0.0.0` takes the connection, so `::` counts for IPv4 only when no
+socket listens at the address, its IPv4-mapped form or `0.0.0.0`. A `::`
+socket set IPV6_V6ONLY still counts then, though the connection reached no
+socket /proc lists (a NAT rule sent it elsewhere, say). A connection to the
+unspecified address (`0.0.0.0`, `::`) reaches the family's loopback address,
+and one to an IPv4-mapped address (`::ffff:127.0.0.1`) the IPv4 address it
+maps, as Linux routes them, so the probe reads it there. The folder is `null`
 on another system, when the
 address the connection reached is not one of this host's own (a container's,
 say), since no socket here took it, when /proc does not say, or when those
@@ -271,22 +278,29 @@ def _proc_address(hex_address: str) -> bytes:
     )
 
 
-def _could_take(local: bytes, reached: _Address) -> bool:
-    """Whether a socket listening at `local` could have taken a connection to
-    `reached`: one at that address, or at its family's wildcard, which for
-    IPv4 includes `::` and the IPv4-mapped form of the address."""
-    family, address = reached.family, reached.packed
-    if len(local) == 4:
-        return family == socket.AF_INET and local in (address, bytes(4))
-    if family == socket.AF_INET6:
-        return local in (address, bytes(16))
-    return local in (bytes(10) + b"\xff\xff" + address, bytes(16))
+def _lookup_order(reached: _Address) -> tuple[tuple[bytes, ...], ...]:
+    """The addresses a socket listens at that Linux looks for, in turn, to give
+    a connection to `reached`: the address itself, then its family's wildcard,
+    and at each an IPv4 socket before an IPv6 one (an IPv4-mapped address). So
+    for IPv4 `127.0.0.1`, `::ffff:127.0.0.1`, `0.0.0.0`, then `::` with
+    `::ffff:0.0.0.0`, and for IPv6 `::1`, then `::`."""
+    if reached.family == socket.AF_INET6:
+        return (reached.packed,), (bytes(16),)
+    return (reached.packed,), (_MAPPED + reached.packed,), (bytes(4),), (bytes(16), _MAPPED + bytes(4))
 
 
 def _listening_inodes(port: int, proc: Path, reached: _Address | None = None) -> set[str]:
     """The inodes of the sockets listening on `port`: every one, or with
-    `reached`, the ones that could have taken a connection to it."""
-    inodes: set[str] = set()
+    `reached`, the ones that could have taken a connection to it: those at the
+    first addresses in `_lookup_order` that any socket listens at. A `::`
+    socket set IPV6_V6ONLY takes no IPv4 connection, and /proc does not show
+    the flag, but one that takes them shares its port with an IPv4 socket only
+    under SO_REUSEPORT, and then an IPv4 socket at the address or `0.0.0.0`
+    comes first either way: so a `::` socket counts for IPv4 only when no
+    socket listens at the address, its IPv4-mapped form or `0.0.0.0`. One set
+    IPV6_V6ONLY still counts then, though it took no part: the connection
+    reached no socket /proc lists (a NAT rule sent it elsewhere, say)."""
+    listening: list[tuple[bytes, str]] = []
     for table in ("tcp", "tcp6"):
         try:
             lines = (proc / "net" / table).read_text(encoding="ascii").splitlines()[1:]
@@ -297,9 +311,15 @@ def _listening_inodes(port: int, proc: Path, reached: _Address | None = None) ->
             if len(fields) <= 9 or fields[3] != _LISTEN:
                 continue
             local, _, local_port = fields[1].rpartition(":")
-            if int(local_port, 16) == port and (reached is None or _could_take(_proc_address(local), reached)):
-                inodes.add(fields[9])
-    return inodes
+            if int(local_port, 16) == port:
+                listening.append((_proc_address(local), fields[9]))
+    if reached is None:
+        return {inode for _, inode in listening}
+    for addresses in _lookup_order(reached):
+        found = {inode for local, inode in listening if local in addresses}
+        if found:
+            return found
+    return set()
 
 
 def _held(pid: Path, sockets: set[str]) -> set[str]:

@@ -23,6 +23,7 @@ import importlib.util
 import json
 import os
 import re
+import select
 import signal
 import socket
 import struct
@@ -263,19 +264,102 @@ def test_the_folder_is_the_one_of_the_socket_the_connection_reached(tmp_path):
         # Two sockets that could both have taken it (SO_REUSEPORT), from two folders.
         ([(socket.AF_INET, "127.0.0.1", 3002, "444", "/a"), (socket.AF_INET, "127.0.0.1", 3002, "555", "/b")],
          _V4, None),
+        ([(socket.AF_INET, "0.0.0.0", 3002, "444", "/a"), (socket.AF_INET, "0.0.0.0", 3002, "555", "/b")],
+         _V4, None),
         # The same, from one folder: a server's forked workers.
-        ([(socket.AF_INET, "127.0.0.1", 3002, "444", "/a"), (socket.AF_INET, "0.0.0.0", 3002, "555", "/a")],
+        ([(socket.AF_INET, "127.0.0.1", 3002, "444", "/a"), (socket.AF_INET, "127.0.0.1", 3002, "555", "/a")],
          _V4, "/a"),
         # A socket no readable process holds (another user's server) could be the one that answered.
-        ([(socket.AF_INET, "127.0.0.1", 3002, "444", "/a"), (socket.AF_INET, "0.0.0.0", 3002, "555", None)],
+        ([(socket.AF_INET, "127.0.0.1", 3002, "444", "/a"), (socket.AF_INET, "127.0.0.1", 3002, "555", None)],
          _V4, None),
+        ([(socket.AF_INET6, "::", 3002, "444", "/a"), (socket.AF_INET6, "::", 3002, "555", None)], _V4, None),
     ],
     ids=["v6-wildcard", "v4-mapped", "v4-wildcard", "v4-wildcard-for-v6", "other-address", "two-folders",
-         "one-folder", "unread-holder"],
+         "two-folders-at-the-wildcard", "one-folder", "unread-holder", "unread-holder-at-the-v6-wildcard"],
 )
 def test_a_folder_is_named_only_when_every_socket_that_could_answer_shares_it(tmp_path, listeners, reached, expected):
     proc = _fake_proc(tmp_path, listeners)
     assert probe_servers._cwd_of_listener(3002, proc, reached) == expected
+
+
+# Which socket Linux gives a connection to, measured on Linux 6.12 with real sockets, with
+# net.ipv6.bindv6only 0 and 1, SO_REUSEPORT and SO_INCOMING_CPU: a socket at the address itself before any
+# wildcard, an IPv4 socket before an IPv6 one at the same address (an IPv4-mapped one), so for IPv4
+# `127.0.0.1`, then `::ffff:127.0.0.1`, then `0.0.0.0`, then `::` (or `::ffff:0.0.0.0`), and for IPv6
+# `::1`, then `::`. A `::` socket set IPV6_V6ONLY (nginx's `listen [::]`, Go's `tcp6`, asyncio's per-family
+# sockets, or any `::` socket under bindv6only 1) takes no IPv4 connection, and one that takes them shares
+# its port with an IPv4 socket only under SO_REUSEPORT, so an IPv4 socket at the address or 0.0.0.0 takes
+# the connection first either way. /proc does not show IPV6_V6ONLY: counting every `::` socket for IPv4,
+# the probe named no folder for, stopped, or left up with its reason, a `::` server that never took the
+# connection.
+_ORDER = [
+    # (listeners as (host, folder), reached, the folder of the socket Linux gives the connection to)
+    ([("127.0.0.1", "/v4"), ("::", "/v6only")], _V4, "/v4"),
+    ([("0.0.0.0", "/v4"), ("::", "/v6only")], _V4, "/v4"),
+    ([("127.0.0.1", "/exact"), ("0.0.0.0", "/any")], _V4, "/exact"),
+    ([("::ffff:127.0.0.1", "/mapped"), ("0.0.0.0", "/any")], _V4, "/mapped"),
+    ([("127.0.0.1", "/v4"), ("::ffff:127.0.0.1", "/mapped")], _V4, "/v4"),
+    ([("0.0.0.0", "/v4"), ("::ffff:0.0.0.0", "/mapped")], _V4, "/v4"),
+    # The IPv4 socket at another address, which takes no connection to 127.0.0.1: `::` does (SO_REUSEPORT).
+    ([("127.0.0.2", "/other"), ("::", "/dual")], _V4, "/dual"),
+    ([("::1", "/exact"), ("::", "/any")], _V6, "/exact"),
+    ([("0.0.0.0", "/v4"), ("::", "/v6")], _V6, "/v6"),
+]
+_ORDER_IDS = ["v4-beside-v6only-wildcard", "v4-wildcard-beside-v6only-wildcard", "v4-beside-v4-wildcard",
+              "v4-mapped-beside-v4-wildcard", "v4-beside-v4-mapped", "v4-wildcard-beside-v4-mapped-wildcard",
+              "v6-wildcard-beside-v4-at-another-address", "v6-beside-v6-wildcard", "v6-wildcard-for-v6"]
+
+
+@pytest.mark.parametrize(("listeners", "reached", "expected"), _ORDER, ids=_ORDER_IDS)
+def test_the_folder_is_the_one_of_the_socket_linux_gives_the_connection_to(tmp_path, listeners, reached, expected):
+    proc = _fake_proc(
+        tmp_path,
+        [
+            (socket.AF_INET6 if ":" in host else socket.AF_INET, host, 3002, str(400 + at), folder)
+            for at, (host, folder) in enumerate(listeners)
+        ],
+    )
+    assert probe_servers._cwd_of_listener(3002, proc, reached) == expected
+
+
+def _bound(host: str, port: int, v6only: bool) -> socket.socket:
+    """A socket listening at `host` and `port`, with SO_REUSEPORT so that it can share the port as `_ORDER` lays
+    one out, and for IPv6 with IPV6_V6ONLY as `v6only` says, whatever the system's default."""
+    sock = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        if ":" in host:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, int(v6only))
+        sock.bind((host, port))
+        sock.listen()
+    except (OSError, AttributeError) as exc:
+        sock.close()
+        pytest.skip(f"{host}:{port} cannot be bound here: {exc}")
+    return sock
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not socket.has_ipv6,
+    reason="Linux's lookup order, with sockets read from its /proc",
+)
+@pytest.mark.parametrize(("listeners", "reached", "expected"), _ORDER, ids=_ORDER_IDS)
+def test_the_sockets_counted_are_the_ones_linux_gives_the_connection_to(listeners, reached, expected):
+    """The same layouts on real sockets: the probe counts exactly the socket
+    Linux gave its connection to, which this test reads from the listener that
+    has it waiting to be accepted."""
+    port = _free_port()
+    with contextlib.ExitStack() as stack:
+        socks = {
+            folder: stack.enter_context(_bound(host, port, v6only=folder == "/v6only"))
+            for host, folder in listeners
+        }
+        target = socket.inet_ntop(reached.family, reached.packed)
+        landed = probe_servers._reached(target, port)
+        assert landed == reached
+        ready, _, _ = select.select(list(socks.values()), [], [], 2)
+        assert [folder for folder, sock in socks.items() if sock in ready] == [expected]
+        counted = probe_servers._listening_inodes(port, Path("/proc"), landed)
+        assert counted == {str(os.fstat(socks[expected].fileno()).st_ino)}
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the folder is read from Linux's /proc")
@@ -334,12 +418,14 @@ def test_two_real_servers_on_one_port_are_told_apart(tmp_path, capsys):
 # server through a launcher in a process group of its own, and is then killed
 # with its group, as Playwright's teardown kills it.
 
-def _serving(host: str) -> str:
-    """A server that listens on `host`, at the port its first argument gives."""
+def _serving(host: str, v6only: bool = False) -> str:
+    """A server that listens on `host`, at the port its first argument gives,
+    with IPV6_V6ONLY set when `v6only` says so."""
     return (
         "import socket, sys, time\n"
         f"s = socket.socket(socket.{'AF_INET6' if ':' in host else 'AF_INET'})\n"
-        f"s.bind(({host!r}, int(sys.argv[1])))\n"
+        + ("s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)\n" if v6only else "")
+        + f"s.bind(({host!r}, int(sys.argv[1])))\n"
         "s.listen()\n"
         "print('ready', flush=True)\n"
         "time.sleep(600)\n"
@@ -645,6 +731,64 @@ def test_a_url_whose_connection_lands_on_another_address_is_read_where_it_lands(
     assert found["answering"] == [{"url": url, "port": port, "cwd": os.getcwd()}]
     assert code == 1
     assert out["left"][0]["reason"].endswith("is this probe's own")
+
+
+@contextlib.contextmanager
+def _leading_its_session(cwd: Path, port: int, serve: str):
+    """A server from `cwd` that leads a session of its own and still runs, as one from a terminal does: its pid."""
+    server = subprocess.Popen(
+        [sys.executable, "-c", serve, str(port)],
+        cwd=cwd,
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        if server.stdout.readline().strip() != "ready":
+            pytest.skip(f"no server started on port {port}")
+        yield server.pid
+    finally:
+        server.kill()
+        server.wait(timeout=10)
+
+
+@_LINUX_ONLY
+@pytest.mark.skipif(not socket.has_ipv6, reason="no IPv6")
+@pytest.mark.parametrize("v6only_server", ["the-runs", "the-operators"])
+def test_a_v6only_server_on_the_v6_wildcard_is_neither_stopped_nor_named_for_an_ipv4_url(tmp_path, capsys,
+                                                                                         v6only_server):
+    """A server on `[::]` with IPV6_V6ONLY, which takes no IPv4 connection,
+    beside the one on `127.0.0.1` that took the URL's, at one port. The probe
+    counted it as one that could have taken the connection: one the run left
+    up, from another folder, it stopped with the other and named no folder for
+    them; an operator's, whose session's first process still runs, it gave as
+    the reason it left the server on 127.0.0.1 up. Now it reads only the server
+    Linux gave the connection to: it stops it and names its folder, and the
+    server on `[::]` keeps running."""
+    project = tmp_path / "project"
+    other = project / "sub"
+    other.mkdir(parents=True)
+    marker = _baseline(tmp_path)
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    v6only = _serving("::", v6only=True)
+    with contextlib.ExitStack() as stack:
+        if v6only_server == "the-runs":
+            (v6_server,) = stack.enter_context(_left_up(other, port, v6only))
+        else:
+            v6_server = stack.enter_context(_leading_its_session(other, port, v6only))
+        (server,) = stack.enter_context(_left_up(project, port))
+        code = probe_servers.main(["--url", url, "--stop-since", str(marker), "--root", str(project)])
+        out = json.loads(capsys.readouterr().out)
+        assert _gone(server) and not _gone(v6_server)
+        assert probe_servers._reached("::1", port) is not None
+    assert code == 0
+    assert out["answering"] == [] and out["free"] == [url] and out["left"] == []
+    assert [(entry["url"], entry["process_groups"], entry["pids"]) for entry in out["stopped"]] == [
+        (url, [server], [server])
+    ]
+    assert os.path.realpath(out["stopped"][0]["cwd"]) == os.path.realpath(project)
 
 
 @pytest.mark.parametrize(
