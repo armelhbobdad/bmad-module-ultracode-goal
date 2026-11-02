@@ -144,6 +144,18 @@ caveat said every row whose run stopped before any test cannot run, while
 its web server: the caveat now names that case alone, and says that a run
 Playwright stopped because it could not load a spec, a support file or its
 config reads as a kill.
+
+Then a run found the caveat forbidding a stop the run owed (#190): Execute's
+step 5 sweep runs the browser tests in the main tree right before the gate,
+and the server its runner started through turbo outlived it, so at the gate's
+first check it answered from the main tree, and "A server that answers is not
+the gate's to stop" left the worktree's runs reusing it. And a scratch runner
+config whose only start command is a launcher left a server up at each run,
+which nothing ever stopped, so they piled up over an Epic (#186). The probe now
+stops a server only when /proc shows this run started it, at every check and
+once more when the story's gate ends, and the decision log names each one it
+stopped; every other server stays the gate's to leave up. Each condition is
+pinned below with a mutant twin.
 """
 
 from __future__ import annotations
@@ -230,7 +242,28 @@ _REUSED_SAYS = (
     "it runs, and name in its summary each URL that answers at one of those checks:",
     "that is a server the gate set reuses, whoever started it, one a run in the worktree left up included, and with "
     "reuse on each row of a table after which it answers ran through it.",
-    "A server that answers is not the gate's to stop.",
+    # Who stops a server the run itself started (#190), and that no other server is stopped.
+    "A server the run itself started is the run's to stop, and no other server is.",
+    "`references/execute.md` step 5 re-runs the full sweep, browser tests included, in the main tree right before the "
+    "gate, so a server its runner started through a launcher can still answer at the first check, from the main tree, "
+    "and the worktree's runs would reuse it.",
+    "So run the probe at every check this caveat names, automate's included, with the stop flags added: "
+    "`--stop-since {workflow.implementation_artifacts}/.baseline-<story_id> --root {project-root} --root <tmp-path>`.",
+    "The probe then stops a server that answers only when it can show this run started it: every process in the "
+    "server's process group is this user's, has no controlling terminal and started after the story's baseline "
+    "marker was written, the process that led its session has exited, as a runner's start command has once the "
+    "runner ends, and the server runs from inside one of those folders.",
+    "A resume keeps that marker, so a server an earlier session of the story started counts.",
+    "At automate's check after a table, a URL whose server the probe stopped still counts as one that answers there, "
+    "since with reuse on the table's rows ran through that server.",
+    "It leaves every other server up and lists it under `left` with its reason, and on a system without Linux's "
+    "`/proc` it stops nothing.",
+    "A server the probe leaves up is not the gate's to stop: never stop it any other way, since it may be the "
+    "operator's own.",
+    # The servers a story's runs left up do not pile up over an Epic (#186).
+    "Once the story's verdict is recorded, and before the worktree is removed, run the probe with the stop flags once "
+    "more over every URL the gate set may reuse and every URL of the scratch config, so that no server this story's "
+    "runs left up outlives its gate:",
     # The own-server route, where the runner config allows one, whether or not a server answers.
     "When the runner config lets the worktree's runs have their own server without editing a tracked file, give them "
     "one, whether or not a server answers:",
@@ -244,10 +277,10 @@ _REUSED_SAYS = (
     "server an earlier run left up keeps it.",
     "So give the scratch config a start command that runs the server in the process group the runner stops, where "
     "the project has one (the package's own dev script rather than a task runner's),",
-    "check its URLs with the same probe before each assessor starts, moving each one that answers to a port the "
-    "probe reports free, and run no two assessors under it at once.",
-    "Have automate check its URLs at the same points, before and after each table, and move a port that answers "
-    "before it runs the next one.",
+    "check its URLs with the same probe before each assessor starts, moving each one that still answers to a port "
+    "the probe reports free, and run no two assessors under it at once.",
+    "Have automate check its URLs at the same points, before and after each table, and move a port that still "
+    "answers before it runs the next one.",
     # The one stop before any test that reads as a row that cannot run, how a conductor tells it, and the others.
     "A row whose run stopped because the runner could not start its web server reads as one that cannot run, by the "
     "detail `mutate_check.py` gives it, that no test ran",
@@ -336,8 +369,42 @@ def test_reused_server_predicate_rejects_the_three_caveat_section():
         # Nothing for the conductor to name in the decision log.
         ("and name in its summary each URL that answers at one of those checks:",
          "and stop at each URL that answers at one of those checks:"),
-        # The operator's server stopped by the run.
-        ("A server that answers is not the gate's to stop.", "Stop a server that answers."),
+        # The operator's server stopped by the run: any server that answers, or one the probe leaves up.
+        ("A server the run itself started is the run's to stop, and no other server is.",
+         "Stop a server that answers."),
+        ("A server the probe leaves up is not the gate's to stop: never stop it any other way, since it may be the "
+         "operator's own.", "Stop a server the probe leaves up some other way."),
+        # #190's wording: no stop at all, so the server step 5 left up in the main tree serves the worktree's runs.
+        ("A server the run itself started is the run's to stop, and no other server is.",
+         "A server that answers is not the gate's to stop."),
+        (" So run the probe at every check this caveat names, automate's included, with the stop flags added: "
+         "`--stop-since {workflow.implementation_artifacts}/.baseline-<story_id> --root {project-root} --root "
+         "<tmp-path>`.", ""),
+        # Automate's checks without the stop flags: each table's left-up server piles up within its pass.
+        ("every check this caveat names, automate's included,", "every check this caveat names,"),
+        # A condition dropped: a terminal's server, one from before the story's work (the operator's own dev
+        # server), one whatever started it still runs beside, or another project's.
+        ("has no controlling terminal and started after", "started after"),
+        ("is this user's, has no controlling terminal and started after the story's baseline marker was written,",
+         "is this user's and has no controlling terminal,"),
+        (" the process that led its session has exited, as a runner's start command has once the runner ends, and",
+         " and"),
+        (", and the server runs from inside one of those folders.", "."),
+        # A marker a resume rewrites: a server an earlier session of the story started reads as older than it.
+        ("`--stop-since {workflow.implementation_artifacts}/.baseline-<story_id>",
+         "`--stop-since {workflow.implementation_artifacts}/.current-story"),
+        # A table's rows read by their ledger once its after-check stopped the server they ran through.
+        (" At automate's check after a table, a URL whose server the probe stopped still counts as one that answers "
+         "there, since with reuse on the table's rows ran through that server.", ""),
+        # Where the probe cannot read /proc, stopped anyway by other means.
+        ("on a system without Linux's `/proc` it stops nothing.",
+         "on a system without Linux's `/proc` stop each server that answers yourself."),
+        # #186: the servers a story's runs left up outlive its gate and pile up over the Epic.
+        (" Once the story's verdict is recorded, and before the worktree is removed, run the probe with the stop flags "
+         "once more over every URL the gate set may reuse and every URL of the scratch config, so that no server this "
+         "story's runs left up outlives its gate: over an Epic they would pile up, each holding a port.", ""),
+        ("over every URL the gate set may reuse and every URL of the scratch config,",
+         "over every URL the gate set may reuse,"),
         # No own-server route, so every project takes the stated limit.
         ("give them one, whether or not a server answers:", "say so in the brief:"),
         # The own-server route only where a server answers: with reuse on, a run's own server is reused.
@@ -351,10 +418,10 @@ def test_reused_server_predicate_rejects_the_three_caveat_section():
          "worktree itself."),
         # The scratch port checked once: a server an earlier run left up keeps it, and each later run stops before
         # any test, which read as another test's kill.
-        ("before each assessor starts, moving each one that answers to a port the probe reports free",
+        ("before each assessor starts, moving each one that still answers to a port the probe reports free",
          "before the first assessor starts"),
-        (" Have automate check its URLs at the same points, before and after each table, and move a port that answers "
-         "before it runs the next one.", ""),
+        (" Have automate check its URLs at the same points, before and after each table, and move a port that still "
+         "answers before it runs the next one.", ""),
         # The scratch port checked before each table only: a server the table's own runs left up holds it.
         ("check its URLs at the same points, before and after each table,", "check its URLs before each table,"),
         ("So give the scratch config a start command that runs the server in the process group the runner stops, "
@@ -855,11 +922,51 @@ def test_honesty_predicate_rejects_a_line_that_hides_what_the_server_measured(ol
     assert not _honest_about_a_reused_server(mutant)
 
 
+# The gate now stops a server the run itself left up (#190): a process
+# stopped is an action on the operator's machine, so the line names each one.
+_HONEST_ABOUT_A_STOP = "It also names each server the probe stopped, by its URL and the folder it ran from."
+
+
+def _honest_about_a_stop(section: str) -> bool:
+    return _HONEST_ABOUT_A_STOP in re.sub(r"\s+", " ", _honesty_line(section))
+
+
+def test_worktree_honesty_line_names_each_server_the_probe_stopped():
+    assert _honest_about_a_stop(_worktree_section())
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (" " + _HONEST_ABOUT_A_STOP, ""),
+        # A stop named without the tree its server ran from: the main tree's, or an old worktree's.
+        ("by its URL and the folder it ran from.", "by its URL."),
+    ],
+    ids=["no-stop-named", "no-folder"],
+)
+def test_honesty_predicate_rejects_a_line_that_hides_a_stop(old, new):
+    section = _worktree_section()
+    mutant = section.replace(old, new)
+    assert mutant != section, "the mutant must actually change the text"
+    assert not _honest_about_a_stop(mutant)
+
+
 _TIP_SAYS = (
     "**Stop a dev server before an unattended drive.**",
     "a mutation the gate writes into the worktree never reaches them.",
-    "The gate checks the URLs a runner config may reuse and never stops a server it did not start:",
+    # A server the run itself left up is the run's to stop (#190): the gate did not start step 5's, but stops it.
+    "The gate checks the URLs a runner config may reuse and never stops a server it cannot show the run started:",
     "when a scratch runner config can, whether or not one answers,",
+    "On Linux the gate stops a server the run itself left up, such as one the sweep right before the gate started "
+    "through turbo, at each of its checks and once more when the story's gate ends, so those servers do not pile up "
+    "over an Epic, and the decision log names each one it stopped.",
+    "It stops one only when every process of it is yours, has no controlling terminal and started after the current "
+    "story began, the process that started its session has exited, and it runs from your project or the gate's "
+    "worktree.",
+    # The one server of yours that meets every condition, and how to keep it up.
+    "A server you start during a drive can meet all of that: one inside the project, on a port the gate checks, "
+    "started from a terminal you then close (a `nohup ... &`, say), reads as the run's and is stopped.",
+    "Start such a server outside the project or on another port, or keep its terminal open.",
     # A stopped dev server is not the end of it: a server the runner starts through turbo outlives the run.
     "but a server it starts through a launcher such as turbo, which runs it in a process group of its own, outlives "
     "the run that started it, and with reuse on the runs after it reuse it,",
@@ -888,7 +995,16 @@ def test_the_operating_tips_say_to_stop_a_dev_server_before_a_drive():
     ("old", "new"),
     [
         ("**Stop a dev server before an unattended drive.**", "**A dev server can stay up during a drive.**"),
-        ("and never stops a server it did not start:", "and stops any server that answers:"),
+        ("and never stops a server it cannot show the run started:", "and stops any server that answers:"),
+        # #190's tip: the gate stops nothing, though it stops step 5's server.
+        ("and never stops a server it cannot show the run started:", "and never stops a server it did not start:"),
+        # A condition left out, or the stop said to happen without a word in the decision log.
+        ("has no controlling terminal and started after", "started after"),
+        (" the process that started its session has exited,", ""),
+        (", and the decision log names each one it stopped.", "."),
+        # The case where it stops a server of yours, left unsaid.
+        (" A server you start during a drive can meet all of that: one inside the project, on a port the gate checks, "
+         "started from a terminal you then close (a `nohup ... &`, say), reads as the run's and is stopped.", ""),
         # The first tip's promise, kept beside the rest: with the dev server stopped, nothing goes unmeasured.
         ("keeps it from outliving the run.", "keeps it from outliving the run, and nothing goes unmeasured for this "
          "reason."),
@@ -2225,14 +2341,18 @@ _HOOK_REJECTION_SENTENCES = {
         ("An Epic whose stories all read `done` while a story's `.evidence-owed-<s", "a5bb6b9a9f94"),
         ("The hook-enforced latch (`.mem-state.json`) fails closed while it is pre", "ed3ddc055043"),
     ),
+    # Reviewed (#190): the symptom flowchart, which gained a node for a dev
+    # server the gate stopped, and the last sentence of that new section, which
+    # runs into the "Hooks not firing" heading and symptom; neither says how a
+    # hook's rejection is answered.
     "troubleshooting.md": (
         ("**What to check.** - **Older Claude Code.** The hook returns a `deny` de", "b9349b662d21"),
         ("- **A refused settings write.** Preflight writes its hooks and allow rul", "298ba71ea2eb"),
         ("--- title: Troubleshooting description: Maps the real failure modes of a", "74417cea7b2a"),
         ("Most read like `PreToolUse:Bash hook error: [<command>]: failed; blockin", "03a6eaa3f853"),
         ("It names each primitive the version lacks. 2.1.295 is the floor, the rel", "d3fb84ee20ae"),
-        ("See the cap sections in the [gate model](./gate-model.md). ## Hooks not ", "b86d92214a9b"),
-        ("Start from the symptom you observed and follow it to the section that ex", "e7d26b0d82f1"),
+        ("Start from the symptom you observed and follow it to the section that ex", "b8cdcd44aae2"),
+        ("When the run left that server up (a runner killed before it could end it", "483a24883f06"),
     ),
     "operating-tips.md": (
         ("The Epic is finished. | | `evidence-owed` | Every story is `done`, but a", "2dbc62bde6cc"),

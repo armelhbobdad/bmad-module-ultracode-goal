@@ -16,16 +16,20 @@ Stdlib + pytest only.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import http.server
 import importlib.util
 import json
 import os
+import re
+import signal
 import socket
 import struct
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -293,6 +297,486 @@ def test_two_real_servers_on_one_port_are_told_apart(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert code == 1
     assert [entry["cwd"] for entry in out["answering"]] == [os.getcwd(), str(stale)]
+
+
+# --- a server the run itself left up (#190, #186) ------------------------------
+#
+# Measured with turbo 2.11.9: Playwright starts its `webServer` command in a
+# session of its own (Node's `detached`) and its teardown kills that command's
+# process group. turbo runs the task (`bun run dev`, the server under it) in a
+# process group of its own in that session, so the server outlives the run,
+# reparented to `systemd --user`, with no controlling terminal, while the
+# command that led its session is gone, and turbo's strict env mode drops the
+# variables Claude Code sets, so no variable marks it as the run's. Execute's
+# step 5 sweep left one so in the main tree right before the gate (#190), and
+# each run under a scratch runner config whose only start command is a
+# launcher leaves one on its port (#186). These tests make that server with
+# real processes: a start command that leads a session of its own runs the
+# server through a launcher in a process group of its own, and is then killed
+# with its group, as Playwright's teardown kills it.
+
+_SERVE = (
+    "import socket, sys, time\n"
+    "s = socket.socket()\n"
+    "s.bind(('127.0.0.1', int(sys.argv[1])))\n"
+    "s.listen()\n"
+    "print('ready', flush=True)\n"
+    "time.sleep(600)\n"
+)
+_LAUNCHER = (
+    "import subprocess, sys\n"
+    "server = subprocess.Popen(\n"
+    "    [sys.executable, '-c', sys.argv[1], sys.argv[2]], process_group=0, stdin=subprocess.DEVNULL,\n"
+    "    stdout=subprocess.PIPE, text=True,\n"
+    ")\n"
+    "print(server.pid, server.stdout.readline().strip(), flush=True)\n"
+    "server.wait()\n"
+)
+
+
+def _gone(pid: int) -> bool:
+    """Whether the process has exited: no /proc entry, or a zombie nobody has reaped yet."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except OSError:
+        return True
+    return stat[stat.rindex(")") + 2 :].split()[0] in ("Z", "X")
+
+
+@contextlib.contextmanager
+def _left_up(cwd: Path, port: int):
+    """A server a runner left up, from `cwd`: its pid, which is its process group's."""
+    start = subprocess.Popen(
+        [sys.executable, "-c", _LAUNCHER, _SERVE, str(port)],
+        cwd=cwd,
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    server = None
+    try:
+        line = start.stdout.readline().split()
+        if len(line) != 2 or line[1] != "ready":
+            pytest.skip(f"no server started on 127.0.0.1:{port}")
+        server = int(line[0])
+        # The runner's teardown: the start command's process group, with SIGKILL.
+        os.killpg(start.pid, signal.SIGKILL)
+        start.wait(timeout=10)
+        yield server
+    finally:
+        if start.poll() is None:
+            os.killpg(start.pid, signal.SIGKILL)
+            start.wait(timeout=10)
+        if server is not None and not _gone(server):
+            os.killpg(server, signal.SIGKILL)
+
+
+def _baseline(tmp_path: Path, age: float = 60.0) -> Path:
+    """The story's baseline marker, written `age` seconds ago."""
+    marker = tmp_path / ".baseline-1-1"
+    marker.write_text("0" * 40 + "\n", encoding="utf-8")
+    then = time.time() - age
+    os.utime(marker, (then, then))
+    return marker
+
+
+_LINUX_ONLY = pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="the probe reads a server's processes from Linux's /proc"
+)
+
+
+@_LINUX_ONLY
+def test_a_server_the_run_left_up_in_the_main_tree_is_stopped(tmp_path, capsys):
+    """#190: the server step 5's sweep left up answers from the main tree, so
+    the gate's worktree run would reuse it and measure the main tree. With the
+    stop flags the probe stops it, and the URL is free for the worktree's own."""
+    main_tree = tmp_path / "main"
+    main_tree.mkdir()
+    marker = _baseline(tmp_path)
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    with _left_up(main_tree, port) as server:
+        found = probe_servers.probe([url])
+        assert [os.path.realpath(entry["cwd"]) for entry in found["answering"]] == [os.path.realpath(main_tree)]
+        code = probe_servers.main(["--url", url, "--stop-since", str(marker), "--root", str(main_tree)])
+        out = json.loads(capsys.readouterr().out)
+        assert _gone(server)
+    assert code == 0
+    assert out["answering"] == [] and out["free"] == [url] and out["left"] == []
+    assert [(entry["url"], entry["pids"]) for entry in out["stopped"]] == [(url, [server])]
+    assert os.path.realpath(out["stopped"][0]["cwd"]) == os.path.realpath(main_tree)
+
+
+@_LINUX_ONLY
+def test_a_server_from_a_folder_of_its_own_tree_is_stopped_once_that_folder_is_removed(tmp_path, capsys):
+    """A server a run in an old gate worktree left up, whose folder the
+    rebuild removed: Linux names its folder with a ` (deleted)` suffix, and it
+    is still inside the worktree's root."""
+    worktree = tmp_path / ".gate-worktree-1-1"
+    worktree.mkdir()
+    marker = _baseline(tmp_path)
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    with _left_up(worktree, port) as server:
+        worktree.rmdir()
+        code = probe_servers.main(["--url", url, "--stop-since", str(marker), "--root", str(worktree)])
+        out = json.loads(capsys.readouterr().out)
+        assert _gone(server)
+    assert code == 0
+    assert out["stopped"][0]["cwd"].endswith(" (deleted)")
+
+
+def _left_up_reason(capsys, url: str, marker: Path, root: Path) -> tuple[int, dict]:
+    code = probe_servers.main(["--url", url, "--stop-since", str(marker), "--root", str(root)])
+    out = json.loads(capsys.readouterr().out)
+    assert out["stopped"] == []
+    assert [entry["url"] for entry in out["answering"]] == [url]
+    assert [entry["url"] for entry in out["left"]] == [url]
+    return code, out
+
+
+@_LINUX_ONLY
+def test_a_server_from_outside_every_root_is_left_up(tmp_path, capsys):
+    """Another project's server on the port: the run never started a server there."""
+    main_tree, elsewhere = tmp_path / "main", tmp_path / "elsewhere"
+    main_tree.mkdir()
+    elsewhere.mkdir()
+    marker = _baseline(tmp_path)
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    with _left_up(elsewhere, port) as server:
+        code, out = _left_up_reason(capsys, url, marker, main_tree)
+        assert not _gone(server)
+    assert code == 1
+    assert "outside every --root" in out["left"][0]["reason"]
+
+
+@_LINUX_ONLY
+def test_a_server_that_started_before_the_marker_is_left_up(tmp_path, capsys):
+    """A dev server left running from before the story's work began, the
+    operator's own: it started before the baseline marker was written."""
+    main_tree = tmp_path / "main"
+    main_tree.mkdir()
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    with _left_up(main_tree, port) as server:
+        marker = _baseline(tmp_path, age=0.0)
+        code, out = _left_up_reason(capsys, url, marker, main_tree)
+        assert not _gone(server)
+    assert code == 1
+    assert f"process {server} in its process group started before {marker} was written" == out["left"][0]["reason"]
+
+
+@_LINUX_ONLY
+def test_a_server_whose_session_leader_still_runs_is_left_up(tmp_path, capsys):
+    """A server whatever started it still runs beside: a shell, an IDE, a
+    runner mid-run. Its session's first process runs, so it is not one a
+    finished run left up."""
+    main_tree = tmp_path / "main"
+    main_tree.mkdir()
+    marker = _baseline(tmp_path)
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    start = subprocess.Popen(
+        [sys.executable, "-c", _LAUNCHER, _SERVE, str(port)],
+        cwd=main_tree,
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        if start.stdout.readline().split()[1:] != ["ready"]:
+            pytest.skip(f"no server started on 127.0.0.1:{port}")
+        code, out = _left_up_reason(capsys, url, marker, main_tree)
+        assert start.poll() is None
+    finally:
+        os.killpg(start.pid, signal.SIGKILL)
+        start.wait(timeout=10)
+        for entry in Path("/proc").iterdir():
+            # The launcher's server, in a group of its own, outlives it: stop it too.
+            if entry.name.isdigit() and not _gone(int(entry.name)):
+                try:
+                    stat = (entry / "stat").read_text(encoding="ascii")
+                except OSError:
+                    continue
+                if int(stat[stat.rindex(")") + 2 :].split()[3]) == start.pid:
+                    os.killpg(int(stat[stat.rindex(")") + 2 :].split()[2]), signal.SIGKILL)
+    assert code == 1
+    assert out["left"][0]["reason"] == f"process {start.pid}, which leads its session, still runs"
+
+
+@_LINUX_ONLY
+def test_the_probes_own_server_is_left_up(tmp_path, capsys):
+    """A listener in the process that runs the probe: never its own to stop."""
+    marker = _baseline(tmp_path)
+    with _listener() as sock:
+        url = f"http://127.0.0.1:{sock.getsockname()[1]}"
+        code, out = _left_up_reason(capsys, url, marker, Path(os.getcwd()))
+    assert code == 1
+    assert "this probe's own" in out["left"][0]["reason"]
+
+
+def test_without_a_linux_proc_it_stops_nothing(tmp_path):
+    """macOS, Windows, or a /proc it cannot read: every answering URL is left
+    up, and says why, so the gate falls back to its rule for a server it
+    leaves."""
+    marker = _baseline(tmp_path)
+    with _listener() as sock:
+        url = f"http://127.0.0.1:{sock.getsockname()[1]}"
+        stop = probe_servers._stop_request(str(marker), [str(tmp_path)])
+        out = probe_servers.probe([url], stop, proc=tmp_path / "no-proc")
+    assert out["stopped"] == []
+    assert [entry["url"] for entry in out["answering"]] == [url]
+    assert out["left"][0]["reason"].startswith("this system has no Linux /proc")
+
+
+def test_the_stop_flags_go_together_and_need_a_marker_it_can_read(tmp_path, capsys):
+    url = f"http://127.0.0.1:{_free_port()}"
+    with pytest.raises(SystemExit) as exc:
+        probe_servers.main(["--url", url, "--stop-since", str(_baseline(tmp_path))])
+    assert exc.value.code == 2
+    with pytest.raises(SystemExit) as exc:
+        probe_servers.main(["--url", url, "--root", str(tmp_path)])
+    assert exc.value.code == 2
+    assert probe_servers.main(["--url", url, "--stop-since", str(tmp_path / "absent"), "--root", str(tmp_path)]) == 2
+    assert "REFUSED: --stop-since" in capsys.readouterr().err
+
+
+_GATE = _SCRIPTS.parent / "references" / "gate.md"
+
+
+def _gate_stop_flags() -> list[str]:
+    """The stop flags gate.md's caveat adds to the probe, as one code span."""
+    found = re.search(r"with the stop flags added: `(--stop-since [^`]+)`", _GATE.read_text(encoding="utf-8"))
+    return found.group(1).split() if found else []
+
+
+def test_the_stop_flags_the_gate_prescribes_are_the_ones_the_probe_takes(tmp_path, capsys):
+    """The conductor copies the flags from gate.md: each one, with its
+    placeholders filled as a run fills them, is one the probe accepts."""
+    artifacts, project = tmp_path / "artifacts", tmp_path / "project"
+    artifacts.mkdir()
+    project.mkdir()
+    _baseline(artifacts)
+    filled = {
+        "{workflow.implementation_artifacts}/.baseline-<story_id>": str(artifacts / ".baseline-1-1"),
+        "{project-root}": str(project),
+        "<tmp-path>": str(artifacts / ".gate-worktree-1-1"),
+    }
+    flags = [filled.get(word, word) for word in _gate_stop_flags()]
+    assert flags[0::2] == ["--stop-since", "--root", "--root"], flags
+    url = f"http://127.0.0.1:{_free_port()}"
+    assert probe_servers.main(["--url", url, *flags]) == 0
+    assert json.loads(capsys.readouterr().out) == {"answering": [], "free": [url], "stopped": [], "left": []}
+
+
+def test_the_stop_flags_reader_misses_a_flag_the_gate_drops():
+    """The twin: a caveat whose span lost a flag is not the probe's three."""
+    flags = _gate_stop_flags()
+    assert flags
+    assert (flags[:2] + flags[4:])[0::2] != ["--stop-since", "--root", "--root"]
+
+
+def test_without_the_stop_flags_the_output_keeps_its_two_keys(capsys):
+    """Readers of the first output read `answering` and `free` only."""
+    port = _free_port()
+    assert probe_servers.main(["--url", f"http://127.0.0.1:{port}"]) == 0
+    assert set(json.loads(capsys.readouterr().out)) == {"answering", "free"}
+
+
+# Each condition on its own, on a /proc laid out as Linux lays it out: one
+# server whose every process passes, and the same server with one thing
+# changed. The probe's caller is given, so these run on any system.
+
+_BOOT = 1_000_000
+_TICKS = 100.0
+_SINCE = float(_BOOT + 100)
+_CALLER = probe_servers._Caller(uid=1000, pgrp=500, session=500, lineage=frozenset({500, 400, 1}))
+# The server the run left up: `bun run dev` (40) leading its process group, the server under it (41) holding the
+# socket, both in the session the runner's start command (30, gone) led, started 200 seconds after boot.
+_RUN_LEFT_UP = (
+    {"pid": 40, "ppid": 1, "pgrp": 40, "session": 30, "tty": 0, "start": 20_000, "uid": 1000, "cwd": "/p/apps/web"},
+    {"pid": 41, "ppid": 40, "pgrp": 40, "session": 30, "tty": 0, "start": 20_100, "uid": 1000, "cwd": "/p/apps/web",
+     "holds": True},
+)
+
+
+def _proc_with(tmp_path: Path, processes) -> Path:
+    proc = tmp_path / "proc"
+    (proc / "net").mkdir(parents=True)
+    (proc / "stat").write_text(f"cpu  1 2 3\nbtime {_BOOT}\n", encoding="ascii")
+    header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+    (proc / "net" / "tcp").write_text(
+        header + "   0: 0100007F:0BB9 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 777\n",
+        encoding="ascii",
+    )
+    (proc / "net" / "tcp6").write_text(header, encoding="ascii")
+    for p in processes:
+        folder = proc / str(p["pid"])
+        (folder / "fd").mkdir(parents=True)
+        # minflt through itrealvalue: the twelve fields between flags and starttime, field 22.
+        rest = " ".join(["0"] * 12)
+        (folder / "stat").write_text(
+            f"{p['pid']} (node (dev)) {p.get('state', 'S')} {p['ppid']} {p['pgrp']} {p['session']} {p['tty']} -1 0 "
+            f"{rest} {p['start']} 0 0\n",
+            encoding="ascii",
+        )
+        (folder / "status").write_text(f"Name:\tnode\nUid:\t{p['uid']}\t{p['uid']}\t{p['uid']}\t{p['uid']}\n")
+        try:
+            os.symlink(p["cwd"], folder / "cwd")
+            if p.get("holds"):
+                os.symlink("socket:[777]", folder / "fd" / "3")
+        except OSError:
+            pytest.skip("these symlinks cannot be made here")
+    return proc
+
+
+def _verdict(tmp_path: Path, processes, roots=("/p",)) -> str | None:
+    proc = _proc_with(tmp_path, processes)
+    stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, tuple(roots))
+    reason, members = probe_servers._not_the_runs(proc, 3001, _V4, stop, _CALLER, _TICKS)
+    assert (reason is None) == bool(members)
+    return reason
+
+
+def _changed(index: int, **fields) -> tuple[dict, ...]:
+    return tuple({**p, **fields} if i == index else p for i, p in enumerate(_RUN_LEFT_UP))
+
+
+def test_a_server_whose_every_process_passes_is_the_runs(tmp_path):
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP)
+    stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+    reason, members = probe_servers._not_the_runs(proc, 3001, _V4, stop, _CALLER, _TICKS)
+    assert reason is None
+    assert sorted(member.pid for member in members) == [40, 41]
+
+
+@pytest.mark.parametrize(
+    ("processes", "roots", "reason"),
+    [
+        # Started from a terminal: the terminal's shell leads its session and is its controlling terminal.
+        (_changed(0, tty=34817), ("/p",), "process 40 in its process group has a controlling terminal"),
+        # Another user's process in the group.
+        (_changed(0, uid=1001), ("/p",), "process 40 in its process group is not this user's"),
+        # One process of the group started before the marker, within the clock's slack, or long before.
+        (_changed(0, start=10_000), ("/p",), "process 40 in its process group started before /p/.baseline-1-1 was "
+         "written"),
+        (_changed(1, start=10_150), ("/p",), "process 41 in its process group started before /p/.baseline-1-1 was "
+         "written"),
+        # The process that led its session still runs.
+        (_RUN_LEFT_UP + ({"pid": 30, "ppid": 1, "pgrp": 30, "session": 30, "tty": 0, "start": 19_000, "uid": 1000,
+                          "cwd": "/p"},), ("/p",), "process 30, which leads its session, still runs"),
+        # Outside every root, and a root that is only a prefix of its folder's name.
+        (_RUN_LEFT_UP, ("/q",), "it runs from /p/apps/web, outside every --root"),
+        (_RUN_LEFT_UP, ("/p/apps/we",), "it runs from /p/apps/web, outside every --root"),
+        # The probe's own group, session or lineage.
+        (tuple({**p, "pgrp": 500} for p in _RUN_LEFT_UP), ("/p",), "process group 500 is this probe's own"),
+        (tuple({**p, "session": 500} for p in _RUN_LEFT_UP), ("/p",),
+         "process 40 in its process group is this probe, one that started it or in its session"),
+        (({**_RUN_LEFT_UP[0], "pid": 400, "pgrp": 400}, {**_RUN_LEFT_UP[1], "ppid": 400, "pgrp": 400}), ("/p",),
+         "process 400 in its process group is this probe, one that started it or in its session"),
+    ],
+    ids=["terminal", "other-user", "started-before", "started-within-slack", "leader-runs", "outside-roots",
+         "prefix-root", "own-group", "own-session", "own-lineage"],
+)
+def test_a_server_that_fails_one_condition_is_left_up(tmp_path, processes, roots, reason):
+    assert _verdict(tmp_path, processes, roots) == reason
+
+
+def test_a_server_whose_workers_share_its_socket_and_group_is_the_runs(tmp_path):
+    """A server that forks workers, each holding the listening socket, in its one process group."""
+    worker = {**_RUN_LEFT_UP[1], "pid": 42, "ppid": 41, "start": 20_200}
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP + (worker,))
+    stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+    reason, members = probe_servers._not_the_runs(proc, 3001, _V4, stop, _CALLER, _TICKS)
+    assert reason is None
+    assert sorted(member.pid for member in members) == [40, 41, 42]
+
+
+def test_a_holder_that_has_exited_since_its_socket_was_read_is_left_up(tmp_path):
+    zombie = {**_RUN_LEFT_UP[1], "state": "Z"}
+    assert _verdict(tmp_path, (_RUN_LEFT_UP[0], zombie)) == "a process that holds its socket has exited"
+
+
+def test_a_session_leader_that_has_exited_but_is_not_reaped_does_not_run(tmp_path):
+    leader = {"pid": 30, "ppid": 1, "pgrp": 30, "session": 30, "tty": 0, "start": 19_000, "uid": 1000, "cwd": "/p",
+              "state": "Z"}
+    assert _verdict(tmp_path, _RUN_LEFT_UP + (leader,)) is None
+
+
+def test_a_pid_given_to_another_session_since_does_not_lead_this_one(tmp_path):
+    reused = {"pid": 30, "ppid": 1, "pgrp": 30, "session": 29, "tty": 0, "start": 19_000, "uid": 1000, "cwd": "/p"}
+    assert _verdict(tmp_path, _RUN_LEFT_UP + (reused,)) is None
+
+
+def test_a_socket_no_readable_process_holds_is_left_up(tmp_path):
+    processes = tuple({k: v for k, v in p.items() if k != "holds"} for p in _RUN_LEFT_UP)
+    assert _verdict(tmp_path, processes).startswith("a socket that could have taken the connection has no holder")
+
+
+def test_the_stop_signals_the_group_and_reads_the_url_again(tmp_path, monkeypatch, capsys):
+    """The group gets SIGTERM; once its processes have exited, the URL is
+    probed again and read as free."""
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP)
+    monkeypatch.setattr(probe_servers, "_reads_processes", lambda _proc: True)
+    monkeypatch.setattr(probe_servers, "_caller", lambda _proc: _CALLER)
+    monkeypatch.setattr(probe_servers, "_clock_ticks", lambda: _TICKS)
+    sent = []
+    with _listener() as sock:
+        port = sock.getsockname()[1]
+        monkeypatch.setattr(probe_servers, "_listening_inodes", lambda _port, _proc, _reached=None: {"777"})
+
+        def kill(group, sig):
+            sent.append((group, sig))
+            for pid in (40, 41):
+                (proc / str(pid) / "stat").unlink()
+            sock.close()
+
+        stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+        out = probe_servers.probe([f"http://127.0.0.1:{port}"], stop, proc=proc, kill=kill)
+    assert sent == [(40, signal.SIGTERM)]
+    assert out["answering"] == [] and out["left"] == []
+    assert out["stopped"] == [
+        {"url": f"http://127.0.0.1:{port}", "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": [40, 41]}
+    ]
+
+
+def test_a_group_that_does_not_exit_is_left_up_and_said_so(tmp_path, monkeypatch):
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP)
+    monkeypatch.setattr(probe_servers, "_reads_processes", lambda _proc: True)
+    monkeypatch.setattr(probe_servers, "_caller", lambda _proc: _CALLER)
+    monkeypatch.setattr(probe_servers, "_clock_ticks", lambda: _TICKS)
+    monkeypatch.setattr(probe_servers, "_GRACE", 0.1)
+    monkeypatch.setattr(probe_servers, "_listening_inodes", lambda _port, _proc, _reached=None: {"777"})
+    sent = []
+    with _listener() as sock:
+        port = sock.getsockname()[1]
+        stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+        out = probe_servers.probe(
+            [f"http://127.0.0.1:{port}"], stop, proc=proc, kill=lambda group, sig: sent.append((group, sig))
+        )
+    assert [sig for _, sig in sent] == [signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)]
+    assert out["stopped"] == []
+    assert out["left"][0]["reason"] == "its processes still ran after SIGTERM and SIGKILL"
+
+
+def test_a_server_something_keeps_starting_is_left_up_after_a_bounded_number_of_stops(tmp_path, monkeypatch):
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP)
+    monkeypatch.setattr(probe_servers, "_reads_processes", lambda _proc: True)
+    monkeypatch.setattr(probe_servers, "_caller", lambda _proc: _CALLER)
+    monkeypatch.setattr(probe_servers, "_clock_ticks", lambda: _TICKS)
+    monkeypatch.setattr(probe_servers, "_listening_inodes", lambda _port, _proc, _reached=None: {"777"})
+    # Each stop "succeeds", and the server answers again: a supervisor restarts it.
+    monkeypatch.setattr(probe_servers, "_stop_groups", lambda _proc, _members, _kill=None: True)
+    with _listener() as sock:
+        port = sock.getsockname()[1]
+        stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+        out = probe_servers.probe([f"http://127.0.0.1:{port}"], stop, proc=proc)
+    assert len(out["stopped"]) == probe_servers._STOPS
+    assert out["left"][0]["reason"] == f"it answered again after {probe_servers._STOPS} stops, so something keeps " \
+        "starting it"
 
 
 def test_a_mutant_the_reused_server_never_loads_reads_green(tmp_path):

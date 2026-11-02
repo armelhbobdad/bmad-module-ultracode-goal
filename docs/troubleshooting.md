@@ -25,9 +25,11 @@ flowchart TD
     R -->|"yes"| RES["See: Resume after an interruption"]
     R -->|"no"| D{"A drive stopped and you cannot tell why"}
     D -->|"yes"| OPS["See: operating tips, the driver's stop reasons"]
-    D -->|"no"| LOG["Read the tail of .decision-log.md"]
+    D -->|"no"| V{"A dev server of yours is gone after a drive"}
+    V -->|"yes"| SRV["See: The gate stopped a server, or left one up"]
+    V -->|"no"| LOG["Read the tail of .decision-log.md"]
     classDef accent fill:#6366F1,stroke:#4F46E5,color:#fff
-    class PRE,GATE,HOOK,REF,BUD,RES,OPS,LOG accent
+    class PRE,GATE,HOOK,REF,BUD,RES,OPS,SRV,LOG accent
 ```
 
 ## Preflight can't reach budget-zero
@@ -62,6 +64,14 @@ Note this is fail-closed on purpose: a missing or unreadable gate artifact escal
 ## Gate re-loops on a sweep-scope or delta cap
 
 A per-story gate can return `reloop` with a `PASS` gate status when a cap fired rather than a finding: the `reasons` name either the sweep-scope cap (the `.tests-ran` marker says `scope=scoped`, or the marker/`scope=` line is missing) or the delta-profile cap (`--cycle-profile delta` was declared). Neither is an error; both mean "not yet, and here is why": a story only advances off a full-scope sweep judged by the full gate instrument. The remedy is the cap-only re-loop, which skips the generalize ceremony entirely: re-run the full three-axis sweep, refresh the marker with `scope=full`, and re-run the gate without `--cycle-profile`. See the cap sections in the [gate model](./gate-model.md).
+
+## The gate stopped a server, or left one up
+
+**Symptom.** A dev server you had running is gone after a drive, or the decision log's worktree line names a server the gate stopped, or one it left up.
+
+**What happened.** A test runner such as Playwright starts a server through a launcher such as turbo, which runs it in a process group of its own, so the server outlives the run. Execute's sweep right before the gate leaves one up in the main tree that way, and so does a gate run. On Linux the gate stops such a server with `scripts/probe_servers.py` at each of its checks, and once more when the story's gate ends, so the gate's runs in its worktree do not reuse it and those servers do not pile up over an Epic. It stops a server only when every process of it is yours, has no controlling terminal and started after the story's `.baseline-<story_id>` marker was written, the process that started its session has exited, and it runs from the project or the gate's worktree. It leaves every other server up, and its `left` list gives the reason; on macOS and Windows it stops nothing. The gate never stops a server any other way.
+
+**What you do.** If it stopped a server of yours, that server met every condition: you started it during the drive, inside the project and on a port the gate checks, and the terminal you started it from was closed (a `nohup ... &`, say). Start it again, and during a drive start such a server outside the project or on another port, or keep its terminal open. A server it left up keeps its port, so the gate gives the worktree's runs a server of their own through a scratch runner config where it can, and otherwise tells each assessor what that server leaves unmeasured. When the run left that server up (a runner killed before it could end its start command leaves one whose session's first process still runs), stop it yourself once the drive is done.
 
 ## Hooks not firing
 

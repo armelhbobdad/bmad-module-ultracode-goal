@@ -39,12 +39,50 @@ since it cannot tell then which of them took the connection. A server whose
 folder has since been removed (one started from a gate worktree the rebuild
 replaced) reads with the ` (deleted)` suffix Linux gives it.
 
+Stopping a server the run started. A server the run's own runs started can
+stay up after them: Execute's step 5 sweep runs the full suite, browser tests
+included, in the main tree right before the gate, and a server its runner
+started through a launcher answers there at the gate's first check, so the
+gate's worktree runs would reuse it (#190). Under a scratch runner config
+whose only start command is a launcher, each run leaves one up on the
+config's port (#186). The gate runs every check above with `--stop-since
+<file>` and `--root`, and once more when the story's gate ends, so those
+servers neither serve the worktree's runs nor pile up over an Epic. With
+them the probe stops each server that answers when /proc shows the run
+started it, and leaves every other one up. A server counts as the run's only
+when every process in its process group belongs to this user, has no
+controlling terminal and started after `<file>` was last written (the gate
+passes the story's baseline marker, which Execute writes before any of the
+story's work and a resume keeps, so a server an earlier session started still
+counts); when the process that led its session no longer runs; and when the
+folder it runs from is inside a `--root`. A runner starts its server's
+command in a session of its own, which has no controlling terminal, and ends
+that command when it ends, so a server a launcher ran in a group of its own
+lives on without the process that led its session. A server started from a
+terminal has a controlling terminal while that terminal's shell runs, and the
+shell leads its session. Measured with turbo 2.11.9 and Claude Code 2.1.316
+on Linux: the server turbo left up had no terminal, its session's first
+process was gone and its parent was `systemd --user`; a server started from a
+terminal had one. A server started with `nohup ... &` from a terminal that is
+closed afterwards has neither, so it reads as the run's when it also started
+after the marker and runs from inside a root. The probe never stops its own
+process group, or one that holds a process that started it. It sends the
+group SIGTERM, then SIGKILL to what is left after a few seconds, and checks
+the URL again: a URL that still answers is read as above, once more, until a
+bounded number of stops. On a system with no /proc to read it stops nothing.
+
 Usage:
     uv run probe_servers.py --url <url> [--url <url> ...]
+    uv run probe_servers.py --url <url> [--url <url> ...] --stop-since <file> --root <dir> [--root <dir> ...]
 
 Output: JSON on stdout, `{"answering": [{"url", "port", "cwd"}], "free":
-[<url>, ...]}`. Exit 0 when no URL answers, 1 when any does, and 2 when a URL
-has no host, or a port that is not a number from 0 to 65535.
+[<url>, ...]}`. With `--stop-since`, `answering` and `free` say what answers
+once it has stopped what it could, and two keys are added: `stopped`, each
+server it stopped (`{"url", "port", "cwd", "process_groups", "pids"}`), and
+`left`, each URL that still answers with the reason it left that server up
+(`{"url", "port", "cwd", "reason"}`). Exit 0 when no URL answers, 1 when any
+does, and 2 when a URL has no host, or a port that is not a number from 0 to
+65535, or when the `--stop-since` file cannot be read.
 """
 
 from __future__ import annotations
@@ -52,16 +90,31 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import socket
 import struct
 import sys
+import time
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlsplit
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 # The `st` column of /proc/net/tcp for a listening socket.
 _LISTEN = "0A"
 _TIMEOUT = 1.0
+_PROC = Path("/proc")
+# A process's start time is read to the second (/proc/stat's boot time is a
+# whole second), so one that started within this long after the marker was
+# written is not counted as started after it.
+_CLOCK_SLACK = 2.0
+# How long a process group has to exit after SIGTERM, and again after SIGKILL.
+_GRACE = 5.0
+# How many times one URL's server is stopped before the probe leaves it up:
+# something that starts it again is not this run's to fight.
+_STOPS = 3
+# The state letters of a process that has exited (a zombie nobody has reaped yet, or a dead one).
+_EXITED = ("Z", "X")
 
 
 def _host_and_port(url: str) -> tuple[str, int]:
@@ -149,47 +202,292 @@ def _held(pid: Path, sockets: set[str]) -> set[str]:
     return held
 
 
+def _holders(port: int, proc: Path, reached: tuple[int, bytes] | None = None) -> tuple[dict[int, str], bool]:
+    """The processes holding a socket listening on `port` (with `reached`,
+    one that could have taken a connection to it), each with the folder it
+    runs from, and whether every such socket has a holder this one can read."""
+    sockets = {f"socket:[{inode}]" for inode in _listening_inodes(port, proc, reached)}
+    if not sockets:
+        return {}, False
+    held: set[str] = set()
+    holders: dict[int, str] = {}
+    for pid in (entry for entry in proc.iterdir() if entry.name.isdigit()):
+        try:
+            found = _held(pid, sockets)
+            if found:
+                holders[int(pid.name)] = os.readlink(pid / "cwd")
+                held |= found
+        except OSError:
+            # Another user's process, or one that has exited.
+            continue
+    return holders, held == sockets
+
+
 def _cwd_of_listener(port: int, proc: Path = Path("/proc"), reached: tuple[int, bytes] | None = None) -> str | None:
     """The folder the process listening on `port` runs from (with `reached`,
     the one listening where a connection to it lands), or None unless every
     socket that could have taken it is held from one folder by a process this
     one can read."""
-    sockets = {f"socket:[{inode}]" for inode in _listening_inodes(port, proc, reached)}
-    if not sockets:
-        return None
-    held: set[str] = set()
-    cwds: set[str] = set()
-    for pid in (entry for entry in proc.iterdir() if entry.name.isdigit()):
-        try:
-            found = _held(pid, sockets)
-            if found:
-                cwds.add(os.readlink(pid / "cwd"))
-                held |= found
-        except OSError:
-            # Another user's process, or one that has exited.
-            continue
+    holders, complete = _holders(port, proc, reached)
+    cwds = set(holders.values())
     # A second folder, or a socket with no holder it can read, leaves it unable to say which one answered.
-    return next(iter(cwds)) if len(cwds) == 1 and held == sockets else None
+    return next(iter(cwds)) if len(cwds) == 1 and complete else None
 
 
-def probe(urls: list[str]) -> dict:
-    answering, free = [], []
+# --- stopping a server the run started -------------------------------------------
+
+
+class _Process(NamedTuple):
+    pid: int
+    state: str
+    ppid: int
+    pgrp: int
+    session: int
+    tty: int
+    # Clock ticks after boot.
+    start: int
+
+
+class _Caller(NamedTuple):
+    """The process that runs the probe: whose processes it may stop, and which it must not."""
+
+    uid: int
+    pgrp: int
+    session: int
+    # This process and every process that started it.
+    lineage: frozenset[int]
+
+
+class _Stop(NamedTuple):
+    """What `--stop-since` and `--root` ask for."""
+
+    marker: Path
+    since: float
+    roots: tuple[str, ...]
+
+
+def _process(proc: Path, pid: int) -> _Process | None:
+    """A process as /proc/<pid>/stat gives it, or None once it has gone. The
+    name in parentheses can hold spaces and parentheses, so the fields are
+    read after its last `)`."""
+    try:
+        raw = (proc / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+        fields = raw[raw.rindex(")") + 2 :].split()
+        return _Process(pid, fields[0], int(fields[1]), int(fields[2]), int(fields[3]), int(fields[4]), int(fields[19]))
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _running(proc: Path, pid: int) -> _Process | None:
+    found = _process(proc, pid)
+    return None if found is None or found.state in _EXITED else found
+
+
+def _uid(proc: Path, pid: int) -> int | None:
+    """The process's user, when its real and effective users are one."""
+    try:
+        for line in (proc / str(pid) / "status").read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("Uid:"):
+                ids = line.split()[1:3]
+                return int(ids[0]) if len(ids) == 2 and ids[0] == ids[1] else None
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _boot_time(proc: Path) -> float | None:
+    try:
+        for line in (proc / "stat").read_text(encoding="ascii").splitlines():
+            if line.startswith("btime "):
+                return float(line.split()[1])
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _processes(proc: Path) -> list[_Process]:
+    found = (_running(proc, int(entry.name)) for entry in proc.iterdir() if entry.name.isdigit())
+    return sorted((process for process in found if process is not None), key=lambda process: process.pid)
+
+
+def _caller(proc: Path) -> _Caller:
+    lineage, pid = set(), os.getpid()
+    while pid > 0 and pid not in lineage:
+        lineage.add(pid)
+        parent = _process(proc, pid)
+        pid = parent.ppid if parent is not None else 0
+    return _Caller(os.getuid(), os.getpgrp(), os.getsid(0), frozenset(lineage))
+
+
+def _inside(cwd: str, roots: tuple[str, ...]) -> bool:
+    # A folder removed since the process started from it (an old gate worktree) reads with this suffix.
+    path = cwd.removesuffix(" (deleted)")
+    for root in roots:
+        try:
+            # commonpath gives the system's own separators, so the root is compared in that form.
+            if os.path.commonpath([path, root]) == os.path.normpath(root):
+                return True
+        except ValueError:
+            # Paths on two drives, or one relative and one absolute.
+            continue
+    return False
+
+
+def _not_the_runs(
+    proc: Path, port: int, reached: tuple[int, bytes], stop: _Stop, caller: _Caller, ticks: float
+) -> tuple[str | None, list[_Process]]:
+    """Why the server listening where a connection to `reached` lands is not
+    one the run can be shown to have started, or None and the processes of
+    its process groups when it is."""
+    holders, complete = _holders(port, proc, reached)
+    if not complete:
+        return (
+            "a socket that could have taken the connection has no holder this probe can read (another user's "
+            "server, or /proc does not say)"
+        ), []
+    outside = sorted(cwd for cwd in holders.values() if not _inside(cwd, stop.roots))
+    if outside:
+        return f"it runs from {outside[0]}, outside every --root", []
+    boot = _boot_time(proc)
+    if boot is None:
+        return "/proc gives no boot time to read a process's start time against", []
+    processes = _processes(proc)
+    if {process.pid for process in processes if process.pid in holders} != set(holders):
+        return "a process that holds its socket has exited", []
+    groups = {process.pgrp for process in processes if process.pid in holders}
+    members = [process for process in processes if process.pgrp in groups]
+    for group in sorted(groups):
+        if group <= 1 or group == caller.pgrp:
+            return f"process group {group} is this probe's own", []
+    for member in members:
+        if member.pid in caller.lineage or member.session == caller.session:
+            return f"process {member.pid} in its process group is this probe, one that started it or in its session", []
+        if _uid(proc, member.pid) != caller.uid:
+            return f"process {member.pid} in its process group is not this user's", []
+        if member.tty != 0:
+            return f"process {member.pid} in its process group has a controlling terminal", []
+        if boot + member.start / ticks < stop.since + _CLOCK_SLACK:
+            return f"process {member.pid} in its process group started before {stop.marker} was written", []
+    for session in sorted({member.session for member in members}):
+        leader = _running(proc, session)
+        if leader is not None and leader.session == session:
+            return f"process {session}, which leads its session, still runs", []
+    return None, members
+
+
+def _stop_groups(proc: Path, members: list[_Process], kill=None) -> bool:
+    """SIGTERM to each process group, then SIGKILL to what is left of it after
+    a grace period: whether every one of `members` has exited. A process is
+    known by its start time as well as its pid, so a pid the system has given
+    to a new process since does not count as one still running."""
+    kill = kill or os.killpg
+    groups = sorted({member.pgrp for member in members})
+
+    def alive() -> list[_Process]:
+        left = []
+        for member in members:
+            now = _running(proc, member.pid)
+            if now is not None and now.start == member.start:
+                left.append(member)
+        return left
+
+    for sig in (signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)):
+        for group in sorted({member.pgrp for member in alive()} & set(groups)):
+            try:
+                kill(group, sig)
+            except OSError:
+                # Gone since (ProcessLookupError), or one it may not signal: what is left is reported below.
+                continue
+        deadline = time.monotonic() + _GRACE
+        while alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if not alive():
+            return True
+    return False
+
+
+def _reads_processes(proc: Path) -> bool:
+    return sys.platform.startswith("linux") and (proc / "stat").is_file() and hasattr(os, "killpg")
+
+
+def _clock_ticks() -> float:
+    """The clock ticks per second /proc/<pid>/stat counts a start time in."""
+    return float(os.sysconf("SC_CLK_TCK"))
+
+
+def probe(urls: list[str], stop: _Stop | None = None, proc: Path | None = None, kill=None) -> dict:
+    proc = proc or _PROC
+    answering, free, stopped, left = [], [], [], []
+    readable = stop is not None and _reads_processes(proc)
+    caller = _caller(proc) if readable else None
+    ticks = _clock_ticks() if readable else 0.0
     for url in urls:
         host, port = _host_and_port(url)
-        reached = _reached(host, port)
-        if reached is None:
-            free.append(url)
-        else:
-            answering.append({"url": url, "port": port, "cwd": _cwd_of_listener(port, reached=reached)})
-    return {"answering": answering, "free": free}
+        for attempt in range(_STOPS + 1):
+            reached = _reached(host, port)
+            if reached is None:
+                free.append(url)
+                break
+            entry = {"url": url, "port": port, "cwd": _cwd_of_listener(port, proc, reached)}
+            if stop is None:
+                answering.append(entry)
+                break
+            if not readable:
+                reason = "this system has no Linux /proc to read the server's processes from, so it stops nothing"
+                members: list[_Process] = []
+            elif attempt == _STOPS:
+                reason = f"it answered again after {_STOPS} stops, so something keeps starting it"
+                members = []
+            else:
+                reason, members = _not_the_runs(proc, port, reached, stop, caller, ticks)
+            if reason is None and not _stop_groups(proc, members, kill):
+                reason = "its processes still ran after SIGTERM and SIGKILL"
+            if reason is not None:
+                answering.append(entry)
+                left.append({**entry, "reason": reason})
+                break
+            stopped.append(
+                {
+                    **entry,
+                    "process_groups": sorted({member.pgrp for member in members}),
+                    "pids": sorted(member.pid for member in members),
+                }
+            )
+    result = {"answering": answering, "free": free}
+    if stop is not None:
+        result.update(stopped=stopped, left=left)
+    return result
+
+
+def _stop_request(marker: str | None, roots: list[str] | None) -> _Stop | None:
+    if marker is None:
+        return None
+    try:
+        since = Path(marker).stat().st_mtime
+    except OSError as exc:
+        raise ValueError(f"--stop-since {marker}: {exc.strerror or exc}") from exc
+    return _Stop(Path(marker), since, tuple(os.path.realpath(root) for root in roots or ()))
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Report which URLs already have a server answering.")
     parser.add_argument("--url", action="append", required=True, help="A URL a runner may reuse; repeatable.")
+    parser.add_argument(
+        "--stop-since",
+        metavar="FILE",
+        help="Stop each answering server the run can be shown to have started after FILE was last written.",
+    )
+    parser.add_argument(
+        "--root",
+        action="append",
+        metavar="DIR",
+        help="With --stop-since: a folder a server it stops may run from; repeatable.",
+    )
     args = parser.parse_args(argv)
+    if (args.stop_since is None) != (args.root is None):
+        parser.error("--stop-since and --root go together")
     try:
-        result = probe(args.url)
+        result = probe(args.url, _stop_request(args.stop_since, args.root))
     except ValueError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 2

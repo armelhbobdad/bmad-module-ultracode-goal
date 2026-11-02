@@ -88,6 +88,10 @@ Both declare `dependencies = []`. They read a JSON event on stdin, inspect git/l
 
 **How to remove them:** delete the corresponding `PreToolUse` and `Stop` hook entries, and the `permissions.allow` entries preflight added, from `.claude/settings.local.json`. Because the file is machine-local and gitignored, nothing else in your repo depends on them. To take out the guard alone, when it refuses every tool call because it cannot run, delete the inner item whose `command` names `guard_pretooluse.py` from `hooks.PreToolUse[].hooks[]`, and its matcher group if that leaves the group's `hooks` list empty. A resume or the next preflight puts it back, so fix what stopped it from running first.
 
+## Processes the gate stops
+
+One script can end processes on your machine. At the gate, `skills/ultracode-goal/scripts/probe_servers.py`, run with `--stop-since`, stops a dev server the run itself left up, so the gate's measurement worktree does not reuse it. It sends SIGTERM, then SIGKILL, to that server's process group, and only when, on Linux, every process in the group is your user's, has no controlling terminal and started after the current story's baseline marker was written, the process that led its session has exited, and the server runs from the project or the gate's worktree. It never signals its own process group or one that holds a process that started it, it stops nothing on macOS or Windows, and the decision log names each server it stopped. A server you start during a drive, inside the project and on a port the gate checks, from a terminal you then close, can meet every condition: [troubleshooting](https://armelhbobdad.github.io/bmad-module-ultracode-goal/troubleshooting/) says how to keep one up.
+
 ## Secrets
 
 The UCG module never requires you to provide secrets. It does not read, store, or transmit credentials as part of its own operation. In a **headless** run, a secret the run cannot resolve is treated as a **red blocker** that halts the run, never as an interactive prompt and never as a value the conductor invents to keep moving.
