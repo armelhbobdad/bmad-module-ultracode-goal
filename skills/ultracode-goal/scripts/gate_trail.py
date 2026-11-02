@@ -163,7 +163,16 @@ _STORY_HEADING = re.compile(
 )
 # The rest of the line in the heading `references/gate.md` ("Run the gate") has
 # the run write before each gate cycle: `### Story <story_id>: gate`.
-_GATE_HEADING_TAIL = re.compile(r":[ \t]*gate[ \t]*", re.IGNORECASE)
+_GATE_HEADING_TAIL = re.compile(r":[ \t]*gate\s*", re.IGNORECASE)
+# The same tail as a later cycle's heading may carry it: `gate` alone, or with a
+# note in parentheses (`: gate (cycle 2)`) or a cycle number (`: gate cycle 2`,
+# `: gate, cycle 2`, `: gate #2`) after it. `gate` must stand as a word with
+# nothing but such a note after it, so `: gate-gap`, `: gate-automate` and
+# `: gate notes` are no cycle.
+_GATE_CYCLE_TAIL = re.compile(
+    r":[ \t]*gate(?:[ \t]*\([^()\r\n]*\)|[ \t]*[,;]?[ \t]*(?:cycle[ \t]*)?#?\d+)?\s*",
+    re.IGNORECASE,
+)
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n(\{.*?\})\s*\n```", re.DOTALL)
 # A JSON object as a single-backtick code span, the way some runs log
 # `gate_eval.py`'s result inside a sentence. `[^`]` keeps it inside one span.
@@ -604,6 +613,19 @@ def _is_gate_heading(match: re.Match[str]) -> bool:
     return level == "###" and bool(_GATE_HEADING_TAIL.fullmatch(tail))
 
 
+def _is_gate_cycle_heading(match: re.Match[str]) -> bool:
+    """True iff a story heading opens a gate cycle: the prescribed heading at
+    any level `_STORY_HEADING` reads (`## Story 7-1: gate`), or with a note
+    after `gate` (`### Story 7-1: gate (cycle 2)`), as `_GATE_CYCLE_TAIL` reads
+    it.
+
+    Only the cycle reading takes these shapes. Which headings name a story at
+    all is still `_story_heading_id`'s call, where the shape that names any id,
+    listed or not, is the prescribed one alone.
+    """
+    return bool(_GATE_CYCLE_TAIL.fullmatch(match.group(3)))
+
+
 def _story_heading_id(match: re.Match[str], keys: set[str]) -> str | None:
     """The story id a `_STORY_HEADING` match names, or None for a prose heading.
 
@@ -685,10 +707,13 @@ def recorded_verdicts(decision_log: Path | None, keys: set[str] | None = None) -
     that shape is a later cycle, and when its span holds no verdict object it
     drops the earlier one: the trail falls back to the gate artifact rather
     than show an earlier cycle's verdict, and the story's last cycle decides.
+    A later heading at another level (`## Story 7-1: gate`) or with a note after
+    `gate` (`: gate (cycle 2)`) is a later cycle too (`_is_gate_cycle_heading`).
     Any other later heading for the id (`### Story 7-1: re-loop 1`, a note on
-    what the re-loop owes) is no cycle, so with no verdict object of its own it
-    keeps the verdict before it: a downgraded or capped `reloop` followed by a
-    re-loop's notes must not read as the gate file's mapped `advance`.
+    what the re-loop owes, `: gate-gap`) is no cycle, so with no verdict object
+    of its own it keeps the verdict before it: a downgraded or capped `reloop`
+    followed by a re-loop's notes must not read as the gate file's mapped
+    `advance`.
 
     Keyed by the heading's id VERBATIM. It used to be keyed by
     `numeric_prefix(...)`, which collapsed every alphanumeric child id of one
@@ -713,7 +738,7 @@ def recorded_verdicts(decision_log: Path | None, keys: set[str] | None = None) -
         verdict = _first_verdict(text[match.end() : end], ident)
         if verdict:
             out[ident] = verdict
-        elif _is_gate_heading(match):
+        elif _is_gate_cycle_heading(match):
             out.pop(ident, None)
     return out
 
