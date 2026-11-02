@@ -62,6 +62,7 @@ const REPO_URL = 'https://github.com/armelhbobdad/bmad-module-ultracode-goal/';
 
 const fs = require('node:fs');
 const path = require('node:path');
+const yaml = require('js-yaml');
 
 /** Hosts/schemes that are never local links. */
 const EXTERNAL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
@@ -388,7 +389,8 @@ function frontMatterEnd(lines) {
  * like a heading, and reading the raw file counted every one of them, so a
  * link to a comment passed as a link to a section. Front matter is skipped
  * for the same reason. Only ATX headings are read: a setext heading (text
- * underlined with `===` or `---`) gets no id here.
+ * underlined with `===` or `---`) gets no id here. A leading byte order mark
+ * is dropped first, as GitHub and the site both drop it.
  *
  * @param {string} content - Raw Markdown
  * @returns {Set<string>} Every heading id in the file
@@ -397,7 +399,7 @@ function extractAnchors(content) {
   const anchors = new Set();
   const occurrences = new Map();
 
-  for (const line of blankFences(blankFrontMatter(content)).split('\n')) {
+  for (const line of blankFences(blankFrontMatter(content.replace(/^\uFEFF/, ''))).split('\n')) {
     const match = line.match(ATX_HEADING);
     if (!match) {
       continue;
@@ -478,12 +480,17 @@ function isFile(file) {
  * The route Starlight serves a page at, from the slug Astro gave the page:
  * '' for the root. A slug `index`, or one ending in `/index`, names its
  * folder, and the route is in Unicode NFC.
+ *
+ * The build writes the page to `<route>/index.html`, where a run of slashes
+ * names one folder. So a slash before, after or between the folders of a
+ * slug adds no folder: `/lead`, `trail/` and `a//b` are served at lead/,
+ * trail/ and a/b/.
  */
 function routeOfSlug(slug) {
   if (slug === 'index' || slug === '' || slug === '/') {
     return '';
   }
-  return (slug.endsWith('/index') ? slug.slice(0, -'/index'.length) : slug).normalize();
+  return (slug.endsWith('/index') ? slug.slice(0, -'/index'.length) : slug).normalize().split('/').filter(Boolean).join('/');
 }
 
 /**
@@ -506,45 +513,33 @@ function routeOfPath(rel) {
 }
 
 /**
- * The string a YAML value written on one line holds, or null when it is
- * empty or null. A single-quoted value doubles its `'`, a double-quoted one
- * is read with JSON's escapes, and a plain one ends where ` #` starts a
- * comment.
+ * Where a docs build finds a page's front matter: Astro's own pattern (in
+ * @astrojs/markdown-remark). It starts at a `---` or `+++` at the very start
+ * of the file, after a byte order mark or after blank lines, and runs to the
+ * next line that starts with `---` or `+++`.
  */
-function yamlScalar(raw) {
-  const single = raw.match(/^'((?:[^']|'')*)'(?:[ \t]+#.*)?$/);
-  if (single) {
-    return single[1].replaceAll("''", "'") || null;
-  }
-  const double = raw.match(/^"((?:[^"\\]|\\.)*)"(?:[ \t]+#.*)?$/);
-  if (double) {
-    try {
-      return JSON.parse(`"${double[1]}"`) || null;
-    } catch {
-      return double[1] || null;
-    }
-  }
-  const plain = raw.replace(/(?:^|[ \t]+)#.*$/, '');
-  return /^(?:~|null|Null|NULL)?$/.test(plain) ? null : plain;
-}
+const FRONT_MATTER = /(?:^\uFEFF?|^\s*\n)(---|\+\+\+)([\s\S]*?\n)(?:---|\+\+\+)/;
 
 /**
- * The `slug` a page's YAML front matter sets, or null when it sets none.
+ * The front matter a docs build reads from a page, as the object its YAML
+ * holds, or {} when it has none.
  *
- * A docs build serves a page at the slug its front matter sets, taken as
- * written, in place of the route its path gives it. Only a top-level `slug:`
- * line is read, with a plain or quoted value on that line. An empty or null
- * value sets no slug, as in the build.
+ * The build parses it with js-yaml, as this does, so a key or value written
+ * in any YAML form (quoted, folded, on the next line, an alias) is read as
+ * the build reads it. Front matter the build cannot parse fails the build,
+ * and is read as none here. TOML front matter (opened by `+++`) is not read.
  */
-function frontMatterSlug(text) {
-  const lines = text.split('\n');
-  for (const line of lines.slice(1, Math.max(frontMatterEnd(lines), 1))) {
-    const value = line.match(/^slug:(?:[ \t]+(.*?))?[ \t\r]*$/);
-    if (value) {
-      return yamlScalar(value[1] ?? '');
-    }
+function frontMatter(text) {
+  const match = FRONT_MATTER.exec(text);
+  if (!match || match[1] !== '---') {
+    return {};
   }
-  return null;
+  try {
+    const data = yaml.load(match[2]);
+    return data && typeof data === 'object' ? data : {};
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -553,34 +548,84 @@ function frontMatterSlug(text) {
  * path alone gives it (see `routeOfPath`).
  *
  * The build reads every `.md` file below docs/ except one with a file or
- * folder name that starts with `_` or `.`. It serves a page at the slug its
- * front matter sets, else at its `pathRoute`. These routes match the ones a
- * real build (Astro 5.18, Starlight 0.37) wrote for the same files.
+ * folder name that starts with `_` or `.`. It serves a page at the `slug` its
+ * front matter sets, else at its `pathRoute`, and leaves out a page whose
+ * front matter sets `draft: true`. These routes match the ones a real build
+ * (Astro 5.18, Starlight 0.37) wrote for the same files. A `.mdx` file, which
+ * the build also reads as a page, is not listed, so a link to one is
+ * reported.
+ *
+ * The build's file walker (fdir, under tinyglobby) follows a symbolic link
+ * to a file or a folder, and serves what it finds at the link's own path. It
+ * does not follow a folder link whose real path is, holds or sits in the real
+ * path of a folder link above it, so a loop of links ends after one turn. It
+ * compares real paths as plain text, so `/a/doc` holds `/a/docs` there too.
+ * A dangling link is skipped. This walk does the same.
+ *
+ * When two files claim one route, the build keeps one of them and warns, and
+ * which one depends on the order its reads finish in. So `onClash(route,
+ * files)` is called with the files in path order, and the first of them that
+ * is no draft is listed. A draft claims its route too, since the build drops
+ * it only after it has replaced the other page.
+ *
+ * @param {string} docsDir - The docs/ folder
+ * @param {(route: string, files: string[]) => void} [onClash] - Called once per route two or more files claim
+ * @returns {Map<string, {file: string, pathRoute: string}>} Pages by route
  */
-function sitePages(docsDir) {
-  const pages = new Map();
-  const visit = (dir, segments) => {
+function sitePages(docsDir, onClash = () => {}) {
+  const claims = new Map();
+  const visit = (dir, segments, links) => {
     let entries;
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
-    for (const entry of entries) {
+    // In name order, so the result is the same whatever order the file
+    // system lists a folder in.
+    for (const entry of entries.toSorted((a, b) => (a.name < b.name ? -1 : 1))) {
       if (/^[_.]/.test(entry.name)) {
         continue;
       }
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        visit(full, [...segments, entry.name]);
-      } else if (entry.isFile() && path.extname(entry.name) === '.md') {
+      let kind = entry;
+      let real = null;
+      if (entry.isSymbolicLink()) {
+        try {
+          kind = fs.statSync(full);
+          real = fs.realpathSync(full);
+        } catch {
+          continue;
+        }
+      }
+      if (kind.isDirectory()) {
+        if (!real || !links.some((link) => link.startsWith(real) || real.startsWith(link))) {
+          visit(full, [...segments, entry.name], real ? [...links, real] : links);
+        }
+      } else if (kind.isFile() && path.extname(entry.name) === '.md') {
+        const data = frontMatter(fs.readFileSync(full, 'utf8'));
         const pathRoute = routeOfPath([...segments, entry.name.slice(0, -'.md'.length)].join('/'));
-        const slug = frontMatterSlug(fs.readFileSync(full, 'utf8'));
-        pages.set(slug === null ? pathRoute : routeOfSlug(slug), { file: full, pathRoute });
+        const route = typeof data.slug === 'string' && data.slug ? routeOfSlug(data.slug) : pathRoute;
+        claims.set(route, [...(claims.get(route) ?? []), { file: full, pathRoute, draft: data.draft === true }]);
       }
     }
   };
-  visit(docsDir, []);
+  visit(docsDir, [], []);
+
+  const pages = new Map();
+  for (const [route, unsorted] of claims) {
+    const files = unsorted.toSorted((a, b) => (a.file < b.file ? -1 : 1));
+    if (files.length > 1) {
+      onClash(
+        route,
+        files.map((claim) => claim.file),
+      );
+    }
+    const page = files.find((claim) => !claim.draft);
+    if (page) {
+      pages.set(route, { file: page.file, pathRoute: page.pathRoute });
+    }
+  }
   return pages;
 }
 
@@ -713,7 +758,14 @@ function checkSource({ projectRoot, docsDir, siteUrl = SITE_URL, repoUrl = REPO_
     }
     return anchorsByFile.get(file);
   };
-  const pages = sitePages(docsDir);
+  const pages = sitePages(docsDir, (route, [first, ...others]) => {
+    for (const file of others) {
+      report(
+        path.relative(projectRoot, file),
+        `page shares its site route with another, and a docs build keeps only one of them: ${routeName(route)} (also ${path.relative(projectRoot, first)})`,
+      );
+    }
+  });
 
   for (const file of files) {
     const rel = path.relative(projectRoot, file);

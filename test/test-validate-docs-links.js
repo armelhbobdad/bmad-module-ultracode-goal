@@ -462,6 +462,181 @@ async function main() {
     ]);
   });
 
+  await testAsync('front matter is read as the build reads it, and a slug adds no empty folder', async () => {
+    // Every route below is the one `astro build` (Astro 5.18.2, Starlight
+    // 0.37.7) wrote for the same front matter. The build parses it as YAML,
+    // so a quoted key, a block or flow value and an alias all set the slug,
+    // and it finds it after a byte order mark or blank lines too. A slash
+    // around or inside a slug names no folder of its own.
+    const site = 'https://example.com/base/';
+    const page = (front) => `---\ntitle: Page\n${front}---\n\n## Heading\n`;
+    const { cfg } = fixture(
+      {
+        root: {
+          'README.md': [
+            `[a](${site}lead/) [b](${site}trail/#heading) [c](${site}deep/sub/) [d](${site}a/b/)`,
+            `[e](${site}bomslug/) [f](${site}blockslug/) [g](${site}bom/)`,
+          ].join('\n'),
+        },
+        docs: {
+          'bom.md': `\uFEFF${page('slug: bomslug\n')}`,
+          'qkey.md': page('"slug": qkeyslug\n'),
+          'block.md': page('slug: >-\n  blockslug\n'),
+          'multiline.md': page('slug:\n  mlslug\n'),
+          'leadblank.md': `\n\n${page('slug: blankslug\n')}`,
+          'flow.md': '---\n{title: Flow, slug: flowslug}\n---\n',
+          'anchor.md': page('base: &b anchorslug\nslug: *b\n'),
+          'crlf.md': '---\r\ntitle: Crlf\r\nslug: crlfslug\r\n---\r\n',
+          'trailsp.md': '--- \ntitle: TrailSp\nslug: trailspslug\n---\n',
+          'upperindex.md': page('slug: Index\n'),
+          'space.md': page('slug: "My Page"\n'),
+          'lead.md': page('slug: /lead\n'),
+          'trail.md': page('slug: trail/\n'),
+          'deeptrail.md': page('slug: deep/sub/\n'),
+          'deepidx.md': page('slug: deepidx/index/\n'),
+          'doubled.md': page('slug: a//b\n'),
+        },
+      },
+      ['--site-url', site],
+    );
+    assert.deepStrictEqual([...sitePages(cfg.docsDir).keys()].sort(), [
+      'Index',
+      'My Page',
+      'a/b',
+      'anchorslug',
+      'blankslug',
+      'blockslug',
+      'bomslug',
+      'crlfslug',
+      'deep/sub',
+      'deepidx/index',
+      'flowslug',
+      'lead',
+      'mlslug',
+      'qkeyslug',
+      'trail',
+      'trailspslug',
+    ]);
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => i.detail),
+      [
+        `site link names no page or file a docs build of this tree serves: ${site}bom/ (the site serves ${path.join('docs', 'bom.md')} at bomslug/)`,
+      ],
+    );
+  });
+
+  await testAsync('a draft is no page of the site', async () => {
+    // A production build of the site leaves out every page whose front
+    // matter sets `draft: true`.
+    const site = 'https://example.com/base/';
+    const { cfg } = fixture(
+      {
+        root: { 'README.md': `[a](${site}draft/) [b](${site}kept/)\n` },
+        docs: {
+          'draft.md': '---\ntitle: Draft\ndraft: true\n---\n',
+          'kept.md': '---\ntitle: Kept\ndraft: false\n---\n',
+        },
+      },
+      ['--site-url', site],
+    );
+    assert.deepStrictEqual([...sitePages(cfg.docsDir).keys()], ['kept']);
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => i.detail),
+      [`site link names no page or file a docs build of this tree serves: ${site}draft/`],
+    );
+  });
+
+  await testAsync('two pages served at one route are reported', async () => {
+    // A build keeps one entry per route and warns about the other, and which
+    // one it keeps depends on the order its reads finish in. A draft counts,
+    // since the build drops it only after it has replaced the page.
+    const { cfg } = fixture({
+      docs: {
+        'dup.md': '## From file\n',
+        'dup/index.md': '## From index\n',
+        'faq.md': '# FAQ\n',
+        'other.md': '---\nslug: faq\n---\n',
+        'kept.md': '# Kept\n',
+        'shadow.md': '---\nslug: kept\ndraft: true\n---\n',
+        'alone.md': '# Alone\n',
+      },
+    });
+    const same = 'page shares its site route with another, and a docs build keeps only one of them';
+    const r = await runQuiet(cfg);
+    assert.deepStrictEqual(
+      r.issues.map((i) => `${i.file}: ${i.detail}`),
+      [
+        `${path.join('docs', 'dup', 'index.md')}: ${same}: dup/ (also ${path.join('docs', 'dup.md')})`,
+        `${path.join('docs', 'other.md')}: ${same}: faq/ (also ${path.join('docs', 'faq.md')})`,
+        `${path.join('docs', 'shadow.md')}: ${same}: kept/ (also ${path.join('docs', 'kept.md')})`,
+      ],
+    );
+  });
+
+  // The build's file walker follows a symbolic link to a file or a folder,
+  // and stops at a folder link that leads back to where a link above it
+  // leads. A dangling link is skipped. The routes are the ones a real build
+  // wrote for the same tree.
+  const linkSite = 'https://example.com/base/';
+  const linked = fixture(
+    {
+      root: {
+        'README.md': `[a](${linkSite}linked/#heading) [b](${linkSite}linkdir/page/) [c](${linkSite}linkdir/sub/) [d](${linkSite}linkdir/back/target/)\n`,
+        'outside/target.md': '## Heading\n',
+        'outside/dir/page.md': '# Page\n',
+        'outside/dir/sub/index.md': '# Sub\n',
+      },
+      docs: { 'loopdir/page.md': '# Loop\n' },
+    },
+    ['--site-url', linkSite],
+  );
+  let linkRefused = null;
+  try {
+    for (const [target, at, type] of [
+      [path.join('..', 'outside', 'target.md'), path.join('docs', 'linked.md'), 'file'],
+      [path.join('..', 'outside', 'dir'), path.join('docs', 'linkdir'), 'dir'],
+      ['..', path.join('outside', 'dir', 'back'), 'dir'],
+      ['.', path.join('docs', 'loopdir', 'again'), 'dir'],
+      ['missing.md', path.join('docs', 'dangling.md'), 'file'],
+    ]) {
+      const linkPath = path.join(linked.root, at);
+      // On Windows a junction, which needs no privilege, stands in for a
+      // folder link, and takes an absolute target.
+      if (process.platform === 'win32' && type === 'dir') {
+        fs.symlinkSync(path.resolve(path.dirname(linkPath), target), linkPath, 'junction');
+      } else {
+        fs.symlinkSync(target, linkPath, type);
+      }
+    }
+  } catch (error) {
+    if (!['EPERM', 'EACCES', 'ENOSYS'].includes(error.code)) {
+      throw error;
+    }
+    linkRefused = error.code;
+  }
+  if (linkRefused) {
+    console.log(`- skipped: linked docs files and folders (this platform refused to create a symbolic link: ${linkRefused})`);
+  } else {
+    await testAsync('a linked docs file or folder is served as the build follows it', async () => {
+      assert.deepStrictEqual([...sitePages(linked.cfg.docsDir).keys()].sort(), [
+        'linkdir/page',
+        'linkdir/sub',
+        'linked',
+        'loopdir/again/page',
+        'loopdir/page',
+      ]);
+      // The source pass reads each docs file, and a dangling one has nothing to read.
+      fs.rmSync(path.join(linked.root, 'docs', 'dangling.md'));
+      const r = await runQuiet(linked.cfg);
+      assert.deepStrictEqual(
+        r.issues.map((i) => i.detail),
+        [`site link names no page or file a docs build of this tree serves: ${linkSite}linkdir/back/target/`],
+      );
+    });
+  }
+
   await testAsync('a link to a file on the repository main is mapped back to that file', async () => {
     const repo = 'https://git.test/owner/repo/';
     const { cfg } = fixture(
@@ -591,6 +766,12 @@ async function main() {
     // github-slugger: Foo -> foo, Foo -> foo-1, "Foo 1" -> foo-1 is taken -> foo-1-1.
     const ids = [...extractAnchors('# Foo\n# Foo\n# Foo 1\n# Foo\n')];
     assert.deepStrictEqual(ids, ['foo', 'foo-1', 'foo-1-1', 'foo-2']);
+  });
+
+  test('extractAnchors reads a file that starts with a byte order mark', () => {
+    // GitHub and the site both drop the mark before reading the Markdown.
+    assert.deepStrictEqual([...extractAnchors('\uFEFF# Title\n')], ['title']);
+    assert.deepStrictEqual([...extractAnchors('\uFEFF---\n# a yaml comment\n---\n# Real\n')], ['real']);
   });
 
   test('extractAnchors skips fences, front matter and non-headings', () => {
