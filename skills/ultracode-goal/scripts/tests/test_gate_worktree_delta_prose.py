@@ -193,7 +193,11 @@ last two and the first whatever test it names. Two files whose processes exit
 non-zero after all their tests pass still read as a kill, since Node prints
 them as it prints a process that dies during a test: the bullet states that
 limit and tells automate to write each Node row to run only the row's test
-file.
+file. A review of that fix found three more such runs, measured below on the
+bullet as it stands, which names each already: a file that cannot load in
+the runner's own process under Node 22, a file that throws `undefined` as it
+loads there, and a module that ends that process after the row's test
+passes. Each now reads 0 failed.
 """
 
 from __future__ import annotations
@@ -4073,6 +4077,9 @@ _NODE_CAPTURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_lo
         ("node-spec-isolation-none-load-failure", "mode is strict"),
         ("node-tap-isolation-none-syntax-error", "clamp at the bound"),
         ("node-global-setup-throws", "rows are seeded"),
+        ("node22-spec-isolation-none-load-failure", "mode is strict"),
+        ("node-spec-isolation-none-throws-undefined", "row passes"),
+        ("node-tap-isolation-none-exits-after-the-test-passes", "flush keeps its value"),
     ],
 )
 def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_red):
@@ -4097,11 +4104,18 @@ def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_re
     found a row that names its test as TAP writes it, `\\#` and all, read as a
     kill when the file exited after that test passed, or failed because a timer
     the test started threw after it ended; it reads 0 failed too. Its final
-    review (the last five captures) found three runs in which no test went red
-    read as a kill: two files that each failed because a timer their test
-    started threw after it ended, a file that cannot load under
-    `--test-isolation=none`, which imports every file in the runner's own
-    process, and a global setup that throws; each reads 0 failed now."""
+    review (the five captures before the last three) found three runs in which
+    no test went red read as a kill: two files that each failed because a
+    timer their test started threw after it ended, a file that cannot load
+    under `--test-isolation=none`, which imports every file in the runner's
+    own process, and a global setup that throws; each reads 0 failed now. The
+    review of that fix (the last three captures) found three more: a file
+    that cannot load in the runner's own process under Node 22, which gives
+    its test no location, one that throws `undefined` as it loads, and a
+    module that ends the runner's own process after the row's test passes;
+    each reads 0 failed now, which the cannot-run bullet names already (a
+    test file Node's test runner cannot load, and a Node test file's process
+    that exits non-zero after the row's test passes)."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
     status, detail, _ = mutate_check._classify_red(output, expect_red)

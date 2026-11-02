@@ -2786,23 +2786,48 @@ def test_a_kill_another_run_counted_stands_beside_a_global_setup_that_throws(tmp
 @pytest.mark.parametrize(
     ("capture", "cut_after"),
     [
-        ("node-spec-isolation-none-load-failure", "✖ config.test.mjs (1.587863ms)"),
         ("node-tap-isolation-none-load-failure", "  location: '/home/dev/work/isolation-none/config.test.mjs:1:1'"),
+        ("node22-tap-isolation-none-load-failure", "  error: 'config: unknown mode loose'"),
     ],
 )
 def test_a_node_file_test_whose_error_is_cut_off_is_read_as_node_s_own(capture, cut_after):
     """The sign that a file threw as Node imported it is read only from what
-    Node printed of the file test's error: the spec reporter's line below the
-    test in its list of failing tests, and TAP's whole block, up to the `...`
+    Node printed of the file test's error: TAP's whole block, up to the `...`
     that ends it. Output that ends first says nothing of the error, so the
-    test reads as Node's own `test failed`, as it did before; the whole
-    output reads as a file that threw."""
+    test reads as Node's own `test failed`, as it did before (the Node 22
+    test, which has no location, is not read at all); the whole output reads
+    as a file that threw."""
     module = _mutate_check_module()
     output = (LOAD_FAILURES / f"{capture}.txt").read_text(encoding="utf-8")
     lines, _ = module._output_tasks(output)
     assert list(module._node_file_tests(lines).values()) == [True]
     last = len(lines) - lines[::-1].index(cut_after)
-    assert list(module._node_file_tests(lines[:last]).values()) == [False]
+    assert not any(module._node_file_tests(lines[:last]).values())
+
+
+@pytest.mark.parametrize(
+    ("capture", "entry"),
+    [
+        ("node-spec-isolation-none-load-failure", "✖ config.test.mjs (1.587863ms)"),
+        ("node22-spec-isolation-none-load-failure", "✖ config.test.mjs (0.681573ms)"),
+    ],
+)
+def test_a_spec_entry_that_ends_node_s_list_of_failing_tests_carries_no_error(capture, entry):
+    """The spec reporter writes its whole list of failing tests at once, below
+    its summary, so an entry that ends the output, under the list's header,
+    is the whole entry: Node printed no error below it, as for a file that
+    threw `undefined` as Node imported it (the real captures in the review
+    below). Node's own `test failed` is always printed. It read as Node's own
+    when it ended the output, and the run as a kill. Without the list's
+    header above it, the output was cut, and the entry still reads as Node's
+    own."""
+    module = _mutate_check_module()
+    output = (LOAD_FAILURES / f"{capture}.txt").read_text(encoding="utf-8")
+    lines, _ = module._output_tasks(output)
+    last = len(lines) - lines[::-1].index(entry)
+    assert list(module._node_file_tests(lines[:last]).values()) == [True]
+    headless = [line for line in lines[:last] if line != "✖ failing tests:"]
+    assert not any(module._node_file_tests(headless).values())
 
 
 def _node_takes(flag: str) -> bool:
@@ -2924,6 +2949,244 @@ def test_real_node_run_in_which_no_test_went_red_reads_0_failed(tmp_path, case, 
     for name, text in files.items():
         (tmp_path / name).write_text(text, encoding="utf-8", newline="\n")
     module = next(name for name in files if not name.endswith(".test.mjs") and name != "setup.mjs")
+    table = [
+        {"file": module, "anchor": anchor, "replacement": replacement, "command": command.format(reporter=reporter),
+         "expect_red": expect_red}
+        for command, anchor, replacement, expect_red, _ in rows
+    ]
+    readings = {
+        None: lambda name: ("MISATTRIBUTED", _ZERO_FAILED),
+        "kill": lambda name: ("MISATTRIBUTED", _NEVER_APPEARS.format(name)),
+        "KILLED": lambda name: ("KILLED", f"exactly {name!r} went red"),
+    }
+    expected = {index: readings[row[4]](row[3]) for index, row in enumerate(rows)}
+    proc = _run_table(tmp_path, table)
+    assert _ledger_rows(proc.stdout) == expected, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+# --- What the review of the fixes for that final review found -----------------
+#
+# Three more runs in which no test went red read as a kill. Node 22, where the
+# runner's own process is `--experimental-test-isolation=none` (Node 22 has no
+# `--test-isolation`), reports a test file that cannot load there as a test
+# with no location at all: no `test at` line above it in the spec reporter's
+# list of failing tests, no `location:` in its TAP block. A file that throws
+# `undefined` (any value that is not truthy) as Node imports it gets no error
+# line below its entry in that list, so when that entry ended the output it
+# read as Node's own `test failed`. And under isolation none a module that
+# calls `process.exit` after the row's test passed ends the runner's own
+# process, before Node prints a file's test or a summary.
+#
+# The captures (local paths replaced with /home/dev/work/isolation-none), each
+# from the spec reporter (node*-spec-*) and with `--test-reporter=tap`
+# (node*-tap-*):
+#   node22-*-isolation-none-load-failure
+#                       Node 22.22.0, `node --test
+#                       --experimental-test-isolation=none config.test.mjs
+#                       other.test.mjs`: the mutant (`mode = 'strict'` to
+#                       `'loose'` in config.mjs) makes config.mjs throw as
+#                       config.test.mjs imports it
+#   node22-*-isolation-none-kill-beside-a-load-failure
+#                       Node 22.22.0, the same over a.test.mjs and b.test.mjs:
+#                       `cap is pinned` fails in a.test.mjs, and limit.mjs
+#                       throws as b.test.mjs imports it
+#   node22-*-isolation-none-throws-undefined
+#   node-*-isolation-none-throws-undefined
+#                       Node 22.22.0 and 24.21.0, isolation none over
+#                       z.test.mjs and zz.test.mjs: the mutant (`v = 1` to `2`
+#                       in mod.mjs) makes mod.mjs `throw undefined` as
+#                       z.test.mjs imports it; zz.test.mjs's `row passes`
+#                       passes
+#   node-*-isolation-none-exits-after-the-test-passes
+#                       Node 24.21.0, `node --test --test-isolation=none
+#                       a.test.mjs`: the mutant (`code = 0` to `1` in
+#                       flush.mjs) makes a timer `flush` starts call
+#                       `process.exit(1)` after `flush keeps its value` passes
+#   node-*-isolation-none-exits-after-a-kill
+#                       the same, with a test before it, `flush drops
+#                       nothing`, that fails
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node22-spec-isolation-none-load-failure", "mode is strict"),
+        ("node22-tap-isolation-none-load-failure", "mode is strict"),
+        ("node22-spec-isolation-none-throws-undefined", "row passes"),
+        ("node22-tap-isolation-none-throws-undefined", "row passes"),
+        ("node-spec-isolation-none-throws-undefined", "row passes"),
+        ("node-tap-isolation-none-throws-undefined", "row passes"),
+    ],
+)
+def test_a_node_22_or_falsy_load_failure_in_the_runner_s_own_process_reads_0_failed(tmp_path, capture, expect_red):
+    """Node 22 gives the test of a file that cannot load in the runner's own
+    process no location, so it was never found, and the row read as a kill.
+    It is found now as a failed test with no location whose error is not
+    Node's own: no other test lacks one. A file that throws `undefined` gets
+    no error line, and the spec reporter's run read as a kill when its entry
+    ended the output (TAP's already read 0 failed); it reads 0 failed now."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture",
+    ["node22-spec-isolation-none-kill-beside-a-load-failure", "node22-tap-isolation-none-kill-beside-a-load-failure"],
+)
+def test_a_node_22_kill_beside_a_file_that_cannot_load_in_the_runner_s_own_process_is_one_kill(tmp_path, capture):
+    """The twin: the failing test beside it is located where it is declared,
+    so it is never read as a file's test, and stands as the one kill."""
+    proc = _read_capture(tmp_path, capture, "cap is pinned")
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'cap is pinned' went red")}, proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("capture", "old", "new"),
+    [
+        ("node22-spec-isolation-none-load-failure", "  Error: config: unknown mode loose", "  'test failed'"),
+        ("node22-tap-isolation-none-load-failure", "  type: 'test'",
+         "  type: 'test'\n  failureType: 'testCodeFailure'"),
+        ("node22-tap-isolation-none-load-failure", "  type: 'test'", "  extra: 'not node'"),
+    ],
+)
+def test_a_failed_node_test_with_no_location_is_read_only_beside_an_error_of_its_own(capture, old, new):
+    """A failed test with no location is the file's own only when its error
+    is not Node's `test failed` (in TAP, a block that a `failureType` does not
+    name, of the shape Node writes, its `type:` included): one that is, or a
+    block of another shape, is not read, and counts as before."""
+    module = _mutate_check_module()
+    output = (LOAD_FAILURES / f"{capture}.txt").read_text(encoding="utf-8")
+    lines, _ = module._output_tasks(output)
+    assert list(module._node_file_tests(lines).values()) == [True]
+    changed, _ = module._output_tasks(output.replace(old, new))
+    assert module._node_file_tests(changed) == {}
+
+
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize(
+    ("capture", "expect_red", "reading"),
+    [
+        ("exits-after-the-test-passes", "flush keeps its value", ("MISATTRIBUTED", _ZERO_FAILED)),
+        # The twins: a test Node never reported (the process ended first), and a test that went red.
+        ("exits-after-the-test-passes", "flush keeps another value",
+         ("MISATTRIBUTED", _NEVER_APPEARS.format("flush keeps another value"))),
+        ("exits-after-a-kill", "flush keeps its value",
+         ("MISATTRIBUTED", _NEVER_APPEARS.format("flush keeps its value"))),
+        ("exits-after-a-kill", "flush drops nothing",
+         ("KILLED+others", "'flush drops nothing' went red; failure count unparseable")),
+    ],
+)
+def test_a_runner_s_own_process_that_exits_after_the_row_s_test_passes_reads_0_failed(
+    tmp_path, reporter, capture, expect_red, reading
+):
+    """Under `--test-isolation=none` a module that calls `process.exit` ends
+    the runner itself, so Node prints neither a file's test nor a summary.
+    When it ends after the row's test passed it read as a kill, though no
+    test went red. Output that reports a pass of the row's test, no failed
+    test and no summary reads 0 failed now, as a test file whose process
+    exits after that pass does. An exit before Node reports the row's test is
+    a death during a test, and a test that failed before the exit is a kill,
+    so both still read as one."""
+    proc = _read_capture(tmp_path, f"node-{reporter}-isolation-none-{capture}", expect_red)
+    assert _ledger_rows(proc.stdout) == {0: reading}, proc.stdout + proc.stderr
+
+
+STDERR_AFTER_STDOUT_CHECKER = """\
+import sys
+from pathlib import Path
+if "LIMIT = 5" in open("code.py", encoding="utf-8").read():
+    print("all green")
+    sys.exit(0)
+sys.stdout.buffer.write(Path("capture.txt").read_bytes().rstrip(b"\\n"))
+sys.stdout.flush()
+sys.stderr.write("(node:4242) Warning: a module wrote this to stderr\\n")
+sys.exit(1)
+"""
+
+
+def test_the_last_line_of_stdout_is_read_apart_from_the_first_line_of_stderr(tmp_path):
+    """The spec reporter ends its output with no line break, so the first line
+    a module wrote to stderr was read on one line with the last entry of its
+    list of failing tests, and the file's test was never found: the row read
+    as a kill. The two streams' lines are read apart now."""
+    project = _project(tmp_path)
+    _custom_checker(project, STDERR_AFTER_STDOUT_CHECKER)
+    capture = (LOAD_FAILURES / "node-spec-isolation-none-throws-undefined.txt").read_bytes()
+    (project / "capture.txt").write_bytes(capture)
+    proc = _run_table(project, [_row(expect_red="row passes")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+# The timer leaves the reporter time to write the pass before the exit; Node
+# prints no summary before it fires, since the runner ends only once nothing
+# else is pending.
+_FLUSH_EXITS = (
+    "export const code = 0;\n"
+    "export function flush(v) { setTimeout(() => { if (code) process.exit(code); }, 100); return v; }\n"
+)
+_FLUSH_EXITS_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import { flush } from './flush.mjs';\n"
+    "test('flush keeps its value', () => { assert.equal(flush(3), 3); });\n"
+)
+_UNDEFINED = "export const v = 1;\nif (v !== 1) throw undefined;\nexport function twice(x) { return x * 2; }\n"
+_TWICE_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import { twice } from './mod.mjs';\ntest('twice doubles', () => { assert.equal(twice(2), 4); });\n"
+)
+_ISOLATION_NONE = "node --test --experimental-test-isolation=none --test-reporter={reporter}"
+# `--experimental-test-isolation` is the option's only name on Node 22 and an
+# alias of `--test-isolation` on Node 24, so each case runs on both.
+_REAL_NODE_REVIEW = {
+    "load-failure": (
+        {"config.mjs": _CONFIG, "config.test.mjs": _CONFIG_TEST, "other.test.mjs": _OTHER_TEST},
+        [
+            (f"{_ISOLATION_NONE} config.test.mjs other.test.mjs", "export const mode = 'strict';",
+             "export const mode = 'loose';", "mode is strict", None),
+            (f"{_ISOLATION_NONE} config.test.mjs other.test.mjs", "{ return mode; }", "{ return 'lax'; }",
+             "mode is strict", "KILLED"),
+        ],
+    ),
+    "throws-undefined": (
+        {"mod.mjs": _UNDEFINED, "z.test.mjs": _TWICE_TEST, "zz.test.mjs": "import { test } from 'node:test';\n"
+         "test('row passes', () => {});\n"},
+        [
+            (f"{_ISOLATION_NONE} z.test.mjs zz.test.mjs", "export const v = 1;", "export const v = 2;", "row passes",
+             None),
+            (f"{_ISOLATION_NONE} z.test.mjs zz.test.mjs", "return x * 2;", "return x * 3;", "twice doubles", "KILLED"),
+        ],
+    ),
+    "exits-after-the-test-passes": (
+        {"flush.mjs": _FLUSH_EXITS, "a.test.mjs": _FLUSH_EXITS_TEST},
+        [
+            (f"{_ISOLATION_NONE} a.test.mjs", "export const code = 0;", "export const code = 1;",
+             "flush keeps its value", None),
+            # The twin: the process exits during the row's test, a death that reads as a kill.
+            (f"{_ISOLATION_NONE} a.test.mjs", "return v; }", "process.exit(1); }", "flush keeps its value", "kill"),
+        ],
+    ),
+}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize("case", list(_REAL_NODE_REVIEW))
+def test_real_node_runner_s_own_process_in_which_no_test_went_red_reads_0_failed(tmp_path, case, reporter):
+    """The real `node --test --experimental-test-isolation=none`, with each
+    reporter, on whichever Node runs the suite (22 locates no file's test, 24
+    does): a file that cannot load, one that throws `undefined` as it loads,
+    and a module that ends the runner's process after the row's test passed
+    each read 0 failed, and each twin reads as a kill."""
+    if not _node_takes("--experimental-test-isolation"):
+        pytest.skip("this node does not take --experimental-test-isolation")
+    files, rows = _REAL_NODE_REVIEW[case]
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8", newline="\n")
+    module = next(name for name in files if not name.endswith(".test.mjs"))
     table = [
         {"file": module, "anchor": anchor, "replacement": replacement, "command": command.format(reporter=reporter),
          "expect_red": expect_red}

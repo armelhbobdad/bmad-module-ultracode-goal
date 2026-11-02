@@ -1,0 +1,7 @@
+TAP version 13
+# Subtest: flush keeps its value
+ok 1 - flush keeps its value
+  ---
+  duration_ms: 1.01957
+  type: 'test'
+  ...

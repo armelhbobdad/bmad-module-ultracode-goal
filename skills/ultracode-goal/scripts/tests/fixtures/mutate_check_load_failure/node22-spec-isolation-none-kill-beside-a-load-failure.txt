@@ -1,0 +1,40 @@
+✖ cap is pinned (3.184458ms)
+✖ b.test.mjs (0.430308ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 41.43405
+
+✖ failing tests:
+
+test at a.test.mjs:4:1
+✖ cap is pinned (3.184458ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  11 !== 10
+  
+      at TestContext.<anonymous> (file:///home/dev/work/isolation-none/a.test.mjs:4:38)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.start (node:internal/test_runner/test:944:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 11,
+    expected: 10,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+✖ b.test.mjs (0.430308ms)
+  Error: limit.mjs: LIMIT above 5
+      at file:///home/dev/work/isolation-none/limit.mjs:2:22
+      at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+      at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+      at async node:internal/test_runner/runner:767:15
+      at async runFiles (node:internal/test_runner/runner:745:9)
+      at async runChain (node:internal/test_runner/runner:805:5)
