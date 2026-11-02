@@ -96,6 +96,32 @@ def test_the_sizing_note_pin_reds_on_the_note_that_asked_for_a_split():
     assert not _note_asks_no_split(section.replace(_NOTE_NOW, _NOTE_NOW + " It should be split smaller next time."))
 
 
+# Finalize re-derives the terminal `budget_used` so a reader of run-status.json
+# sees the turns the run spent. Sizing reads no turns, so the reason given for
+# that re-derivation must not say the figure feeds the next Epic's sizing.
+_HEADROOM_NOW = "a run that ran close to its ceiling reports headroom it did not have."
+_HEADROOM_BEFORE = (
+    "a run that ran close to its ceiling reports headroom, and that figure feeds the sizing decisions the next "
+    "Epic makes."
+)
+
+
+def _budget_reason_ties_no_turns_to_sizing(finalize: str) -> bool:
+    return _HEADROOM_NOW in finalize and not re.search(r"sizing decisions|feeds the sizing", finalize)
+
+
+def test_the_terminal_budget_reason_ties_no_turns_to_sizing():
+    assert _budget_reason_ties_no_turns_to_sizing(_read("finalize.md"))
+
+
+def test_the_budget_reason_pin_reds_on_the_reason_that_fed_sizing():
+    """Twin: the reason as it read while sizing still weighed turns."""
+    text = _read("finalize.md")
+    mutant = text.replace(_HEADROOM_NOW, _HEADROOM_BEFORE)
+    assert mutant != text, "the mutant must actually change the text"
+    assert not _budget_reason_ties_no_turns_to_sizing(mutant)
+
+
 _PING_DEFERS = "A marker whose story the gate advanced is never promoted or pinged"
 
 
