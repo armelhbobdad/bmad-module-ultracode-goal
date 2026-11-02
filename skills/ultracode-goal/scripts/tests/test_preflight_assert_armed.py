@@ -543,6 +543,12 @@ def test_the_reason_says_what_each_kind_of_command_costs(tmp_path: Path) -> None
     assert "one that prints and exits 0 lets every call through unchecked" in reason
     assert "A budget command the shell cannot start lets each stop through uncounted" in reason
     assert "one uv refuses sends each stop back with uv's error, up to eight times in a row" in reason
+    # Final pass: uv syncs the project in the hook's folder before it looks for
+    # the script, and exits 1 where that project fails to build or resolve.
+    assert (
+        "up to eight times in a row, unless the project uv syncs first fails to build or resolve, when uv exits 1 "
+        "and each stop goes through uncounted too." in reason
+    )
 
 
 @pytest.mark.parametrize(

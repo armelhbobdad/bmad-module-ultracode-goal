@@ -1521,12 +1521,13 @@ def _command_problem(command: str, script: str) -> str | None:
     to a shell, which splits it at every unquoted space, so an unquoted value
     or path that holds one (a project under `~/My Projects`) makes the rest of
     it the command the shell runs (exit 127), or the file `uv run` is given
-    (uv exits 2), and the hook never starts. Under the guard's `"onFailure":
-    "block"` either refuses every tool call. On Stop, exit 127 is a
-    non-blocking error, so each stop goes through uncounted, and exit 2 sends
-    each stop back, up to eight times in a row. The command is read as a
-    POSIX shell reads it (`_shell_tokens`) and never run, so the script path
-    is not opened: a moved skill is not this check's to find.
+    (uv exits 2, or 1 where the project it syncs first fails to build), and
+    the hook never starts. Under the guard's `"onFailure": "block"` each
+    refuses every tool call. On Stop, exit 127 and exit 1 are non-blocking
+    errors, so each stop goes through uncounted, and exit 2 sends each stop
+    back, up to eight times in a row. The command is read as a POSIX shell
+    reads it (`_shell_tokens`) and never run, so the script path is not
+    opened: a moved skill is not this check's to find.
 
     A leading word is an assignment only as the shell takes one, with its
     name and "=" unquoted: `'KEY=a b'` is the command the shell runs. A
@@ -1742,7 +1743,9 @@ def _command_reason(problems: list[str]) -> str:
         "\"onFailure\": \"block\", and one that prints and exits 0 lets every "
         "call through unchecked. A budget command the shell cannot start lets "
         "each stop through uncounted, and one uv refuses sends each stop back "
-        "with uv's error, up to eight times in a row. Re-merge the hooks as "
+        "with uv's error, up to eight times in a row, unless the project uv "
+        "syncs first fails to build or resolve, when uv exits 1 and each stop "
+        "goes through uncounted too. Re-merge the hooks as "
         "preflight.md step 5's Hooks bullet says, each injected value and the "
         "script path in single quotes (KEY='value' uv run '<path>'; replace, "
         "never append; on a resume purge nothing, as execute.md's re-assertion "

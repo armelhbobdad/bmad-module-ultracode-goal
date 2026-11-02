@@ -313,12 +313,17 @@ def test_the_bullet_says_what_an_unquoted_budget_command_costs():
     command (exit 127) the stop goes through, but an unquoted script path
     leaves `uv run` a script it cannot find, and uv 0.12.15 exits 2 ("Failed
     to spawn"), which on Stop sends the stop back, up to the eight blocks in a
-    row after which Claude Code lets it through."""
+    row after which Claude Code lets it through. Final pass: uv syncs the
+    project in the hook's folder before it looks for the script, and where
+    that project fails to build or resolve it exits 1 (a non-blocking error
+    on Stop), so the stop goes through, as docs/troubleshooting.md says for a
+    moved skill."""
     flat = _flat(_hooks_bullet())
     assert "skips the budget hook without a word" not in flat
     assert (
         "and the budget hook counts no turn (a command the shell cannot run lets each stop through; a script `uv` "
-        "cannot find sends each stop back with uv's error, up to eight times in a row)." in flat
+        "cannot find sends each stop back with uv's error, up to eight times in a row, unless the project `uv` "
+        "syncs first fails to build or resolve, when `uv` exits 1 and each stop goes through too)." in flat
     )
 
 
