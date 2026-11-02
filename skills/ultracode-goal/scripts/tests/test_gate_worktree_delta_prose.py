@@ -2427,6 +2427,9 @@ _HOOK_REJECTION_SENTENCES = {
         # Reviewed (#186): the same refused settings write on a resume; no
         # hook's rejection of the evidence commit.
         ("A resume rewrites the file too when the hooks need re-arming (the first ", "e507cf59b477"),
+        # Reviewed (#186 review): a missing budget script, whose uv exit 2 a Stop
+        # hook reads as a block on stopping; no hook's rejection of the evidence commit.
+        ("The budget hook's command points at nothing too, and `uv` exits 2 when i", "428357f0c82f"),
         ("Most read like `PreToolUse:Bash hook error: [<command>]: failed; blockin", "03a6eaa3f853"),
         ("It names each primitive the version lacks. 2.1.295 is the floor, the rel", "d3fb84ee20ae"),
         ("Start from the symptom you observed and follow it to the section that ex", "b8cdcd44aae2"),

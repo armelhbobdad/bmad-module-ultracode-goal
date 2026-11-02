@@ -1,4 +1,4 @@
 type: docs
 summary: |
-  Troubleshooting's "Every tool call is refused" entry now says what a moved or removed skill costs in a project that has a `pyproject.toml`, in its folder or a folder above it: before each refusal, `uv run` syncs that project, creating its `.venv` and `uv.lock` on the first call and building the project again whenever it changes, and the refusal can show that project's build error instead of `Failed to spawn`. Reinstalling the skill ends it.
+  Troubleshooting's "Every tool call is refused" entry now says what a moved or removed skill costs in a project that has a `pyproject.toml`, in its folder or a folder above it: before each refusal, `uv run` syncs that project, creating its `.venv` and `uv.lock` on the first call and building the project again whenever it changes, and the refusal can show that project's build error instead of `Failed to spawn`. It also says that the budget hook's command then blocks each stop with uv's error, since `uv` exits 2 for a script it cannot find and Claude Code reads that exit on a `Stop` hook as a block. Reinstalling the skill ends both.
 issues: [186]

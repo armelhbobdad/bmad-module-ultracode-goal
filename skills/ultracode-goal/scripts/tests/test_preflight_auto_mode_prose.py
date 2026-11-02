@@ -197,6 +197,16 @@ def test_troubleshooting_names_the_ancestor_project_a_missing_guard_syncs():
     )
 
 
+def test_troubleshooting_says_a_missing_budget_script_blocks_each_stop():
+    """Review of #186: `uv run` exits 2 for a script it cannot find, and exit 2
+    on a Stop hook blocks the stop, though the budget script itself never does."""
+    text = " ".join((_DOCS / "troubleshooting.md").read_text(encoding="utf-8").split())
+    assert (
+        "The budget hook's command points at nothing too, and `uv` exits 2 when it cannot find a script, which on a "
+        "`Stop` hook Claude Code reads as a block" in text
+    )
+
+
 def test_the_resume_predicate_rejects_the_4_0_0_rule():
     mutant = _refused_write_rule()
     cut = mutant.index(" A resume never reaches this stage")
