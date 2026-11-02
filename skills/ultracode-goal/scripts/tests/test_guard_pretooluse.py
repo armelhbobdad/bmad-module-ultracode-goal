@@ -7617,12 +7617,20 @@ def test_a_path_longer_than_the_bound_is_resolved_a_stretch_at_a_time(
     may refuse a path that long); a shorter one goes whole."""
     calls: list[str] = []
     real = os.path.realpath
+    stretch = guard_module._realpath_stretch
 
     def counting(path, *args, **kwargs):
         calls.append(path)
         return real(path, *args, **kwargs)
 
+    def counting_stretch(path):
+        # Before Python 3.13 a stretch goes to realpath's own helper, which
+        # also says whether realpath stopped at a loop.
+        calls.append(path)
+        return stretch(path)
+
     monkeypatch.setattr(guard_module.os.path, "realpath", counting)
+    monkeypatch.setattr(guard_module, "_realpath_stretch", counting_stretch)
     bound = guard_module._MAX_RESOLVED
     long_path = os.path.join(str(tmp_path), *(["a"] * (bound // 2 + 1)))
     assert len(long_path) > bound
@@ -7723,27 +7731,41 @@ _LOOKUP_CAP_DENY = (
 def test_a_long_path_stops_resolving_at_the_lookup_cap(guard_module, monkeypatch, tmp_path: Path) -> None:
     """_real_long counts every name each stretch hands realpath, the path
     resolved so far included, and raises _TooManyLookups rather than hand it
-    more than _MAX_LONG_LOOKUPS; a path within the cap still resolves whole."""
+    more than _MAX_LONG_LOOKUPS; a path within the cap still resolves whole.
+    The lookups the system is asked for are counted too: a link to `.` adds
+    none, so they come to the names handed."""
     _symlink_or_skip(tmp_path / "s", Path("."))
     real = os.path.realpath
     expected = real(str(tmp_path / "x"))
+    stretch = guard_module._realpath_stretch
+    lstat = os.lstat
     handed: list[int] = []
+    lookups = 0
 
-    def counting(path: str) -> str:
+    def counting(path: str) -> tuple[str, bool]:
         handed.append(len([name for name in path.split(os.sep) if name]))
-        return real(path)
+        return stretch(path)
 
-    monkeypatch.setattr(guard_module.os.path, "realpath", counting)
+    def counting_lstat(*args, **kwargs):
+        nonlocal lookups
+        lookups += 1
+        return lstat(*args, **kwargs)
+
+    monkeypatch.setattr(guard_module, "_realpath_stretch", counting)
+    monkeypatch.setattr(guard_module.os, "lstat", counting_lstat)
     cap = guard_module._MAX_LONG_LOOKUPS
     assert cap == guard_module._MAX_RESOLVED == 32_768
     within = os.path.join(str(tmp_path), *(["s"] * 17_000), "x")
     assert guard_module._real(within) == expected
-    assert sum(handed) <= cap
+    assert handed and sum(handed) <= cap
+    assert 0 < lookups <= cap
     handed.clear()
+    lookups = 0
     past = os.path.join(str(tmp_path), *(["s"] * 40_000), "x")
     with pytest.raises(guard_module._TooManyLookups):
         guard_module._real(past)
-    assert sum(handed) <= cap
+    assert handed and sum(handed) <= cap
+    assert 0 < lookups <= cap
 
 
 @_POSIX_WALK
@@ -7778,10 +7800,18 @@ def _v4_0_0_real(path: str) -> str:
 def test_a_long_path_resolves_as_v4_0_0_resolved_it(guard_module, tmp_path: Path) -> None:
     """Differential: _real gives v4.0.0's answer on paths around and past
     _MAX_RESOLVED, as abspath hands them to it, through links to `.`, `..`,
-    `/`, the store and the home folder, two kinds of loop, a dangling link, a
-    link whose target ends near the longest path the system looks up, a file,
-    real folders, missing names, a name no file system takes, and one longer
-    than the bound; and on a long path holding `..` steps, as _is_pinned's are.
+    `/`, the store and the home folder, three kinds of loop, a dangling link,
+    a link whose target ends near the longest path the system looks up, a
+    file, real folders, missing names, a name no file system takes, and one
+    longer than the bound; and on a long path holding `..` steps, as
+    _is_pinned's are.
+
+    The third loop's target holds `..` (lp -> lq/../C, lq -> lp, C a link to
+    the store). Before Python 3.13 realpath stops at a loop and keeps the rest
+    of the path as written, and abspath then applies the target's `..`, which
+    takes the loop out of the path and leaves C unresolved; a stretch that
+    handed that path on to the next would follow C, and v4.0.0 did not
+    (review finding, 4.1.0).
 
     `dot`, a long name for a link to `.`, keeps the path resolved so far
     short over many stretches at little cost; a long run of `s` costs v4.0.0
@@ -7819,6 +7849,9 @@ def test_a_long_path_resolves_as_v4_0_0_resolved_it(guard_module, tmp_path: Path
         top / "loop": "loop",
         top / "la": "lb",
         top / "lb": "la",
+        top / "lp": "lq/../C",
+        top / "lq": "lp",
+        top / "C": str(store),
         top / "dang": "nowhere/x",
         top / "far": "d/" + "/".join(["m" * 200] * far_names),
         top / "deep": str(deep),
@@ -7829,7 +7862,7 @@ def test_a_long_path_resolves_as_v4_0_0_resolved_it(guard_module, tmp_path: Path
     for link, target in links.items():
         _symlink_or_skip(link, Path(target))
     words = [
-        "s", "u", "r", "L", "H", "loop", "la", "dang", "far", "deep", "d", "e", "f",
+        "s", "u", "r", "L", "H", "loop", "la", "lp", "C", "dang", "far", "deep", "d", "e", "f",
         "missing", ".ultracode-goal", "recall", "n" * 200, "*" * 300, "q" * 5_000,
     ]  # fmt: skip
     rng = random.Random(410)
@@ -7841,6 +7874,8 @@ def test_a_long_path_resolves_as_v4_0_0_resolved_it(guard_module, tmp_path: Path
         os.path.join(str(top), "far", *(["s"] * 2_000)),
         os.path.join(str(top), *([dot] * 500), "deep", *([dot] * 500), "L", "a"),
         os.path.join(str(top), "*" * (bound + 1), "L"),
+        os.path.join(str(top), *(["s"] * 16_000), "lp", "x", *(["y" * 200] * 5)),
+        os.path.join(str(top), *([dot] * 150), "lp", *(["y" * 200] * 20), "C", "a"),
     ]
     for _ in range(300):
         names: list[str] = []
@@ -7862,6 +7897,43 @@ def test_a_long_path_resolves_as_v4_0_0_resolved_it(guard_module, tmp_path: Path
     with_dotdot = os.path.join(str(top), *(["n" * 200] * 170), *([".."] * 170), "L", "x")
     assert len(with_dotdot) > bound
     assert guard_module._real(with_dotdot) == _v4_0_0_real(with_dotdot)
+
+
+@_POSIX_WALK
+def test_a_long_path_through_a_loop_is_the_one_that_can_differ_from_3_13(guard_module, tmp_path: Path) -> None:
+    """Residual, stated in _real_long's docstring (found while fixing the
+    4.1.0 review finding on a loop whose target holds `..`): from Python 3.13
+    realpath goes on past a symlink loop, keeping the loop's link in the path
+    and reusing within the call what each link resolved to, while a stretch
+    looks the link up afresh. With lm -> ln/C and ln -> lm, a path past the
+    bound through lm then comes back with C twice. Before 3.13 realpath stops
+    at the loop, _real_long keeps the rest as written, and the answers agree.
+    The system refuses any path through the loop, so a call reaches nothing
+    through it either way. Without a loop, the differential above holds on
+    every version."""
+    import errno
+
+    _symlink_or_skip(tmp_path / "s", Path("."))
+    _symlink_or_skip(tmp_path / "lm", Path("ln/C"))
+    _symlink_or_skip(tmp_path / "ln", Path("lm"))
+    bound = guard_module._MAX_RESOLVED
+    # lm and x end the first stretch, and the names after them start the next.
+    runs = (bound - len(str(tmp_path)) - 100) // 2
+    tail = ["x", *(["y" * 200] * 5)]
+    path = os.path.join(str(tmp_path), *(["s"] * runs), "lm", *tail)
+    assert len(path) > bound
+    whole = os.path.realpath(path)
+    real_top = os.path.realpath(str(tmp_path))
+    assert whole == os.path.join(real_top, "lm", "C", *tail)
+    if sys.version_info < (3, 13):
+        assert guard_module._real(path) == whole
+    else:
+        assert guard_module._real(path) == os.path.join(real_top, "lm", "C", "C", *tail)
+    with pytest.raises(OSError) as refused:
+        os.stat(tmp_path / "lm" / "x")
+    assert refused.value.errno == errno.ELOOP
+    doc = " ".join(guard_module._real_long.__doc__.split())
+    assert "So from 3.13, and only for a path through a symlink loop, the answer can differ from realpath's" in doc
 
 
 def test_a_glob_or_dotdot_on_the_way_to_a_link_is_a_residual(store_world: _StoreWorld) -> None:

@@ -2282,6 +2282,22 @@ def _real_long(path: str) -> str:
     _MAX_LONG_LOOKUPS lookups, counting the names of the path resolved so far
     that each stretch looks up again, it raises _TooManyLookups.
 
+    Before Python 3.13, realpath stops at a symlink loop and keeps the rest of
+    the path as written, and abspath then applies any `..` the targets met on
+    the way left in it, which can take the loop out of the path and leave a
+    link after it unresolved. So when a stretch stops at a loop, every later
+    name is kept as written too (_realpath_stretch says when it does), rather
+    than handed to the next stretch, which would follow that link.
+
+    From Python 3.13 realpath goes on past a loop, keeping the loop's link in
+    the path, and within one call reuses what each link it met resolved to,
+    a loop's links included; a stretch looks such a link up afresh. So from
+    3.13, and only for a path through a symlink loop, the answer can differ
+    from realpath's: with lm -> ln/C and ln -> lm, a path through lm that
+    goes on past a stretch's end comes back with C twice. The system refuses
+    any path through a loop (ELOOP), so a call reaches nothing through such
+    a path either way.
+
     Windows looks a path up whole, never one longer than a written path can
     be, so there the first stretch is resolved and the rest kept: that finds
     every link realpath on the whole path could. A path with a `..` step,
@@ -2307,11 +2323,32 @@ def _real_long(path: str) -> str:
         lookups += resolved.count(sep) + end - done
         if lookups > _MAX_LONG_LOOKUPS:
             raise _TooManyLookups(f"{lookups:,} lookups for a {len(path):,}-character path")
-        resolved = os.path.realpath(_joined(resolved, names[done:end]))
+        resolved, whole = _realpath_stretch(_joined(resolved, names[done:end]))
         done = end
-        if os.name == "nt":
+        if os.name == "nt" or not whole:
             break
     return _joined(resolved, names[done:])
+
+
+def _realpath_stretch(path: str) -> tuple[str, bool]:
+    """os.path.realpath(path), with False when realpath stopped at a symlink
+    loop and kept the rest as written, which it does before Python 3.13.
+
+    There realpath returns abspath of what posixpath._joinrealpath returns,
+    whose second value is False after a loop. That helper is private, so it
+    is called only on the versions that have it, with the arguments realpath
+    hands it, and should a release take other arguments, realpath's own
+    answer is returned. From 3.13, and on Windows, the answer is realpath's,
+    with True.
+    """
+    join_real = getattr(os.path, "_joinrealpath", None) if sys.version_info < (3, 13) else None
+    if join_real is None:
+        return os.path.realpath(path), True
+    try:
+        resolved, whole = join_real(path[:0], path, False, {})
+    except TypeError:  # a release whose helper takes other arguments
+        return os.path.realpath(path), True
+    return os.path.abspath(resolved), bool(whole)
 
 
 def _joined(head: str, names: list[str]) -> str:
