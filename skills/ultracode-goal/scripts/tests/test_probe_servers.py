@@ -227,8 +227,8 @@ def _fake_proc(tmp_path: Path, listeners: list[tuple[int, str, int, str, str | N
     return proc
 
 
-_V4 = (socket.AF_INET, socket.inet_pton(socket.AF_INET, "127.0.0.1"))
-_V6 = (socket.AF_INET6, socket.inet_pton(socket.AF_INET6, "::1"))
+_V4 = probe_servers._Address(socket.AF_INET, socket.inet_pton(socket.AF_INET, "127.0.0.1"))
+_V6 = probe_servers._Address(socket.AF_INET6, socket.inet_pton(socket.AF_INET6, "::1"))
 
 
 def test_the_folder_is_the_one_of_the_socket_the_connection_reached(tmp_path):
@@ -470,51 +470,63 @@ def test_a_host_the_lookup_cannot_encode_after_a_servers_url_stops_nothing(tmp_p
     assert captured.out == "" and f"REFUSED: {_UNENCODABLE_HOSTS[-1]}: " in captured.err
 
 
-# A server whose forked worker shares its socket and, on SIGTERM, leaves the
-# process group, so the SIGKILL sent to that group misses it. The worker sets
-# its handler before the server says it is ready.
-_SERVE_WITH_A_WORKER_THAT_LEAVES = (
-    "import os, signal, socket, sys, time\n"
-    "s = socket.socket()\n"
-    "s.bind(('127.0.0.1', int(sys.argv[1])))\n"
-    "s.listen()\n"
-    "r, w = os.pipe()\n"
-    "worker = os.fork()\n"
-    "if worker == 0:\n"
-    "    signal.signal(signal.SIGTERM, lambda *_: os.setpgid(0, 0))\n"
-    "    os.write(w, b'1')\n"
-    "    while True:\n"
-    "        time.sleep(600)\n"
-    "os.read(r, 1)\n"
-    "print('ready', worker, flush=True)\n"
-    "time.sleep(600)\n"
-)
+def _serve_with_a_worker_that_leaves(holds_the_socket: bool) -> str:
+    """A server whose forked worker, on SIGTERM, leaves the process group, so
+    the SIGKILL sent to that group misses it. The worker shares the server's
+    listening socket, or closes its copy, and sets its handler before the
+    server says it is ready."""
+    return (
+        "import os, signal, socket, sys, time\n"
+        "s = socket.socket()\n"
+        "s.bind(('127.0.0.1', int(sys.argv[1])))\n"
+        "s.listen()\n"
+        "r, w = os.pipe()\n"
+        "worker = os.fork()\n"
+        "if worker == 0:\n"
+        + ("" if holds_the_socket else "    s.close()\n")
+        + "    signal.signal(signal.SIGTERM, lambda *_: os.setpgid(0, 0))\n"
+        "    os.write(w, b'1')\n"
+        "    while True:\n"
+        "        time.sleep(600)\n"
+        "os.read(r, 1)\n"
+        "print('ready', worker, flush=True)\n"
+        "time.sleep(600)\n"
+    )
 
 
 @_LINUX_ONLY
-def test_a_server_stopped_only_in_part_is_named_with_what_it_stopped(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("worker_answers", [True, False], ids=["worker-answers", "nothing-answers"])
+def test_a_server_stopped_only_in_part_is_named_with_what_it_stopped(tmp_path, monkeypatch, capsys, worker_answers):
     """The SIGTERM ends the server and its worker leaves the group, so the
     SIGKILL misses it: the server it ended is listed under `stopped`, marked
-    `partial`, and the URL, which the worker still answers, under `left`.
-    Before, this read as nothing stopped, and the ended server was named
-    nowhere."""
+    `partial`, with the worker as still running. The probe then reads the URL
+    once more: the worker that holds the socket still answers it, so the URL
+    is listed under `left`; the twin's worker holds none, so the URL is free.
+    Before, a partial stop read as nothing stopped and the ended server was
+    named nowhere, and then the URL kept its read from before the stop, so it
+    read as answering, and the probe exited 1, with nothing listening."""
     main_tree = tmp_path / "main"
     main_tree.mkdir()
     marker = _baseline(tmp_path)
     port = _free_port()
     url = f"http://127.0.0.1:{port}"
     monkeypatch.setattr(probe_servers, "_GRACE", 0.5)
-    with _left_up(main_tree, port, _SERVE_WITH_A_WORKER_THAT_LEAVES) as (server, worker):
+    with _left_up(main_tree, port, _serve_with_a_worker_that_leaves(worker_answers)) as (server, worker):
         code = probe_servers.main(["--url", url, "--stop-since", str(marker), "--root", str(main_tree)])
         out = json.loads(capsys.readouterr().out)
         assert _gone(server) and not _gone(worker)
+    assert [
+        (entry["url"], entry["process_groups"], entry["pids"], entry["partial"], entry["running"])
+        for entry in out["stopped"]
+    ] == [(url, [server], [server], True, [worker])]
+    if not worker_answers:
+        assert code == 0
+        assert out["answering"] == [] and out["free"] == [url] and out["left"] == []
+        return
     assert code == 1
-    assert [(entry["url"], entry["process_groups"], entry["pids"], entry["partial"]) for entry in out["stopped"]] == [
-        (url, [server], [server], True)
-    ]
     assert [entry["url"] for entry in out["answering"]] == [url]
     assert [entry["reason"] for entry in out["left"]] == [
-        f"some of its processes still ran after SIGTERM and SIGKILL (pid {worker})"
+        f"some of its processes still ran after SIGTERM and SIGKILL to process group {server} (pid {worker})"
     ]
 
 
@@ -707,23 +719,28 @@ def _proc_with(tmp_path: Path, processes, listening: str = "0100007F") -> Path:
     )
     (proc / "net" / "tcp6").write_text(header, encoding="ascii")
     for p in processes:
-        folder = proc / str(p["pid"])
-        (folder / "fd").mkdir(parents=True)
-        # minflt through itrealvalue: the twelve fields between flags and starttime, field 22.
-        rest = " ".join(["0"] * 12)
-        (folder / "stat").write_text(
-            f"{p['pid']} (node (dev)) {p.get('state', 'S')} {p['ppid']} {p['pgrp']} {p['session']} {p['tty']} -1 0 "
-            f"{rest} {p['start']} 0 0\n",
-            encoding="ascii",
-        )
-        (folder / "status").write_text(f"Name:\tnode\nUid:\t{p['uid']}\t{p['uid']}\t{p['uid']}\t{p['uid']}\n")
-        try:
-            os.symlink(p["cwd"], folder / "cwd")
-            if p.get("holds"):
-                os.symlink("socket:[777]", folder / "fd" / "3")
-        except OSError:
-            pytest.skip("these symlinks cannot be made here")
+        _add_process(proc, p)
     return proc
+
+
+def _add_process(proc: Path, p: dict) -> None:
+    """Process `p` in a /proc laid out as Linux lays it out, holding socket 777 when marked `holds`."""
+    folder = proc / str(p["pid"])
+    (folder / "fd").mkdir(parents=True)
+    # minflt through itrealvalue: the twelve fields between flags and starttime, field 22.
+    rest = " ".join(["0"] * 12)
+    (folder / "stat").write_text(
+        f"{p['pid']} (node (dev)) {p.get('state', 'S')} {p['ppid']} {p['pgrp']} {p['session']} {p['tty']} -1 0 "
+        f"{rest} {p['start']} 0 0\n",
+        encoding="ascii",
+    )
+    (folder / "status").write_text(f"Name:\tnode\nUid:\t{p['uid']}\t{p['uid']}\t{p['uid']}\t{p['uid']}\n")
+    try:
+        os.symlink(p["cwd"], folder / "cwd")
+        if p.get("holds"):
+            os.symlink("socket:[777]", folder / "fd" / "3")
+    except OSError:
+        pytest.skip("these symlinks cannot be made here")
 
 
 def _verdict(tmp_path: Path, processes, roots=("/p",)) -> str | None:
@@ -833,7 +850,7 @@ def test_the_stop_signals_the_group_and_reads_the_url_again(tmp_path, monkeypatc
     assert out["answering"] == [] and out["left"] == []
     assert out["stopped"] == [
         {"url": f"http://127.0.0.1:{port}", "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": [40, 41],
-         "partial": False}
+         "partial": False, "running": []}
     ]
 
 
@@ -852,16 +869,20 @@ def test_a_group_that_does_not_exit_is_left_up_and_said_so(tmp_path, monkeypatch
             [f"http://127.0.0.1:{port}"], stop, proc=proc, kill=lambda group, sig: sent.append((group, sig))
         )
     assert [sig for _, sig in sent] == [signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)]
-    # Nothing exited, so nothing was stopped; the reason names the processes the signals did not end.
+    # Nothing exited and the URL still answers, so nothing was stopped; the reason names the group the signals went
+    # to and the processes they did not end.
     assert out["stopped"] == []
-    assert out["left"][0]["reason"] == "its processes still ran after SIGTERM and SIGKILL (pids 40, 41)"
+    assert out["left"][0]["reason"] == (
+        "its processes still ran after SIGTERM and SIGKILL to process group 40 (pids 40, 41)"
+    )
 
 
 def test_a_group_stopped_only_in_part_names_the_processes_that_exited(tmp_path, monkeypatch):
     """A process that leaves its group on SIGTERM outlives the SIGKILL sent to
     that group: the processes the signals ended are listed under `stopped`,
-    marked `partial`, and the URL under `left` with the ones that still run.
-    Before, a partial stop was reported as nothing stopped."""
+    marked `partial`, with the ones that still run, and the URL, which those
+    still answer, under `left`. Before, a partial stop was reported as nothing
+    stopped."""
     proc = _proc_with(tmp_path, _RUN_LEFT_UP)
     monkeypatch.setattr(probe_servers, "_reads_processes", lambda _proc: True)
     monkeypatch.setattr(probe_servers, "_caller", lambda _proc: _CALLER)
@@ -883,12 +904,98 @@ def test_a_group_stopped_only_in_part_names_the_processes_that_exited(tmp_path, 
         out = probe_servers.probe([url], stop, proc=proc, kill=kill)
     assert sent == [(40, signal.SIGTERM), (40, getattr(signal, "SIGKILL", signal.SIGTERM))]
     assert out["stopped"] == [
-        {"url": url, "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": [40], "partial": True}
+        {"url": url, "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": [40], "partial": True,
+         "running": [41]}
     ]
     assert [entry["url"] for entry in out["answering"]] == [url]
     assert out["left"] == [
         {"url": url, "port": port, "cwd": "/p/apps/web",
-         "reason": "some of its processes still ran after SIGTERM and SIGKILL (pid 41)"}
+         "reason": "some of its processes still ran after SIGTERM and SIGKILL to process group 40 (pid 41)"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("ends", "pids", "running"), [((41,), [41], [40]), ((), [], [40, 41])], ids=["its-listener-exits", "none-exits"]
+)
+def test_a_url_nothing_answers_after_a_partial_stop_is_free(tmp_path, monkeypatch, ends, pids, running):
+    """After a stop that leaves some of a server's processes running, the
+    probe reads the URL once more. Here nothing answers then: the listener
+    (41) exits and its group's leader (40) outlives the SIGKILL, or no process
+    exits but the server lets go of its socket. The URL is free, and the
+    server is listed under `stopped` with the processes still running, so
+    each process the probe signalled is named. Before, the URL kept its read
+    from before the stop: answering, and under `left`, with nothing listening.
+    The twin is the test above, whose survivor still answers."""
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP)
+    _stop_mode(monkeypatch)
+    monkeypatch.setattr(probe_servers, "_GRACE", 0.1)
+    monkeypatch.setattr(probe_servers, "_listening_inodes", lambda _port, _proc, _reached=None: {"777"})
+    sent = []
+    with _listener() as sock:
+        port = sock.getsockname()[1]
+        url = f"http://127.0.0.1:{port}"
+
+        def kill(group, sig):
+            sent.append((group, sig))
+            for pid in ends:
+                with contextlib.suppress(FileNotFoundError):
+                    (proc / str(pid) / "stat").unlink()
+            sock.close()
+
+        stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+        out = probe_servers.probe([url], stop, proc=proc, kill=kill)
+    assert sent == [(40, signal.SIGTERM), (40, getattr(signal, "SIGKILL", signal.SIGTERM))]
+    assert out == {
+        "answering": [],
+        "free": [url],
+        "stopped": [
+            {"url": url, "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": pids, "partial": True,
+             "running": running}
+        ],
+        "left": [],
+    }
+
+
+# A worker the server (41) forks after the probe has read its group.
+_JOINS = {**_RUN_LEFT_UP[1], "pid": 42, "ppid": 41, "start": 20_200, "holds": False}
+
+
+@pytest.mark.parametrize("joins", ["before-the-signal", "as-the-signal-is-sent", "never"])
+def test_a_process_that_joins_the_group_after_it_was_read_is_named(tmp_path, monkeypatch, joins):
+    """The signal reaches every process in the group when it is sent, a worker
+    forked since the probe read the group included. The probe reads the group
+    again right before each signal and right after it, and names each process
+    it finds: one forked before the signal, and one forked as it is sent,
+    which the signal ends but which is not reaped yet at the read after it.
+    Before, only the processes of the first read were named. The twin: none
+    joins."""
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP)
+    _stop_mode(monkeypatch)
+    monkeypatch.setattr(probe_servers, "_listening_inodes", lambda _port, _proc, _reached=None: {"777"})
+    read = probe_servers._not_the_runs
+
+    def then_a_worker_forks(*args):
+        verdict = read(*args)
+        if joins == "before-the-signal":
+            _add_process(proc, _JOINS)
+        return verdict
+
+    monkeypatch.setattr(probe_servers, "_not_the_runs", then_a_worker_forks)
+    with _listener() as sock:
+        port = sock.getsockname()[1]
+
+        def kill(group, sig):
+            if joins == "as-the-signal-is-sent":
+                _add_process(proc, {**_JOINS, "state": "Z"})
+            for pid in (40, 41) if joins == "as-the-signal-is-sent" else (40, 41, 42):
+                with contextlib.suppress(FileNotFoundError):
+                    (proc / str(pid) / "stat").unlink()
+            sock.close()
+
+        stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+        out = probe_servers.probe([f"http://127.0.0.1:{port}"], stop, proc=proc, kill=kill)
+    assert [(entry["pids"], entry["running"]) for entry in out["stopped"]] == [
+        ([40, 41] if joins == "never" else [40, 41, 42], [])
     ]
 
 
@@ -899,7 +1006,7 @@ def _stop_mode(monkeypatch) -> None:
     monkeypatch.setattr(probe_servers, "_clock_ticks", lambda: _TICKS)
 
 
-_ELSEWHERE = (socket.AF_INET, socket.inet_pton(socket.AF_INET, "192.0.2.1"))
+_ELSEWHERE = probe_servers._Address(socket.AF_INET, socket.inet_pton(socket.AF_INET, "192.0.2.1"))
 
 
 def test_an_address_of_this_host_takes_a_connection_and_another_hosts_does_not():
@@ -961,6 +1068,61 @@ def test_ipv6_loopback_is_this_hosts_own():
     assert probe_servers._lands_here(_V6)
 
 
+def _link_local_listener() -> socket.socket | None:
+    """A socket listening on one of this host's IPv6 link-local addresses, on
+    that address's link, which takes a connection made to it there; None when
+    there is none. The addresses are read from /proc/net/if_inet6: scope 20
+    (link), with neither the tentative (0x40) nor the failed (0x08)
+    duplicate-address flag."""
+    try:
+        rows = Path("/proc/net/if_inet6").read_text(encoding="ascii").splitlines()
+    except OSError:
+        return None
+    for row in rows:
+        fields = row.split()
+        if len(fields) != 6 or fields[3] != "20" or int(fields[4], 16) & 0x48:
+            continue
+        address, index = socket.inet_ntop(socket.AF_INET6, bytes.fromhex(fields[0])), int(fields[1], 16)
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        try:
+            sock.bind((address, 0, 0, index))
+            sock.listen()
+            sock.settimeout(1.0)
+            with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as client:
+                client.settimeout(1.0)
+                client.connect(sock.getsockname())
+                sock.accept()[0].close()
+        except OSError:
+            sock.close()
+            continue
+        return sock
+    return None
+
+
+@_LINUX_ONLY
+@pytest.mark.skipif(not socket.has_ipv6, reason="no IPv6")
+def test_a_link_local_address_of_this_host_is_its_own(capsys):
+    """An IPv6 link-local address is one on a link, which a URL names with a
+    zone (`[fe80::1%eth0]`, or the link's index), and Linux binds one only on
+    its link. The probe dropped the zone, so it could not bind this host's own
+    link-local address and read it as another host's: it named no folder for
+    the server that answered there, and with the stop flags would have
+    stopped nothing for it. The twin: the same address with no link reads as
+    another host's."""
+    sock = _link_local_listener()
+    if sock is None:
+        pytest.skip("this host has no IPv6 link-local address a socket can listen on")
+    with sock:
+        address, port, _, index = sock.getsockname()
+        address = address.split("%", 1)[0]
+        code = probe_servers.main(["--url", f"http://[{address}%{index}]:{port}"])
+        packed = socket.inet_pton(socket.AF_INET6, address)
+        assert probe_servers._lands_here(probe_servers._Address(socket.AF_INET6, packed, index))
+        assert not probe_servers._lands_here(probe_servers._Address(socket.AF_INET6, packed))
+    assert code == 1
+    assert json.loads(capsys.readouterr().out)["answering"][0]["cwd"] == os.getcwd()
+
+
 @pytest.mark.parametrize(("reached", "stops"), [(_ELSEWHERE, False), (_V4, True)], ids=["elsewhere", "here"])
 def test_a_url_that_reached_another_hosts_address_stops_no_server_here(tmp_path, monkeypatch, reached, stops):
     """A URL whose host resolves to a container's address, say, answered from
@@ -1006,6 +1168,74 @@ def test_a_url_that_reached_another_hosts_address_names_no_folder_here(tmp_path,
     assert out == {"answering": [{"url": "http://192.0.2.1:3001", "port": 3001, "cwd": cwd}], "free": []}
 
 
+def _proc_listing(tmp_path: Path, lists: str) -> Path:
+    """A /proc that lists nothing (macOS, Windows), a socket at that port no connection to 127.0.0.1 reaches, one
+    that could have taken it whose holder this probe cannot read, or one that could have taken it, held from
+    /p/apps/web."""
+    if lists == "nothing":
+        return tmp_path / "no-proc"
+    if lists == "another-address":
+        return _proc_with(tmp_path, _RUN_LEFT_UP, listening="0200007F")
+    if lists == "an-unread-holder":
+        return _proc_with(tmp_path, tuple({k: v for k, v in p.items() if k != "holds"} for p in _RUN_LEFT_UP))
+    return _proc_with(tmp_path, _RUN_LEFT_UP)
+
+
+def _asked(monkeypatch) -> list:
+    """The addresses the probe asks `_lands_here` about, each of which it reads as this host's."""
+    calls = []
+    monkeypatch.setattr(probe_servers, "_lands_here", lambda reached: calls.append(reached) or True)
+    monkeypatch.setattr(probe_servers, "_reached", lambda _host, _port: _V4)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("lists", "cwd"),
+    [("nothing", None), ("another-address", None), ("an-unread-holder", None), ("the-address", "/p/apps/web")],
+)
+def test_without_the_stop_flags_it_listens_on_the_address_only_for_a_folder_proc_names(tmp_path, monkeypatch, lists,
+                                                                                      cwd):
+    """It tells an address of this host's own by listening on it, which a
+    firewall on macOS or Windows can ask the user about. Without the stop
+    flags that answer changes only a folder /proc names, so it listens only
+    then. Before, it listened at every answering URL's address, on every
+    system. The twin: a /proc that names the folder."""
+    calls = _asked(monkeypatch)
+    out = probe_servers.probe(["http://127.0.0.1:3001"], proc=_proc_listing(tmp_path, lists))
+    assert out["answering"] == [{"url": "http://127.0.0.1:3001", "port": 3001, "cwd": cwd}]
+    assert calls == ([_V4] if cwd else [])
+
+
+@pytest.mark.parametrize(
+    ("lists", "reason"),
+    [
+        ("nothing", "this system has no Linux /proc to read the server's processes from, so it stops nothing"),
+        ("another-address", "/proc lists no socket here that could have taken the connection at 127.0.0.1"),
+        ("the-address", "it runs from /p/apps/web, outside every --root"),
+    ],
+    ids=["nothing", "another-address", "the-address"],
+)
+def test_with_the_stop_flags_it_listens_on_the_address_only_when_proc_lists_a_socket_that_could_take_it(
+    tmp_path, monkeypatch, lists, reason
+):
+    """With the stop flags the answer counts only on a system whose /proc it
+    reads, and only when /proc lists a socket here that could have taken the
+    connection: with none, no process here holds one, so it has nothing to
+    stop, and says so. Before, it listened at the address on every system,
+    and with no such socket gave the reason of a socket it could not read.
+    The twin: a socket that could have taken it, of a server the probe then
+    leaves up for another reason."""
+    calls = _asked(monkeypatch)
+    proc = _proc_listing(tmp_path, lists)
+    if lists != "nothing":
+        _stop_mode(monkeypatch)
+    stop = probe_servers._Stop(Path("/q/.baseline-1-1"), _SINCE, ("/q",))
+    out = probe_servers.probe(["http://127.0.0.1:3001"], stop, proc=proc, kill=lambda *_: pytest.fail("signalled"))
+    assert out["stopped"] == []
+    assert [entry["reason"] for entry in out["left"]] == [reason]
+    assert calls == ([_V4] if lists == "the-address" else [])
+
+
 @pytest.mark.parametrize(
     "bad", ["http://", "http://localhost:notaport", "http://localhost:99999", *_UNENCODABLE_HOSTS]
 )
@@ -1037,7 +1267,7 @@ def test_a_server_something_keeps_starting_is_left_up_after_a_bounded_number_of_
     monkeypatch.setattr(probe_servers, "_clock_ticks", lambda: _TICKS)
     monkeypatch.setattr(probe_servers, "_listening_inodes", lambda _port, _proc, _reached=None: {"777"})
     # Each stop "succeeds" (no process still runs), and the server answers again: a supervisor restarts it.
-    monkeypatch.setattr(probe_servers, "_stop_groups", lambda _proc, _members, _kill=None: [])
+    monkeypatch.setattr(probe_servers, "_stop_groups", lambda _proc, members, _kill=None: (members, []))
     with _listener() as sock:
         port = sock.getsockname()[1]
         stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))

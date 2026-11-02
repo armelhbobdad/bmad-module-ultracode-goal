@@ -37,9 +37,14 @@ too). The folder is `null` on another system, when the address the
 connection reached is not one of this host's own (a container's, say), since
 no socket here took it, when /proc does not say, or when those sockets are
 not all held from one folder by processes it can read, since it cannot tell
-then which of them took the connection. A server whose folder has since been
-removed (one started from a gate worktree the rebuild replaced) reads with
-the ` (deleted)` suffix Linux gives it.
+then which of them took the connection. It tells an address of this host's
+own by listening on it, at a port the system picks, and taking a connection it
+makes there, and it does so only when /proc lists a socket that could have
+taken the URL's connection and the answer counts: for a folder /proc names,
+or with the stop flags below. So on a system with no /proc it opens no
+listening socket. A server whose folder has since been removed (one started
+from a gate worktree the rebuild replaced) reads with the ` (deleted)` suffix
+Linux gives it.
 
 Stopping a server the run started. A server the run's own runs started can
 stay up after them: Execute's step 5 sweep runs the full suite, browser tests
@@ -71,14 +76,15 @@ has since exited, with no terminal, reads as the run's too when it also
 started after the marker and runs from inside a root. The marker can be days
 old, since a resume keeps it. The probe never stops its own process group, or
 one that holds a process that started it, and it stops nothing for a URL whose
-connection reached an address that is not one of this host's own, since no
-server here took that connection. It sends the group SIGTERM, then SIGKILL to
-what is left after a few seconds, and checks the URL again: a URL that still
-answers is read as above, once more, until a bounded number of stops. A
-process still running after the SIGKILL (one that left its group on the
-SIGTERM, say) leaves the server stopped only in part: the probe names the
-processes that exited and the ones still running, and stops it no more. On a
-system with no /proc to read it stops nothing.
+connection no process here took: /proc lists no socket here that could have
+taken it, or it reached an address that is not one of this host's own (a
+container's, say). It sends the group SIGTERM, then SIGKILL to what is left
+after a few seconds, and checks the URL again: a URL that still answers is
+read as above, once more, until a bounded number of stops. A process still
+running after the SIGKILL (one that left its group on the SIGTERM, say)
+leaves the server stopped only in part: the probe names the processes that
+exited and the ones still running, reads the URL once more, and stops that
+server no more. On a system with no /proc to read it stops nothing.
 
 Usage:
     uv run probe_servers.py --url <url> [--url <url> ...]
@@ -88,13 +94,18 @@ Output: JSON on stdout, `{"answering": [{"url", "port", "cwd"}], "free":
 [<url>, ...]}`. With `--stop-since`, `answering` and `free` say what answers
 once it has stopped what it could, and two keys are added: `stopped`, each
 server it stopped, in whole or in part (`{"url", "port", "cwd",
-"process_groups", "pids", "partial"}`: the groups it signalled, the processes
-that exited, and whether any of its processes still ran after the SIGKILL),
-and `left`, each URL that still answers with the reason it left that server
-up (`{"url", "port", "cwd", "reason"}`). A server stopped only in part is
-listed under both, and its `left` reason names the processes still running;
-one none of whose processes exited is listed under `left` alone, its reason
-naming them all, so every process the probe signals is named. Exit 0 when no
+"process_groups", "pids", "partial", "running"}`: the groups it signalled, the
+processes that exited, whether any of its processes still ran after the
+SIGKILL, and the ones that did), and `left`, each URL that still answers with
+the reason it left that server up (`{"url", "port", "cwd", "reason"}`). After
+a stop that leaves some of a server's processes running, the server is listed
+under `stopped` when some of its processes exited or its URL no longer
+answers, and a URL that still answers is listed under `left`, its reason
+naming the groups signalled and the processes still running. It reads the
+groups' processes again right before each signal and right after it, and
+names each one it finds in them, so a process it signals goes unnamed only
+when it joins a group after the read before a signal and is out of that
+group, reaped or moved to another, by the read after it. Exit 0 when no
 URL answers, 1 when any does, and 2 when a URL has no host, a host the lookup
 cannot encode (an empty label, or one over 63 characters), or a port that is
 not a number from 0 to 65535, or when the `--stop-since` file cannot be read:
@@ -134,6 +145,17 @@ _STOPS = 3
 _EXITED = ("Z", "X")
 
 
+class _Address(NamedTuple):
+    """An address a connection reached: its family, the address packed as the
+    socket module packs one, and for an IPv6 address the scope id of the link
+    it is on (the `eth0` of `fe80::1%eth0`, as the link's index), 0 when it
+    names none."""
+
+    family: int
+    packed: bytes
+    scope: int = 0
+
+
 def _host_and_port(url: str) -> tuple[str, int]:
     parts = urlsplit(url if "://" in url else f"http://{url}")
     try:
@@ -152,9 +174,9 @@ def _host_and_port(url: str) -> tuple[str, int]:
     return parts.hostname, port if port is not None else _DEFAULT_PORTS.get(parts.scheme, 80)
 
 
-def _reached(host: str, port: int) -> tuple[int, bytes] | None:
-    """The family and packed address of the first of the host's addresses that
-    accepts a connection at `port`, or None when none does."""
+def _reached(host: str, port: int) -> _Address | None:
+    """The first of the host's addresses that accepts a connection at `port`,
+    or None when none does."""
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except (OSError, UnicodeError):
@@ -166,23 +188,26 @@ def _reached(host: str, port: int) -> tuple[int, bytes] | None:
             with socket.socket(family, kind, proto) as sock:
                 sock.settimeout(_TIMEOUT)
                 if sock.connect_ex(address) == 0:
-                    # An IPv6 address can carry a zone (`fe80::1%lo`), which is no part of it.
-                    return family, socket.inet_pton(family, address[0].split("%", 1)[0])
+                    # An IPv6 address can carry a zone (`fe80::1%eth0`), which is no part of it: the lookup gives its
+                    # link as the scope id, which a socket bound to a link-local address needs.
+                    scope = address[3] if family == socket.AF_INET6 else 0
+                    return _Address(family, socket.inet_pton(family, address[0].split("%", 1)[0]), scope)
         except OSError:
             # An address family this system cannot open (IPv6 switched off).
             continue
     return None
 
 
-def _lands_here(reached: tuple[int, bytes]) -> bool:
+def _lands_here(reached: _Address) -> bool:
     """Whether a connection to the reached address lands on this host: a
     socket bound to it here takes one made to it. Only an address of this
     host's own can be bound, unless Linux's `ip_nonlocal_bind` lets any one be,
-    so the bound socket must also take the connection."""
-    family, packed = reached
+    so the bound socket must also take the connection. A link-local IPv6
+    address is bound on its link, as Linux requires."""
+    family, host = reached.family, socket.inet_ntop(reached.family, reached.packed)
     try:
         with socket.socket(family, socket.SOCK_STREAM) as server, socket.socket(family, socket.SOCK_STREAM) as client:
-            server.bind((socket.inet_ntop(family, packed), 0))
+            server.bind((host, 0, 0, reached.scope) if family == socket.AF_INET6 else (host, 0))
             server.listen(1)
             server.settimeout(_TIMEOUT)
             client.settimeout(_TIMEOUT)
@@ -193,7 +218,8 @@ def _lands_here(reached: tuple[int, bytes]) -> bool:
             server.accept()[0].close()
             return True
     except OSError:
-        # Another host's address (EADDRNOTAVAIL), or one a connection to never reached the socket bound to it.
+        # Another host's address (EADDRNOTAVAIL), a link-local one with no link (EINVAL), or one a connection to never
+        # reached the socket bound to it.
         return False
 
 
@@ -206,11 +232,11 @@ def _proc_address(hex_address: str) -> bytes:
     )
 
 
-def _could_take(local: bytes, reached: tuple[int, bytes]) -> bool:
+def _could_take(local: bytes, reached: _Address) -> bool:
     """Whether a socket listening at `local` could have taken a connection to
     `reached`: one at that address, or at its family's wildcard, which for
     IPv4 includes `::` and the IPv4-mapped form of the address."""
-    family, address = reached
+    family, address = reached.family, reached.packed
     if len(local) == 4:
         return family == socket.AF_INET and local in (address, bytes(4))
     if family == socket.AF_INET6:
@@ -218,7 +244,7 @@ def _could_take(local: bytes, reached: tuple[int, bytes]) -> bool:
     return local in (bytes(10) + b"\xff\xff" + address, bytes(16))
 
 
-def _listening_inodes(port: int, proc: Path, reached: tuple[int, bytes] | None = None) -> set[str]:
+def _listening_inodes(port: int, proc: Path, reached: _Address | None = None) -> set[str]:
     """The inodes of the sockets listening on `port`: every one, or with
     `reached`, the ones that could have taken a connection to it."""
     inodes: set[str] = set()
@@ -251,7 +277,7 @@ def _held(pid: Path, sockets: set[str]) -> set[str]:
     return held
 
 
-def _holders(port: int, proc: Path, reached: tuple[int, bytes] | None = None) -> tuple[dict[int, str], bool]:
+def _holders(port: int, proc: Path, reached: _Address | None = None) -> tuple[dict[int, str], bool]:
     """The processes holding a socket listening on `port` (with `reached`,
     one that could have taken a connection to it), each with the folder it
     runs from, and whether every such socket has a holder this one can read."""
@@ -272,7 +298,7 @@ def _holders(port: int, proc: Path, reached: tuple[int, bytes] | None = None) ->
     return holders, held == sockets
 
 
-def _cwd_of_listener(port: int, proc: Path = Path("/proc"), reached: tuple[int, bytes] | None = None) -> str | None:
+def _cwd_of_listener(port: int, proc: Path = Path("/proc"), reached: _Address | None = None) -> str | None:
     """The folder the process listening on `port` runs from (with `reached`,
     the one listening where a connection to it lands), or None unless every
     socket that could have taken it is held from one folder by a process this
@@ -383,7 +409,7 @@ def _inside(cwd: str, roots: tuple[str, ...]) -> bool:
 
 
 def _not_the_runs(
-    proc: Path, port: int, reached: tuple[int, bytes], stop: _Stop, caller: _Caller, ticks: float
+    proc: Path, port: int, reached: _Address, stop: _Stop, caller: _Caller, ticks: float
 ) -> tuple[str | None, list[_Process]]:
     """Why the server listening where a connection to `reached` lands is not
     one the run can be shown to have started, or None and the processes of
@@ -424,37 +450,62 @@ def _not_the_runs(
     return None, members
 
 
-def _stop_groups(proc: Path, members: list[_Process], kill=None) -> list[_Process]:
-    """SIGTERM to each process group, then SIGKILL to what is left of it after
-    a grace period: which of `members` still run after both, none when every
-    one has exited. A process is known by its start time as well as its pid,
-    so a pid the system has given to a new process since does not count as one
-    still running."""
+def _in_groups(proc: Path, groups: set[int]) -> list[_Process]:
+    """Every process /proc lists in one of `groups`, one that has exited and
+    is not reaped yet included."""
+    try:
+        pids = [int(entry.name) for entry in proc.iterdir() if entry.name.isdigit()]
+    except OSError:
+        return []
+    found = (_process(proc, pid) for pid in pids)
+    return [process for process in found if process is not None and process.pgrp in groups]
+
+
+def _stop_groups(proc: Path, members: list[_Process], kill=None) -> tuple[list[_Process], list[_Process]]:
+    """SIGTERM to each process group of `members`, then SIGKILL to what is
+    left of it after a grace period. Gives every process it found in those
+    groups, and which of them still run after both signals, none when every
+    one has exited. A signal reaches each process in the group when it is
+    sent, a worker forked since `members` were read included, so it reads the
+    groups again right before each signal and right after it, and adds each
+    process it finds in them. A process is known by its start time as well as
+    its pid, so a pid the system has given to a new process since does not
+    count as one still running."""
     kill = kill or os.killpg
-    groups = sorted({member.pgrp for member in members})
+    groups = {member.pgrp for member in members}
+    found = list(members)
 
     def alive() -> list[_Process]:
         left = []
-        for member in members:
+        for member in found:
             now = _running(proc, member.pid)
             if now is not None and now.start == member.start:
                 left.append(member)
         return left
 
+    def join(targets: set[int]) -> None:
+        known = {(process.pid, process.start) for process in found}
+        found.extend(process for process in _in_groups(proc, targets) if (process.pid, process.start) not in known)
+
     for sig in (signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)):
-        for group in sorted({member.pgrp for member in alive()} & set(groups)):
+        # Only a group one of its processes still runs in: the id of a group none is left in can name a new one.
+        targets = {member.pgrp for member in alive()} & groups
+        join(targets)
+        for group in sorted(targets):
             try:
                 kill(group, sig)
             except OSError:
                 # Gone since (ProcessLookupError), or one it may not signal: what is left is reported below.
                 continue
+        # One forked between that read and the signal, which the signal reached, shows here until it is reaped.
+        join(targets)
         deadline = time.monotonic() + _GRACE
         while alive() and time.monotonic() < deadline:
             time.sleep(0.05)
         if not alive():
-            return []
+            return found, []
     # A process that left its group after the SIGTERM (or one SIGKILL cannot end yet), which the SIGKILL missed.
-    return alive()
+    return found, alive()
 
 
 def _reads_processes(proc: Path) -> bool:
@@ -464,6 +515,28 @@ def _reads_processes(proc: Path) -> bool:
 def _clock_ticks() -> float:
     """The clock ticks per second /proc/<pid>/stat counts a start time in."""
     return float(os.sysconf("SC_CLK_TCK"))
+
+
+def _read(url: str, port: int, reached: _Address, proc: Path, readable: bool) -> tuple[dict, bool | None]:
+    """The URL's entry, its folder the one of the process listening where the
+    connection landed, and whether the address it reached is one of this
+    host's own: None when the probe had no cause to ask. It asks by listening
+    on that address (`_lands_here`), which a firewall on macOS or Windows can
+    ask the user about, so only where the answer counts: for a folder /proc
+    names, and, where it may stop a server (`readable`), when /proc lists a
+    socket here that could have taken the connection."""
+    cwd = _cwd_of_listener(port, proc, reached)
+    if cwd is None and not (readable and _listening_inodes(port, proc, reached)):
+        return {"url": url, "port": port, "cwd": None}, None
+    # A connection that reached another host's address (a container's, say) was taken by no socket here, though one
+    # here listens on every address at that port.
+    here = _lands_here(reached)
+    return {"url": url, "port": port, "cwd": cwd if here else None}, here
+
+
+def _numbered(noun: str, numbers: list[int]) -> str:
+    """`pid 41`, or `pids 40, 41`."""
+    return f"{noun}{'s' if len(numbers) > 1 else ''} {', '.join(map(str, numbers))}"
 
 
 def probe(urls: list[str], stop: _Stop | None = None, proc: Path | None = None, kill=None) -> dict:
@@ -481,50 +554,54 @@ def probe(urls: list[str], stop: _Stop | None = None, proc: Path | None = None, 
             if reached is None:
                 free.append(url)
                 break
-            # A connection that reached another host's address (a container's, say) was taken by no socket here, though
-            # one here listens on every address at that port.
-            here = _lands_here(reached)
-            entry = {"url": url, "port": port, "cwd": _cwd_of_listener(port, proc, reached) if here else None}
+            entry, here = _read(url, port, reached, proc, readable)
             if stop is None:
                 answering.append(entry)
                 break
+            members: list[_Process] = []
             if not readable:
                 reason = "this system has no Linux /proc to read the server's processes from, so it stops nothing"
-                members: list[_Process] = []
+            elif here is None:
+                reason = (
+                    "/proc lists no socket here that could have taken the connection at "
+                    f"{socket.inet_ntop(reached.family, reached.packed)}"
+                )
             elif not here:
                 reason = (
-                    f"it answered at {socket.inet_ntop(*reached)}, which is not an address of this host, so no process "
-                    "here took the connection"
+                    f"it answered at {socket.inet_ntop(reached.family, reached.packed)}, which is not an address of "
+                    "this host, so no process here took the connection"
                 )
-                members = []
             elif attempt == _STOPS:
                 reason = f"it answered again after {_STOPS} stops, so something keeps starting it"
-                members = []
             else:
                 reason, members = _not_the_runs(proc, port, reached, stop, caller, ticks)
             if reason is None:
-                running = _stop_groups(proc, members, kill)
-                exited = [member for member in members if member not in running]
-                # Each process the signals ended is named, those of a server they ended only in part included.
-                if exited:
-                    stopped.append(
-                        {
-                            **entry,
-                            "process_groups": sorted({member.pgrp for member in members}),
-                            "pids": sorted(member.pid for member in exited),
-                            "partial": bool(running),
-                        }
-                    )
-                if running:
-                    pids = sorted(member.pid for member in running)
-                    reason = (
-                        f"{'some of its' if exited else 'its'} processes still ran after SIGTERM and SIGKILL "
-                        f"(pid{'s' if len(pids) > 1 else ''} {', '.join(map(str, pids))})"
-                    )
-            if reason is not None:
-                answering.append(entry)
-                left.append({**entry, "reason": reason})
-                break
+                groups = sorted({member.pgrp for member in members})
+                found, running = _stop_groups(proc, members, kill)
+                still = sorted(process.pid for process in running)
+                exited = sorted(process.pid for process in found if process not in running)
+                record = {**entry, "process_groups": groups, "pids": exited, "partial": bool(running), "running": still}
+                if not running:
+                    stopped.append(record)
+                    continue
+                # Stopped only in part, and stopped no more. The URL is read once more, since the processes the
+                # signals ended may have held every socket that answered it. The server is listed under `stopped` when
+                # the signals ended a process of it or the URL no longer answers; otherwise the reason its URL is left
+                # names the groups signalled and their processes, so each process found in them is named.
+                after = _reached(host, port)
+                if exited or after is None:
+                    stopped.append(record)
+                if after is None:
+                    free.append(url)
+                    break
+                entry, _ = _read(url, port, after, proc, readable)
+                reason = (
+                    f"{'some of its' if exited else 'its'} processes still ran after SIGTERM and SIGKILL to "
+                    f"{_numbered('process group', groups)} ({_numbered('pid', still)})"
+                )
+            answering.append(entry)
+            left.append({**entry, "reason": reason})
+            break
     result = {"answering": answering, "free": free}
     if stop is not None:
         result.update(stopped=stopped, left=left)
