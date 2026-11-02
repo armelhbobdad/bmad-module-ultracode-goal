@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `mutate_check.py` no longer reads as a kill a Node test run whose test files fail only because a timer or a promise a test started threw after the test ended. Node then lists each such test as passed, prints that the test "generated asynchronous activity after the test ended", and fails the file. A row read 0 failed, a row that cannot run, only when one file did so and its lines held a pass of the row's test: with a second such file it read as a kill, and as a clean `KILLED` ("exactly ... went red") when it named one of those tests, since the line that reports the activity named it beside `Error` and `fail`. Each file whose lines report such activity now comes off the failure count, whatever test the line names, and the line never counts as a test's failure, so the run reads 0 failed. A process that dies during a test after such a report now reads 0 failed too, and the gate's reference says so.

@@ -62,6 +62,7 @@ const REPO_URL = 'https://github.com/armelhbobdad/bmad-module-ultracode-goal/';
 
 const fs = require('node:fs');
 const path = require('node:path');
+const yaml = require('js-yaml');
 
 /** Hosts/schemes that are never local links. */
 const EXTERNAL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
@@ -360,14 +361,19 @@ function headingText(raw) {
  */
 function blankFrontMatter(text) {
   const lines = text.split('\n');
-  if (lines[0].trimEnd() !== '---') {
-    return text;
-  }
-  const end = lines.findIndex((line, index) => index > 0 && /^(?:---|\.\.\.)\s*$/.test(line));
+  const end = frontMatterEnd(lines);
   if (end === -1) {
     return text;
   }
   return lines.map((line, index) => (index <= end ? '' : line)).join('\n');
+}
+
+/** The index of the line that closes a leading YAML front matter block, or -1 when there is none. */
+function frontMatterEnd(lines) {
+  if (lines[0].trimEnd() !== '---') {
+    return -1;
+  }
+  return lines.findIndex((line, index) => index > 0 && /^(?:---|\.\.\.)\s*$/.test(line));
 }
 
 /**
@@ -383,7 +389,8 @@ function blankFrontMatter(text) {
  * like a heading, and reading the raw file counted every one of them, so a
  * link to a comment passed as a link to a section. Front matter is skipped
  * for the same reason. Only ATX headings are read: a setext heading (text
- * underlined with `===` or `---`) gets no id here.
+ * underlined with `===` or `---`) gets no id here. A leading byte order mark
+ * is dropped first, as GitHub and the site both drop it.
  *
  * @param {string} content - Raw Markdown
  * @returns {Set<string>} Every heading id in the file
@@ -392,7 +399,7 @@ function extractAnchors(content) {
   const anchors = new Set();
   const occurrences = new Map();
 
-  for (const line of blankFences(blankFrontMatter(content)).split('\n')) {
+  for (const line of blankFences(blankFrontMatter(content.replace(/^\uFEFF/, ''))).split('\n')) {
     const match = line.match(ATX_HEADING);
     if (!match) {
       continue;
@@ -470,20 +477,173 @@ function isFile(file) {
 }
 
 /**
- * The docs/ page a docs build of this tree serves at the route `<page>/`
- * ('' for the root), or null.
+ * The route Starlight serves a page at, from the slug Astro gave the page:
+ * '' for the root. A slug `index`, or one ending in `/index`, names its
+ * folder, and the route is in Unicode NFC.
  *
- * docs/x.md and docs/x/index.md are served at x/, docs/index.md at the root,
- * and a name starting with `_` is never published. docs/404.md is served at
- * 404.html alone, never at 404/, a route ending in `index` serves no page
- * (docs/x/index.md is at x/), and one with an extension names a file.
+ * The build writes the page to `<route>/index.html`, where a run of slashes
+ * names one folder. So a slash before, after or between the folders of a
+ * slug adds no folder: `/lead`, `trail/` and `a//b` are served at lead/,
+ * trail/ and a/b/.
  */
-function pageAt(page, docsDir) {
-  if (page === '404' || path.extname(page) || /(?:^|\/)index$/.test(page) || page.split('/').some((segment) => segment.startsWith('_'))) {
-    return null;
+function routeOfSlug(slug) {
+  if (slug === 'index' || slug === '' || slug === '/') {
+    return '';
   }
-  const candidates = [`${page || 'index'}.md`, path.join(page, 'index.md')].map((rel) => fileBelow(docsDir, rel));
-  return candidates.find((file) => isFile(file)) ?? null;
+  return (slug.endsWith('/index') ? slug.slice(0, -'/index'.length) : slug).normalize().split('/').filter(Boolean).join('/');
+}
+
+/**
+ * The route a docs build gives a page from its path below docs/, written
+ * with `/` between folders and without its `.md`: '' for docs/index.md.
+ *
+ * Astro slugs each segment of the path the way github-slugger slugs a
+ * heading (see `headingToAnchor`): it lowercases the segment, drops dots and
+ * most other punctuation, and makes each space a hyphen. So docs/FAQ.md is
+ * served at faq/, docs/release-v3.2.md at release-v32/, and
+ * docs/Guides/Getting Started.md at guides/getting-started/. A last segment
+ * `index`, in any case, names its folder.
+ */
+function routeOfPath(rel) {
+  const slug = rel
+    .split('/')
+    .map((segment) => headingToAnchor(segment))
+    .join('/');
+  return routeOfSlug(slug.replace(/\/index$/, ''));
+}
+
+/**
+ * Where a docs build finds a page's front matter: Astro's own pattern (in
+ * @astrojs/markdown-remark). It starts at a `---` or `+++` at the very start
+ * of the file, after a byte order mark or after blank lines, and runs to the
+ * next line that starts with `---` or `+++`.
+ */
+const FRONT_MATTER = /(?:^\uFEFF?|^\s*\n)(---|\+\+\+)([\s\S]*?\n)(?:---|\+\+\+)/;
+
+/**
+ * The front matter a docs build reads from a page, as the object its YAML
+ * holds, or {} when it has none.
+ *
+ * The build parses it with js-yaml, as this does, so a key or value written
+ * in any YAML form (quoted, folded, on the next line, an alias) is read as
+ * the build reads it. Front matter the build cannot parse fails the build,
+ * and is read as none here. TOML front matter (opened by `+++`) is not read.
+ */
+function frontMatter(text) {
+  const match = FRONT_MATTER.exec(text);
+  if (!match || match[1] !== '---') {
+    return {};
+  }
+  try {
+    const data = yaml.load(match[2]);
+    return data && typeof data === 'object' ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Every page a docs build of this tree serves, keyed by its route ('' for
+ * the root), as `{file, pathRoute}`: `pathRoute` is the route the page's
+ * path alone gives it (see `routeOfPath`).
+ *
+ * The build reads every `.md` file below docs/ except one with a file or
+ * folder name that starts with `_` or `.`. It serves a page at the `slug` its
+ * front matter sets, else at its `pathRoute`, and leaves out a page whose
+ * front matter sets `draft: true`. These routes match the ones a real build
+ * (Astro 5.18, Starlight 0.37) wrote for the same files. A `.mdx` file, which
+ * the build also reads as a page, is not listed, so a link to one is
+ * reported.
+ *
+ * The build's file walker (fdir, under tinyglobby) follows a symbolic link
+ * to a file or a folder, and serves what it finds at the link's own path. It
+ * does not follow a folder link whose real path is, holds or sits in the real
+ * path of a folder link above it, so a loop of links ends after one turn. It
+ * compares real paths as plain text, so `/a/doc` holds `/a/docs` there too.
+ * A dangling link is skipped. This walk does the same.
+ *
+ * When two files claim one route, the build keeps one of them and warns, and
+ * which one depends on the order its reads finish in. So `onClash(route,
+ * files)` is called with the files in path order, and the first of them that
+ * is no draft is listed. A draft claims its route too, since the build drops
+ * it only after it has replaced the other page.
+ *
+ * @param {string} docsDir - The docs/ folder
+ * @param {(route: string, files: string[]) => void} [onClash] - Called once per route two or more files claim
+ * @returns {Map<string, {file: string, pathRoute: string}>} Pages by route
+ */
+function sitePages(docsDir, onClash = () => {}) {
+  const claims = new Map();
+  const visit = (dir, segments, links) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    // In name order, so the result is the same whatever order the file
+    // system lists a folder in.
+    for (const entry of entries.toSorted((a, b) => (a.name < b.name ? -1 : 1))) {
+      if (/^[_.]/.test(entry.name)) {
+        continue;
+      }
+      const full = path.join(dir, entry.name);
+      let kind = entry;
+      let real = null;
+      if (entry.isSymbolicLink()) {
+        try {
+          kind = fs.statSync(full);
+          real = fs.realpathSync(full);
+        } catch {
+          continue;
+        }
+      }
+      if (kind.isDirectory()) {
+        if (!real || !links.some((link) => link.startsWith(real) || real.startsWith(link))) {
+          visit(full, [...segments, entry.name], real ? [...links, real] : links);
+        }
+      } else if (kind.isFile() && path.extname(entry.name) === '.md') {
+        const data = frontMatter(fs.readFileSync(full, 'utf8'));
+        const pathRoute = routeOfPath([...segments, entry.name.slice(0, -'.md'.length)].join('/'));
+        const route = typeof data.slug === 'string' && data.slug ? routeOfSlug(data.slug) : pathRoute;
+        claims.set(route, [...(claims.get(route) ?? []), { file: full, pathRoute, draft: data.draft === true }]);
+      }
+    }
+  };
+  visit(docsDir, [], []);
+
+  const pages = new Map();
+  for (const [route, unsorted] of claims) {
+    const files = unsorted.toSorted((a, b) => (a.file < b.file ? -1 : 1));
+    if (files.length > 1) {
+      onClash(
+        route,
+        files.map((claim) => claim.file),
+      );
+    }
+    const page = files.find((claim) => !claim.draft);
+    if (page) {
+      pages.set(route, { file: page.file, pathRoute: page.pathRoute });
+    }
+  }
+  return pages;
+}
+
+/**
+ * The page a docs build of this tree serves at the route `<route>/` ('' for
+ * the root), or undefined. docs/404.md has the route 404, but the site
+ * serves it at 404.html alone, never at 404/.
+ */
+function pageAt(route, pages) {
+  return route === '404' ? undefined : pages.get(route);
+}
+
+/** Where the site serves the page at a route, as a link names it. */
+function routeName(route) {
+  if (route === '404') {
+    return '404.html';
+  }
+  return route ? `${route}/` : 'its root';
 }
 
 /**
@@ -496,26 +656,30 @@ function pageAt(page, docsDir) {
  * Other files the build generates (the sitemap, the search index) are not
  * linked from these docs, so a link to one is reported.
  */
-function servedAt(rel, { docsDir, projectRoot }) {
+function servedAt(rel, { pages, projectRoot }) {
   if (SITE_FILES.has(rel) || isFile(fileBelow(path.join(projectRoot, 'website', 'public'), rel))) {
     return null;
   }
   if (rel === '404.html') {
-    const notFound = path.join(docsDir, '404.md');
-    return isFile(notFound) ? { file: notFound } : undefined;
+    const notFound = pages.get('404');
+    return notFound ? { file: notFound.file } : undefined;
   }
   const html = rel.match(/^(?:(.*)\/)?index\.html$/s);
-  const file = html && pageAt(html[1] ?? '', docsDir);
-  return file ? { file } : undefined;
+  const page = html && pageAt(html[1] ?? '', pages);
+  return page ? { file: page.file } : undefined;
 }
 
 /**
  * What a link into the published site shows: `{file}` naming the docs/ page
  * that renders at its route, `{file: null}` when a docs build of this tree
- * serves nothing there (with `pageAsFile` when the route names, as a .md or
- * .html file, a page served at its own route), or null when the href is not
- * below the site or names a file the site serves as it is, which has no
- * heading to check.
+ * serves nothing there, or null when the href is not below the site or names
+ * a file the site serves as it is, which has no heading to check.
+ *
+ * With `file: null` comes `meant`, the `[route, page]` of the page the link
+ * most likely meant, or undefined. It reads the link's path as the path of a
+ * docs/ file, less a `.md` or `.html`, and finds the page whose own path
+ * gives the same route. So FAQ/, FAQ.md and faq.md all mean docs/FAQ.md,
+ * which the site serves at faq/.
  *
  * The route is looked up as GitHub Pages serves it: a route ending in `/` (or
  * the root) from its index.html, and any other from the file it names, else
@@ -534,7 +698,7 @@ function servedAt(rel, { docsDir, projectRoot }) {
  * page changed since then still shows its released text. That window is
  * accepted, not checked.
  */
-function siteSource(href, { siteUrl, docsDir, projectRoot }) {
+function siteSource(href, { siteUrl, pages, projectRoot }) {
   const route = pathBelow(href, siteUrl);
   if (route === null) {
     return null;
@@ -542,13 +706,13 @@ function siteSource(href, { siteUrl, docsDir, projectRoot }) {
   const name = route.replace(/\/+$/, '');
   const index = `${name ? `${name}/` : ''}index.html`;
   for (const rel of name && name === route ? [name, `${name}.html`, index] : [index]) {
-    const shown = servedAt(rel, { docsDir, projectRoot });
+    const shown = servedAt(rel, { pages, projectRoot });
     if (shown !== undefined) {
       return shown;
     }
   }
-  const asFile = name.match(/^(.+)\.(?:md|html)$/is);
-  return asFile && pageAt(asFile[1].replace(/(?:^|\/)index$/, ''), docsDir) ? { file: null, pageAsFile: true } : { file: null };
+  const meant = routeOfPath(name.replace(/\.(?:md|html)$/i, ''));
+  return { file: null, meant: [...pages].find(([, page]) => page.pathRoute === meant) };
 }
 
 /**
@@ -594,6 +758,14 @@ function checkSource({ projectRoot, docsDir, siteUrl = SITE_URL, repoUrl = REPO_
     }
     return anchorsByFile.get(file);
   };
+  const pages = sitePages(docsDir, (route, [first, ...others]) => {
+    for (const file of others) {
+      report(
+        path.relative(projectRoot, file),
+        `page shares its site route with another, and a docs build keeps only one of them: ${routeName(route)} (also ${path.relative(projectRoot, first)})`,
+      );
+    }
+  });
 
   for (const file of files) {
     const rel = path.relative(projectRoot, file);
@@ -606,13 +778,14 @@ function checkSource({ projectRoot, docsDir, siteUrl = SITE_URL, repoUrl = REPO_
       const anchor = fragmentOf(href);
 
       if (EXTERNAL.test(href)) {
-        const page = siteSource(href, { siteUrl, docsDir, projectRoot });
+        const page = siteSource(href, { siteUrl, pages, projectRoot });
         const shown = page ?? repoSource(href, { repoUrl, projectRoot });
         if (!shown) {
           continue;
         }
         if (!shown.file) {
-          const hint = page?.pageAsFile ? ' (a page is linked by its route: x/ for docs/x.md)' : '';
+          const [route, meant] = page?.meant ?? [];
+          const hint = meant ? ` (the site serves ${path.relative(projectRoot, meant.file)} at ${routeName(route)})` : '';
           report(
             rel,
             page
@@ -954,12 +1127,14 @@ function checkLlmsIndex({ buildDir }, report) {
       continue; // external link, not a site route
     }
     checked += 1;
+    // A route ending in `/` (or the root) resolves to its index.html alone,
+    // any other to its index.html or the file it names. A folder is not a
+    // file, so one without an index.html resolves to nothing, as on GitHub
+    // Pages.
     const route = url.pathname.slice(rootPath.length);
-    const candidates =
-      route === ''
-        ? [path.join(buildDir, 'index.html')]
-        : [path.join(buildDir, route.replace(/\/$/, ''), 'index.html'), path.join(buildDir, route)];
-    if (!candidates.some((candidate) => fs.existsSync(candidate))) {
+    const index = path.join(buildDir, route, 'index.html');
+    const candidates = route === '' || route.endsWith('/') ? [index] : [index, path.join(buildDir, route)];
+    if (!candidates.some((candidate) => isFile(candidate))) {
       report(
         'build/site/llms.txt',
         `links a route that resolves to nothing: ${target} (looked for ${candidates
@@ -1109,6 +1284,7 @@ module.exports = {
   blankFences,
   headingToAnchor,
   extractAnchors,
+  sitePages,
   assetUrls,
   walk,
   buildInputsStatus,

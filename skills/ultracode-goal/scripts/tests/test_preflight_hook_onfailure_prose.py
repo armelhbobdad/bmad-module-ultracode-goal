@@ -50,6 +50,7 @@ PREFLIGHT_CHECK = SCRIPTS / "preflight_check.py"
 REPO_ROOT = SCRIPTS.parents[2]
 SECURITY = REPO_ROOT / "SECURITY.md"
 TROUBLESHOOTING = REPO_ROOT / "docs" / "troubleshooting.md"
+GETTING_STARTED = REPO_ROOT / "docs" / "getting-started.md"
 
 
 def _read(path: Path) -> str:
@@ -290,11 +291,50 @@ def test_the_bullet_says_to_quote_and_why():
         "write a single quote inside a value as `'\\''`",
         "`--assert-armed` reads each UCG hook command the way the shell splits it",
         "each value in single quotes as the templates above write them: `KEY='value' uv run '…'`",
+        # Final pass: the name quoted with its value, and an operator, which
+        # the check now reads as the shell does.
+        "Quote the value alone, never its name with it: the shell runs `'KEY=a b'` as the command.",
+        "that holds a shell operator or redirection (`;`, `||`, `&`, `<`, `2>&1`) outside quotes,",
+        # Its review: an expansion, which the shell makes before uv starts.
+        "or that holds what the shell expands before `uv` starts (a `$` or a backtick outside single quotes, such "
+        "as `$HOME` or `\"$(cat)\"`, or a `*`, `?`, `[` or `{` outside quotes).",
     ):
         assert clause in flat, clause
+    problem = _command_problem()
+    assert problem("'KEY=a b' uv run '/srv/guard_pretooluse.py'", "guard_pretooluse.py") is not None
+    assert problem("KEY='a b' uv run '/srv/guard_pretooluse.py'", "guard_pretooluse.py") is None
+    for operator in (";", "||", "&", "<", "2>&1", "$HOME", '"$(cat)"', "`cat`", "*"):
+        command = "uv run '/srv/guard_pretooluse.py' %s x" % operator
+        assert problem(command, "guard_pretooluse.py") is not None, command
+    assert problem("KEY='$HOME' uv run '/srv/guard_pretooluse.py'", "guard_pretooluse.py") is None
     no_write = flat[flat.index("A merge that would change nothing makes no write") :]
     no_write = no_write[: no_write.index("assert instead of writing")]
     assert "each command quoted as the templates below write it" in no_write
+
+
+def test_the_bullet_says_what_an_unquoted_budget_command_costs():
+    """Review of #186's fix (4.1.0): the bullet said Claude Code skips a budget
+    hook that cannot start without a word. Where the shell cannot run the
+    command (exit 127) the stop goes through, but an unquoted script path
+    leaves `uv run` a script it cannot find, and uv 0.12.15 exits 2 ("Failed
+    to spawn"), which on Stop sends the stop back, up to the eight blocks in a
+    row after which Claude Code lets it through. Final pass: uv syncs the
+    project in the hook's folder before it looks for the script, and where
+    that project fails to build or resolve it exits 1 (a non-blocking error
+    on Stop), so the stop goes through, as docs/troubleshooting.md says for a
+    moved skill. Its review: a resolve that fails on the network exits 2,
+    not 1 (uv 0.12.15 behind a proxy it could not reach, for the project's
+    dependencies and for its build backend alike), so that stop is sent back;
+    only a build that fails, or requirements no index satisfies, exit 1."""
+    flat = _flat(_hooks_bullet())
+    assert "skips the budget hook without a word" not in flat
+    assert "fails to build or resolve" not in flat
+    assert (
+        "and the budget hook counts no turn (a command the shell cannot run lets each stop through; a script `uv` "
+        "cannot find sends each stop back with uv's error, up to eight times in a row, unless the project `uv` "
+        "syncs first fails to build, or its requirements cannot be satisfied, when `uv` exits 1 and each stop "
+        "goes through too; a network failure in that sync exits 2, and sends each stop back)." in flat
+    )
 
 
 # --- what the setting does, and what it costs --------------------------------
@@ -422,6 +462,75 @@ def test_the_preflight_bullet_hands_a_resume_to_that_route():
     assert (
         "a resume, which never reaches this stage, re-merges through this bullet when its `--assert-armed` "
         "names the missing key (`references/execute.md`, the re-assertion sweep)" in flat
+    )
+
+
+# Review of #186's fix (4.1.0): a run UCG 3.x armed on a Claude Code below
+# 2.1.295 meets the missing key and the version together, and the sweep takes
+# the escalation route first and fixes none of the others (a hooks re-merge
+# writes a protected file a headless session may be refused). Each sentence
+# that sends that first resume, or any resume with a hooks reason, to
+# re-merge says so where it says it, since a conductor or an operator that
+# reads it alone would otherwise make the write.
+_OPERATORS_REASON_FIRST = {
+    "preflight.md Hooks bullet": (
+        "the re-assertion sweep), unless a reason that is the operator's to fix stands beside it (a skills failure, "
+        "or a Claude Code below the minimum): that resume escalates the story it was about to drive first, and the "
+        "resume after the operator's fix re-merges."
+    ),
+    "execute.md resume route": (
+        "meets this reason and re-arms here, unless a reason that is the operator's to fix (a skills failure, or a "
+        "Claude Code below the minimum) stands beside it: the paragraph above takes the escalation route first, and "
+        "the resume after the operator's fix re-arms here."
+    ),
+    # The route's own lead, which orders the re-merge for every hooks reason.
+    "execute.md resume route lead": (
+        "or injected env that is missing) and no reason that is the operator's to fix stands beside them (the "
+        "paragraph above escalates that one first), apply `references/preflight.md` step 5's **Hooks** bullet alone"
+    ),
+    "troubleshooting.md": (
+        "The resume re-checks the hooks and re-arms them if they need it, unless it also finds a reason that is "
+        "yours to fix, a missing story skill or a Claude Code older than 2.1.295: it then escalates the story it "
+        "was about to drive first, and re-arms the hooks on the resume after you fix that."
+    ),
+    # The refused settings write, which names the first resume after an update.
+    "troubleshooting.md refused write": (
+        "A resume rewrites the file too when the hooks need re-arming (the first resume after an update to 4.x "
+        "does, unless it first escalates a reason that is yours to fix, such as a Claude Code older than 2.1.295)"
+    ),
+    # Final pass: Getting started named the first resume after an update as
+    # the one that re-arms, with no exception, and the version floor's bullet
+    # sent the operator back to the resume after `claude update` without
+    # saying that this one makes the protected write.
+    "getting-started.md": (
+        "A resume that finds the hooks need re-arming (the first after an update to 4.x does, unless it first "
+        "escalates a reason that is yours to fix, such as a Claude Code older than 2.1.295; then the resume after "
+        "your fix does) writes the file again: make that resume attended too"
+    ),
+    "troubleshooting.md version floor": (
+        "On a run UCG 3.x armed, that resume is also the one that re-arms the hooks, a write to "
+        "`.claude/settings.local.json`: make it attended, since a headless one may be refused the write (see \"A "
+        "refused settings write\" below)."
+    ),
+}
+
+
+@pytest.mark.parametrize("where", sorted(_OPERATORS_REASON_FIRST))
+def test_a_resume_re_arms_only_once_no_operators_reason_stands_beside_it(where: str):
+    text = {
+        "preflight.md Hooks bullet": _flat(_hooks_bullet()),
+        "execute.md resume route": _flat(_resume_route()),
+        "execute.md resume route lead": _flat(_resume_route()),
+        "troubleshooting.md": _flat(_read(TROUBLESHOOTING)),
+        "troubleshooting.md refused write": _flat(_read(TROUBLESHOOTING)),
+        "getting-started.md": _flat(_read(GETTING_STARTED)),
+        "troubleshooting.md version floor": _flat(_read(TROUBLESHOOTING)),
+    }[where]
+    assert _OPERATORS_REASON_FIRST[where] in text
+    # The sweep's own rule, which these sentences now defer to.
+    assert (
+        "When one stands beside other reasons, a hooks reason included, take this route first and fix none of the "
+        "others" in _flat(_read(EXECUTE))
     )
 
 

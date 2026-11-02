@@ -1,0 +1,87 @@
+
+> api@0.0.0 test
+> node --test $REPORTER test/index.test.mjs
+
+file:///home/dev/work/load-failure-in-two-workspaces/shared/clamp.mjs:2
+  if (x > hi {
+             ^
+
+SyntaxError: Unexpected token '{'
+    at compileSourceTextModule (node:internal/modules/esm/utils:319:16)
+    at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:89:18)
+    at #translate (node:internal/modules/esm/loader:438:20)
+    at afterLoad (node:internal/modules/esm/loader:506:29)
+    at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:511:12)
+    at #getOrCreateModuleJobAfterResolve (node:internal/modules/esm/loader:564:36)
+    at afterResolve (node:internal/modules/esm/loader:611:52)
+    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:617:12)
+    at ModuleJob.syncLink (node:internal/modules/esm/module_job:276:33)
+    at ModuleJob.link (node:internal/modules/esm/module_job:381:17)
+
+Node.js v24.21.0
+✖ test/index.test.mjs (80.14924ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 98.072769
+
+✖ failing tests:
+
+test at test/index.test.mjs:1:1
+✖ test/index.test.mjs (80.14924ms)
+  'test failed'
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /home/dev/work/load-failure-in-two-workspaces/packages/api
+npm error workspace api@0.0.0
+npm error location /home/dev/work/load-failure-in-two-workspaces/packages/api
+npm error command failed
+npm error command sh -c node --test $REPORTER test/index.test.mjs
+
+
+> web@0.0.0 test
+> node --test $REPORTER test/index.test.mjs
+
+file:///home/dev/work/load-failure-in-two-workspaces/shared/clamp.mjs:2
+  if (x > hi {
+             ^
+
+SyntaxError: Unexpected token '{'
+    at compileSourceTextModule (node:internal/modules/esm/utils:319:16)
+    at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:89:18)
+    at #translate (node:internal/modules/esm/loader:438:20)
+    at afterLoad (node:internal/modules/esm/loader:506:29)
+    at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:511:12)
+    at #getOrCreateModuleJobAfterResolve (node:internal/modules/esm/loader:564:36)
+    at afterResolve (node:internal/modules/esm/loader:611:52)
+    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:617:12)
+    at ModuleJob.syncLink (node:internal/modules/esm/module_job:276:33)
+    at ModuleJob.link (node:internal/modules/esm/module_job:381:17)
+
+Node.js v24.21.0
+✖ test/index.test.mjs (61.620403ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 77.456286
+
+✖ failing tests:
+
+test at test/index.test.mjs:1:1
+✖ test/index.test.mjs (61.620403ms)
+  'test failed'
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /home/dev/work/load-failure-in-two-workspaces/packages/web
+npm error workspace web@0.0.0
+npm error location /home/dev/work/load-failure-in-two-workspaces/packages/web
+npm error command failed
+npm error command sh -c node --test $REPORTER test/index.test.mjs

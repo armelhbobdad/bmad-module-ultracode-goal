@@ -62,16 +62,36 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      command lookup. So only mem_recall.py changes the latch: `latch` writes
      it, and `unlatch` removes it when it carries the caller's run_id.
      Accepted residual, stated like the exec-wrapper one below: indirection
-     (for the store, a `cd` then a relative path; for both, a variable
-     holding part of the path or the name, a script that names the store or
-     the latch in its contents, whether a file tool or a heredoc fed to `cat`
-     or `tee` wrote it), commands on an ancestor directory (a search
-     of it, removing the implementation artifacts folder, a `git clean` or
-     `git stash --all`), repo-wide searches that reach a store inside the
-     workspace, the interpreter `uv` or `python` resolves to, with the
-     configuration it reads, and a pinned call itself: the exemption checks
-     the script's path, not its arguments, so a model that ignores the deny
-     note can still run `latch` or `unlatch` on its own.
+     (for the store, a `cd` then a relative path; a glob that matches a
+     symlink on the way to it or a folder before that symlink, such as the
+     `[H]` or `?` in `cat [H]/.ultracode-goal/recall/*` after `ln -s ~ H`,
+     or the `d*` in `cat d*/H/.ultracode-goal/recall/*` with H such a link
+     in d, a brace group in a word longer than _BRACE_WORD_CAP counting as
+     such a glob; and a `..` that climbs back over a symlink, as in
+     `cat L/../recall/*` with L a link to the store. Each at any length: the
+     guard expands no glob against the file system, and resolves the links a
+     path spells only after abspath has applied its `..` steps to the path
+     as written. For both, a variable holding part of the path or the name,
+     a script that names the store or the latch in its contents, whether a
+     file tool or a heredoc fed to `cat` or `tee` wrote it), commands on an
+     ancestor directory (a search of it, removing the implementation
+     artifacts folder, a `git clean` or `git stash --all`), repo-wide
+     searches that reach a store inside the workspace, the interpreter `uv`
+     or `python` resolves to, with the configuration it reads, and a pinned
+     call itself: the exemption checks the script's path, not its arguments,
+     so a model that ignores the deny note can still run `latch` or
+     `unlatch` on its own.
+  Accepted residual for 6 and 7, on time: while a latch is present they
+  resolve the symlinks of every path a call names, and nothing bounds that
+  short of Claude Code's hook timeout. _MAX_LONG_LOOKUPS caps the names
+  realpath is handed for one path longer than _MAX_RESOLVED, not the names
+  inside the targets of the links it follows (some 2,000 in a target on
+  Linux, looked up again by each stretch), nor a call that names many paths
+  (many words, or the variants of a brace group). With such links behind a
+  folder some 2,000 levels deep, where each lookup is slow, a crafted call
+  can keep the guard past the timeout. Preflight arms the guard with
+  "onFailure": "block", so Claude Code then refuses the call: a stall, not a
+  way past the guard.
   Invariants 6 and 7 count a present latch as a live run: the guard reads no
   clock and detects no dead run, so a latch a dead run left behind keeps
   denying until the next Stage 1 replaces it or the user deletes it by hand.
@@ -511,13 +531,163 @@ class _CommandScope:
         self.bodies: dict[tuple[str, int], set[str]] = {}
 
 
+class _Lexer(shlex.shlex):
+    """shlex.shlex with a token built in a list, so a long word lexes in
+    linear time.
+
+    The stdlib's read_token adds each character to the token with
+    `self.token += nextchar`, and CPython copies the whole string for every
+    such add to an attribute, so a word of n characters cost time in n
+    squared: a Bash command holding one word of about 2.5 MB kept the guard
+    past Claude Code's 600 s hook timeout, which under the guard item's
+    `"onFailure": "block"` refuses the call. This read_token is the stdlib's
+    (CPython 3.11 to 3.14 ship the same one), branch for branch, with the
+    token kept as a list of characters and joined once at its end; only its
+    debug prints are left out, since the guard never sets `debug`. Every
+    other method is shlex's own, and the tests compare the two readings on
+    generated text.
+    """
+
+    def read_token(self):  # noqa: C901, PLR0912  (the stdlib's state machine, kept whole)
+        quoted = False
+        escapedstate = " "
+        token: list[str] = []
+        while True:
+            if self.punctuation_chars and self._pushback_chars:
+                nextchar = self._pushback_chars.pop()
+            else:
+                nextchar = self.instream.read(1)
+            if nextchar == "\n":
+                self.lineno += 1
+            if self.state is None:
+                token = []  # past end of file
+                break
+            elif self.state == " ":
+                if not nextchar:
+                    self.state = None  # end of file
+                    break
+                elif nextchar in self.whitespace:
+                    if token or (self.posix and quoted):
+                        break  # emit current token
+                    else:
+                        continue
+                elif nextchar in self.commenters:
+                    self.instream.readline()
+                    self.lineno += 1
+                elif self.posix and nextchar in self.escape:
+                    escapedstate = "a"
+                    self.state = nextchar
+                elif nextchar in self.wordchars:
+                    token = [nextchar]
+                    self.state = "a"
+                elif nextchar in self.punctuation_chars:
+                    token = [nextchar]
+                    self.state = "c"
+                elif nextchar in self.quotes:
+                    if not self.posix:
+                        token = [nextchar]
+                    self.state = nextchar
+                elif self.whitespace_split:
+                    token = [nextchar]
+                    self.state = "a"
+                else:
+                    token = [nextchar]
+                    if token or (self.posix and quoted):
+                        break  # emit current token
+                    else:
+                        continue
+            elif self.state in self.quotes:
+                quoted = True
+                if not nextchar:  # end of file
+                    raise ValueError("No closing quotation")
+                if nextchar == self.state:
+                    if not self.posix:
+                        token.append(nextchar)
+                        self.state = " "
+                        break
+                    else:
+                        self.state = "a"
+                elif self.posix and nextchar in self.escape and self.state in self.escapedquotes:
+                    escapedstate = self.state
+                    self.state = nextchar
+                else:
+                    token.append(nextchar)
+            elif self.state in self.escape:
+                if not nextchar:  # end of file
+                    raise ValueError("No escaped character")
+                # In posix shells, only the quote itself or the escape
+                # character may be escaped within quotes.
+                if escapedstate in self.quotes and nextchar != self.state and nextchar != escapedstate:
+                    token.append(self.state)
+                token.append(nextchar)
+                self.state = escapedstate
+            elif self.state in ("a", "c"):
+                if not nextchar:
+                    self.state = None  # end of file
+                    break
+                elif nextchar in self.whitespace:
+                    self.state = " "
+                    if token or (self.posix and quoted):
+                        break  # emit current token
+                    else:
+                        continue
+                elif nextchar in self.commenters:
+                    self.instream.readline()
+                    self.lineno += 1
+                    if self.posix:
+                        self.state = " "
+                        if token or (self.posix and quoted):
+                            break  # emit current token
+                        else:
+                            continue
+                elif self.state == "c":
+                    if nextchar in self.punctuation_chars:
+                        token.append(nextchar)
+                    else:
+                        if nextchar not in self.whitespace:
+                            self._pushback_chars.append(nextchar)
+                        self.state = " "
+                        break
+                elif self.posix and nextchar in self.quotes:
+                    self.state = nextchar
+                elif self.posix and nextchar in self.escape:
+                    escapedstate = "a"
+                    self.state = nextchar
+                elif (
+                    nextchar in self.wordchars
+                    or nextchar in self.quotes
+                    or (self.whitespace_split and nextchar not in self.punctuation_chars)
+                ):
+                    token.append(nextchar)
+                else:
+                    if self.punctuation_chars:
+                        self._pushback_chars.append(nextchar)
+                    else:
+                        self.pushback.appendleft(nextchar)
+                    self.state = " "
+                    if token or (self.posix and quoted):
+                        break  # emit current token
+                    else:
+                        continue
+        result = "".join(token)
+        self.token = ""
+        if self.posix and not quoted and result == "":
+            result = None
+        return result
+
+
 def _tokenize(segment: str) -> list[str]:
     """Split one shell segment into words; raises ValueError on bad quoting.
 
     A named seam on purpose: it gives the fail-closed fallback below a single
     trigger to catch, instead of scattering shlex handling through the caller.
+    It is shlex.split's own reading (posix, split at whitespace, no comments),
+    through _Lexer, so a long word costs time linear in its length.
     """
-    return shlex.split(segment)
+    lexer = _Lexer(segment, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return list(lexer)
 
 
 def _git_subcommand_index(tokens: list[str]) -> int | None:
@@ -763,7 +933,7 @@ def _quoted_segments(command: str) -> list[list[str]]:
     `|` apart (`git ci -m 'fix: a; b'`), and each fragment then tokenizes to
     nothing. shlex in punctuation mode keeps it inside its word.
     """
-    lexer = shlex.shlex(_mask_quoted(command), posix=True, punctuation_chars=_PUNCTUATION)
+    lexer = _Lexer(_mask_quoted(command), posix=True, punctuation_chars=_PUNCTUATION)
     lexer.whitespace = " \t\r"  # a newline is punctuation, so it ends a segment
     lexer.whitespace_split = True
     lexer.commenters = ""  # shlex would start one mid-word; bash does not
@@ -2062,13 +2232,149 @@ def _fold(path: str) -> str:
     return folded
 
 
+# No system looks up a path longer than this (Linux takes 4096 bytes, macOS
+# 1024, Windows 32767 UTF-16 units). os.path.realpath walks a path one name at
+# a time and hands the system the whole path resolved so far at each step,
+# which costs time in the square of its length: one Bash word of a few MB
+# spelled as a path (`a/a/a/...`) kept the guard past Claude Code's 600 s hook
+# timeout while a run latch is present. A longer word can still name a file,
+# though: the shell reads a glob of 33,000 `*` as the short name it matches,
+# and `mkdir -p` walks a path a folder at a time. So _real_long still resolves
+# it, in stretches no longer than this.
+_MAX_RESOLVED = 32_768
+
+# The most names _real_long hands realpath for one path: twice as many as
+# realpath looks up for the names of a path within _MAX_RESOLVED, which holds
+# at most half as many names as it has characters, since a name and its
+# separator take two. Each realpath call on a stretch looks up every name of
+# the path it is handed, the path resolved so far again and then the stretch,
+# and each lookup hands the system the whole path up to that name. A link to
+# `.` keeps the resolved path short however often it repeats, and as deep as
+# the system looks up (on Linux some 2,000 folders, each walked again by every
+# lookup), so the time a run of them took grew with its length at about 70 s
+# a MB, and a word of a few MB could outlast the hook's timeout. A path whose
+# names would come to more than this is refused, unresolved (_TooManyLookups).
+# The count leaves out the names inside the targets of the links realpath
+# follows (some 2,000 in a target on Linux, looked up again by each stretch)
+# and covers one path, not a call: the module docstring states that residual.
+_MAX_LONG_LOOKUPS = _MAX_RESOLVED
+
+
+class _TooManyLookups(Exception):
+    """A path longer than _MAX_RESOLVED whose links keep it short, so that
+    its names, counted again for each stretch, come to more than
+    _MAX_LONG_LOOKUPS lookups. Nothing catches it short of _mem_gate, which
+    runs the checks that resolve paths only while a run latch is present, and
+    refuses the call (failing closed)."""
+
+
 @functools.lru_cache(maxsize=None)
 def _real(path: str) -> str:
-    """os.path.realpath, memoized; the path unchanged when it cannot resolve."""
+    """os.path.realpath, memoized; the path unchanged when it cannot resolve.
+    A path longer than _MAX_RESOLVED gets realpath's answer from _real_long,
+    in time linear in its length, or raises _TooManyLookups."""
     try:
+        if len(path) > _MAX_RESOLVED:
+            return _real_long(path)
         return os.path.realpath(path)
     except (OSError, ValueError, RuntimeError):
         return path
+
+
+def _real_long(path: str) -> str:
+    """os.path.realpath of a path longer than _MAX_RESOLVED, from realpath
+    calls on stretches of it no longer than the bound.
+
+    realpath looks up the path resolved so far with the next name joined to
+    it, follows a symlink it finds there, and keeps a name it cannot look up
+    as written. So resolving the path a stretch of whole names at a time,
+    with the path resolved so far in front, gives realpath's answer; and once
+    that path joined to the next name is longer than the bound, no lookup of
+    it or of any longer path succeeds, and the rest is kept as written. It is
+    the path resolved so far that is measured, not the path as written: a
+    link to `.` keeps the resolved path short however often it repeats, and
+    realpath follows a link after it. Rather than hand realpath more than
+    _MAX_LONG_LOOKUPS names in all, counting the names of the path resolved
+    so far that each stretch looks up again, it raises _TooManyLookups. The
+    names inside the targets of the links realpath follows are not counted
+    (the module docstring states that residual).
+
+    Before Python 3.13, realpath stops at a symlink loop and keeps the rest of
+    the path as written, and abspath then applies any `..` the targets met on
+    the way left in it, which can take the loop out of the path and leave a
+    link after it unresolved. So when a stretch stops at a loop, every later
+    name is kept as written too (_realpath_stretch says when it does), rather
+    than handed to the next stretch, which would follow that link.
+
+    From Python 3.13 realpath goes on past a loop, keeping the loop's link in
+    the path, and within one call reuses what each link it met resolved to,
+    a loop's links included; a stretch looks such a link up afresh. So from
+    3.13, and only for a path through a symlink loop, the answer can differ
+    from realpath's: with lm -> ln/C and ln -> lm, a path through lm that
+    goes on past a stretch's end comes back with C twice. The system refuses
+    any path through a loop (ELOOP), so a call reaches nothing through such
+    a path either way.
+
+    Windows looks a path up whole, never one longer than a written path can
+    be, so there the first stretch is resolved and the rest kept: that finds
+    every link realpath on the whole path could. A path with a `..` step,
+    which realpath applies to the path resolved so far, goes to realpath
+    whole: the deny side (_abs_forms, _roots) hands only abspath's output,
+    which has none, and _is_pinned never hands a long path.
+    """
+    sep = os.sep
+    drive, rest = os.path.splitdrive(path)
+    names = rest.split(sep)
+    if not os.path.isabs(path) or os.pardir in names:
+        return os.path.realpath(path)
+    names = [name for name in names if name and name != os.curdir]
+    resolved = drive + sep
+    done = lookups = 0
+    while done < len(names):
+        size, end = len(resolved), done
+        while end < len(names) and size + len(sep) + len(names[end]) <= _MAX_RESOLVED:
+            size += len(sep) + len(names[end])
+            end += 1
+        if end == done:
+            break
+        lookups += resolved.count(sep) + end - done
+        if lookups > _MAX_LONG_LOOKUPS:
+            raise _TooManyLookups(f"{lookups:,} lookups for a {len(path):,}-character path")
+        resolved, whole = _realpath_stretch(_joined(resolved, names[done:end]))
+        done = end
+        if os.name == "nt" or not whole:
+            break
+    return _joined(resolved, names[done:])
+
+
+def _realpath_stretch(path: str) -> tuple[str, bool]:
+    """os.path.realpath(path), with False when realpath stopped at a symlink
+    loop and kept the rest as written, which it does before Python 3.13.
+
+    There realpath returns abspath of what posixpath._joinrealpath returns,
+    whose second value is False after a loop. That helper is private, so it
+    is called only on the versions that have it, with the arguments realpath
+    hands it, and should a release take other arguments, realpath's own
+    answer is returned. From 3.13, and on Windows, the answer is realpath's,
+    with True.
+    """
+    join_real = getattr(os.path, "_joinrealpath", None) if sys.version_info < (3, 13) else None
+    if join_real is None:
+        return os.path.realpath(path), True
+    try:
+        resolved, whole = join_real(path[:0], path, False, {})
+    except TypeError:  # a release whose helper takes other arguments
+        return os.path.realpath(path), True
+    return os.path.abspath(resolved), bool(whole)
+
+
+def _joined(head: str, names: list[str]) -> str:
+    """The names joined under head, by the separator alone (os.path.join
+    would read a name holding a drive as a new start)."""
+    if not names:
+        return head
+    sep = os.sep
+    return (head if head.endswith(sep) else head + sep) + sep.join(names)
 
 
 def _roots(path: str) -> tuple[str, ...]:
@@ -2486,8 +2792,12 @@ def _is_pinned(path: str | None) -> bool:
     """True when the path is a pinned script as written (lexically, `.` and
     `..` folded away) AND leads to one when walked step by step with its
     symlinks resolved, so a `..` that leaves a symlinked folder for another
-    file of the pinned name is not exempt."""
-    if path is None:
+    file of the pinned name is not exempt.
+
+    A path longer than _MAX_RESOLVED is never exempt: its `..` steps are
+    still in it, and realpath on such a path costs time in the square of its
+    length. Withholding the exemption fails closed."""
+    if path is None or len(path) > _MAX_RESOLVED:
         return False
     try:
         lexical = os.path.normcase(os.path.abspath(path))
@@ -3485,6 +3795,17 @@ def _mem_gate(event: dict, impl: Path | None) -> None:
         return
     try:
         _latch_gate(event, state_path)
+    except _TooManyLookups:
+        _latch_deny(
+            state_path,
+            f"refusing this {event.get('tool_name')} call, because it names a "
+            f"path longer than {_MAX_RESOLVED:,} characters whose symlinks keep "
+            "it short (a run of links to `.`, say), so resolving it takes more "
+            f"than {_MAX_LONG_LOOKUPS:,} lookups and could outlast the hook's "
+            "timeout: whether the path reaches the recall store or claude-mem's "
+            "files cannot be told, and the call is refused (failing closed). "
+            "Spell the path without the repeated links.",
+        )
     except Exception as exc:  # noqa: BLE001  fail closed on the unforeseen
         # A crash would exit non-zero, which the client reads as no decision,
         # letting the call through. A present latch means deny instead.

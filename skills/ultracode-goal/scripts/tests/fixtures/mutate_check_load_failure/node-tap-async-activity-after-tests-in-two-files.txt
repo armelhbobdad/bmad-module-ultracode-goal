@@ -1,0 +1,48 @@
+TAP version 13
+# Subtest: remember returns the value
+ok 1 - remember returns the value
+  ---
+  duration_ms: 1.121563
+  type: 'test'
+  ...
+# Error: Test "remember returns the value" at a.test.mjs:4:1 generated asynchronous activity after the test ended. This activity created the error "Error: cache overflow at a" and would have caused the test to fail, but instead triggered an uncaughtException event.
+# Subtest: a.test.mjs
+not ok 1 - a.test.mjs
+  ---
+  duration_ms: 70.78299
+  type: 'test'
+  location: '/home/dev/work/async-activity-in-two-files/a.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: remember keeps a second key
+ok 3 - remember keeps a second key
+  ---
+  duration_ms: 1.58547
+  type: 'test'
+  ...
+# Error: Test "remember keeps a second key" at b.test.mjs:4:1 generated asynchronous activity after the test ended. This activity created the error "Error: cache overflow at b" and would have caused the test to fail, but instead triggered an uncaughtException event.
+# Subtest: b.test.mjs
+not ok 2 - b.test.mjs
+  ---
+  duration_ms: 76.602108
+  type: 'test'
+  location: '/home/dev/work/async-activity-in-two-files/b.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 2
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 99.05326

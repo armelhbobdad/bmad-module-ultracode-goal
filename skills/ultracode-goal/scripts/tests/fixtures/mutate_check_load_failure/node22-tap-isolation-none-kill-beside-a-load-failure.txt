@@ -1,0 +1,48 @@
+TAP version 13
+# Subtest: cap is pinned
+not ok 1 - cap is pinned
+  ---
+  duration_ms: 3.143388
+  type: 'test'
+  location: '/home/dev/work/isolation-none/a.test.mjs:4:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    11 !== 10
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 10
+  actual: 11
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///home/dev/work/isolation-none/a.test.mjs:4:38)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: b.test.mjs
+not ok 2 - b.test.mjs
+  ---
+  duration_ms: 0.384832
+  type: 'test'
+  error: 'limit.mjs: LIMIT above 5'
+  stack: |-
+    file:///home/dev/work/isolation-none/limit.mjs:2:22
+    ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+    async node:internal/test_runner/runner:767:15
+    async runFiles (node:internal/test_runner/runner:745:9)
+    async runChain (node:internal/test_runner/runner:805:5)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 46.954527

@@ -1,0 +1,35 @@
+TAP version 13
+# ----- Native stack trace -----
+#  1: 0x931db0  [/usr/local/bin/node]
+#  2: 0x9eb6c2  [/usr/local/bin/node]
+#  3: 0x7ff0cbdcf08d 
+# ----- JavaScript stack trace -----
+# 1: file:///home/dev/work/aborts-as-it-loads/mode.mjs:3:11
+# 2: run (node:internal/modules/esm/module_job:561:25)
+# Subtest: mode.test.mjs
+not ok 1 - mode.test.mjs
+  ---
+  duration_ms: 1060.576814
+  type: 'test'
+  location: '/home/dev/work/aborts-as-it-loads/mode.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: ~
+  signal: 'SIGABRT'
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: other passes
+ok 2 - other passes
+  ---
+  duration_ms: 0.771491
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1068.601249

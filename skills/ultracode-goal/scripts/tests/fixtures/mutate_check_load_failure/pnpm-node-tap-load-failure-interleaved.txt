@@ -1,0 +1,119 @@
+Scope: 2 of 3 workspace projects
+packages/guard test$ node --test $REPORTER guard.test.mjs
+packages/other test$ node --test $REPORTER other.test.mjs
+packages/other test: TAP version 13
+packages/guard test: TAP version 13
+packages/other test: # Subtest: other step 0
+packages/other test: ok 1 - other step 0
+packages/other test:   ---
+packages/other test:   duration_ms: 33.238672
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: # Subtest: other step 1
+packages/other test: ok 2 - other step 1
+packages/other test:   ---
+packages/other test:   duration_ms: 5.393266
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: # Subtest: other step 2
+packages/other test: ok 3 - other step 2
+packages/other test:   ---
+packages/other test:   duration_ms: 7.127961
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/guard test: # file:///home/dev/work/pnpm-load-failure/packages/guard/clamp.mjs:4
+packages/guard test: # if (!(LIMIT < 5)) throw new Error(`LIMIT out of range: ${LIMIT}`);
+packages/guard test: #                         ^
+packages/guard test: # Error: LIMIT out of range: 5
+packages/guard test: #     at file:///home/dev/work/pnpm-load-failure/packages/guard/clamp.mjs:4:25
+packages/guard test: # Node.js v24.21.0
+packages/other test: # Subtest: other step 3
+packages/other test: ok 4 - other step 3
+packages/other test:   ---
+packages/other test:   duration_ms: 8.180733
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: # Subtest: other step 4
+packages/other test: ok 5 - other step 4
+packages/other test:   ---
+packages/other test:   duration_ms: 9.435488
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: # Subtest: other step 5
+packages/other test: ok 6 - other step 5
+packages/other test:   ---
+packages/other test:   duration_ms: 5.759891
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/guard test: # Subtest: guard.test.mjs
+packages/guard test: not ok 1 - guard.test.mjs
+packages/guard test:   ---
+packages/guard test:   duration_ms: 159.930035
+packages/guard test:   type: 'test'
+packages/guard test:   location: '/home/dev/work/pnpm-load-failure/packages/guard/guard.test.mjs:1:1'
+packages/guard test:   failureType: 'testCodeFailure'
+packages/guard test:   exitCode: 1
+packages/guard test:   signal: ~
+packages/guard test:   error: 'test failed'
+packages/guard test:   code: 'ERR_TEST_FAILURE'
+packages/guard test:   ...
+packages/guard test: 1..1
+packages/guard test: # tests 1
+packages/guard test: # suites 0
+packages/guard test: # pass 0
+packages/guard test: # fail 1
+packages/guard test: # cancelled 0
+packages/guard test: # skipped 0
+packages/guard test: # todo 0
+packages/guard test: # duration_ms 187.920493
+packages/other test: # Subtest: other step 6
+packages/other test: ok 7 - other step 6
+packages/other test:   ---
+packages/other test:   duration_ms: 4.426921
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: # Subtest: other step 7
+packages/other test: ok 8 - other step 7
+packages/other test:   ---
+packages/other test:   duration_ms: 5.016997
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: # Subtest: other step 8
+packages/other test: ok 9 - other step 8
+packages/other test:   ---
+packages/other test:   duration_ms: 6.243303
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: # Subtest: other step 9
+packages/other test: ok 10 - other step 9
+packages/other test:   ---
+packages/other test:   duration_ms: 7.524765
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: # Subtest: other step 10
+packages/other test: ok 11 - other step 10
+packages/other test:   ---
+packages/other test:   duration_ms: 4.033531
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: # Subtest: other step 11
+packages/other test: ok 12 - other step 11
+packages/other test:   ---
+packages/other test:   duration_ms: 4.249806
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/guard test: Failed
+/home/dev/work/pnpm-load-failure/packages/guard:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  guard@0.0.0 test: `node --test $REPORTER guard.test.mjs`
+Exit status 1
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?
+packages/other test: 1..12
+packages/other test: # tests 12
+packages/other test: # suites 0
+packages/other test: # pass 12
+packages/other test: # fail 0
+packages/other test: # cancelled 0
+packages/other test: # skipped 0
+packages/other test: # todo 0
+packages/other test: # duration_ms 281.368996
+packages/other test: Done

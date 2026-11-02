@@ -1,0 +1,21 @@
+✖ config.test.mjs (0.681573ms)
+✔ other passes (0.131334ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14.88261
+
+✖ failing tests:
+
+✖ config.test.mjs (0.681573ms)
+  Error: config: unknown mode loose
+      at file:///home/dev/work/isolation-none/config.mjs:2:30
+      at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+      at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+      at async node:internal/test_runner/runner:767:15
+      at async runFiles (node:internal/test_runner/runner:745:9)
+      at async runChain (node:internal/test_runner/runner:805:5)

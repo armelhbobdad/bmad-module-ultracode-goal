@@ -2570,7 +2570,7 @@ def test_echo_mention_of_git_commit_is_allowed(tmp_path: Path) -> None:
     assert out is None
 
 
-_TOKENIZE_BODY = "    return shlex.split(segment)"
+_TOKENIZE_BODY = "    return list(lexer)"  # _tokenize's last line
 
 
 def test_anchoring_disabled_denies_echo_mention(tmp_path: Path) -> None:
@@ -7532,3 +7532,536 @@ def test_security_predicate_rejects_a_dropped_clause(clause: str) -> None:
     mutant = live.replace(clause, "")
     assert mutant != live, "the mutant must actually change the text"
     assert not _security_states_the_classifier_fails_closed(mutant)
+
+
+# --- #186: one long word -------------------------------------------------------
+# shlex's read_token adds each character to its token with `self.token +=
+# nextchar`, which copies the token every time, so one word of n characters
+# cost time in n squared, and os.path.realpath, which the recall gate runs on
+# every path a command names, hands the system the whole path so far at each
+# of its components. A Bash command holding one word of about 2.5 MB kept the
+# guard past Claude Code's 600 s hook timeout, and under the guard item's
+# "onFailure": "block" Claude Code then refuses the call.
+
+# The characters each lexer reading treats apart: blanks, quotes, the escape,
+# shell punctuation, a `#`, a masked punctuation character as _mask_quoted
+# writes it, and plain word characters.
+_LEX_ALPHABET = (
+    " ", "\t", "\r", "\n", "'", '"', "\\", ";", "&", "|", "(", ")",
+    "<", ">", "#", "", "a", "b", "-", "=", "$", "`", "*",
+)  # fmt: skip
+
+
+def _shlex_reading(text: str, *, punctuation: bool, lexer_class) -> tuple[str, object]:
+    """The words a lexer reads from text, configured as the guard configures
+    it, or the error it raises."""
+    if punctuation:
+        lexer = lexer_class(text, posix=True, punctuation_chars="();<>|&\n")
+        lexer.whitespace = " \t\r"
+    else:
+        lexer = lexer_class(text, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        return "words", list(lexer)
+    except ValueError as exc:
+        return "error", str(exc)
+
+
+def test_the_linear_lexer_reads_every_text_as_shlex_does(guard_module) -> None:
+    """The guard's lexer is shlex's read_token with the token kept in a list.
+    It must read every text exactly as the stdlib's does, in both readings
+    the guard makes (shlex.split's, and the punctuation-mode one that splits
+    segments), words and errors alike: every text of up to four characters
+    over the first ten of the alphabet, and seeded random texts of up to
+    forty over all of it."""
+    import itertools
+    import random
+    import shlex
+
+    texts = ["".join(chars) for size in range(5) for chars in itertools.product(_LEX_ALPHABET[:10], repeat=size)]
+    rng = random.Random(186)
+    texts += ["".join(rng.choice(_LEX_ALPHABET) for _ in range(rng.randint(5, 40))) for _ in range(10_000)]
+    for text in texts:
+        for punctuation in (False, True):
+            ours = _shlex_reading(text, punctuation=punctuation, lexer_class=guard_module._Lexer)
+            theirs = _shlex_reading(text, punctuation=punctuation, lexer_class=shlex.shlex)
+            assert ours == theirs, (text, punctuation)
+    assert guard_module._tokenize("a 'b c' d\\ e") == shlex.split("a 'b c' d\\ e")
+
+
+def test_one_long_word_is_read_in_linear_time(guard_module) -> None:
+    """Issue #186: at this size the stdlib lexer took about a minute for each
+    reading, and these four calls make several. The bound is generous for a
+    slow, busy runner; the readings take seconds."""
+    import time
+
+    n = 1_000_000
+    word = "a" * n
+    start = time.perf_counter()
+    assert guard_module._tokenize(word) == [word]
+    assert guard_module._quoted_segments("echo " + word) == [["echo", word]]
+    assert guard_module._git_writes("echo " + word) == set()
+    assert guard_module._git_writes(_V + " -m '" + word + "'") == {"commit"}
+    elapsed = time.perf_counter() - start
+    assert elapsed < 120.0, f"took {elapsed:.1f}s"
+
+
+def test_a_path_longer_than_the_bound_is_resolved_a_stretch_at_a_time(
+    guard_module, monkeypatch, tmp_path: Path
+) -> None:
+    """os.path.realpath on a path of k components hands the system each prefix:
+    time in k times the path's length. A path longer than _MAX_RESOLVED goes to
+    realpath a stretch of whole names at a time, none longer than the bound,
+    and on POSIX comes back as realpath gives it whole (on Windows realpath
+    may refuse a path that long); a shorter one goes whole."""
+    calls: list[str] = []
+    real = os.path.realpath
+    stretch = guard_module._realpath_stretch
+
+    def counting(path, *args, **kwargs):
+        calls.append(path)
+        return real(path, *args, **kwargs)
+
+    def counting_stretch(path):
+        # Before Python 3.13 a stretch goes to realpath's own helper, which
+        # also says whether realpath stopped at a loop.
+        calls.append(path)
+        return stretch(path)
+
+    monkeypatch.setattr(guard_module.os.path, "realpath", counting)
+    monkeypatch.setattr(guard_module, "_realpath_stretch", counting_stretch)
+    bound = guard_module._MAX_RESOLVED
+    long_path = os.path.join(str(tmp_path), *(["a"] * (bound // 2 + 1)))
+    assert len(long_path) > bound
+    resolved = guard_module._real(long_path)
+    assert calls and all(len(call) <= bound for call in calls)
+    if sys.platform != "win32":
+        assert resolved == real(long_path)
+    calls.clear()
+    short_path = str(tmp_path / "a")
+    guard_module._real(short_path)
+    assert calls == [short_path]
+    # A `..` that brings a long path back under the bound is applied first,
+    # by abspath, so the deny side still resolves it.
+    candidate = "a/" * (bound // 2) + "../" * (bound // 2) + "b"
+    forms = guard_module._abs_forms(candidate, str(tmp_path), [], str(tmp_path))
+    resolved = os.path.abspath(str(tmp_path / "b"))
+    assert calls[-1] == resolved
+    assert guard_module._fold(real(resolved)) in forms
+
+
+def test_a_pinned_script_spelled_past_the_bound_is_not_exempt(guard_module, monkeypatch) -> None:
+    """_is_pinned hands _real a path with its `..` steps still in it, which
+    realpath would walk whole, in time in the square of its length. A
+    spelling longer than _MAX_RESOLVED is never exempt, and never resolved."""
+    pinned = guard_module._pinned_paths()[0]
+    folder, name = os.path.split(pinned)
+    count = guard_module._MAX_RESOLVED // 4
+    spelled = os.path.join(folder, *(["a"] * count), *([os.pardir] * count), name)
+    assert os.path.normcase(os.path.abspath(spelled)) in guard_module._pinned_scripts()
+    assert guard_module._is_pinned(pinned)
+    monkeypatch.setattr(guard_module, "_real", lambda path: pytest.fail(f"resolved a {len(path)}-character path"))
+    assert not guard_module._is_pinned(spelled)
+
+
+# A word longer than _MAX_RESOLVED can still name a file. The shell reads a
+# glob of 33,000 `*` as the short name it matches before any system sees the
+# path, and GNU `mkdir -p` walks a path one folder at a time, so neither is
+# held to the length a system looks up whole. The 4.1.0 review found that a
+# guard leaving such a word unresolved let through what v4.0.0 refused; each
+# twin below is refused under the bound and past it. They run on POSIX, where
+# the review reproduced them and realpath walks a path a name at a time;
+# Windows looks a path up whole.
+_POSIX_WALK = pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX realpath walks a path a name at a time; Windows looks it up whole"
+)
+
+
+@_POSIX_WALK
+def test_a_glob_past_the_bound_through_a_home_link_is_denied(store_world: _StoreWorld) -> None:
+    """After `ln -s ~ H`, which the guard allows, bash prints the store for
+    `cat H/.ultracode-goal/recall/<33,000 *>jsonl`."""
+    _symlink_or_skip(store_world.cwd / "H", store_world.home)
+    for stars in (1, 33_000):
+        code, out = _bash(store_world, "cat H/.ultracode-goal/recall/" + "*" * stars + "jsonl")
+        _assert_latch_denied(code, out, store_world.latch)
+
+
+@_POSIX_WALK
+def test_mkdir_p_past_the_bound_through_a_store_link_is_denied(store_world: _StoreWorld) -> None:
+    """With L a link to the store, GNU `mkdir -p L/a/a/...` past the bound
+    created 17,000 folders in it."""
+    _symlink_or_skip(store_world.cwd / "L", store_world.store)
+    for count in (16_000, 16_500):
+        code, out = _bash(store_world, "mkdir -p L/" + "a/" * count)
+        _assert_latch_denied(code, out, store_world.latch)
+
+
+@_POSIX_WALK
+def test_a_run_of_links_to_dot_past_the_bound_still_reaches_the_store(store_world: _StoreWorld) -> None:
+    """realpath stops finding links once the path it has resolved so far is
+    too long to look up, not the path as written: with `s` a link to `.`, the
+    resolved path stays at the cwd however often `s/` repeats, so v4.0.0
+    still followed L after 17,000 of them, and `mkdir -p` walks it the same
+    way. Resolving only the first _MAX_RESOLVED characters as written would
+    miss L. It is the store rule that refuses them, having followed L, not
+    the cap on lookups below."""
+    _symlink_or_skip(store_world.cwd / "s", Path("."))
+    _symlink_or_skip(store_world.cwd / "L", store_world.store)
+    for count in (16_000, 17_000):
+        code, out = _bash(store_world, "mkdir -p " + "s/" * count + "L/a")
+        reason = _assert_latch_denied(code, out, store_world.latch)
+        assert f"names the recall store {store_world.store}" in reason
+
+
+# Review finding GB-PERF: each lookup hands the system the path resolved so
+# far, and a link to `.` keeps that path as deep as the system looks up, so a
+# run of such links behind some 2,000 real folders cost about 70 s a MB, and a
+# word of a few MB outlasted the hook's 600 s. A path past the bound that takes
+# more than _MAX_LONG_LOOKUPS lookups is refused instead, unresolved.
+_LOOKUP_CAP_DENY = (
+    "names a path longer than 32,768 characters whose symlinks keep it short (a run of "
+    "links to `.`, say), so resolving it takes more than 32,768 lookups and could "
+    "outlast the hook's timeout"
+)
+
+
+@_POSIX_WALK
+def test_a_long_path_stops_resolving_at_the_lookup_cap(guard_module, monkeypatch, tmp_path: Path) -> None:
+    """_real_long counts every name each stretch hands realpath, the path
+    resolved so far included, and raises _TooManyLookups rather than hand it
+    more than _MAX_LONG_LOOKUPS; a path within the cap still resolves whole.
+    The lookups the system is asked for are counted too: a link to `.` adds
+    none, so they come to the names handed."""
+    _symlink_or_skip(tmp_path / "s", Path("."))
+    real = os.path.realpath
+    expected = real(str(tmp_path / "x"))
+    stretch = guard_module._realpath_stretch
+    lstat = os.lstat
+    handed: list[int] = []
+    lookups = 0
+
+    def counting(path: str) -> tuple[str, bool]:
+        handed.append(len([name for name in path.split(os.sep) if name]))
+        return stretch(path)
+
+    def counting_lstat(*args, **kwargs):
+        nonlocal lookups
+        lookups += 1
+        return lstat(*args, **kwargs)
+
+    monkeypatch.setattr(guard_module, "_realpath_stretch", counting)
+    monkeypatch.setattr(guard_module.os, "lstat", counting_lstat)
+    cap = guard_module._MAX_LONG_LOOKUPS
+    assert cap == guard_module._MAX_RESOLVED == 32_768
+    within = os.path.join(str(tmp_path), *(["s"] * 17_000), "x")
+    assert guard_module._real(within) == expected
+    assert handed and sum(handed) <= cap
+    assert 0 < lookups <= cap
+    handed.clear()
+    lookups = 0
+    past = os.path.join(str(tmp_path), *(["s"] * 40_000), "x")
+    with pytest.raises(guard_module._TooManyLookups):
+        guard_module._real(past)
+    assert handed and sum(handed) <= cap
+    assert 0 < lookups <= cap
+
+
+@_POSIX_WALK
+def test_a_long_path_past_the_lookup_cap_is_denied(store_world: _StoreWorld) -> None:
+    """End to end, under a latch: 40,000 `s/`, with `s` a link to `.`, would
+    take more lookups than the cap, so the call is refused, failing closed,
+    though the path ends in a missing file and not in the store. With no
+    latch the guard resolves nothing and lets it through."""
+    _symlink_or_skip(store_world.cwd / "s", Path("."))
+    command = "cat " + "s/" * 40_000 + "x"
+    reason = _assert_latch_denied(*_bash(store_world, command), store_world.latch)
+    assert _LOOKUP_CAP_DENY in reason
+    assert "refused (failing closed)" in reason
+    store_world.latch.unlink()
+    _assert_allowed(*_bash(store_world, command))
+    for text in _lookup_cap_texts():
+        assert (
+            "so that resolving it takes more than 32,768 lookups of the names it spells and of the "
+            "folders it has resolved so far"
+        ) in text
+
+
+def _lookup_cap_texts() -> tuple[str, str]:
+    """SECURITY.md and the change fragment, each on one line."""
+    return tuple(
+        " ".join(path.read_text(encoding="utf-8").split())
+        for path in (_REPO_ROOT / "SECURITY.md", _REPO_ROOT / "changes" / "guard-long-word-linear.yaml")
+    )
+
+
+@_POSIX_WALK
+def test_the_lookup_cap_counts_the_names_a_path_spells_not_those_its_links_hold(
+    guard_module, monkeypatch, tmp_path: Path
+) -> None:
+    """Accepted residual (review finding, 4.1.0): the cap counts the names of
+    the path as written and of the path resolved so far, which each stretch
+    looks up again, not the names inside the targets of the links realpath
+    follows (some 2,000 in a target on Linux, looked up again by each
+    stretch), and it counts each path on its own, not a call. So a path past
+    the bound through links with long targets makes more lookups than the cap
+    and is resolved, not refused, and a call naming many paths has no cap at
+    all. With links behind a folder some 2,000 levels deep, where each lookup
+    is slow, either can keep the guard past the hook's 600 s; preflight arms
+    the guard with `"onFailure": "block"`, so Claude Code then refuses the
+    call: a stall, not a way past the guard. The guard's docstring, the
+    comment on the cap, SECURITY.md and the change fragment say so, and claim
+    the cap for no more than it counts."""
+    try:
+        limit = os.pathconf(str(tmp_path), "PC_PATH_MAX")
+    except (OSError, ValueError):
+        limit = -1
+    limit = 4096 if limit <= 0 else min(limit, 4096)
+    # Each target stays short of the longest path the system looks up (and
+    # of the longest link macOS makes): about 2,000 names on Linux.
+    per_target = (limit - 100) // 2
+    cap = guard_module._MAX_LONG_LOOKUPS
+    _symlink_or_skip(tmp_path / "s", Path("."))
+    links = [f"T{i}" for i in range(cap // per_target + 1)]
+    for link in links:
+        _symlink_or_skip(tmp_path / link, Path("/".join(["s"] * per_target)))
+    names: list[str] = []
+    while len(str(tmp_path)) + sum(len(name) + 1 for name in names) <= guard_module._MAX_RESOLVED:
+        names.extend(links)
+    path = os.path.join(str(tmp_path), *names, "x")
+    lookups = 0
+    lstat = os.lstat
+
+    def counting(*args, **kwargs):
+        nonlocal lookups
+        lookups += 1
+        return lstat(*args, **kwargs)
+
+    monkeypatch.setattr(guard_module.os, "lstat", counting)
+    resolved = guard_module._real(path)
+    monkeypatch.undo()
+    assert lookups > cap, lookups
+    assert resolved == os.path.realpath(path) == os.path.join(os.path.realpath(str(tmp_path)), "x")
+
+    doc = " ".join(guard_module.__doc__.split())
+    assert (
+        "_MAX_LONG_LOOKUPS caps the names realpath is handed for one path longer than _MAX_RESOLVED, not the "
+        "names inside the targets of the links it follows"
+    ) in doc
+    assert "nor a call that names many paths" in doc
+    assert "a stall, not a way past the guard" in doc
+    source = HOOK.read_text(encoding="utf-8")
+    assert "The most lookups _real_long makes for one path" not in source
+    for text in _lookup_cap_texts():
+        assert (
+            "That count leaves out the names inside the targets of the links the path goes through, and "
+            "counts each path on its own"
+        ) in text
+        assert "can still keep the guard past the timeout, and Claude Code then refuses the call" in text
+
+
+def _v4_0_0_real(path: str) -> str:
+    """The guard's _real as v4.0.0 shipped it, the bar a long path is held to."""
+    try:
+        return os.path.realpath(path)
+    except (OSError, ValueError, RuntimeError):
+        return path
+
+
+@_POSIX_WALK
+def test_a_long_path_resolves_as_v4_0_0_resolved_it(guard_module, tmp_path: Path) -> None:
+    """Differential: _real gives v4.0.0's answer on paths around and past
+    _MAX_RESOLVED, as abspath hands them to it, through links to `.`, `..`,
+    `/`, the store and the home folder, three kinds of loop, a dangling link,
+    a link whose target ends near the longest path the system looks up, a
+    file, real folders, missing names, a name no file system takes, and one
+    longer than the bound; and on a long path holding `..` steps, as
+    _is_pinned's are.
+
+    The third loop's target holds `..` (lp -> lq/../C, lq -> lp, C a link to
+    the store). Before Python 3.13 realpath stops at a loop and keeps the rest
+    of the path as written, and abspath then applies the target's `..`, which
+    takes the loop out of the path and leaves C unresolved; a stretch that
+    handed that path on to the next would follow C, and v4.0.0 did not
+    (review finding, 4.1.0).
+
+    `dot`, a long name for a link to `.`, keeps the path resolved so far
+    short over many stretches at little cost; a long run of `s` costs v4.0.0
+    time in the square of the path, so only the fixed paths hold one."""
+    import random
+
+    bound = guard_module._MAX_RESOLVED
+    home = tmp_path / "home"
+    store = home / ".ultracode-goal" / "recall"
+    top = tmp_path / "top"
+    # `far`'s target and the deepest real folder stay short of the longest
+    # path the system looks up (4096 bytes on Linux, 1024 on macOS, which
+    # refuses to create a folder or a link past it): 18 and 11 names of 200
+    # on Linux, fewer on macOS.
+    try:
+        limit = os.pathconf(str(tmp_path), "PC_PATH_MAX")
+    except (OSError, ValueError):
+        limit = -1
+    limit = 4096 if limit <= 0 else min(limit, 4096)
+    far_names = min(18, (limit - len(str(top)) - 80) // 201)
+    deep = top / "d" / "e"
+    for name in ("n" * 200,) * (far_names * 11 // 18):
+        deep = deep / name
+    deep.mkdir(parents=True)
+    store.mkdir(parents=True)
+    (top / "f").write_text("x", encoding="utf-8")
+    dot = "t" * 200
+    links = {
+        top / "s": ".",
+        top / dot: ".",
+        top / "u": "..",
+        top / "r": "/",
+        top / "L": str(store),
+        top / "H": str(home),
+        top / "loop": "loop",
+        top / "la": "lb",
+        top / "lb": "la",
+        top / "lp": "lq/../C",
+        top / "lq": "lp",
+        top / "C": str(store),
+        top / "dang": "nowhere/x",
+        top / "far": "d/" + "/".join(["m" * 200] * far_names),
+        top / "deep": str(deep),
+        deep / "s": ".",
+        deep / dot: ".",
+        deep / "L": str(store),
+    }
+    for link, target in links.items():
+        _symlink_or_skip(link, Path(target))
+    words = [
+        "s", "u", "r", "L", "H", "loop", "la", "lp", "C", "dang", "far", "deep", "d", "e", "f",
+        "missing", ".ultracode-goal", "recall", "n" * 200, "*" * 300, "q" * 5_000,
+    ]  # fmt: skip
+    rng = random.Random(410)
+    paths = [
+        os.path.join(str(top), *(["s"] * 17_000), "L", "a"),
+        os.path.join(str(top), "deep", *(["s"] * 17_000), "L", "a"),
+        os.path.join(str(top), "H", ".ultracode-goal", "recall", "*" * 33_000 + "jsonl"),
+        os.path.join(str(top), "L", *(["a"] * 16_500)),
+        os.path.join(str(top), "far", *(["s"] * 2_000)),
+        os.path.join(str(top), *([dot] * 500), "deep", *([dot] * 500), "L", "a"),
+        os.path.join(str(top), "*" * (bound + 1), "L"),
+        os.path.join(str(top), *(["s"] * 16_000), "lp", "x", *(["y" * 200] * 5)),
+        os.path.join(str(top), *([dot] * 150), "lp", *(["y" * 200] * 20), "C", "a"),
+    ]
+    for _ in range(300):
+        names: list[str] = []
+        size = len(str(top))
+        goal = rng.randint(bound - 2_000, 3 * bound)
+        while size < goal:
+            pick = rng.random()
+            if pick < 0.15:
+                run = [dot] * rng.randint(1, 600)
+            elif pick < 0.2:
+                run = ["s"] * rng.randint(1, 300)
+            else:
+                run = [rng.choice(words)]
+            names.extend(run)
+            size += sum(len(name) + 1 for name in run)
+        paths.append(os.path.abspath(os.path.join(str(top), *names)))
+    for path in paths:
+        assert guard_module._real(path) == _v4_0_0_real(path), path[:300]
+    with_dotdot = os.path.join(str(top), *(["n" * 200] * 170), *([".."] * 170), "L", "x")
+    assert len(with_dotdot) > bound
+    assert guard_module._real(with_dotdot) == _v4_0_0_real(with_dotdot)
+
+
+@_POSIX_WALK
+def test_a_long_path_through_a_loop_is_the_one_that_can_differ_from_3_13(guard_module, tmp_path: Path) -> None:
+    """Residual, stated in _real_long's docstring (found while fixing the
+    4.1.0 review finding on a loop whose target holds `..`): from Python 3.13
+    realpath goes on past a symlink loop, keeping the loop's link in the path
+    and reusing within the call what each link resolved to, while a stretch
+    looks the link up afresh. With lm -> ln/C and ln -> lm, a path past the
+    bound through lm then comes back with C twice. Before 3.13 realpath stops
+    at the loop, _real_long keeps the rest as written, and the answers agree.
+    The system refuses any path through the loop, so a call reaches nothing
+    through it either way. Without a loop, the differential above holds on
+    every version."""
+    import errno
+
+    _symlink_or_skip(tmp_path / "s", Path("."))
+    _symlink_or_skip(tmp_path / "lm", Path("ln/C"))
+    _symlink_or_skip(tmp_path / "ln", Path("lm"))
+    bound = guard_module._MAX_RESOLVED
+    # lm and x end the first stretch, and the names after them start the next.
+    runs = (bound - len(str(tmp_path)) - 100) // 2
+    tail = ["x", *(["y" * 200] * 5)]
+    path = os.path.join(str(tmp_path), *(["s"] * runs), "lm", *tail)
+    assert len(path) > bound
+    whole = os.path.realpath(path)
+    real_top = os.path.realpath(str(tmp_path))
+    assert whole == os.path.join(real_top, "lm", "C", *tail)
+    if sys.version_info < (3, 13):
+        assert guard_module._real(path) == whole
+    else:
+        assert guard_module._real(path) == os.path.join(real_top, "lm", "C", "C", *tail)
+    with pytest.raises(OSError) as refused:
+        os.stat(tmp_path / "lm" / "x")
+    assert refused.value.errno == errno.ELOOP
+    doc = " ".join(guard_module._real_long.__doc__.split())
+    assert "So from 3.13, and only for a path through a symlink loop, the answer can differ from realpath's" in doc
+
+
+def test_a_glob_or_dotdot_on_the_way_to_a_link_is_a_residual(store_world: _StoreWorld) -> None:
+    """Accepted residual, as in v4.0.0 (review findings GB-2 and GB2-R): the
+    guard expands no glob against the file system, and applies a `..` to the
+    path as written before it follows any link, so bash reaches the store
+    through a link the guard never follows, short or past the bound: a glob
+    over the link's own name (`[H]`, `?`) or over a folder before it (`d*`,
+    with d/H a link to the home folder), a brace group in a word longer than
+    _BRACE_WORD_CAP, which the guard reads as a `*` (the same group in a short
+    word expands, and is refused), and a `..` that climbs back over a link
+    (`L/..`, with L a link to the store). The guard's docstring and
+    SECURITY.md list each, and the change fragment claims none of them is
+    refused."""
+    world = store_world
+    _symlink_or_skip(world.cwd / "H", world.home)
+    _symlink_or_skip(world.cwd / "L", world.store)
+    (world.cwd / "d").mkdir()
+    _symlink_or_skip(world.cwd / "d" / "H", world.home)
+    recall = ".ultracode-goal/recall/"
+    for stars in (1, 33_000):
+        glob = "*" * stars + "jsonl"
+        for head in ("[H]", "?", "d*/H", "[d]/H"):
+            _assert_allowed(*_bash(world, f"cat {head}/{recall}{glob}"))
+        _assert_allowed(*_bash(world, f"cat L/../recall/{glob}"))
+    guard = _load_guard_module()
+    cap = guard._BRACE_WORD_CAP
+    assert cap == 1024
+    _assert_latch_denied(*_bash(world, f"cat {{H,x}}/{recall}*jsonl"), world.latch)
+    _assert_allowed(*_bash(world, f"cat {{H,x}}/{recall}" + "*" * cap + "jsonl"))
+
+    doc = " ".join(guard.__doc__.split())
+    assert "a glob that matches a symlink on the way to it or a folder before that symlink" in doc
+    assert "a brace group in a word longer than _BRACE_WORD_CAP counting as such a glob" in doc
+    assert "a `..` that climbs back over a symlink" in doc
+    security = " ".join((_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8").split())
+    assert "a glob that matches a symlink on the way to the store or a folder before that symlink" in security
+    assert "a brace group in a word longer than 1,024 characters, which the guard reads as such a glob" in security
+    assert "a `..` that climbs back over a symlink" in security
+    fragment = " ".join((_REPO_ROOT / "changes" / "guard-long-word-linear.yaml").read_text(encoding="utf-8").split())
+    assert "reaches the recall store through a link it names is still refused" not in fragment
+    assert "the guard does not follow a link the shell reaches through a glob" in fragment
+    assert "through a brace group in a word longer than 1,024 characters" in fragment
+    assert "by a `..` that climbs back over a link" in fragment
+
+
+def test_one_long_path_word_under_a_latch_is_decided_in_time(store_world: _StoreWorld) -> None:
+    """End to end: a Bash word of 1.25 MB spelled as a path, with a run latch
+    present so the recall gate reads it too. It kept the guard past the
+    600 s Claude Code gives a hook; it is decided in seconds now. The bound
+    is half that timeout, generous for a slow, busy runner."""
+    import time
+
+    start = time.perf_counter()
+    code, out = _bash(store_world, "cat " + "a/" * 625_000)
+    elapsed = time.perf_counter() - start
+    assert code == 0, out
+    assert elapsed < 300.0, f"took {elapsed:.1f}s"

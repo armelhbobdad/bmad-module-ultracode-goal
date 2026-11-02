@@ -1,0 +1,36 @@
+TAP version 13
+# Subtest: other passes
+ok 1 - other passes
+  ---
+  duration_ms: 0.70486
+  type: 'test'
+  ...
+# Subtest: syntax.test.mjs
+not ok 2 - syntax.test.mjs
+  ---
+  duration_ms: 0.753767
+  type: 'test'
+  location: '/home/dev/work/isolation-none/syntax.test.mjs:1:1'
+  error: "Unexpected token '{'"
+  name: 'SyntaxError'
+  stack: |-
+    compileSourceTextModule (node:internal/modules/esm/utils:319:16)
+    ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:89:18)
+    #translate (node:internal/modules/esm/loader:438:20)
+    afterLoad (node:internal/modules/esm/loader:506:29)
+    ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:511:12)
+    #getOrCreateModuleJobAfterResolve (node:internal/modules/esm/loader:564:36)
+    afterResolve (node:internal/modules/esm/loader:611:52)
+    ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:617:12)
+    ModuleJob.syncLink (node:internal/modules/esm/module_job:276:33)
+    ModuleJob.link (node:internal/modules/esm/module_job:381:17)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 15.173523

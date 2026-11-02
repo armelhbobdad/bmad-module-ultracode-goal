@@ -1,0 +1,17 @@
+✔ [P0] clamp at the bound (1.813852ms)
+✖ clamp.test.mjs (493.217721ms)
+✔ other passes (6.283851ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 586.42347
+
+✖ failing tests:
+
+test at clamp.test.mjs:1:1
+✖ clamp.test.mjs (493.217721ms)
+  'test failed'

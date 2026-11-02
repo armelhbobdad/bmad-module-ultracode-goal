@@ -1,0 +1,28 @@
+----- Native stack trace -----
+
+ 1: 0x931db0  [/usr/local/bin/node]
+ 2: 0x9eb6c2  [/usr/local/bin/node]
+ 3: 0x7f685bdcf08d 
+
+----- JavaScript stack trace -----
+
+1: file:///home/dev/work/aborts-as-it-loads/mode.mjs:3:11
+2: run (node:internal/modules/esm/module_job:561:25)
+
+
+✖ mode.test.mjs (1075.68203ms)
+✔ other passes (1.047899ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1083.602248
+
+✖ failing tests:
+
+test at mode.test.mjs:1:1
+✖ mode.test.mjs (1075.68203ms)
+  'test failed'

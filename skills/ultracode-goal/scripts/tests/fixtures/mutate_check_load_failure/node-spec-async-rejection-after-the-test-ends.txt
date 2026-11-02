@@ -1,0 +1,17 @@
+✔ rejects later (0.917097ms)
+ℹ Error: Test "rejects later" at rej.test.mjs:2:1 generated asynchronous activity after the test ended. This activity created the error "Error: late rejection" and would have caused the test to fail, but instead triggered an unhandledRejection event.
+✖ rej.test.mjs (60.149742ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 69.420627
+
+✖ failing tests:
+
+test at rej.test.mjs:1:1
+✖ rej.test.mjs (60.149742ms)
+  'test failed'

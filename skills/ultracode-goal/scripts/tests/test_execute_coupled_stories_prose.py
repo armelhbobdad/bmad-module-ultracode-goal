@@ -61,7 +61,10 @@ _FRAGMENT = _REPO_ROOT / "changes" / "execute-coupled-stories.yaml"
 
 _LEAD = "**Two stories green only together: move the clauses in writing, never share a commit.**"
 _NARROWING = "**Get an AC narrowed in writing before committing a case that pins behaviour it forbids.**"
-_CLOSE_LEAD = "**Closing a `coupled-stories` escalation records the move, and the resumed run makes it.**"
+_CLOSE_LEAD = (
+    "**Closing a `coupled-stories` escalation records a proposed move, and the resumed run makes it; a re-plan "
+    "is the operator's own edit.**"
+)
 
 
 def _norm(text: str) -> str:
@@ -402,8 +405,24 @@ _RESOLVE_CHECKS = {
         "This surface edits neither story file and moves no test case" in c
         and "the ruling is the operator's, and the resumed run applies it" in c
     ),
+    # One sentence, since the re-plan-only sentence below carries the same
+    # `defer`-then-`close` words.
     "closes a re-plan only once the operator made it": lambda c: (
-        "re-plans the rows instead" in c and "record `defer` until they have made it, then `close`" in c
+        "re-plans the rows instead (one story in place of the two, or another order) is the operator's own edit of "
+        "`sprint-status.yaml` and the story files: record `defer` until they have made it, then `close`" in c
+    ),
+    # execute.md escalates proposing only a re-plan for a later story outside
+    # the run, for a pair no move applies to, and for an AC between two
+    # decomposed children that holds a clause no run measured.
+    "says a sidecar may propose only a re-plan, and when": lambda c: (
+        "or it proposes only a re-plan, where no move fits: the later story is outside the run's scope, the two "
+        "stories are a pair no move applies to (a decomposed child beside a story that has a file, or children of "
+        "two parents), or an AC between two decomposed children holds a clause no run measured" in c
+    ),
+    "records no move for a re-plan-only sidecar": lambda c: (
+        "A sidecar that proposes only a re-plan has no move for this surface to record or for the resumed run to "
+        "apply, so whatever the operator rules for it is their own edit of those files: record `defer` until they "
+        "have made it, then `close`." in c
     ),
 }
 
@@ -437,9 +456,33 @@ def test_ucg_resolve_closes_a_coupled_stories_escalation():
         ),
         # A re-plan closed before it exists: the resume re-drives the old rows.
         (
-            "record `defer` until they have made it, then `close`",
-            "record `close`",
+            "and the story files: record `defer` until they have made it, then `close`",
+            "and the story files: record `close`",
             "closes a re-plan only once the operator made it",
+        ),
+        # The opening as it read before: every sidecar proposed a move.
+        (
+            "names, which narrows the earlier story's AC, or it proposes only a re-plan, where no move fits: the "
+            "later story is outside the run's scope, the two stories are a pair no move applies to (a decomposed "
+            "child beside a story that has a file, or children of two parents), or an AC between two decomposed "
+            "children holds a clause no run measured (`{ucg-root}/references/execute.md`",
+            "names, which narrows the earlier story's AC (`{ucg-root}/references/execute.md`",
+            "says a sidecar may propose only a re-plan, and when",
+        ),
+        # A re-plan-only sidecar closed as a move the operator approved.
+        (
+            " A sidecar that proposes only a re-plan has no move for this surface to record or for the resumed run "
+            "to apply, so whatever the operator rules for it is their own edit of those files: record `defer` until "
+            "they have made it, then `close`.",
+            "",
+            "records no move for a re-plan-only sidecar",
+        ),
+        # The lead as it read before: every close records a move, a re-plan-only
+        # sidecar included, though it has none.
+        (
+            "records a proposed move, and the resumed run makes it; a re-plan is the operator's own edit.**",
+            "records the move, and the resumed run makes it.**",
+            "has a close rule for the kind",
         ),
         # A children's move said to be written into story files neither child has.
         (

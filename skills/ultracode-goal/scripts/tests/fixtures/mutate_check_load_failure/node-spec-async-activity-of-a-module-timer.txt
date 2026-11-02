@@ -1,0 +1,17 @@
+✔ quick one (1.428747ms)
+ℹ Error: A resource generated asynchronous activity after the test ended. This activity created the error "Error: module timer" which triggered an uncaughtException event, caught by the test runner.
+✖ res.test.mjs (113.972347ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 122.282647
+
+✖ failing tests:
+
+test at res.test.mjs:1:1
+✖ res.test.mjs (113.972347ms)
+  'test failed'

@@ -75,13 +75,20 @@ run makes in place of the tool-action-per-fact environment sweep the resume
 rule otherwise costs (references/execute.md, resume). It asserts the epic
 branch, both hooks with the all-tools PreToolUse matcher, `"onFailure":
 "block"` on every guard item (an arming made by UCG 3.x or earlier has none,
-and its resume re-merges the hooks: references/execute.md), each UCG hook
-command splitting, the way the shell splits it, into `<env> uv run <script>`
-(an unquoted path with a space does not, and that hook never starts), the
-five injected hook env vars (accepted from the hook command strings OR the
-inherited process env, both of which preflight step 5 permits), and the UCG
+and its resume re-merges the hooks, unless a reason that is the operator's to
+fix stands beside that one (the story skills, or the Claude Code version):
+the resume escalates it first, and those reasons come first in `reasons`;
+references/execute.md), each UCG hook command splitting, the way the shell
+splits it, into `<env> uv run <script>` (an unquoted path with a space, or an
+assignment quoted with its name, does not, and that hook never starts; a
+shell operator, redirection or expansion fails it too), the five injected hook env vars
+(accepted from the hook command strings OR the inherited process env, both
+of which preflight step 5 permits), the UCG
 story skills (a manual deletion between spawns, or an interrupted UCG install
-or update, can remove them), reports the recall latch WITHOUT
+or update, can remove them), and the Claude Code version against the
+minimums step 1 enforces (`checks.cc_version`: below 2.1.295 Claude Code
+ignores the guard's "onFailure", and a version `claude --version` cannot
+give is reported with `read: false` and fails nothing), reports the recall latch WITHOUT
 certifying it (re-latching stays a model-owned Stage 1 step on every resume;
 a present latch also reports its `latch_version` and a derived `store_ok`
 colour, red for anything but a green latch v2),
@@ -91,7 +98,8 @@ decision-pending (an open escalation-<story>.json, which outranks the rest),
 story-boundary (no baseline), gate-owed (committed, green, un-gated, which
 requires --trace-output evidence and never fires without it; or a re-gate owed,
 a .regate-<story> marker naming HEAD), or mid-story.
-Exit 0 iff branch+hooks+env+skills are armed; the latch, the tracked fact and
+Exit 0 iff branch+hooks+env+skills are armed and the Claude Code version is
+not below a minimum; the latch, the tracked fact and
 the story block never move the exit code, because they inform model-owned actions rather than certify
 them.
 
@@ -106,7 +114,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -119,6 +126,14 @@ MIN_AUTOMEMORY = (2, 1, 59)
 # with a code other than 0 or 2, or times out refuses the call (2.1.295 added
 # it; older versions drop the key silently and let such a call through).
 MIN_HOOK_ONFAILURE = (2, 1, 295)
+# Each minimum by the name the cc_version blocker and the resume manifest give
+# it, in the order they list them.
+_CC_MINIMUMS = (
+    ("/goal", MIN_GOAL),
+    ("workflows", MIN_WORKFLOWS),
+    ("auto-memory", MIN_AUTOMEMORY),
+    ("hook-onFailure", MIN_HOOK_ONFAILURE),
+)
 
 # Root-level config filenames that signal a scaffolded JS/browser test framework
 # (playwright / cypress / jest / vitest). Pytest and npm-driven harnesses are
@@ -212,7 +227,8 @@ TEA_RENAMED_PREFIX = "bmad-tea-"
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
-    """Run a command, returning (returncode, stdout, stderr). 127 if not found."""
+    """Run a command, returning (returncode, stdout, stderr). 127 if it cannot
+    be started (not found, no execute bit, no program) or times out."""
     try:
         proc = subprocess.run(
             cmd,
@@ -222,7 +238,7 @@ def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
             timeout=30,
         )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         return 127, "", str(exc)
 
 
@@ -244,6 +260,16 @@ def _cc_version() -> tuple[str | None, tuple[int, int, int] | None]:
 
 def _meets(version: tuple[int, int, int] | None, minimum: tuple[int, int, int]) -> bool:
     return version is not None and version >= minimum
+
+
+def _below_minimums(version: tuple[int, int, int] | None) -> list[str]:
+    """Each minimum the version does not meet, as `<name>>=<minimum>`."""
+    return ["%s>=%d.%d.%d" % (name, *minimum) for name, minimum in _CC_MINIMUMS if not _meets(version, minimum)]
+
+
+def _cc_version_detail(cc_raw: str | None, below: list[str]) -> str:
+    """The cc_version blocker's words, which the resume manifest's reason opens with."""
+    return "Claude Code %s is below the minimum for: %s" % (cc_raw or "(version unreadable)", ", ".join(below))
 
 
 def _git(args: list[str], project_root: Path) -> tuple[int, str]:
@@ -780,19 +806,7 @@ def build_report(
 
     # Primitive versions: any one being below minimum blocks the unattended run.
     if not (goal_ok and workflows_ok and automemory_ok and hook_onfailure_ok):
-        below = []
-        if not goal_ok:
-            below.append("/goal>=%d.%d.%d" % MIN_GOAL)
-        if not workflows_ok:
-            below.append("workflows>=%d.%d.%d" % MIN_WORKFLOWS)
-        if not automemory_ok:
-            below.append("auto-memory>=%d.%d.%d" % MIN_AUTOMEMORY)
-        if not hook_onfailure_ok:
-            below.append("hook-onFailure>=%d.%d.%d" % MIN_HOOK_ONFAILURE)
-        detail = (
-            "Claude Code %s is below the minimum for: %s"
-            % (cc_raw or "(version unreadable)", ", ".join(below))
-        )
+        detail = _cc_version_detail(cc_raw, _below_minimums(cc_ver))
         blockers.append(
             {
                 "id": "cc_version",
@@ -985,43 +999,727 @@ def _hook_commands(settings: dict) -> list[tuple[str, str | None, str]]:
 
 
 # A leading `NAME=value` word: an assignment the shell applies to the command
-# that follows it, not a command of its own.
+# that follows it, not a command of its own. It is read on the word as written:
+# the shell takes a word for one only when its name and its "=" are unquoted
+# (`KEY='a b'` is one; `'KEY=a b'`, `"KEY=a b"`, `KEY"=v"` and `\KEY=v` are
+# the command dash and bash run, and exit 127 for).
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# The operators a shell reads outside quotes, longest first: those that end a
+# command or join it to another (POSIX sh's, a newline, and bash's `|&`), and
+# those that redirect its input or output (POSIX sh's, and bash's `&>`, `&>>`
+# and `<<<`). Claude Code runs a hook command through a shell, so any of them
+# makes the hook more than `<env> uv run <script>`.
+_CONTROL_OPERATORS = frozenset({"&&", "||", ";;", "|&", ";", "&", "|", "(", ")", "\n"})
+_SHELL_OPERATORS = tuple(
+    sorted(
+        _CONTROL_OPERATORS | {"<<<", "<<-", "&>>", "<<", ">>", "<&", ">&", "<>", ">|", "&>", "<", ">"},
+        key=len,
+        reverse=True,
+    )
+)
 
 
 def _last_path_part(word: str) -> str:
     return re.split(r"[/\\]", word)[-1]
 
 
+# A `$` the shell expands before it runs the command: a parameter (`$HOME`,
+# `$1`, `$@`), `${...}`, `$(...)`, `$((...))` or bash's `$[...]`, in double
+# quotes or outside them, and outside them bash's `$'...'` and `$"..."` too,
+# which dash reads as a `$` and a quoted word (`$'25'` is `25` in bash, `$25`
+# in dash). A `$` before anything else (a space, the end of the word) stays a
+# `$`. A backtick starts a command substitution in double quotes or outside
+# them; outside them a `*`, `?` or `[` makes a word a pattern the shell
+# matches against file names, and a `{` may start bash's brace expansion
+# (`{a,b}`).
+_EXPANDS_IN_DOUBLE_QUOTES = re.compile(r"\$[A-Za-z0-9_{(\[@*#?$!-]|`")
+_EXPANDS = re.compile(r"\$[A-Za-z0-9_{(\[@*#?$!'\"-]|[`*?[{]")
+_PARAMETER = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])")
+_BRACKET = re.compile(r"\[[^\]\s]*\]?")
+
+
+def _expansion_end(command: str, index: int) -> int:
+    """Where the expansion that starts at `index` (`_EXPANDS`) ends, to show
+    it in a problem: past its closing backtick, quote, parenthesis, brace or
+    bracket, nested parentheses and braces counted and quotes not read, or at
+    the end of the command where none closes it."""
+    opener = command[index : index + 2]
+    if opener[0] == "{" or opener in ("$(", "${"):
+        bracket = "(" if opener == "$(" else "{"
+        depth = 0
+        for cursor in range(index, len(command)):
+            if command[cursor] == bracket:
+                depth += 1
+            elif command[cursor] == (")" if bracket == "(" else "}"):
+                depth -= 1
+                if depth == 0:
+                    return cursor + 1
+        return len(command)
+    if opener[0] == "`" or opener in ("$'", '$"'):
+        quote = opener[-1] if opener[0] == "$" else "`"
+        close = command.find(quote, index + (2 if opener[0] == "$" else 1))
+        return len(command) if close < 0 else close + 1
+    if opener == "$[":
+        match = _BRACKET.match(command, index + 1)
+    else:
+        match = (_BRACKET if opener[0] == "[" else _PARAMETER).match(command, index)
+    return match.end() if match is not None else index + 1
+
+
+def _substitutes_a_command(expansion: str) -> bool:
+    """Is this expansion a command substitution, which runs a command that
+    reads the stdin the script would read (`$(cat)`, a backtick), rather
+    than arithmetic (`$((1+1))`) or a parameter?"""
+    return expansion.startswith("`") or (expansion.startswith("$(") and not expansion.startswith("$(("))
+
+
+def _shell_tokens(command: str) -> list[tuple[str, str, str, int, int]] | None:
+    """The command's tokens as a POSIX shell reads them, or None when its
+    quoting does not parse (a quote left open).
+
+    Each is (kind, text, raw, start, end): kind "word", with its text the word
+    once its quotes and escapes are removed and raw the word as written, or
+    "control" or "redirect" for an operator, with a redirection's file
+    descriptor (`2>`) in it, or "expansion" for what the shell expands
+    (`_EXPANDS`), with its text as far as `_expansion_end` reads it,
+    right after the word that holds it. start and end place the token in
+    `command`. Single quotes keep everything to the next one; in double quotes
+    a backslash escapes only `$`, a backtick, `"`, `\\` and a newline; outside
+    them it escapes the next character, and a backslash before a newline joins
+    the two lines. A `#` that starts a word starts a comment, to the end of
+    the line. Nothing is expanded: a word holds `$NAME` as written, beside the
+    expansion token that names it.
+    """
+    tokens: list[tuple[str, str, str, int, int]] = []
+    expansions: list[tuple[str, str, str, int, int]] = []  # in the word under way
+    text: list[str] = []
+    raw: list[str] = []
+    start = -1  # where the word under way starts; -1 while there is none
+    index, size = 0, len(command)
+
+    def flush(end: int) -> None:
+        nonlocal start
+        if start >= 0:
+            tokens.append(("word", "".join(text), "".join(raw), start, end))
+            tokens.extend(expansions)
+            expansions.clear()
+            text.clear()
+            raw.clear()
+            start = -1
+
+    def expansion(at: int) -> None:
+        end = _expansion_end(command, at)
+        expansions.append(("expansion", command[at:end], command[at:end], at, end))
+
+    while index < size:
+        char = command[index]
+        if start < 0 and char == "#":
+            newline = command.find("\n", index)
+            index = size if newline < 0 else newline
+            continue
+        if char in " \t":
+            flush(index)
+            index += 1
+            continue
+        if char == "\\" and command.startswith("\\\n", index):
+            index += 2
+            continue
+        operator = next((o for o in _SHELL_OPERATORS if command.startswith(o, index)), None)
+        if operator is not None:
+            begin = index
+            # A redirection's file descriptor: digits alone, right before it.
+            if operator not in _CONTROL_OPERATORS and start >= 0 and re.fullmatch(r"[0-9]+", "".join(raw)):
+                begin, start = start, -1
+                text.clear()
+                raw.clear()
+            flush(index)
+            kind = "control" if operator in _CONTROL_OPERATORS else "redirect"
+            tokens.append((kind, command[begin : index + len(operator)], operator, begin, index + len(operator)))
+            index += len(operator)
+            continue
+        if start < 0:
+            start = index
+        if char == "\\":
+            escaped = command[index + 1 : index + 2]
+            text.append(escaped or "\\")  # a backslash that ends the command stays
+            raw.append(command[index : index + 2])
+            index += 2
+        elif char == "'":
+            close = command.find("'", index + 1)
+            if close < 0:
+                return None
+            text.append(command[index + 1 : close])
+            raw.append(command[index : close + 1])
+            index = close + 1
+        elif char == '"':
+            cursor = index + 1
+            while cursor < size and command[cursor] != '"':
+                if command[cursor] == "\\" and command[cursor + 1 : cursor + 2] in ("$", "`", '"', "\\", "\n"):
+                    if command[cursor + 1] != "\n":
+                        text.append(command[cursor + 1])
+                    cursor += 2
+                    continue
+                if _EXPANDS_IN_DOUBLE_QUOTES.match(command, cursor):
+                    expansion(cursor)
+                text.append(command[cursor])
+                cursor += 1
+            if cursor >= size:
+                return None
+            raw.append(command[index : cursor + 1])
+            index = cursor + 1
+        else:
+            if _EXPANDS.match(command, index):
+                expansion(index)
+            text.append(char)
+            raw.append(char)
+            index += 1
+    flush(size)
+    return tokens
+
+
+# How uv reads the options of a hook command, as uv 0.12.15 defines them (the
+# global ones, and those of `uv run` and of each argument group it reads, the
+# ones `--help` hides too), each tried against that binary. Before `run` uv
+# takes its global options alone (`uv --python 3.12 run` exits 2), after it
+# those and `uv run`'s own. A flag takes no value (`--offline=true` exits 2);
+# an option that takes one takes it glued (`--python=3.12`, `-p3.12`) or in
+# the next word, which must not start with "-" (`--python -q` exits 2). Read
+# as flags, values took the script's place, and read as uv's, an option uv
+# refuses there passed. An option a later uv adds reads as one uv does not
+# take, which fails safe: the re-merge rewrites the command as preflight does.
+_UV_GLOBAL_FLAGS = frozenset(
+    {
+        "--allow-python-downloads", "--isolated", "--managed-python", "-n", "--native-tls", "--no-cache",
+        "--no-cache-dir", "--no-color", "--no-config", "--no-installer-metadata", "--no-managed-python",
+        "--no-native-tls", "--no-offline", "--no-preview", "--no-progress", "--no-python-downloads",
+        "--no-system-certs", "--offline", "--preview", "-q", "--quiet", "--system-certs", "-v", "--verbose",
+    }
+)
+_UV_GLOBAL_VALUES = frozenset(
+    {
+        "--allow-insecure-host", "--cache-dir", "--color", "--config-file", "--directory", "--preview-feature",
+        "--preview-features", "--project", "--python-fetch", "--python-preference", "--trusted-host",
+    }
+)
+_UV_RUN_FLAGS = frozenset(
+    {
+        "--active", "--all-extras", "--all-groups", "--all-packages", "--binary", "--build", "--build-isolation",
+        "--compile", "--compile-bytecode", "--dev", "--editable", "--exact", "--force-reinstall", "--frozen",
+        "--gui-script", "--inexact", "--locked", "--no-active", "--no-all-extras", "--no-binary", "--no-build",
+        "--no-build-isolation", "--no-compile", "--no-compile-bytecode", "--no-default-groups", "--no-dev",
+        "--no-editable", "--no-env-file", "--no-exact", "--no-frozen", "--no-index", "--no-locked", "--no-project",
+        "--no-refresh", "--no-reinstall", "--no-sources", "--no-sync", "--no-upgrade", "--no_workspace",
+        "--only-dev", "--pre", "--refresh", "--reinstall", "-s", "--script", "--show-resolution", "-U", "--upgrade",
+    }
+)
+_UV_RUN_VALUES = frozenset(
+    {
+        "-C", "--config-setting", "--config-settings", "--config-settings-package", "--default-index", "--env-file",
+        "--exclude-newer", "--exclude-newer-package", "--extra", "--extra-index-url", "-f", "--find-links",
+        "--fork-strategy", "--group", "-i", "--index", "--index-strategy", "--index-url", "--keyring-provider",
+        "--link-mode", "--max-recursion-depth", "--no-binary-package", "--no-build-isolation-package",
+        "--no-build-package", "--no-editable-package", "--no-extra", "--no-group", "--no-sources-package",
+        "--only-group", "-P", "-p", "--package", "--prerelease", "--prerelease-package", "--python",
+        "--python-platform", "--refresh-package", "--reinstall-package", "--resolution", "--upgrade-group",
+        "--upgrade-package", "-w", "--with", "--with-editable", "--with-requirements",
+    }
+)
+# The spellings of an option uv names another way in its errors.
+_UV_ALIASES = {
+    "--trusted-host": "--allow-insecure-host", "--compile": "--compile-bytecode",
+    "--config-settings": "--config-setting", "-C": "--config-setting", "-f": "--find-links", "-i": "--index-url",
+    "--no-exact": "--inexact", "--no-cache-dir": "--no-cache", "-n": "--no-cache",
+    "--no-compile": "--no-compile-bytecode", "--no_workspace": "--no-project",
+    "--preview-feature": "--preview-features", "-p": "--python", "-q": "--quiet",
+    "--force-reinstall": "--reinstall", "-s": "--script", "-U": "--upgrade", "-P": "--upgrade-package",
+    "-v": "--verbose", "-w": "--with",
+}
+# The options uv takes twice in one place. It refuses any other given twice
+# there (`--offline --offline` exits 2), though once before `run` and once
+# after it is fine.
+_UV_REPEATABLE = frozenset(
+    {
+        "--allow-insecure-host", "--config-setting", "--config-settings-package", "--env-file",
+        "--exclude-newer-package", "--extra", "--extra-index-url", "--find-links", "--group", "--index",
+        "--no-binary-package", "--no-build-isolation-package", "--no-build-package", "--no-editable-package",
+        "--no-extra", "--no-group", "--no-sources-package", "--only-group", "--prerelease-package",
+        "--preview-features", "--quiet", "--refresh-package", "--reinstall-package", "--upgrade-group",
+        "--upgrade-package", "--verbose", "--with", "--with-editable", "--with-requirements",
+    }
+)
+# The pairs of options uv 0.12.15 refuses together, by the names uv gives
+# them, measured by running every pair of its options through `sh -c`, each
+# with a value it takes alone: those it refuses in one place, on either side
+# of `run` ("cannot be used with", exit 2), and those it refuses with one
+# before `run` and the other after it. The two lists differ. clap's own pairs
+# hold in one place only (`uv -q run -v` runs the script), and uv's own
+# (`--offline` with `--refresh`, `--managed-python` with
+# `--python-preference`) in both. A flag beside its negation uv reads
+# last-wins in one place (`uv run --offline --no-offline` runs the script),
+# but for `--allow-python-downloads`, and refuses across `run` ("Boolean
+# flags on different levels are currently not supported").
+_UV_CONFLICTS = frozenset(
+    frozenset(pair)
+    for pair in (
+        ("--all-extras", "--extra"),
+        ("--all-extras", "--only-group"),
+        ("--all-groups", "--only-dev"),
+        ("--all-groups", "--only-group"),
+        ("--all-packages", "--package"),
+        ("--allow-python-downloads", "--no-python-downloads"),
+        ("--color", "--no-color"),
+        ("--dev", "--only-group"),
+        ("--extra", "--only-group"),
+        ("--frozen", "--locked"),
+        ("--frozen", "--no-sources"),
+        ("--frozen", "--upgrade"),
+        ("--group", "--only-dev"),
+        ("--group", "--only-group"),
+        ("--gui-script", "--script"),
+        ("--locked", "--upgrade"),
+        ("--managed-python", "--python-preference"),
+        ("--no-dev", "--only-dev"),
+        ("--no-managed-python", "--python-preference"),
+        ("--no-project", "--package"),
+        ("--offline", "--refresh"),
+        ("--offline", "--refresh-package"),
+        ("--quiet", "--verbose"),
+    )
+)
+_UV_ACROSS_CONFLICTS = frozenset(
+    frozenset(pair)
+    for pair in (
+        ("--allow-python-downloads", "--no-python-downloads"),
+        ("--managed-python", "--python-preference"),
+        ("--native-tls", "--no-native-tls"),
+        ("--no-managed-python", "--python-preference"),
+        ("--offline", "--no-offline"),
+        ("--offline", "--refresh"),
+        ("--offline", "--refresh-package"),
+        ("--preview", "--no-preview"),
+        ("--system-certs", "--no-system-certs"),
+    )
+)
+# The options that end a command line without running the script, as the
+# predicate the problem names. Each prints and exits 0, so a guard handed to
+# one never runs and Claude Code reads its exit as no objection: uv's version
+# and help before `run`, its help after it, and `--show-settings` in either
+# place. `uv run -m <name>` runs a module, not a script file.
+_PRINTS_VERSION = "print its version and exit, not run a script"
+_PRINTS_HELP = "print its help and exit, not run a script"
+_PRINTS_SETTINGS = "print its settings and exit, not run a script"
+_UV_STOPS = {
+    "-V": _PRINTS_VERSION, "--version": _PRINTS_VERSION, "-h": _PRINTS_HELP, "--help": _PRINTS_HELP,
+    "--show-settings": _PRINTS_SETTINGS,
+}
+_UV_RUN_STOPS = {
+    "-m": "run a module, not a script", "--module": "run a module, not a script",
+    "-h": _PRINTS_HELP, "--help": _PRINTS_HELP, "--show-settings": _PRINTS_SETTINGS,
+}
+# The values uv 0.12.15 takes for each option whose value is one of a set:
+# clap's names and aliases, hidden ones included, read from uv's sources, and
+# each run against the binary in both spellings (`--color never`,
+# `--color=never`) and, for a global one, on both sides of `run`. Case
+# counts. Any other value is a usage error, exit 2, before uv runs anything.
+_MANYLINUX = ["manylinux2014"] + ["manylinux_2_%d" % minor for minor in (17, 28, *range(31, 41))]
+_UV_CHOICES = {
+    "--color": frozenset({"auto", "always", "never"}),
+    "--fork-strategy": frozenset({"fewest", "requires-python"}),
+    "--index-strategy": frozenset(
+        {"first-index", "first-match", "unsafe-first-match", "unsafe-any-match", "unsafe-best-match"}
+    ),
+    "--keyring-provider": frozenset({"disabled", "subprocess"}),
+    "--link-mode": frozenset({"clone", "reflink", "copy", "hardlink", "symlink"}),
+    "--prerelease": frozenset({"disallow", "allow", "if-necessary", "explicit", "if-necessary-or-explicit"}),
+    "--python-fetch": frozenset({"automatic", "manual", "never"}),
+    "--python-preference": frozenset({"only-managed", "managed", "system", "only-system"}),
+    "--resolution": frozenset({"highest", "lowest", "lowest-direct"}),
+    "--python-platform": frozenset(
+        [
+            "windows", "linux", "macos", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "i686-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl", "s390x-unknown-linux-gnu", "powerpc64le-unknown-linux-gnu",
+            "loongarch64-unknown-linux-gnu", "riscv64-unknown-linux", "x86_64-apple-darwin", "aarch64-apple-darwin",
+            "x86_64-linux-android", "aarch64-linux-android", "wasm32-pyodide2024", "wasm32-pyodide2025",
+            "arm64-apple-ios", "arm64-apple-ios-simulator", "x86_64-apple-ios-simulator",
+        ]
+        + ["%s-%s" % (arch, tag) for arch in ("x86_64", "aarch64", "ppc64le", "s390x") for tag in _MANYLINUX]
+        + ["%s_%s" % (tag, arch) for arch in ("x86_64", "aarch64", "ppc64le", "s390x") for tag in _MANYLINUX]
+        + ["loongarch64-manylinux_2_%d" % minor for minor in range(36, 41)]
+        + ["manylinux_2_%d_loongarch64" % minor for minor in range(36, 41)]
+    ),
+}
+# The options whose value is a whole number, with the largest uv takes. clap
+# reads it as a signed number before it checks the range, so `+5`, `007` and a
+# glued `=-0` pass, while `5.0`, `1_000` and ` 5` exit 2.
+_UV_NUMBERS = {"--max-recursion-depth": 4294967295}
+_WHOLE_NUMBER = re.compile(r"[+-]?[0-9]+")
+# The value options uv 0.12.15 takes an empty value for, in its own word
+# (`--with ''`) or glued (`--with=`), by the name uv gives each. Each of the
+# others, given one, exits 2 before uv runs anything ("a value is required",
+# or "invalid value ''"). An empty `--python` asks for no Python, so the
+# script's header chooses it.
+_UV_EMPTY_OK = frozenset(
+    {
+        "--allow-insecure-host", "--default-index", "--env-file", "--extra-index-url", "--find-links", "--index",
+        "--index-url", "--python", "--with", "--with-editable", "--with-requirements",
+    }
+)
+# The options that make `uv run` read the script's lockfile (`<script>.lock`
+# beside it), which preflight never writes and the skill does not ship: uv
+# 0.12.15 exits 2 on either, "Unable to find lockfile for Python script".
+_UV_LOCKFILE_FLAGS = ("--frozen", "--locked")
+# The Python both hooks' headers require (`requires-python = ">=3.11"`), as
+# (major, minor). Given `--python`, uv runs the script on the Python that
+# request selects, the newest installed one it admits, with only a warning
+# when the header does not allow it: uv 0.12.15 ran `--python 3.10` on 3.10.21
+# and `--python '<=3.11'` on 3.10.21 where no 3.11.0 was installed, and on
+# 3.9 the guard crashes at import (exit 1). Which Python a request selects
+# depends on what the machine has installed, so the minimum holds everywhere
+# only for a request whose every Python meets it.
+_SCRIPT_PYTHON_MINIMUM = (3, 11)
+# How uv reads a `--python` request as a version, in any case, trimmed: an
+# optional implementation name, joined by nothing, "@" or "-", then a version
+# (`3.10`, `v3.10.21`, `310`, with a suffix such as `t`, `+gil`, `rc1` or a
+# platform) or a set of specifiers (`>=3.11,<3.13`). uv 0.12.15 reads
+# whitespace after the name or its "@" or "-" as nothing (`cpython 3.10`,
+# `cpython@ 3.10` and `cpython- 3.10` ran 3.10), and none before them
+# (`cpython @3.10` named no Python it found). It joins a name to a set of
+# specifiers as it joins one to a version (`cpython-<3.11` and
+# `cpython@<3.11` ran 3.10). A name alone, `any` or
+# `default` asks for any version. A path or a program name names none.
+_PY_IMPLEMENTATION = r"(?:cpython|cp|python|pypy|pp|graalpy|gp|pyodide)"
+_PY_ANY_VERSION = re.compile(r"%s@?|any|default" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII)
+_PY_VERSION = re.compile(
+    r"(?:%s[@-]?\s*)?v?(?P<version>[0-9]+(?:\.[0-9]+){0,2})[a-z0-9_+.-]*" % _PY_IMPLEMENTATION,
+    re.IGNORECASE | re.ASCII,
+)
+_PY_SPECIFIERS = re.compile(
+    r"(?:%s[@-]?\s*)?(?P<specifiers>[<>=!~].*)" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII
+)
+_PY_SPECIFIER = re.compile(
+    r"\s*(?P<operator>===|==|!=|~=|<=|>=|<|>)\s*v?(?P<version>[0-9]+(?:\.[0-9]+)*)(?:\.\*)?\s*", re.ASCII
+)
+# A word that names a Python, by name or by path. `uv run` reads the script's
+# inline metadata (its `# /// script` header) only when it runs the script
+# itself. Handed to `python`, or to any other program, the script runs as that
+# program's argument, so the header's Python minimum does not hold, and the
+# script is no longer isolated from the project it runs in. uv 0.12.15, given
+# `uv run python <script>`, ran Python 3.10 where a `.python-version` named it,
+# created a project's `.venv` and `uv.lock`, and exited 1 without running the
+# script when that project failed to build; and it found no `python3.12` to
+# spawn, with a 3.12 it manages installed, whenever it selected another Python.
+_PYTHON = re.compile(r"^python(?:\d+(?:\.\d+)?)?w?(?:\.exe)?$", re.IGNORECASE)
+
+
+def _number(digits: str) -> int:
+    """A run of ASCII digits as a number, one too long for int() to read
+    from a string (past 4300 digits) read as the largest a version holds."""
+    digits = digits.lstrip("0") or "0"
+    return int(digits) if len(digits) <= 9 else 999_999_999
+
+
+def _release(version: str) -> tuple[int, int]:
+    """(major, minor) of a version uv reads, `0` for a minor it leaves out.
+    Without a dot uv reads the first digit as the major (`310` is 3.10,
+    `0312` 3.12). A specifier's version is read the same way, which can only
+    lower its bound (`>=310` reads as 3.10, never as 310)."""
+    if "." not in version:
+        version = version.lstrip("0") or "0"
+        version = version[0] + ("." + version[1:] if len(version) > 1 else "")
+    parts = [_number(part) for part in version.split(".")]
+    return parts[0], parts[1] if len(parts) > 1 else 0
+
+
+def _python_admits_older(request: str) -> bool:
+    """Does this `--python` request admit a Python below the hooks' minimum?
+
+    True for a version below it, a set of specifiers whose lower bound is
+    below it (`<3.12`, `>=3.9`, `!=3.12` set none above it), and a request
+    for any version. False for an empty request, which leaves the choice to
+    the script's header, and for one this cannot read as a version (a path,
+    a program name), which is not judged.
+    """
+    request = request.strip()
+    if not request:
+        return False
+    if _PY_ANY_VERSION.fullmatch(request):
+        return True
+    plain = _PY_VERSION.fullmatch(request)
+    if plain is not None:
+        return _release(plain.group("version")) < _SCRIPT_PYTHON_MINIMUM
+    specified = _PY_SPECIFIERS.fullmatch(request)
+    if specified is None:
+        return False
+    lowest = (0, 0)
+    for specifier in specified.group("specifiers").split(","):
+        clause = _PY_SPECIFIER.fullmatch(specifier)
+        if clause is None:
+            return False
+        if clause.group("operator") not in ("<", "<=", "!="):
+            lowest = max(lowest, _release(clause.group("version")))
+    return lowest < _SCRIPT_PYTHON_MINIMUM
+
+
+def _uv_options(words: list[str], index: int, after_run: bool) -> tuple[int, str | None, list[str]]:
+    """(index of the first word past uv's options, why uv would not run the
+    script as its header asks or None, each option read by the name uv gives
+    it).
+
+    Before `run` the options are uv's global ones, and `--` there leaves uv no
+    command; after it `uv run`'s own join them, and `--` ends them. A short
+    cluster (`-qp`) reads letter by letter: a letter that takes a value takes
+    the rest of the word, or the next word when it is the last. A value is
+    judged where uv's parser judges it, against a fixed set, as a number or
+    as empty (`_UV_CHOICES`, `_UV_NUMBERS`, `_UV_EMPTY_OK`), and a Python
+    request against the minimum the hooks' headers set
+    (`_SCRIPT_PYTHON_MINIMUM`).
+    """
+    who = "uv run" if after_run else "uv"
+    flags = _UV_GLOBAL_FLAGS | _UV_RUN_FLAGS if after_run else _UV_GLOBAL_FLAGS
+    values = _UV_GLOBAL_VALUES | _UV_RUN_VALUES if after_run else _UV_GLOBAL_VALUES
+    stops = _UV_RUN_STOPS if after_run else _UV_STOPS
+    read: list[str] = []
+
+    def refuse(what: str) -> str:
+        return "%s would %s, and run no script" % (who, what)
+
+    def unknown(name: str) -> str:
+        if not after_run and (name in _UV_RUN_FLAGS or name in _UV_RUN_VALUES or name in _UV_RUN_STOPS):
+            return refuse('refuse "%s", an option it takes only after run' % name)
+        return refuse('refuse "%s", an option it does not take' % name)
+
+    def note(name: str) -> str | None:
+        option = _UV_ALIASES.get(name, name)
+        if option in read and option not in _UV_REPEATABLE:
+            return refuse('refuse "%s" twice' % option)
+        for earlier in read:
+            if frozenset((earlier, option)) in _UV_CONFLICTS:
+                return refuse('refuse "%s" beside "%s"' % (earlier, option))
+        read.append(option)
+        return None
+
+    def value_problem(name: str, value: str | None, separate: bool) -> str | None:
+        """Why uv would not take `value`, glued on or the next word (None when
+        the command ends first, which leaves no script to find)."""
+        if value is None:
+            return None
+        bad = refuse('not take "%s" as the value of "%s"' % (value, name))
+        if separate and value.startswith("-") and value != "-":
+            return bad  # uv reads the word as an option
+        option = _UV_ALIASES.get(name, name)
+        if value == "" and option not in _UV_EMPTY_OK:
+            return bad
+        if option == "--python" and _python_admits_older(value):
+            return (
+                'uv run would let "%s %s" select a Python below the %d.%d minimum the script\'s header sets, and '
+                "uv runs the script on one with only a warning, so that minimum would not hold"
+                % ((name, value.strip()) + _SCRIPT_PYTHON_MINIMUM)
+            )
+        if name in _UV_CHOICES:
+            return None if value in _UV_CHOICES[name] else bad
+        if name in _UV_NUMBERS:
+            # Its digits past the sign and leading zeros, so no word is too
+            # long for int() to read.
+            digits = value.lstrip("+-").lstrip("0") or "0"
+            whole = _WHOLE_NUMBER.fullmatch(value) is not None and (digits == "0" or not value.startswith("-"))
+            return None if whole and len(digits) <= 10 and int(digits) <= _UV_NUMBERS[name] else bad
+        return None
+
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            if after_run:
+                return index + 1, None, read
+            return index, 'uv would take no command after "--", and run no script', read
+        if not word.startswith("-") or word == "-":
+            return index, None, read
+        index += 1
+        if word.startswith("--"):
+            name, glued, value = word.partition("=")
+            if name in stops:
+                return index - 1, "%s would %s" % (who, stops[name]), read
+            if name in values:
+                if glued:
+                    problem = value_problem(name, value, separate=False)
+                else:
+                    problem = value_problem(name, words[index] if index < len(words) else None, separate=True)
+                    index += 1  # its value is the next word
+            elif name in flags:
+                problem = refuse('refuse "%s", a value for an option that takes none' % word) if glued else None
+            else:
+                problem = unknown(name)
+            problem = problem or note(name)
+            if problem is not None:
+                return index - 1, problem, read
+            continue
+        for position, letter in enumerate(word[1:], start=1):
+            name = "-" + letter
+            if name in stops:
+                return index - 1, "%s would %s" % (who, stops[name]), read
+            if name not in values and name not in flags:
+                return index - 1, unknown(name), read
+            problem = None
+            if name in values:
+                if position < len(word) - 1:
+                    # clap takes `-p=3.12` as `-p3.12`: one "=" after the
+                    # letter is no part of the value (`-C=` gives an empty one).
+                    glued = word[position + 1 :]
+                    problem = value_problem(name, glued[1:] if glued.startswith("=") else glued, separate=False)
+                else:
+                    problem = value_problem(name, words[index] if index < len(words) else None, separate=True)
+                    index += 1  # its value is the next word
+            problem = problem or note(name)
+            if problem is not None:
+                return index - 1, problem, read
+            if name in values:
+                break
+    return index, None, read
+
+
 def _command_problem(command: str, script: str) -> str | None:
-    """Why the shell would not start `script` from this hook command, or None.
+    """Why `script` would not run from this hook command as preflight writes
+    it, or None.
 
     Preflight writes each UCG hook as `<env> uv run '<path to the script>'`:
     leading NAME=value words, then `uv run` and the script path, with each
     injected value and the path in single quotes. Claude Code hands the string
     to a shell, which splits it at every unquoted space, so an unquoted value
     or path that holds one (a project under `~/My Projects`) makes the rest of
-    it the command the shell runs, or the file `uv run` is given, and the hook
-    never starts. Under the guard's `"onFailure": "block"` every tool call is
-    then refused, and a Stop hook that cannot start is skipped without a word.
-    The command is split with POSIX shell rules (shlex) and never run, so the
-    script path is not opened: a moved skill is not this check's to find.
+    it the command the shell runs (exit 127), or the file `uv run` is given
+    (uv exits 2, or 1 where the project it syncs first fails to build or its
+    requirements cannot be satisfied, though 2 where the network fails), and
+    the hook never starts. Under the guard's `"onFailure": "block"` each
+    refuses every tool call. On Stop, exit 127 and exit 1 are non-blocking
+    errors, so each stop goes through uncounted, and exit 2 sends each stop
+    back, up to eight times in a row. The command is read as a POSIX shell
+    reads it (`_shell_tokens`) and never run, so the script path is not
+    opened: a moved skill is not this check's to find.
+
+    A leading word is an assignment only as the shell takes one, with its
+    name and "=" unquoted: `'KEY=a b'` is the command the shell runs. A
+    control operator (`;`, `&`, `&&`, `||`, `|`, a newline, a parenthesis)
+    or a redirection (`<`, `>`, `2>&1`) outside quotes fails the command,
+    before or after the script: preflight writes none, and with one the
+    script may read no hook event (`< /dev/null`, or `&`, which hands it an
+    empty stdin), its verdict or reason may not reach Claude Code (`>
+    /dev/null`, `2>&1`), or its exit code may be another command's (`||
+    true`, `; true`). Even a harmless one (`&& true`) is read as a problem,
+    since the re-merge that answers it costs nothing. A comment that starts a
+    word ends the command there, as it does in the shell.
+
+    So does an expansion (`_EXPANDS`): a `$` that starts one outside single
+    quotes (`$HOME`, `${A}`, `"$(cat)"`, `$((1))`, bash's `$'...'`), a
+    backtick outside single quotes, or outside any quotes a `*`, `?`, `[` or
+    `{`. The shell replaces it before uv starts, so the words uv and the
+    script get are not the ones read here: a command substitution can read
+    the hook event first (`"$(cat)"` leaves the guard an empty stdin, and the
+    guard then allows the call), `KEY=${A:- uv run <script> }` is one
+    assignment, so the shell runs nothing, `-p $X` with X unset hands `-p`
+    the script, and `--with *` hands uv a file in the hook's folder as the
+    script. Preflight writes none outside single quotes, so even one the
+    shell leaves as written (`KEY=a*`) is read as a problem. A leading `~`,
+    which the shell turns into the home folder, is read as written: it
+    moves no word and runs nothing.
+
+    uv's options are read as uv reads them (`uv run --python 3.12 <script>`
+    starts the script; `_uv_options`). A command uv would refuse, or one where
+    it prints a version, help or settings and exits (`uv --version`, `uv run
+    --help`), starts nothing: under the guard's key the first refuses every
+    call, and the second's exit 0 reads as no objection. So does one with
+    `--frozen` or `--locked`, which makes uv look for a lockfile beside the
+    script that preflight never writes (`_UV_LOCKFILE_FLAGS`), and one with a
+    pair of options uv refuses together, in one place or across `run`
+    (`_UV_CONFLICTS`, `_UV_ACROSS_CONFLICTS`). A command that
+    hands the script to a Python (`uv run python <script>`) fails too, since
+    the script then runs without its inline metadata (`_PYTHON`), and so does
+    a Python request that admits one below the minimum the script's header
+    sets (`--python 3.10`, `-p 3`, `--python '<3.12'`), since uv runs the
+    script on the Python a request selects with only a warning.
+
+    A value is judged where uv's parser judges it before it runs anything:
+    against a fixed set (`--color`, `--link-mode`, the others in
+    `_UV_CHOICES`), as a whole number (`--max-recursion-depth`), or as empty
+    (refused for every option but those in `_UV_EMPTY_OK`). The values of the
+    other options take forms this check does not enumerate (a path, a URL, a
+    host, a requirement, a package, extra or group name, a date or a span of
+    time, a `KEY=VALUE` setting, a Python named by a path or a program name),
+    so one uv's parser refuses (an `--extra` name with a space in it, `-w-x`)
+    passes here, as does one uv refuses only when it runs (a `--python 3.99`
+    it cannot find, `-p-3`). The values of the leading NAME=value words are
+    not read either: what a variable does to uv or Python (`PATH`,
+    `UV_PYTHON`, `UV_FROZEN`, `PYTHONINSPECT`) is theirs to find when the hook
+    runs.
     """
-    try:
-        words = shlex.split(command)
-    except ValueError:
+    tokens = _shell_tokens(command)
+    if tokens is None:
         return "its quoting does not parse"
+    for position, (kind, shown, _, _, _) in enumerate(tokens):
+        if kind == "expansion":
+            reads_stdin = (
+                ", and the command it runs for it can read the hook event Claude Code sends before the script does"
+                if _substitutes_a_command(shown)
+                else ""
+            )
+            return (
+                "the shell would expand %s before uv starts, so the words uv and the script get need not be the "
+                "ones written here%s" % (json.dumps(shown), reads_stdin)
+            )
+        if kind == "control":
+            return (
+                "the shell would read %s as a control operator, so the command would be more than <env> uv run "
+                "<script>, and the exit code and output Claude Code reads need not be the script's" % json.dumps(shown)
+            )
+        if kind == "redirect":
+            target = tokens[position + 1] if position + 1 < len(tokens) else None
+            if target is not None and target[0] == "word":
+                shown = command[tokens[position][3] : target[4]]
+            return (
+                "the shell would read %s as a redirection, so the script would not read the hook event Claude "
+                "Code sends, or what it writes would not reach Claude Code where it reads it" % json.dumps(shown)
+            )
     index = 0
-    while index < len(words) and _ASSIGNMENT.match(words[index]):
+    while index < len(tokens) and _ASSIGNMENT.match(tokens[index][2]):
         index += 1
-    words = words[index:]
+    words = [word for _, word, _, _, _ in tokens[index:]]
+    if words and _ASSIGNMENT.match(words[0]):
+        return (
+            'the shell would run %s as the command, not uv, since a word whose name or "=" is quoted is no '
+            "assignment" % json.dumps(words[0])
+        )
     if not words or _last_path_part(words[0]) not in ("uv", "uv.exe"):
         return "the shell would run %s as the command, not uv" % (json.dumps(words[0]) if words else "nothing")
-    if len(words) < 2 or words[1] != "run":
-        return "uv is given %s, not run" % (json.dumps(words[1]) if len(words) > 1 else "nothing")
-    index = 2
-    while index < len(words) and words[index].startswith("-"):
-        index += 1
+    index, problem, before = _uv_options(words, 1, after_run=False)
+    if problem is not None:
+        return problem
+    if index >= len(words) or words[index] != "run":
+        return "uv is given %s, not run" % (json.dumps(words[index]) if index < len(words) else "nothing")
+    index, problem, read = _uv_options(words, index + 1, after_run=True)
+    if problem is not None:
+        return problem
+    for later in read:
+        for earlier in before:
+            if frozenset((earlier, later)) in _UV_ACROSS_CONFLICTS:
+                return 'uv would refuse "%s" before run beside "%s" after it, and run no script' % (earlier, later)
+    for flag in _UV_LOCKFILE_FLAGS:
+        if flag in read:
+            return (
+                'uv run would find no lockfile for the script, which "%s" needs and preflight never writes, '
+                "and run no script" % flag
+            )
+    # `uv run --script` (or `-s`, or `--gui-script`) runs the word after its
+    # options as the script, even when that word is `python`.
+    if (
+        index < len(words)
+        and "--script" not in read
+        and "--gui-script" not in read
+        and _PYTHON.match(_last_path_part(words[index]))
+    ):
+        return (
+            "uv run would hand the script to %s without reading its inline metadata, so the Python minimum "
+            "its header sets would not hold, and the script would run in the project's environment, where "
+            "there is one, not an isolated one" % json.dumps(words[index])
+        )
     if index >= len(words) or _last_path_part(words[index]) != script:
         return "uv run would be given %s as the script, not a path ending in %s" % (
             json.dumps(words[index]) if index < len(words) else "nothing",
@@ -1091,6 +1789,23 @@ def _assert_hooks(project_root: Path) -> dict:
     }
 
 
+# How a reason that is the operator's to fix (the story skills, the Claude
+# Code version) ends on a resume, and how a hooks reason defers to one: the
+# re-assertion sweep in references/execute.md escalates it before it fixes
+# any other, since the run stops on it either way and a hooks re-merge writes
+# a protected file that a headless session may be refused.
+_ESCALATE_FIRST = (
+    "Escalate the story about to be driven before fixing any other reason this "
+    "assertion names, as execute.md's re-assertion sweep says: a hooks re-merge "
+    "waits for the resume after the operator's fix"
+)
+_RE_MERGE_WAITS = (
+    "unless a reason that is the operator's to fix (story skills not installed, "
+    "or a Claude Code below the minimum) stands beside this one: that one is "
+    "escalated first, and the resume after the operator's fix re-merges"
+)
+
+
 def _on_failure_reason(values: list) -> str:
     """The named reason for a guard item without `"onFailure": "block"`."""
     shown = ", ".join("missing" if v is None else json.dumps(v) for v in values)
@@ -1101,23 +1816,31 @@ def _on_failure_reason(values: list) -> str:
         '"block" makes Claude Code drop the item, so the guard does not run at '
         "all. Re-merge the hooks as preflight.md step 5's Hooks bullet says "
         "(replace, never append; on a resume purge nothing, as execute.md's "
-        "re-assertion sweep says), then assert again" % shown
+        "re-assertion sweep says), then assert again, %s" % (shown, _RE_MERGE_WAITS)
     )
 
 
 def _command_reason(problems: list[str]) -> str:
-    """The named reason for a UCG hook command the shell would not start."""
+    """The named reason for a UCG hook command that would not run its script
+    as preflight writes it. Each problem says what uv or the shell would do
+    instead; the reason says what that costs under each hook's event."""
     return (
-        "UCG hook command does not start its script as written (%s): Claude Code "
-        "runs it through a shell, which splits it at every unquoted space, so a "
-        "path holding one becomes the command the shell runs, or the script uv "
-        "is given, and the hook never starts (Claude Code then refuses every "
-        "tool call under the guard's \"onFailure\": \"block\", and skips a "
-        "budget hook that cannot start without a word). Re-merge the hooks as "
+        "UCG hook command would not run its script as preflight writes it (%s). "
+        "Claude Code runs a hook command through a shell, which splits it at "
+        "every unquoted space, so a value or path left unquoted becomes the "
+        "command the shell runs, or the script uv is given. A guard command "
+        "that does not start the guard refuses every tool call under its "
+        "\"onFailure\": \"block\", and one that prints and exits 0 lets every "
+        "call through unchecked. A budget command the shell cannot start lets "
+        "each stop through uncounted, and one uv refuses sends each stop back "
+        "with uv's error, up to eight times in a row, unless the project uv "
+        "syncs first fails to build, or its requirements cannot be satisfied, "
+        "when uv exits 1 and each stop goes through uncounted too; a network "
+        "failure in that sync exits 2, and sends each stop back. Re-merge the hooks as "
         "preflight.md step 5's Hooks bullet says, each injected value and the "
         "script path in single quotes (KEY='value' uv run '<path>'; replace, "
         "never append; on a resume purge nothing, as execute.md's re-assertion "
-        "sweep says), then assert again" % "; ".join(problems)
+        "sweep says), then assert again, %s" % ("; ".join(problems), _RE_MERGE_WAITS)
     )
 
 
@@ -1155,6 +1878,45 @@ def _assert_story_skills(project_root: Path) -> dict:
     installed = _story_skills_installed(project_root)
     missing = [s for s, present in installed.items() if not present]
     return {"installed": installed, "missing": missing, "ok": not missing}
+
+
+def _assert_cc_version() -> dict:
+    """The Claude Code version a resume runs on, against the minimums a fresh
+    preflight's cc_version blocker enforces.
+
+    Below 2.1.295 Claude Code ignores the guard's `"onFailure": "block"`, so a
+    run in flight that re-arms on an older one passes every hook check while a
+    guard that cannot run lets the call through. A version `claude --version`
+    cannot give is reported with `read: false` and fails nothing: the fresh
+    preflight read one at launch, and a spawn that `drive_epic.py
+    --claude-bin` started can lack `claude` on its PATH.
+
+    Like the fresh preflight, it runs the `claude` first on PATH, not the
+    binary that runs the session (nothing documented names that one): with
+    two installs, or a `--claude-bin` that names another, it reads the one on
+    PATH. docs/troubleshooting.md says so where the floor is explained.
+    """
+    cc_raw, cc_ver = _cc_version()
+    below = _below_minimums(cc_ver) if cc_ver is not None else []
+    return {
+        "version": cc_raw,
+        "read": cc_ver is not None,
+        "minimum": "%d.%d.%d" % max(minimum for _, minimum in _CC_MINIMUMS),
+        "below": below,
+        "ok": not below,
+    }
+
+
+def _cc_version_reason(version: dict) -> str:
+    """The named reason for a Claude Code below the minimums."""
+    return (
+        "%s. Claude Code before %s ignores the guard's \"onFailure\": \"block\", "
+        "so a guard that cannot start, crashes or times out lets the tool call "
+        "run unchecked, and a fresh preflight refuses to launch below it. A "
+        "resume does not fix this: updating Claude Code (claude update) is the "
+        "operator's call, and a session keeps the version it started with. %s"
+        % (_cc_version_detail(version["version"], version["below"]), version["minimum"], _ESCALATE_FIRST)
+    )
 
 
 def _assert_branch(
@@ -1558,11 +2320,13 @@ def build_assert_armed(
     hooks = _assert_hooks(project_root)
     hook_env = _assert_hook_env(project_root)
     skills = _assert_story_skills(project_root)
+    cc_version = _assert_cc_version()
     checks: dict = {
         "branch": branch,
         "hooks": hooks,
         "hook_env": hook_env,
         "skills": skills,
+        "cc_version": cc_version,
         "latch": _read_latch(impl_artifacts, run_id),
         # Reported, never a reason to fail: a resumed session has no step-1
         # report, and execute.md's ignored-tree rule keys on this fact.
@@ -1570,7 +2334,17 @@ def build_assert_armed(
     }
     if story:
         checks["story"] = _assert_story(project_root, impl_artifacts, story, trace_output)
+    # The reasons that are the operator's to fix come first: the sweep
+    # escalates them before it fixes any other, and a conductor reads the
+    # first reason first.
     reasons: list[str] = []
+    if not skills["ok"]:
+        reasons.append(
+            "%s On a resume, installing them is the operator's call. %s"
+            % (_story_skills_detail(project_root, skills["missing"]), _ESCALATE_FIRST)
+        )
+    if not cc_version["ok"]:
+        reasons.append(_cc_version_reason(cc_version))
     if not branch["ok"]:
         reasons.append(
             "branch %r is not an epic branch under prefix %r (or is protected)"
@@ -1597,9 +2371,7 @@ def build_assert_armed(
             "hook env not fully injected; enforcing hardcoded fallbacks for: %s"
             % ", ".join(hook_env["missing"])
         )
-    if not skills["ok"]:
-        reasons.append(_story_skills_detail(project_root, skills["missing"]))
-    armed = branch["ok"] and hooks["ok"] and hook_env["ok"] and skills["ok"]
+    armed = branch["ok"] and hooks["ok"] and hook_env["ok"] and skills["ok"] and cc_version["ok"]
     return {"armed": armed, "checks": checks, "reasons": reasons}
 
 
@@ -1651,11 +2423,14 @@ def main(argv: list[str] | None = None) -> int:
         "matcher, the guard's \"onFailure\": \"block\", and each hook command "
         "splitting into <env> uv run <script>), injected hook env, "
         "the UCG story "
-        "skills (ucg-create-story, ucg-dev-story), the recall latch "
+        "skills (ucg-create-story, ucg-dev-story), the Claude Code version "
+        "(claude --version, against the minimums the cc_version blocker "
+        "enforces), the recall latch "
         "(reported, never certified), and, with --story, the story's "
         "artifact-derived resume route. Exit 0 iff branch+hooks+env+skills are "
-        "armed. When set, --epic, --tea-config, and the mechanical preflight "
-        "checks do not run.",
+        "armed and the version is not below a minimum (one it cannot read "
+        "fails nothing). When set, --epic, --tea-config, and the other "
+        "mechanical preflight checks do not run.",
     )
     parser.add_argument(
         "--story",

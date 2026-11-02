@@ -13,6 +13,7 @@ inert at runtime, the stage references no longer interpolate a token ceiling,
 and the config key that named it is deprecated in place rather than removed."""
 
 import ast
+import contextlib
 import json
 import os
 import re
@@ -20,7 +21,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parents[1] / "hooks" / "budget_stop.py"
+import pytest
+
+HOOK =Path(__file__).resolve().parents[1] / "hooks" / "budget_stop.py"
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _CUSTOMIZE = _SKILL_ROOT / "customize.toml"
@@ -195,6 +198,603 @@ def test_a_story_marker_that_is_not_utf8_still_counts_against_unknown(tmp_path: 
     assert code == 0
     assert out is None
     assert json.loads((impl / ".budget-unknown.json").read_text())["turns"] == 1
+
+
+# --- #186: bad input never ends the hook on an error --------------------------
+# Claude Code ignores `onFailure` on Stop, so a budget hook that exits 1 is a
+# hook error and nothing more: the stop proceeds, and the turn it should have
+# counted is lost. These inputs each raised out of the hook before it counted.
+
+
+def _run_raw(
+    stdin: str | bytes, cwd: Path, env_extra: dict, timeout: float | None = None
+) -> subprocess.CompletedProcess:
+    env = {**os.environ, **env_extra}
+    data = stdin.encode("utf-8") if isinstance(stdin, str) else stdin
+    return subprocess.run(
+        [sys.executable, str(HOOK)], input=data, cwd=cwd, capture_output=True, env=env, timeout=timeout
+    )
+
+
+def _turns(impl: Path, story: str) -> int:
+    return json.loads((impl / f".budget-{story}.json").read_text(encoding="utf-8"))["turns"]
+
+
+@pytest.mark.parametrize(
+    "stdin,shown",
+    [
+        pytest.param("[1, 2]", "not an object", id="array"),
+        pytest.param('"Stop"', "not an object", id="string"),
+        pytest.param("7", "not an object", id="number"),
+        pytest.param("null", "not an object", id="null"),
+        pytest.param("[" * 100_000, "RecursionError", id="nested-past-what-python-reads"),
+        pytest.param("{not json", "not JSON", id="not-json"),
+        pytest.param(b"\xff\xfe{}", "not JSON", id="not-utf8"),
+    ],
+)
+def test_an_event_it_cannot_read_still_counts_the_turn(tmp_path: Path, stdin: str | bytes, shown: str) -> None:
+    """The env names the state dir and the story, so the turn is counted
+    without the event, and stderr says what was read past."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "25"}
+    proc = _run_raw(stdin, tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == b""
+    assert _turns(impl, "S1") == 1
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert stderr.startswith("budget_stop: ") and shown in stderr, stderr
+    assert "Traceback" not in stderr
+
+
+def test_an_event_it_cannot_read_with_no_state_dir_exits_zero(tmp_path: Path) -> None:
+    """With no event cwd and no ULTRACODE_IMPL_ARTIFACTS there is nowhere to
+    count: exit 0, as for any Stop with no state dir."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ULTRACODE_")}
+    proc = subprocess.run([sys.executable, str(HOOK)], input=b"[]", cwd=tmp_path, capture_output=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_cwd_that_is_not_a_string_reads_as_no_cwd(tmp_path: Path) -> None:
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": 7}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "S1") == 1
+
+
+def test_a_story_pointer_holding_a_nul_counts_against_unknown(tmp_path: Path) -> None:
+    """No file name holds a NUL byte, so the counter could not be written and
+    the hook raised. Such a pointer names no story it can count, so the turn
+    counts against `unknown`, as an unreadable pointer's does."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_bytes(b"S1\x00x\n")
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, _no_story_env(impl, "25"))
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "unknown") == 1
+    assert "NUL" in proc.stderr.decode("utf-8", "replace")
+
+
+def test_a_nul_story_at_its_ceiling_still_exits_zero(tmp_path: Path) -> None:
+    """The overrun path writes a marker named after the story too."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_bytes(b"S1\x00x\n")
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, _no_story_env(impl, "1"))
+    assert proc.returncode == 0, proc.stderr
+    assert (impl / ".escalation-unknown.md").is_file()
+    assert "systemMessage" in json.loads(proc.stdout)
+
+
+@pytest.mark.parametrize("source", ["pointer", "env"])
+@pytest.mark.parametrize(
+    "story",
+    [
+        pytest.param("x/../../../escaped", id="dotdot"),
+        pytest.param("/../../escaped-abs", id="leading-slash"),
+        pytest.param("1/2", id="slash"),
+        pytest.param("x\\..\\..\\..\\escaped", id="backslash"),
+    ],
+)
+def test_a_story_id_holding_a_path_separator_counts_against_unknown(tmp_path: Path, story: str, source: str) -> None:
+    """The counter and the turn-ceiling marker are named after the story id
+    inside the state dir, so an id holding a separator named them in another
+    folder: `x/../../../escaped` wrote `<project>/escaped.json`, and
+    `<project>/escaped.md` at the ceiling (a backslash does so on Windows).
+    Such an id names no story it can count, so the turn counts against
+    `unknown`, as a NUL's does, and nothing is written anywhere else."""
+    project = tmp_path / "proj"
+    impl = project / "_bmad-output" / "implementation-artifacts"
+    impl.mkdir(parents=True)
+    env = _no_story_env(impl, "1")
+    if source == "pointer":
+        (impl / ".current-story").write_text(story + "\n", encoding="utf-8")
+    else:
+        env["ULTRACODE_STORY_ID"] = story
+    before = set(tmp_path.rglob("*"))
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(project)}), project, env)
+    assert proc.returncode == 0, proc.stderr
+    assert set(tmp_path.rglob("*")) - before == {impl / ".budget-unknown.json", impl / ".escalation-unknown.md"}
+    assert _turns(impl, "unknown") == 1
+    assert "separator" in proc.stderr.decode("utf-8", "replace")
+
+
+# A file name holds at most 255 bytes (NAME_MAX on Linux and macOS), and the
+# longest name the hook writes is the turn-ceiling marker's, 15 bytes more
+# than the story id: `.escalation-<id>.md`.
+_LONGEST_ID_BYTES = 255 - len(".escalation-.md")
+
+
+@pytest.mark.parametrize("source", ["pointer", "env"])
+@pytest.mark.parametrize(
+    "story",
+    [
+        pytest.param("1-1-" + "a" * 246, id="250-bytes"),
+        pytest.param("1-1-" + "a" * (_LONGEST_ID_BYTES - 3), id="one-byte-past-the-marker"),
+        pytest.param("1-1-" + "é" * 119, id="121-characters-242-bytes"),
+    ],
+)
+def test_a_story_id_too_long_for_a_file_name_counts_against_unknown(tmp_path: Path, story: str, source: str) -> None:
+    """The counter and the marker are named after the story id, and an id
+    too long for both names was never counted: the counter could not be read
+    or written (ENAMETOOLONG), every turn was lost with a note on stderr, and
+    the ceiling never fired. One too long for the marker's name alone, two
+    bytes longer than the counter's (241 or 242 bytes), was counted but never
+    got its marker. Such an id names no story it can count, as a NUL's or a
+    separator's does, so the turn counts against `unknown`. The length is the
+    file system's, in bytes, not in characters."""
+    assert len(os.fsencode(f".escalation-{story}.md")) > 255
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = _no_story_env(impl, "1")
+    if source == "pointer":
+        (impl / ".current-story").write_text(story + "\n", encoding="utf-8")
+    else:
+        env["ULTRACODE_STORY_ID"] = story
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "unknown") == 1
+    assert (impl / ".escalation-unknown.md").is_file()
+    assert "systemMessage" in json.loads(proc.stdout)
+    assert "too long for a file name" in proc.stderr.decode("utf-8", "replace")
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="a 255-character name passes the 260-character path limit Windows may keep"
+)
+def test_the_longest_story_id_a_marker_name_holds_counts_as_itself(tmp_path: Path) -> None:
+    """The twin at the bound: an id whose marker name is 255 bytes long is
+    counted against itself, and its marker is written at the ceiling."""
+    story = "1-1-" + "a" * (_LONGEST_ID_BYTES - 4)
+    assert len(os.fsencode(f".escalation-{story}.md")) == 255
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = {**_no_story_env(impl, "1"), "ULTRACODE_STORY_ID": story}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, story) == 1
+    assert (impl / f".escalation-{story}.md").is_file()
+    assert not (impl / ".budget-unknown.json").exists()
+
+
+# The whole path has a limit too: PATH_MAX bytes on Linux and macOS, NUL
+# included, so the longest path the system takes is one byte shorter. The
+# marker's path is the longer of the two the hook names after the story.
+
+
+def _longest_path(base: Path) -> int:
+    """The longest path, in bytes, the system takes under base, or a skip."""
+    if sys.platform == "win32" or not hasattr(os, "pathconf"):
+        pytest.skip("builds a path at PATH_MAX, which this check reads on Linux and macOS")
+    try:
+        path_max = os.pathconf(base, "PC_PATH_MAX")
+    except (OSError, ValueError) as exc:
+        pytest.skip(f"this system does not say its PATH_MAX: {exc}")
+    if not 512 <= path_max <= 65536 or len(os.fsencode(str(base))) > path_max // 2:
+        pytest.skip(f"PATH_MAX {path_max} leaves no room to build a path at it under {base}")
+    return path_max - 1
+
+
+def _folder_of_length(base: Path, length: int) -> Path:
+    """A new folder under base whose path is `length` bytes long, made of
+    ASCII names of at most 200 bytes each."""
+    folder, need = base, length - len(os.fsencode(str(base)))
+    assert need >= 2
+    while need:
+        size = min(200, need - 1)
+        if need - (size + 1) == 1:  # leave no single byte that no name can fill
+            size -= 1
+        folder, need = folder / ("d" * size), need - size - 1
+    folder.mkdir(parents=True)
+    assert len(os.fsencode(str(folder))) == length
+    return folder
+
+
+_ID_100_BYTES = "1-1-" + "a" * 96
+
+
+def test_a_story_whose_marker_path_is_too_long_counts_against_unknown(tmp_path: Path) -> None:
+    """The counter's path fits the system's longest path and the marker's,
+    two bytes longer, does not: the story was counted but its turn ceiling
+    never wrote a marker. The turn counts against `unknown`, whose marker
+    fits, and stderr says why."""
+    longest = _longest_path(tmp_path)
+    impl = _folder_of_length(tmp_path, longest - len(f"/.budget-{_ID_100_BYTES}.json"))
+    assert len(os.fsencode(str(impl / f".escalation-{_ID_100_BYTES}.md"))) == longest + 2
+    env = {**_no_story_env(impl, "1"), "ULTRACODE_STORY_ID": _ID_100_BYTES}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(path.name for path in impl.iterdir()) == [".budget-unknown.json", ".escalation-unknown.md"]
+    assert _turns(impl, "unknown") == 1
+    assert "Marker written" in json.loads(proc.stdout)["systemMessage"]
+    assert "longest path" in proc.stderr.decode("utf-8", "replace")
+
+
+def test_a_story_whose_marker_path_is_the_longest_counts_as_itself(tmp_path: Path) -> None:
+    """The twin at the bound: a marker path of exactly the longest length the
+    system takes is counted against its story and written at the ceiling."""
+    longest = _longest_path(tmp_path)
+    impl = _folder_of_length(tmp_path, longest - len(f"/.escalation-{_ID_100_BYTES}.md"))
+    env = {**_no_story_env(impl, "1"), "ULTRACODE_STORY_ID": _ID_100_BYTES}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, _ID_100_BYTES) == 1
+    assert (impl / f".escalation-{_ID_100_BYTES}.md").is_file()
+    assert not (impl / ".budget-unknown.json").exists()
+    assert proc.stderr == b""
+
+
+def test_a_short_story_near_the_longest_path_is_still_counted(tmp_path: Path) -> None:
+    """A short story id leaves its counter's and its marker's names shorter
+    than the new file a write goes through (`.budget-<pid>-<hex>.tmp`), so
+    near the longest path that new file cannot be made while the names fit.
+    The hook then writes the counter and the marker in place, and the turn
+    and the marker still land."""
+    longest = _longest_path(tmp_path)
+    impl = _folder_of_length(tmp_path, longest - len("/.escalation-S1.md"))
+    env = {**_no_story_env(impl, "1"), "ULTRACODE_STORY_ID": "S1"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(path.name for path in impl.iterdir()) == [".budget-S1.json", ".escalation-S1.md"]
+    assert _turns(impl, "S1") == 1
+    assert (impl / ".escalation-S1.md").read_text(encoding="utf-8").startswith("# Turn ceiling reached: story S1")
+    assert "Marker written" in json.loads(proc.stdout)["systemMessage"]
+    assert proc.stderr == b""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="passes bytes that are not UTF-8 through the environment, as POSIX can")
+def test_a_story_id_holding_bytes_that_are_not_utf8_counts_against_unknown(tmp_path: Path) -> None:
+    """An ULTRACODE_STORY_ID holding a byte that is not UTF-8 named a counter
+    the hook could write, but the marker's UTF-8 text could not hold the id,
+    so its turn ceiling never wrote one. It counts against `unknown`, as a
+    `.current-story` that is not UTF-8 does."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = {**_no_story_env(impl, "1"), "ULTRACODE_STORY_ID": os.fsdecode(b"story-\xff")}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(os.listdir(impl)) == [".budget-unknown.json", ".escalation-unknown.md"]
+    assert _turns(impl, "unknown") == 1
+    assert "Marker written" in json.loads(proc.stdout)["systemMessage"]
+    assert "not UTF-8" in proc.stderr.decode("utf-8", "replace")
+
+
+_ASCII_FILE_NAMES = {"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"}
+
+
+def test_a_story_id_the_file_system_cannot_spell_counts_against_unknown(tmp_path: Path) -> None:
+    """Under a file system encoding that has no bytes for a character of the
+    id (ASCII, with Python's UTF-8 mode and locale coercion off), no counter
+    can be named after it. The turn counts against `unknown`, and stderr says
+    the id cannot be spelled rather than that it is too long."""
+    probe = subprocess.run(
+        [sys.executable, "-c", "import sys; print(sys.getfilesystemencoding())"],
+        env={**os.environ, **_ASCII_FILE_NAMES},
+        capture_output=True,
+        text=True,
+    )
+    if probe.stdout.strip() != "ascii":
+        pytest.skip(f"the file system encoding stays {probe.stdout.strip()!r} under the C locale here")
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_text("story-é\n", encoding="utf-8")
+    env = {**_no_story_env(impl, "25"), **_ASCII_FILE_NAMES}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "unknown") == 1
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "cannot spell" in stderr and "too long" not in stderr, stderr
+
+
+# --- A link or a special file at the counter's or the marker's name ----------
+# The hook read and wrote its counter and its marker by name, following a
+# symlink there, so one to a file outside the state dir had that file's
+# contents replaced (by `{"turns": 1}`, or by the marker text at the ceiling),
+# and a FIFO there kept it waiting until Claude Code's hook timeout, with the
+# turn uncounted. It reads and writes neither through such a name now.
+
+
+def _make_special(kind: str, at: Path, target: Path) -> None:
+    """Put a symlink to target, a FIFO or a folder at `at`, or skip where the
+    system cannot make one."""
+    if kind == "symlink":
+        try:
+            os.symlink(target, at)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"cannot create a symlink here: {exc}")
+    elif kind == "fifo":
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("this system has no FIFOs")
+        os.mkfifo(at)
+    else:
+        at.mkdir()
+
+
+def _is_kind(kind: str, path: Path) -> bool:
+    if kind == "symlink":
+        return path.is_symlink()
+    if kind == "fifo":
+        return path.is_fifo()
+    return path.is_dir() and not path.is_symlink()
+
+
+_SPECIAL_KINDS = pytest.mark.parametrize("kind", ["symlink", "fifo", "folder"])
+
+
+@pytest.fixture
+def victim(tmp_path: Path) -> Path:
+    """A file outside the state dir that a link at a counter's or a marker's
+    name points to: its contents must survive the hook."""
+    path = tmp_path / "outside" / "victim.txt"
+    path.parent.mkdir()
+    path.write_text("keep me\nline 2\n", encoding="utf-8")
+    return path
+
+
+def _leftovers(impl: Path) -> list[str]:
+    """Temporary files the hook left in the state dir."""
+    return sorted(path.name for path in impl.iterdir() if path.name.endswith(".tmp"))
+
+
+@_SPECIAL_KINDS
+def test_a_counter_name_holding_a_link_or_a_special_file_counts_against_unknown(
+    tmp_path: Path, victim: Path, kind: str
+) -> None:
+    """The counter's name holds a symlink, a FIFO or a folder: the hook reads
+    nothing through it and writes nothing through it, leaves it as it is, and
+    counts the turn against `unknown`, as for a story id that names no counter
+    it can use. stderr says why. It never waits on the FIFO."""
+    project = tmp_path / "proj"
+    impl = project / "_bmad-output" / "implementation-artifacts"
+    impl.mkdir(parents=True)
+    (impl / ".current-story").write_text("1-1-login\n", encoding="utf-8")
+    counter = impl / ".budget-1-1-login.json"
+    _make_special(kind, counter, victim)
+    event = json.dumps({"hook_event_name": "Stop", "cwd": str(project)})
+    proc = _run_raw(event, project, _no_story_env(impl, "1"), timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert _is_kind(kind, counter)
+    assert _turns(impl, "unknown") == 1
+    assert (impl / ".escalation-unknown.md").is_file()
+    assert not (impl / ".escalation-1-1-login.md").exists()
+    assert "systemMessage" in json.loads(proc.stdout)
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert ".budget-1-1-login.json is a symlink or not a regular file" in stderr, stderr
+    assert "against unknown" in stderr
+    assert _leftovers(impl) == []
+
+
+@_SPECIAL_KINDS
+def test_a_marker_name_holding_a_link_or_a_special_file_is_not_written_through(
+    tmp_path: Path, victim: Path, kind: str
+) -> None:
+    """At the ceiling, the marker's name holds a symlink, a FIFO or a folder:
+    the turn is counted, the overrun message still goes out, and the hook
+    writes no marker through that name and leaves it as it is. The message
+    then says no marker was written, rather than that one was."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    marker = impl / ".escalation-S1.md"
+    _make_special(kind, marker, victim)
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "1"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert _is_kind(kind, marker)
+    assert _turns(impl, "S1") == 1
+    message = json.loads(proc.stdout)["systemMessage"]
+    assert "reached its turn ceiling" in message
+    assert "Marker written" not in message
+    assert f"No marker was written at {marker}" in message
+    assert ".escalation-S1.md is a symlink or not a regular file" in proc.stderr.decode("utf-8", "replace")
+    assert _leftovers(impl) == []
+
+
+def test_a_link_at_unknowns_counter_too_leaves_the_turn_uncounted(tmp_path: Path, victim: Path) -> None:
+    """When `unknown`'s counter name holds a link as well, there is no counter
+    left to count against: the hook writes nothing, says so, and exits 0."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    _make_special("symlink", impl / ".budget-S1.json", victim)
+    _make_special("symlink", impl / ".budget-unknown.json", victim)
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "1"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == b""
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert sorted(path.name for path in impl.iterdir()) == [".budget-S1.json", ".budget-unknown.json"]
+    assert "this turn is not counted" in proc.stderr.decode("utf-8", "replace")
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "mkfifo"), reason="needs O_NOFOLLOW and FIFOs (POSIX)"
+)
+def test_a_link_or_a_fifo_put_at_the_name_after_the_look_is_not_read_through(tmp_path: Path, victim: Path) -> None:
+    """The hook looks at what a name holds before it opens it, and a link or
+    a FIFO could be put there in between. The open itself follows no link at
+    the name and does not wait on a FIFO, the type check after it refuses
+    anything but a regular file, and a write goes through a new file renamed
+    onto the name, which replaces a link there rather than writing through
+    it."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("ucg_budget_stop_under_test", HOOK)
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    link = tmp_path / "link.json"
+    os.symlink(victim, link)
+    with pytest.raises(OSError):
+        hook._read_text(link)
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    with pytest.raises(hook._NotRegular):
+        hook._read_text(fifo)
+    assert hook._load_state(link) == {"turns": 0}
+    hook._write_text(link, '{"turns": 1}')
+    assert not link.is_symlink()
+    assert link.read_text(encoding="utf-8") == '{"turns": 1}'
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["fifo.json", "link.json", "outside"]
+
+
+def test_a_counter_is_replaced_whole_and_leaves_no_temporary_file(tmp_path: Path) -> None:
+    """The positive twin: a regular counter is read and rewritten through a
+    temporary file renamed onto its name, which leaves nothing behind."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".budget-S1.json").write_text(json.dumps({"turns": 4}), encoding="utf-8")
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "5"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "S1") == 5
+    assert (impl / ".escalation-S1.md").is_file()
+    assert sorted(path.name for path in impl.iterdir()) == [".budget-S1.json", ".escalation-S1.md"]
+
+
+# A state dir the hook may change files in but not add names to (mode 555)
+# leaves no room for the new file a write goes through. Root and Windows
+# ignore that mode, so these run elsewhere.
+_NO_NEW_NAMES = pytest.mark.skipif(
+    sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs a folder whose mode refuses new names, which root and Windows do not honour",
+)
+
+
+@contextlib.contextmanager
+def _refusing_new_names(folder: Path):
+    folder.chmod(0o555)
+    try:
+        yield
+    finally:
+        folder.chmod(0o755)
+
+
+@_NO_NEW_NAMES
+def test_a_counter_in_a_folder_that_refuses_new_names_is_written_in_place(tmp_path: Path) -> None:
+    """No new file can be made in the state dir to rename onto the counter's
+    name, so the hook writes into the regular counter already there, as
+    v4.0.0 did, and refreshes the marker already there the same way. The
+    turn is counted and the marker is current."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".budget-S1.json").write_text(json.dumps({"turns": 3}), encoding="utf-8")
+    (impl / ".escalation-S1.md").write_text("an older marker\n", encoding="utf-8")
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "4"}
+    with _refusing_new_names(impl):
+        proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == b""
+    assert _turns(impl, "S1") == 4
+    assert (impl / ".escalation-S1.md").read_text(encoding="utf-8").startswith("# Turn ceiling reached: story S1")
+    assert "Marker written" in json.loads(proc.stdout)["systemMessage"]
+    assert sorted(path.name for path in impl.iterdir()) == [".budget-S1.json", ".escalation-S1.md"]
+
+
+@_NO_NEW_NAMES
+def test_a_hard_link_at_the_counter_in_such_a_folder_is_not_written_through(tmp_path: Path, victim: Path) -> None:
+    """The safety twin: written in place, a counter that another name links
+    to (a hard link to a file outside the state dir) is refused, so the file
+    outside keeps its contents and the turn goes uncounted, said on stderr."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    os.link(victim, impl / ".budget-S1.json")
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "25"}
+    with _refusing_new_names(impl):
+        proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert "could not write .budget-S1.json" in proc.stderr.decode("utf-8", "replace")
+
+
+def _load_hook():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("ucg_budget_stop_in_place", HOOK)
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    return hook
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "mkfifo"), reason="needs O_NOFOLLOW and FIFOs (POSIX)"
+)
+def test_a_write_in_place_follows_no_link_and_waits_on_no_fifo(tmp_path: Path, victim: Path) -> None:
+    """The in-place write opens the name as the counter's read does: it
+    follows no symlink there and does not wait on a FIFO, and it writes only
+    into a regular file no other name links to, truncating it first. A name
+    with nothing at it gets a new file."""
+    hook = _load_hook()
+    link = tmp_path / "link.json"
+    os.symlink(victim, link)
+    with pytest.raises(OSError):
+        hook._write_in_place(link, b'{"turns": 1}')
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    with pytest.raises((OSError, hook._NotRegular)):
+        hook._write_in_place(fifo, b'{"turns": 1}')
+    hard = tmp_path / "hard.json"
+    os.link(victim, hard)
+    with pytest.raises(hook._NotRegular):
+        hook._write_in_place(hard, b'{"turns": 1}')
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert link.is_symlink() and fifo.is_fifo()
+
+    regular = tmp_path / "regular.json"
+    regular.write_text('{"turns": 12}', encoding="utf-8")
+    hook._write_in_place(regular, b'{"turns": 3}')
+    assert regular.read_text(encoding="utf-8") == '{"turns": 3}'
+    new = tmp_path / "new.json"
+    hook._write_in_place(new, b'{"turns": 1}')
+    assert new.read_text(encoding="utf-8") == '{"turns": 1}'
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param("[3]", id="array"),
+        pytest.param("[" * 100_000, id="nested-past-what-python-reads"),
+        pytest.param('{"turns": 1e999}', id="infinite"),
+        pytest.param('{"turns": null}', id="null"),
+    ],
+)
+def test_a_counter_it_cannot_read_restarts_as_an_unparseable_one_does(tmp_path: Path, state: str) -> None:
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".budget-S1.json").write_text(state, encoding="utf-8")
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "S1") == 1
+
+
+def test_the_docstring_says_bad_input_never_ends_the_hook() -> None:
+    doc = " ".join(ast.get_docstring(ast.parse(HOOK.read_text(encoding="utf-8"))).split())
+    assert "Claude Code ignores `onFailure` on Stop" in doc
+    assert "exits 0 whatever it is given" in doc
 
 
 def test_token_env_vars_are_inert(tmp_path: Path) -> None:

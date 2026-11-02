@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The gate trail (`gate-trail.md`) now reads a later gate cycle's heading as a later cycle, as it reads `### Story <story_id>: gate`, for a story whose heading it reads, when the heading is written at another heading level (`## Story <story_id>: gate`), says `re-gate` for `gate`, or follows `gate` with a cycle number (`### Story <story_id>: gate cycle 2`, `### Story <story_id>: gate - cycle 2`) or with a note in parentheses that says `cycle` or `re-gate` (`### Story <story_id>: gate (cycle 2)`). Before, it read such a heading as no cycle, so when no verdict object followed it, the trail kept the earlier cycle's verdict, and a story whose last cycle advanced could read `reloop`. Any other text after `gate`, such as `: gate-gap`, `: gate notes` or a note that names no cycle (`: gate (skipped)`), is still no cycle, and keeps the verdict before it.
+issues: [186]

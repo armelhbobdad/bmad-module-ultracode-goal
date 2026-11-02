@@ -1,0 +1,18 @@
+✔ remember returns the value (0.885208ms)
+ℹ Error: Test "remember returns the value" at cache.test.mjs:4:1 generated asynchronous activity after the test ended. This activity created the error "Error: cache flush failed for a" and would have caused the test to fail, but instead triggered an uncaughtException event.
+✖ cache.test.mjs (61.034026ms)
+✔ other passes (0.820886ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 69.492198
+
+✖ failing tests:
+
+test at cache.test.mjs:1:1
+✖ cache.test.mjs (61.034026ms)
+  'test failed'

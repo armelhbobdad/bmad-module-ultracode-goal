@@ -1,0 +1,15 @@
+✖ z.test.mjs (1.821084ms)
+✔ row passes (2.598504ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 36.745843
+
+✖ failing tests:
+
+test at z.test.mjs:1:1
+✖ z.test.mjs (1.821084ms)

@@ -147,11 +147,22 @@ exists to remove.
 
 An entry recorded with `action` `defer` is the opposite case: it is a parked question, not
 an answered one. Present it again, and replace its entry in place when the operator decides
-it. Suppressing a deferred item would deadlock the run outright — `defer` clears nothing,
+it, carrying its answer forward (section 3). Suppressing a deferred item would deadlock
+the run outright: `defer` clears nothing,
 so the next preflight still blocks on that RED (`{ucg-root}/references/preflight.md`,
 step 3, drops only the ids whose `action` is `close`), while this surface, the only one that
 can answer it, would never ask again. The scan blocks forever on a question the operator is
 no longer offered.
+
+An entry with no `action`, or with an `action` that is neither `close` nor `defer`, is
+pending as well. An earlier version of this surface wrote some entries that way, and
+preflight drops none of their ids, so their questions still block. Present it again, as
+you present a deferred one.
+
+When an item you present already has an entry, show its `answer`, and each earlier answer
+its `history` holds (section 3), beside the decision needed. Such an answer can hold the
+operator's whole ruling: they decide on the record as it stands, and may find it already
+answers the question.
 
 ## 3. Record the answer, then apply its disposition
 
@@ -160,17 +171,32 @@ Every answer lands in `{workflow.implementation_artifacts}/.decisions.json`:
 ```json
 {"decisions": [{"id": "<the pending item's stable id>",
                 "answer": "<what the operator decided, one line>",
-                "action": "close|defer"}]}
+                "action": "close|defer",
+                "history": [{"answer": "<an answer this entry replaced, verbatim>",
+                             "action": "<that answer's action, when it had one>"}]}]}
 ```
 
 **Write the file read-modify-write, keyed by `id`.** Read any existing `.decisions.json`
-first, merge this pass's answers into its `decisions[]` — a new answer for an `id` already
-present replaces that entry, every other entry is preserved untouched — and write the whole
+first, merge this pass's answers into its `decisions[]` (a new answer for an `id` already
+present replaces that entry and carries its answer forward, as the next paragraph says;
+every other entry is preserved untouched), and write the whole
 array back. The fence above is the shape of the *document*, not a licence to emit only this
 pass's answers: a plain overwrite would discard every answer recorded by an earlier pass,
 including the `close` entries preflight reads to keep resolved REDs suppressed. Those
 decisions would silently return as pending and re-block a run the operator already
 unblocked.
+
+**A replacement never drops an earlier answer.** When a new answer replaces the entry for
+its `id`, the new entry carries that entry forward in `history`: copy the replaced entry's
+`history` list as it stands, then append the replaced entry itself, with every field but
+`id` and `history` copied verbatim (its `answer`, and its `action` when it had one). When
+the file holds more than one entry for that `id`, carry each forward, in file order, and
+write one entry in their place. Leave `history` off an entry that replaced nothing. A pass
+that only parks an item records one line, while the entry it replaces can hold the
+operator's whole ruling: a plain replacement would erase that ruling, and nothing in the
+pass would report the loss. Every reader of the file keys on `id` and `action` alone
+(`{ucg-root}/scripts/red_ids.py`, which preflight and the resume read it through), so
+`history` changes no suppression.
 
 **If an existing `.decisions.json` is unreadable, unparseable, or parsed but missing a
 list-valued `decisions`, stop — do not overwrite it.** Say which file failed and why. This
@@ -242,10 +268,15 @@ The two dispositions are genuinely different things, not two names for one:
   and removes the marker (`{ucg-root}/references/gate.md`, "Commit the gate's evidence
   before the next story starts"), on the Epic's last story too, where every row already
   reads `done` and the resume re-enters only for that commit before Finalize.
-  **Closing a `coupled-stories` escalation records the move, and the resumed run makes
-  it.** The sidecar proposes moving clauses the earlier story owes to the later story it
-  names, which narrows the earlier story's AC (`{ucg-root}/references/execute.md`, "Two
-  stories green only together"). When the operator approves the move, as proposed or
+  **Closing a `coupled-stories` escalation records a proposed move, and the resumed run
+  makes it; a re-plan is the operator's own edit.**
+  The sidecar proposes moving clauses the earlier story owes to the later story it
+  names, which narrows the earlier story's AC, or it proposes only a re-plan, where no
+  move fits: the later story is outside the run's scope, the two stories are a pair no
+  move applies to (a decomposed child beside a story that has a file, or children of two
+  parents), or an AC between two decomposed children holds a clause no run measured
+  (`{ucg-root}/references/execute.md`, "Two stories green only together"). When the
+  operator approves a proposed move, as proposed or
   reworded, write the sidecar's `decision_needed` verbatim into this answer's
   `.decision-log.md` entry, under both story keys it names, beside the operator's answer
   and the id you closed, before you delete the sidecar: once the sidecar is gone, that
@@ -256,7 +287,10 @@ The two dispositions are genuinely different things, not two names for one:
   and the resumed run applies it before the earlier story's next commit. An answer that
   re-plans the rows instead (one story in place of the two, or another order) is the
   operator's own edit of `sprint-status.yaml` and the story files: record `defer` until
-  they have made it, then `close`.
+  they have made it, then `close`. A sidecar that proposes only a re-plan has no move for
+  this surface to record or for the resumed run to apply, so whatever the operator rules
+  for it is their own edit of those files: record `defer` until they have made it, then
+  `close`.
 - **`defer`** — the decision is not made yet. Record the entry **without clearing
   anything**. The artifact stays exactly where it is, the item stays pending, and the next
   preflight still blocks on it.
@@ -266,7 +300,9 @@ Record each answer and its disposition in `.decision-log.md` as you apply it.
 ## 4. Hand control back to the existing resume
 
 `/ucg-resolve` defines no resume of its own. Close the pass by stating what closed, what is
-still pending, and that anything still pending re-blocks at the next preflight. **Hand back
+still pending, and that anything still pending re-blocks at the next preflight. Name every
+entry this pass replaced, by `id`, with the earlier answer it carried into `history`, so
+the operator sees what the record held before this pass. **Hand back
 only when the pass closed at least one item, or when the operator asks for the resume**: a
 pass that deferred everything hands into a run blocked on the identical items, and an empty
 enumeration means the run stopped for a non-decision reason — say so, point at the read-only

@@ -12,6 +12,7 @@ counts, so attribution and the exactly-one claim are both exercised for real.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -1082,6 +1083,9 @@ def test_real_node_test_runner_two_runs_add_their_counts(tmp_path):
 #                         each line behind turbo's `guard:test: ` prefix
 #   pnpm-node-spec        pnpm 9.15.9, `pnpm -r test` over two packages, each
 #                         line behind pnpm's `packages/guard test: ` prefix
+#   pnpm-root-node-spec   the same, the packages' folders directly in the
+#                         workspace's, so the prefix is `guard test: `, with
+#                         no `/` (#186's review)
 #   mixed-node-pytest-q   a passing `node --test` run, then `pytest -q`
 #   mixed-node-jest       a passing `node --test` run, then `jest`
 #
@@ -1156,7 +1160,8 @@ def test_real_runner_output_attributes_and_counts_a_kill(tmp_path, run):
     KILLED+others with both counted. Before, jest's default and agent
     reporters read MISATTRIBUTED, jest counted failing files instead of
     failing tests, turbo's or pnpm's prefix hid every count, and a passing
-    Node run before pytest or jest read 0 failed."""
+    Node run before pytest or jest read 0 failed. A pnpm prefix with no `/`
+    hid every count until #186's review."""
     names = _names(run)
     project = _replay_project(tmp_path, run)
     proc = _run_table(
@@ -1917,8 +1922,6 @@ def test_a_qq_run_that_lists_a_kill_leaves_the_count_unknown(tmp_path, command, 
     [
         "node-spec-exits-beside-a-pass-of-the-same-name",
         "node-tap-exits-beside-a-pass-of-the-same-name",
-        "node-spec-exits-after-a-pass-of-a-longer-name",
-        "node-tap-exits-after-a-pass-of-a-longer-name",
         "node-spec-exits-after-a-printed-pass-mark",
         "node-spec-runs-twice-after-a-pass-of-the-same-name",
         "node-tap-runs-twice-after-a-pass-of-the-same-name",
@@ -1929,10 +1932,13 @@ def test_a_node_test_file_that_dies_beside_a_pass_from_elsewhere_reads_as_a_kill
     off the count, when any test anywhere in the output passed under a name
     that held the row's: another file's test of the same name or of a longer
     one, a pass mark a test printed, or a pass in an earlier run of the
-    command. The kill read 0 failed, a row that cannot run. Only a pass of the
-    row's test by its exact name, with the duration Node adds, after the
-    previous file test or run summary takes that test off now: the row reads
-    as a kill whose name never appears."""
+    command. The kill read 0 failed, a row that cannot run. Only a pass with
+    the duration Node adds, after the previous file test or run summary, takes
+    that test off now: the row reads as a kill whose name never appears. That
+    pass named the row's test exactly then; it names a test whose name holds
+    the row's since #186, so the captures of a longer name's pass read 0
+    failed again (`test_a_pass_of_a_test_whose_name_holds_the_row_s_takes_the_
+    file_s_test_off`)."""
     project = _project(tmp_path)
     _custom_checker(project, LOAD_FAILURE_CHECKER)
     (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
@@ -2118,4 +2124,1080 @@ def test_real_node_test_file_is_read_by_its_own_lines(tmp_path, case, reporter):
     proc = _run_table(tmp_path, [row])
     detail = _ZERO_FAILED if case == "a-top-level-await" else _NEVER_APPEARS.format(row["expect_red"])
     assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", detail)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+# --- What a review of #185 found (issue #186) ----------------------------------
+#
+# A Node test file's own failed test is read from the lines Node printed for
+# the file, and five shapes of output misread those lines. A task runner that
+# runs `node --test` in several packages at once interleaves their lines, so
+# another package's lines or run summary landed among the file's. The row's
+# test was matched by its exact name, where the kill path matches the name the
+# row gives anywhere in a line. Only the first file test of a name was read.
+# The TAP reporter escapes `#` and `\` in a name, and names a file outside the
+# folder node runs in by a relative path while it locates it absolutely.
+#
+# The captures (Node 24.21.0, local paths replaced with /home/dev/work), each
+# from the spec reporter (node-spec-*) and with `--test-reporter=tap`
+# (node-tap-*):
+#   pnpm-node-*-exits-after-a-pass-interleaved
+#                       pnpm 9.15.9, `pnpm -r test` over two packages: the
+#                       test `clamp at the bound` passes in the guard package,
+#                       then a timer the mutant adds calls `process.exit(1)`,
+#                       and the other package's tests and run summary land
+#                       between that pass and the guard file's test
+#   pnpm-node-*-load-failure-interleaved
+#                       the same command: the mutant (`LIMIT <= 5` to
+#                       `LIMIT < 5`) makes clamp.mjs throw as it loads, and
+#                       the other package's lines land between the error's
+#                       `Node.js v24.21.0` line and the guard file's test (in
+#                       15 of 40 runs under the spec reporter, 7 of 40 under
+#                       TAP; in the others they land elsewhere)
+#   pnpm-node-*-exits-during-a-test-interleaved
+#                       the twin: the mutant makes `clamp at the bound` call
+#                       `process.exit(1)` during the test
+#   node-*-exits-after-a-tagged-pass
+#                       `node --test clamp.test.mjs other.test.mjs`: the test
+#                       `[P0] clamp at the bound` passes, then a timer the
+#                       mutant adds calls `process.exit(1)`
+#   node-*-exits-after-an-escaped-pass
+#                       `node --test parse.test.mjs other.test.mjs`: the tests
+#                       `strip drops a # comment` and `split cuts a path at
+#                       each \` pass, then a timer calls `process.exit(1)`
+#   node-*-load-failure-in-a-file-named-with-a-hash
+#                       `node --test issue#12.test.mjs other.test.mjs`: the
+#                       mutant (`if (x > hi) {` to `if (x > hi {`) stops
+#                       issue#12.test.mjs loading
+#   node-*-load-failure-outside-the-folder
+#                       `node --test ../shared/clamp.test.mjs app.test.mjs`,
+#                       run in app/: the same mutant stops the file outside
+#                       app/ loading
+#   npm-node-*-load-failure-in-two-workspaces
+#                       `npm run test --workspaces` over two packages, each
+#                       running `node --test test/index.test.mjs`: the same
+#                       mutant, in a module both files import, stops both
+#                       loading
+#   node-*-async-activity-after-the-test-ends
+#                       `node --test cache.test.mjs other.test.mjs`: the test
+#                       `remember returns the value` passes, and a timer it
+#                       started throws after it ends
+#   node-*-exits-as-it-loads
+#                       `node --test mode.test.mjs other.test.mjs`: the mutant
+#                       (`MODE = 'strict'` to `'loose'`) makes mode.mjs call
+#                       `process.exit(1)` at its top level
+#
+# And from the review of that fix:
+#   pnpm-root-node-*-load-failure-interleaved
+#                       `pnpm -r test` over two packages whose folders sit
+#                       directly in the workspace's, so each line is behind
+#                       `guard test: `, a prefix with no `/`: the mutant makes
+#                       clamp.mjs throw as it loads, after a top-level await,
+#                       and the other package's lines land between the error's
+#                       `Node.js v24.21.0` line and the guard file's test
+#   pnpm-root-node-*-exits-during-a-test-interleaved
+#                       the twin: the mutant makes `clamp at the bound` call
+#                       `process.exit(1)` during the test
+#   node-*-load-failure-in-a-file-named-with-an-apostrophe
+#                       `node --test "it's.test.mjs" other.test.mjs`: the
+#                       mutant (`if (x > hi) {` to `if (x > hi {`) stops
+#                       it's.test.mjs loading, and TAP writes its location in
+#                       `"`
+#   node-tap-load-failure-in-a-file-named-with-two-quote-marks
+#                       the same for `say "it's".test.mjs`, located in
+#                       backticks
+#   node-tap-load-failure-in-a-file-named-with-three-quote-marks
+#                       the same for a"b'c`d.test.mjs, located in `'` with its
+#                       `'` written `\'`
+#
+# And from the review of the branch that holds both fixes:
+#   node-*-async-activity-after-a-test-named-with-a-hash
+#                       `node --test cache.test.mjs other.test.mjs`: the test
+#                       `remember returns #1` passes, and a timer it started
+#                       throws after it ends, which TAP reports as an error of
+#                       `remember returns \#1`
+#
+# And from the review of the fix that named, in the gate's reference, a module
+# that calls `process.exit` as its test file loads:
+#   node-*-heap-runs-out-as-it-loads
+#                       `node --max-old-space-size=64 --test walk.test.mjs
+#                       other.test.mjs`: the mutant (`depth < 10` to
+#                       `depth >= 0` in walk.mjs) makes the module's top-level
+#                       loop fill the heap as the file loads
+#   node-*-aborts-as-it-loads
+#                       `node --test mode.test.mjs other.test.mjs`: the mutant
+#                       (`MODE = 'strict'` to `'loose'`) makes mode.mjs call
+#                       `process.abort()` at its top level
+
+
+def _read_capture(tmp_path: Path, capture: str, expect_red: str):
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_bytes((LOAD_FAILURES / f"{capture}.txt").read_bytes())
+    return _run_table(project, [_row(expect_red=expect_red)])
+
+
+@pytest.mark.parametrize(
+    ("capture", "zero_failed"),
+    [
+        ("pnpm-node-spec-exits-after-a-pass-interleaved", True),
+        ("pnpm-node-tap-exits-after-a-pass-interleaved", True),
+        ("pnpm-node-spec-load-failure-interleaved", True),
+        ("pnpm-node-tap-load-failure-interleaved", True),
+        ("pnpm-node-spec-exits-during-a-test-interleaved", False),
+        ("pnpm-node-tap-exits-during-a-test-interleaved", False),
+    ],
+)
+def test_a_node_file_test_is_read_from_its_own_package_s_lines_when_they_interleave(tmp_path, capture, zero_failed):
+    """pnpm and turbo print each package's lines behind a prefix of its own as
+    they come, so another package's lines landed among a file's: its run
+    summary cut the lines the file's test is read from, and its lines stood
+    between the file's load error and its test. A file that cannot load, or
+    whose process exits after the row's test passes, read as a kill, in the
+    runs where the lines landed there. The lines are now read per prefix. The
+    twins: a process that exits during the row's test still reads as a kill."""
+    proc = _read_capture(tmp_path, capture, "clamp at the bound")
+    expected = _ZERO_FAILED if zero_failed else _NEVER_APPEARS.format("clamp at the bound")
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", expected)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("capture", "zero_failed"),
+    [
+        ("pnpm-root-node-spec-load-failure-interleaved", True),
+        ("pnpm-root-node-tap-load-failure-interleaved", True),
+        ("pnpm-root-node-spec-exits-during-a-test-interleaved", False),
+        ("pnpm-root-node-tap-exits-during-a-test-interleaved", False),
+    ],
+)
+def test_a_pnpm_prefix_with_no_slash_is_read_as_one(tmp_path, capture, zero_failed):
+    """pnpm's prefix is the package's folder relative to the folder pnpm runs
+    in, and a package whose folder sits directly in it has a prefix with no
+    `/`: `guard test: `. That prefix was never removed, so no line behind it
+    was read as Node prints it, and a file that cannot load read as a kill in
+    every run, its lines interleaved or not. A prefix pnpm announces with
+    its `guard test$ node --test ...` line is now removed and read apart. The
+    twins: a process that exits during the row's test still reads as a kill."""
+    proc = _read_capture(tmp_path, capture, "clamp at the bound")
+    expected = _ZERO_FAILED if zero_failed else _NEVER_APPEARS.format("clamp at the bound")
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", expected)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("printed", "read"),
+    [
+        (
+            ["Uncaught Error: boom", "guard test: ✖ guard.test.mjs"],
+            ["Uncaught Error: boom", "guard test: ✖ guard.test.mjs"],
+        ),
+        (
+            ["guard test$ node --test", "Uncaught Error: boom", "guard test: ✖ guard.test.mjs"],
+            ["guard test$ node --test", "Uncaught Error: boom", "✖ guard.test.mjs"],
+        ),
+        ([". test$ node --test", ". test: ✖ guard.test.mjs"], [". test$ node --test", "✖ guard.test.mjs"]),
+    ],
+    ids=["never-announced", "announced", "the-folder-pnpm-runs-in"],
+)
+def test_a_prefix_with_no_slash_is_removed_only_when_pnpm_announced_it(printed, read):
+    """A line of a test's own output can read `<word> <word>: `, as
+    `Uncaught Error: boom` does, so a prefix with no `/` is removed only when
+    pnpm announced it with `<package dir> <script>$ <command>`, `.` (the
+    folder pnpm runs in) included."""
+    spec = importlib.util.spec_from_file_location("mutate_check_prefix", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    lines, _ = module._output_tasks("\n".join(printed) + "\n")
+    assert lines == read
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node-spec-exits-after-a-tagged-pass", "clamp at the bound"),
+        ("node-tap-exits-after-a-tagged-pass", "clamp at the bound"),
+        ("node-spec-exits-after-a-pass-of-a-longer-name", "run reads its file"),
+        ("node-tap-exits-after-a-pass-of-a-longer-name", "run reads its file"),
+    ],
+)
+def test_a_pass_of_a_test_whose_name_holds_the_row_s_takes_the_file_s_test_off(tmp_path, capture, expect_red):
+    """A row's `expect_red` names its test anywhere in a failure line, so a
+    row may leave out the `[P0]` tag TEA puts in front of a name. The pass
+    that takes a file's test off the count had to name the test exactly, so
+    such a row read as a kill when its file exited after the test passed. It
+    now takes any name that holds the row's `expect_red`. The last two
+    captures are #179's: a pass of `run reads its file twice`, listed before a
+    file that dies, now reads 0 failed as well, since the row's name names
+    that test too, and a row that cannot run is measured again where a false
+    kill would close its gap."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture", ["npm-node-spec-load-failure-in-two-workspaces", "npm-node-tap-load-failure-in-two-workspaces"]
+)
+def test_each_node_file_test_of_one_name_is_read(tmp_path, capture):
+    """Two workspaces each run `node --test test/index.test.mjs`, and a mutant
+    in a module both import stops both files loading. File tests were tracked
+    by name, so only the first run's was read, and the second's counted: the
+    row read as a kill. Each file test is read now."""
+    proc = _read_capture(tmp_path, capture, "api clamps at the bound")
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node-tap-exits-after-an-escaped-pass", "strip drops a # comment"),
+        ("node-tap-exits-after-an-escaped-pass", "split cuts a path at each \\"),
+        ("node-tap-load-failure-in-a-file-named-with-a-hash", "clamp at the bound"),
+        ("node-spec-exits-after-an-escaped-pass", "strip drops a # comment"),
+        ("node-spec-exits-after-an-escaped-pass", "split cuts a path at each \\"),
+        ("node-spec-load-failure-in-a-file-named-with-a-hash", "clamp at the bound"),
+        # Each name as TAP writes it, the form a TAP kill is read by.
+        ("node-tap-exits-after-an-escaped-pass", "strip drops a \\# comment"),
+        ("node-tap-exits-after-an-escaped-pass", "split cuts a path at each \\\\"),
+        ("node-tap-async-activity-after-a-test-named-with-a-hash", "remember returns \\#1"),
+        ("node-tap-async-activity-after-a-test-named-with-a-hash", "remember returns #1"),
+        ("node-spec-exits-after-an-escaped-pass", "strip drops a \\# comment"),
+        ("node-spec-exits-after-an-escaped-pass", "split cuts a path at each \\\\"),
+        ("node-spec-async-activity-after-a-test-named-with-a-hash", "remember returns \\#1"),
+        ("node-spec-async-activity-after-a-test-named-with-a-hash", "remember returns #1"),
+    ],
+)
+def test_a_name_the_tap_reporter_escapes_is_read_in_either_form(tmp_path, capture, expect_red):
+    """The TAP reporter writes `#` as `\\#` and `\\` as `\\\\` in a test's
+    name, a file's included, but not in the file's location. A row whose test
+    name holds either read as a kill when its file exited after the test
+    passed, and a file whose name holds `#` that could not load read as a kill
+    too. The spec reporter's twins read right already. That fix read a TAP
+    pass only with its escapes read back, so a row that names the test as TAP
+    writes it, the form a kill under TAP is read by, read as a kill instead
+    when its file exited after the test passed, and when a timer the test
+    started threw after it ended (Node then reports an error of the test,
+    which names it as the row does). A pass is now read in either form, under
+    either reporter, since a row written against one reporter can be run
+    under the other."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture", ["node-tap-load-failure-outside-the-folder", "node-spec-load-failure-outside-the-folder"]
+)
+def test_a_test_file_outside_the_folder_node_runs_in_is_read(tmp_path, capture):
+    """Node names a file outside the folder it runs in by a relative path,
+    `../shared/clamp.test.mjs`, and TAP locates it by an absolute one, so a
+    file there that could not load was not seen as a file's own test, and
+    read as a kill under TAP. The spec reporter's twin locates it by the
+    relative path and read right already."""
+    proc = _read_capture(tmp_path, capture, "clamp at the bound")
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        "node-tap-load-failure-in-a-file-named-with-an-apostrophe",
+        "node-tap-load-failure-in-a-file-named-with-two-quote-marks",
+        "node-tap-load-failure-in-a-file-named-with-three-quote-marks",
+        "node-spec-load-failure-in-a-file-named-with-an-apostrophe",
+    ],
+)
+def test_a_tap_location_in_any_quotes_is_read(tmp_path, capture):
+    """TAP quotes a file test's location as JavaScript quotes a string: in
+    `"` when the path holds a `'`, in backticks when it holds both, and in
+    `'` with `\\'` for each `'` when it holds all three. Only `'...'` was
+    read, so a file whose name holds a quote mark that could not load read as
+    a kill under TAP. The spec reporter's twin read right already."""
+    proc = _read_capture(tmp_path, capture, "clamp at the bound")
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture", ["node-spec-async-activity-after-the-test-ends", "node-tap-async-activity-after-the-test-ends"]
+)
+def test_an_error_thrown_after_the_row_s_test_ends_reads_0_failed(tmp_path, capture):
+    """Pinned as it stands (#186 leaves it): Node reports an error a test's
+    timer throws after the test ended ("generated asynchronous activity after
+    the test ended"), lists the test as passed, and fails the file. No test
+    went red, so the row reads 0 failed, a row that cannot run, as any file
+    whose process exits non-zero after the row's test passes does."""
+    proc = _read_capture(tmp_path, capture, "remember returns the value")
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node-spec-exits-as-it-loads", "mode is strict"),
+        ("node-tap-exits-as-it-loads", "mode is strict"),
+        ("node-spec-heap-runs-out-as-it-loads", "walk keeps ten levels"),
+        ("node-tap-heap-runs-out-as-it-loads", "walk keeps ten levels"),
+        ("node-spec-aborts-as-it-loads", "mode is strict"),
+        ("node-tap-aborts-as-it-loads", "mode is strict"),
+        ("node-spec-exits-during-a-test", "run reads its file"),
+        ("node-tap-exits-during-a-test", "run reads its file"),
+        ("node-spec-heap-runs-out-during-a-test", "depth guard fires"),
+        ("node-tap-heap-runs-out-during-a-test", "depth guard fires"),
+    ],
+)
+def test_a_node_test_file_that_dies_as_it_loads_reads_as_one_that_dies_during_a_test(tmp_path, capture, expect_red):
+    """Pinned as it stands (#186 leaves it): a module that calls `process.exit`
+    at its top level stops the file loading, and Node prints for it what it
+    prints for a process that exits during the file's first test: the file's
+    own output, then the file's test, with no `Node.js v` line. A module that
+    fills the heap or calls `process.abort` as it loads (found by the review
+    of the fix that named the exit in the gate's reference) stops it loading
+    too, and Node prints for it what it prints for a process that crashes
+    during a test. Each reads as a kill, since no reading can tell them apart
+    and the last four are kills."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NEVER_APPEARS.format(expect_red))}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 1
+
+
+_EXITS_AFTER_ITS_TESTS = "process.exitCode = 0;"
+_TWO_RUNS = (
+    "import shutil\nimport subprocess\nimport sys\n\nnode = shutil.which('node')\ncodes = [\n"
+    "    subprocess.run([node, '--test', f'--test-reporter={sys.argv[1]}', 'test/index.test.mjs'], cwd=package)"
+    ".returncode\n    for package in ('api', 'web')\n]\nsys.exit(1 if any(codes) else 0)\n"
+)
+_INDEX_TEST = (
+    "import {{ test }} from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import {{ clamp }} from '../../shared/clamp.mjs';\n"
+    "test('{name} clamps at the bound', () => {{ assert.equal(clamp(9, 5), 5); }});\n"
+)
+_SHARED_CLAMP = "export function clamp(x, hi) {\n  if (x > hi) {\n    return hi;\n  }\n  return x;\n}\n"
+_CLAMP_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import { clamp } from './clamp.mjs';\n"
+    "test('clamp at the bound', () => { assert.equal(clamp(9, 5), 5); });\n"
+)
+_REAL_NODE_186 = {
+    "a-tagged-pass": (
+        {
+            "clamp.mjs": "export function clamp(x, hi) {\n  return x > hi ? hi : x;\n}\n" + _EXITS_AFTER_ITS_TESTS + "\n",
+            "clamp.test.mjs": _CLAMP_TEST.replace("'clamp at the bound'", "'[P0] clamp at the bound'"),
+            "other.test.mjs": "import { test } from 'node:test';\ntest('other passes', () => {});\n",
+        },
+        "node --test --test-reporter={reporter} clamp.test.mjs other.test.mjs",
+        {"file": "clamp.mjs", "anchor": _EXITS_AFTER_ITS_TESTS, "replacement": "process.exitCode = 1;"},
+        ["clamp at the bound"],
+    ),
+    "an-escaped-pass": (
+        {
+            "parse.mjs": "export const strip = (line) => line.split('#')[0].trimEnd();\n"
+            "export const split = (path) => path.split('\\\\');\n" + _EXITS_AFTER_ITS_TESTS + "\n",
+            "parse.test.mjs": "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+            "import { split, strip } from './parse.mjs';\n"
+            "test('strip drops a # comment', () => { assert.equal(strip('a = 1 # one'), 'a = 1'); });\n"
+            "test('split cuts a path at each \\\\', () => { assert.deepEqual(split('a\\\\b'), ['a', 'b']); });\n",
+        },
+        "node --test --test-reporter={reporter} parse.test.mjs",
+        {"file": "parse.mjs", "anchor": _EXITS_AFTER_ITS_TESTS, "replacement": "process.exitCode = 1;"},
+        # Each name as the spec reporter prints it, then as TAP writes it.
+        ["strip drops a # comment", "split cuts a path at each \\", "strip drops a \\# comment",
+         "split cuts a path at each \\\\"],
+    ),
+    # From the review of the branch that holds both fixes: a timer the test starts throws after it ends.
+    "an-error-after-a-test-named-with-a-hash": (
+        {
+            "cache.mjs": "const FLUSH = false;\nexport function remember(key, value) {\n"
+            "  if (FLUSH) setTimeout(() => { throw new Error(`cache flush failed for ${key}`); }, 5);\n"
+            "  return value;\n}\n",
+            "cache.test.mjs": "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+            "import { remember } from './cache.mjs';\n"
+            "test('remember returns #1', () => { assert.equal(remember('a', 1), 1); });\n",
+            "other.test.mjs": "import { test } from 'node:test';\ntest('other passes', () => {});\n",
+        },
+        "node --test --test-reporter={reporter} cache.test.mjs other.test.mjs",
+        {"file": "cache.mjs", "anchor": "const FLUSH = false;", "replacement": "const FLUSH = true;"},
+        ["remember returns #1", "remember returns \\#1"],
+    ),
+    "a-file-outside-the-folder": (
+        {
+            "shared/clamp.mjs": _SHARED_CLAMP,
+            "shared/clamp.test.mjs": _CLAMP_TEST,
+            "app/app.test.mjs": "import { test } from 'node:test';\ntest('app starts', () => {});\n",
+        },
+        "cd app && node --test --test-reporter={reporter} ../shared/clamp.test.mjs app.test.mjs",
+        {"file": "shared/clamp.mjs", "anchor": "if (x > hi) {", "replacement": "if (x > hi {"},
+        ["clamp at the bound"],
+    ),
+    "one-name-in-two-runs": (
+        {
+            "shared/clamp.mjs": _SHARED_CLAMP,
+            "api/test/index.test.mjs": _INDEX_TEST.format(name="api"),
+            "web/test/index.test.mjs": _INDEX_TEST.format(name="web"),
+            "two_runs.py": _TWO_RUNS,
+        },
+        f'"{sys.executable}" two_runs.py {{reporter}}',
+        {"file": "shared/clamp.mjs", "anchor": "if (x > hi) {", "replacement": "if (x > hi {"},
+        ["api clamps at the bound"],
+    ),
+    # From the review of #186's fix: TAP locates this file in `"`.
+    "a-file-named-with-an-apostrophe": (
+        {
+            "clamp.mjs": _SHARED_CLAMP,
+            "it's.test.mjs": _CLAMP_TEST,
+            "other.test.mjs": "import { test } from 'node:test';\ntest('other passes', () => {});\n",
+        },
+        'node --test --test-reporter={reporter} "it\'s.test.mjs" other.test.mjs',
+        {"file": "clamp.mjs", "anchor": "if (x > hi) {", "replacement": "if (x > hi {"},
+        ["clamp at the bound"],
+    ),
+}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize("case", list(_REAL_NODE_186))
+def test_real_node_test_file_that_cannot_run_reads_0_failed(tmp_path, case, reporter):
+    """The real `node --test`, with each reporter: a file whose process exits
+    non-zero after a test whose name holds the row's passes (behind a TEA tag,
+    or with a `#` or `\\` the TAP reporter escapes in it, the row naming it in
+    either form), or fails because a timer such a test started threw after it
+    ended, a file outside the folder node runs in, or named with an
+    apostrophe, that cannot load, and two runs that each cannot load a file of
+    one name, each read 0 failed."""
+    files, command, mutation, names = _REAL_NODE_186[case]
+    for name, text in files.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8", newline="\n")
+    rows = [dict(mutation, command=command.format(reporter=reporter), expect_red=name) for name in names]
+    proc = _run_table(tmp_path, rows)
+    expected = {index: ("MISATTRIBUTED", _ZERO_FAILED) for index in range(len(rows))}
+    assert _ledger_rows(proc.stdout) == expected, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+def test_real_node_test_file_that_exits_during_a_test_named_with_a_hash_is_a_kill(tmp_path, reporter):
+    """The twin of the case above: when the mutant makes the test `strip
+    drops a # comment` reach `process.exit(1)`, Node reports no pass of it, so
+    a row that names it in either form, as the spec reporter prints it or as
+    TAP writes it, still reads as a kill."""
+    files, command, _, names = _REAL_NODE_186["an-escaped-pass"]
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8", newline="\n")
+    mutation = {"file": "parse.mjs", "anchor": "line.split('#')[0]", "replacement": "(process.exit(1), line)"}
+    rows = [dict(mutation, command=command.format(reporter=reporter), expect_red=name) for name in names[::2]]
+    proc = _run_table(tmp_path, rows)
+    expected = {index: ("MISATTRIBUTED", _NEVER_APPEARS.format(row["expect_red"])) for index, row in enumerate(rows)}
+    assert _ledger_rows(proc.stdout) == expected, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+# --- What the final review of the branch that holds #186's fixes found ---------
+#
+# Runs in which no test went red read as a kill. Node reports a test's
+# asynchronous activity after it ended (a timer the test started that throws)
+# on a line that names the test and holds `Error` and `fail`, lists the test
+# passed and fails only the file's process. A file's test came off the count
+# only beside a pass of the row's test, so a second such file read as a kill,
+# and the line itself as the row's failure: a clean `KILLED`. Under
+# `--test-isolation=none` Node imports every test file in its own process and
+# reports one that cannot load as a test whose error is the one the file
+# threw, with no `Node.js v` line, and a global setup that throws stops the
+# runner before any test, with no summary: each read as a kill too.
+#
+# The captures (Node 24.21.0, local paths replaced with /home/dev/work), each
+# from the spec reporter (node-spec-*) and with `--test-reporter=tap`
+# (node-tap-*):
+#   node-*-async-activity-after-tests-in-two-files
+#                       `node --test` over a.test.mjs and b.test.mjs: the
+#                       mutant (`pending.size > 100` to `> 0` in cache.mjs)
+#                       makes the timer `remember` starts throw after each
+#                       file's one test (`remember returns the value`,
+#                       `remember keeps a second key`) passes
+#   node-*-async-rejection-after-the-test-ends
+#                       `node --test rej.test.mjs`: the test `rejects later`
+#                       starts a timer that rejects a promise after it ends
+#   node-*-async-activity-of-a-module-timer
+#                       `node --test res.test.mjs`: a timer the file starts at
+#                       its top level, which no test owns, throws after its one
+#                       test, `quick one`, passes
+#   node-*-exits-after-tests-pass-in-two-files
+#                       `node --test` over a.test.mjs and z.test.mjs: the
+#                       mutant (`process.exitCode = 0;` to `1;` in flush.mjs,
+#                       which both import) makes each file's process exit 1
+#                       after its one test (`flush keeps its value`, `flush
+#                       keeps another value`) passes
+#   node-*-isolation-none-load-failure
+#                       `node --test --test-isolation=none config.test.mjs
+#                       other.test.mjs`: the mutant (`mode = 'strict'` to
+#                       `'loose'` in config.mjs) makes config.mjs throw as
+#                       config.test.mjs imports it
+#   node-*-isolation-none-syntax-error
+#                       the same over syntax.test.mjs, whose clamp.mjs holds
+#                       `if (x > hi {`: Node reports the file after the other
+#                       file's pass
+#   node-*-isolation-none-throws-a-string
+#                       the same over str.test.mjs, which throws a string as
+#                       it loads (`null: 'a plain string'` in TAP)
+#   node-*-isolation-none-kill-beside-a-load-failure
+#                       `node --test --test-isolation=none a.test.mjs
+#                       b.test.mjs`: `cap is pinned` fails in a.test.mjs, and
+#                       limit.mjs throws as b.test.mjs imports it
+#   node-global-setup-throws
+#                       `node --test --test-global-setup=setup.mjs
+#                       db.test.mjs`, either reporter: the mutant (`rows = []`
+#                       in seed.mjs) makes the `seed()` setup.mjs calls throw
+
+
+def _mutate_check_module():
+    spec = importlib.util.spec_from_file_location("mutate_check_final_review", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    "capture", ["node-spec-async-activity-after-tests-in-two-files", "node-tap-async-activity-after-tests-in-two-files"]
+)
+@pytest.mark.parametrize("expect_red", ["remember returns the value", "remember keeps a second key", "remember forgets"])
+def test_node_files_that_report_asynchronous_activity_after_a_test_read_0_failed(tmp_path, capture, expect_red):
+    """Each file's test passes, a timer it started throws after it ends, and
+    each file's process fails. Only the file whose lines reported a pass of
+    the row's test came off the count, so the other read as a kill, and the
+    line that reports the activity, which names the row's test beside
+    `Error` and `fail`, read as its failure: `KILLED`, "exactly ... went red".
+    Each file whose lines report such activity comes off now, whatever test
+    the row names, and the run reads 0 failed."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        "node-spec-async-rejection-after-the-test-ends",
+        "node-tap-async-rejection-after-the-test-ends",
+        "node-spec-async-activity-of-a-module-timer",
+        "node-tap-async-activity-of-a-module-timer",
+    ],
+)
+def test_each_form_of_node_s_report_of_asynchronous_activity_takes_its_file_off(tmp_path, capture):
+    """Node reports a promise rejected after its test ended as it reports a
+    timer that throws then, naming the `unhandledRejection` event, and an
+    error no test owns, such as one a timer the file started at its top level
+    threw, as `A resource generated asynchronous activity after the test
+    ended`. Each fails only the file's process, whatever test the row names:
+    a row that names a test in another file reads 0 failed, where it read as
+    a kill."""
+    proc = _read_capture(tmp_path, capture, "a test in another file")
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize("expect_red", ["remember returns the value", "remember keeps a second key"])
+def test_a_report_of_asynchronous_activity_names_no_failed_test(reporter, expect_red):
+    """The report names a test Node lists as passed, so it is no line that
+    names the row's test beside a failure, whatever count is read."""
+    module = _mutate_check_module()
+    output = (LOAD_FAILURES / f"node-{reporter}-async-activity-after-tests-in-two-files.txt").read_text(encoding="utf-8")
+    lines, _ = module._output_tasks(output)
+    assert any(module._NODE_ASYNC_AFTER_END_RE.match(line) and expect_red in line for line in lines)
+    assert not module._named_in_failure_context(lines, expect_red)
+
+
+@pytest.mark.parametrize(
+    "capture", ["node-spec-exits-after-tests-pass-in-two-files", "node-tap-exits-after-tests-pass-in-two-files"]
+)
+@pytest.mark.parametrize("expect_red", ["flush keeps its value", "flush keeps another value"])
+def test_two_node_files_that_exit_after_their_tests_pass_still_read_as_a_kill(tmp_path, capture, expect_red):
+    """Pinned as it stands, a limit the module docstring and the gate's
+    reference state: Node prints a file whose tests all pass and whose process
+    then exits non-zero just as it prints one whose process dies during a
+    test, so only the file whose lines report a pass of the row's test comes
+    off the count. The other counts, and the row reads as a kill though no
+    test went red. A command that runs only the row's test file reads 0 failed
+    (the real run below)."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NEVER_APPEARS.format(expect_red))}, (
+        proc.stdout + proc.stderr
+    )
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node-spec-isolation-none-load-failure", "mode is strict"),
+        ("node-tap-isolation-none-load-failure", "mode is strict"),
+        ("node-spec-isolation-none-syntax-error", "clamp at the bound"),
+        ("node-tap-isolation-none-syntax-error", "clamp at the bound"),
+        ("node-spec-isolation-none-throws-a-string", "str runs"),
+        ("node-tap-isolation-none-throws-a-string", "str runs"),
+        ("node-global-setup-throws", "rows are seeded"),
+    ],
+)
+def test_a_node_test_file_that_cannot_load_in_the_runner_s_own_process_reads_0_failed(tmp_path, capture, expect_red):
+    """Under `--test-isolation=none` Node reports a file that threw as it
+    loaded as a test of that file's name, located at its line 1, column 1,
+    with the error the file threw in place of Node's own `test failed` and no
+    `Node.js v` line, and a global setup that throws stops the runner before
+    any test, with only the error and no summary. No test ran in either, and
+    each read as a kill; each reads 0 failed now."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture",
+    ["node-spec-isolation-none-kill-beside-a-load-failure", "node-tap-isolation-none-kill-beside-a-load-failure"],
+)
+def test_a_node_kill_beside_a_file_that_cannot_load_in_the_runner_s_own_process_is_one_kill(tmp_path, capture):
+    """The twin: the file that cannot load comes off `fail 2`, and the test
+    that failed beside it is the one kill."""
+    proc = _read_capture(tmp_path, capture, "cap is pinned")
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'cap is pinned' went red")}, proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+def test_a_kill_another_run_counted_stands_beside_a_global_setup_that_throws(tmp_path):
+    """The twin: a command that runs a suite with a kill, then Node's runner
+    whose global setup throws, reads that suite's kill."""
+    kill = (LOAD_FAILURES / "node-spec-isolation-none-kill-beside-a-load-failure.txt").read_text(encoding="utf-8")
+    setup = (LOAD_FAILURES / "node-global-setup-throws.txt").read_text(encoding="utf-8")
+    project = _project(tmp_path)
+    _custom_checker(project, LOAD_FAILURE_CHECKER)
+    (project / "capture.txt").write_text(kill + setup, encoding="utf-8", newline="\n")
+    proc = _run_table(project, [_row(expect_red="cap is pinned")])
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'cap is pinned' went red")}, proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("capture", "cut_after"),
+    [
+        ("node-tap-isolation-none-load-failure", "  location: '/home/dev/work/isolation-none/config.test.mjs:1:1'"),
+        ("node22-tap-isolation-none-load-failure", "  error: 'config: unknown mode loose'"),
+    ],
+)
+def test_a_node_file_test_whose_error_is_cut_off_is_read_as_node_s_own(capture, cut_after):
+    """The sign that a file threw as Node imported it is read only from what
+    Node printed of the file test's error: TAP's whole block, up to the `...`
+    that ends it. Output that ends first says nothing of the error, so the
+    test reads as Node's own `test failed`, as it did before (the Node 22
+    test, which has no location, is not read at all); the whole output reads
+    as a file that threw."""
+    module = _mutate_check_module()
+    output = (LOAD_FAILURES / f"{capture}.txt").read_text(encoding="utf-8")
+    lines, _ = module._output_tasks(output)
+    assert list(module._node_file_tests(lines).values()) == [True]
+    last = len(lines) - lines[::-1].index(cut_after)
+    assert not any(module._node_file_tests(lines[:last]).values())
+
+
+@pytest.mark.parametrize(
+    ("capture", "entry"),
+    [
+        ("node-spec-isolation-none-load-failure", "✖ config.test.mjs (1.587863ms)"),
+        ("node22-spec-isolation-none-load-failure", "✖ config.test.mjs (0.681573ms)"),
+    ],
+)
+def test_a_spec_entry_that_ends_node_s_list_of_failing_tests_carries_no_error(capture, entry):
+    """The spec reporter writes its whole list of failing tests at once, below
+    its summary, so an entry that ends the output, under the list's header,
+    is the whole entry: Node printed no error below it, as for a file that
+    threw `undefined` as Node imported it (the real captures in the review
+    below). Node's own `test failed` is always printed. It read as Node's own
+    when it ended the output, and the run as a kill. Without the list's
+    header above it, the output was cut, and the entry still reads as Node's
+    own."""
+    module = _mutate_check_module()
+    output = (LOAD_FAILURES / f"{capture}.txt").read_text(encoding="utf-8")
+    lines, _ = module._output_tasks(output)
+    last = len(lines) - lines[::-1].index(entry)
+    assert list(module._node_file_tests(lines[:last]).values()) == [True]
+    headless = [line for line in lines[:last] if line != "✖ failing tests:"]
+    assert not any(module._node_file_tests(headless).values())
+
+
+def _node_takes(flag: str) -> bool:
+    """Whether the `node` on PATH lists a command-line flag in its help."""
+    node = shutil.which("node")
+    if node is None:
+        return False
+    return flag in subprocess.run([node, "--help"], capture_output=True, text=True, check=False).stdout
+
+
+_CACHE = (
+    "const pending = new Set();\nexport function remember(key, value) {\n  pending.add(key);\n"
+    "  setTimeout(() => { if (pending.size > 100) throw new Error(`cache overflow at ${key}`); }, 5);\n"
+    "  return value;\n}\n"
+)
+_REMEMBER_TEST = (
+    "import {{ test }} from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import {{ remember }} from './cache.mjs';\n"
+    "test('{name}', () => {{ assert.equal(remember('{key}', 1), 1); }});\n"
+)
+_FLUSH = "export function flush(value) {\n  return value;\n}\nprocess.exitCode = 0;\n"
+_FLUSH_TEST = (
+    "import {{ test }} from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import {{ flush }} from './flush.mjs';\n"
+    "test('{name}', () => {{ assert.equal(flush({value}), {value}); }});\n"
+)
+_CONFIG = (
+    "export const mode = 'strict';\nif (mode !== 'strict') throw new Error('config: unknown mode ' + mode);\n"
+    "export function describeMode() { return mode; }\n"
+)
+_CONFIG_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import { describeMode } from './config.mjs';\n"
+    "test('mode is strict', () => { assert.equal(describeMode(), 'strict'); });\n"
+)
+_SEED = (
+    "const rows = ['a'];\nexport function seed() {\n  if (rows.length === 0) throw new Error('seed: no rows');\n"
+    "  return rows;\n}\n"
+)
+_SEED_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seed } from './seed.mjs';\n"
+    "test('rows are seeded', () => { assert.deepEqual(seed(), ['a']); });\n"
+)
+_OTHER_TEST = "import { test } from 'node:test';\ntest('other passes', () => {});\n"
+_REAL_NODE_FINAL = {
+    "async-activity-in-two-files": (
+        None,
+        {
+            "cache.mjs": _CACHE,
+            "a.test.mjs": _REMEMBER_TEST.format(name="remember returns the value", key="a"),
+            "b.test.mjs": _REMEMBER_TEST.format(name="remember keeps a second key", key="b"),
+        },
+        [
+            ("node --test --test-reporter={reporter} a.test.mjs b.test.mjs", "pending.size > 100", "pending.size > 0",
+             "remember returns the value", None),
+            ("node --test --test-reporter={reporter} a.test.mjs b.test.mjs", "pending.size > 100", "pending.size > 0",
+             "remember keeps a second key", None),
+        ],
+    ),
+    "exits-in-two-files": (
+        None,
+        {
+            "flush.mjs": _FLUSH,
+            "a.test.mjs": _FLUSH_TEST.format(name="flush keeps its value", value=3),
+            "z.test.mjs": _FLUSH_TEST.format(name="flush keeps another value", value=4),
+        },
+        [
+            # The limit: each file but the one with the row's test counts.
+            ("node --test --test-reporter={reporter} a.test.mjs z.test.mjs", "process.exitCode = 0;",
+             "process.exitCode = 1;", "flush keeps its value", "kill"),
+            # The command the gate's reference tells automate to write.
+            ("node --test --test-reporter={reporter} a.test.mjs", "process.exitCode = 0;", "process.exitCode = 1;",
+             "flush keeps its value", None),
+        ],
+    ),
+    "isolation-none": (
+        "--test-isolation",
+        {"config.mjs": _CONFIG, "config.test.mjs": _CONFIG_TEST, "other.test.mjs": _OTHER_TEST},
+        [
+            ("node --test --test-isolation=none --test-reporter={reporter} config.test.mjs other.test.mjs",
+             "export const mode = 'strict';", "export const mode = 'loose';", "mode is strict", None),
+            # The twin: a mutant the test kills.
+            ("node --test --test-isolation=none --test-reporter={reporter} config.test.mjs other.test.mjs",
+             "{ return mode; }", "{ return 'lax'; }", "mode is strict", "KILLED"),
+        ],
+    ),
+    "global-setup": (
+        "--test-global-setup",
+        {
+            "seed.mjs": _SEED,
+            "setup.mjs": "import { seed } from './seed.mjs';\nexport async function globalSetup() { seed(); }\n",
+            "db.test.mjs": _SEED_TEST,
+        },
+        [
+            ("node --test --test-global-setup=setup.mjs --test-reporter={reporter} db.test.mjs",
+             "const rows = ['a'];", "const rows = [];", "rows are seeded", None),
+            # The twin: a mutant the test kills, the setup passing.
+            ("node --test --test-global-setup=setup.mjs --test-reporter={reporter} db.test.mjs",
+             "const rows = ['a'];", "const rows = ['b'];", "rows are seeded", "KILLED"),
+        ],
+    ),
+}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize("case", list(_REAL_NODE_FINAL))
+def test_real_node_run_in_which_no_test_went_red_reads_0_failed(tmp_path, case, reporter):
+    """The real `node --test`, with each reporter: two files whose tests pass
+    and then report asynchronous activity after they ended, a file that cannot
+    load under `--test-isolation=none` and a global setup that throws each
+    read 0 failed, and the twins that a test kills read `KILLED`. Two files
+    whose processes exit non-zero after their tests pass read as a kill (the
+    limit), and the same mutant reads 0 failed under a command that runs only
+    the row's test file."""
+    flag, files, rows = _REAL_NODE_FINAL[case]
+    if flag is not None and not _node_takes(flag):
+        pytest.skip(f"this node does not take {flag}")
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8", newline="\n")
+    module = next(name for name in files if not name.endswith(".test.mjs") and name != "setup.mjs")
+    table = [
+        {"file": module, "anchor": anchor, "replacement": replacement, "command": command.format(reporter=reporter),
+         "expect_red": expect_red}
+        for command, anchor, replacement, expect_red, _ in rows
+    ]
+    readings = {
+        None: lambda name: ("MISATTRIBUTED", _ZERO_FAILED),
+        "kill": lambda name: ("MISATTRIBUTED", _NEVER_APPEARS.format(name)),
+        "KILLED": lambda name: ("KILLED", f"exactly {name!r} went red"),
+    }
+    expected = {index: readings[row[4]](row[3]) for index, row in enumerate(rows)}
+    proc = _run_table(tmp_path, table)
+    assert _ledger_rows(proc.stdout) == expected, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+# --- What the review of the fixes for that final review found -----------------
+#
+# Three more runs in which no test went red read as a kill. Node 22, where the
+# runner's own process is `--experimental-test-isolation=none` (Node 22 has no
+# `--test-isolation`), reports a test file that cannot load there as a test
+# with no location at all: no `test at` line above it in the spec reporter's
+# list of failing tests, no `location:` in its TAP block. A file that throws
+# `undefined` (any value that is not truthy) as Node imports it gets no error
+# line below its entry in that list, so when that entry ended the output it
+# read as Node's own `test failed`. And under isolation none a module that
+# calls `process.exit` after the row's test passed ends the runner's own
+# process, before Node prints a file's test or a summary.
+#
+# The captures (local paths replaced with /home/dev/work/isolation-none), each
+# from the spec reporter (node*-spec-*) and with `--test-reporter=tap`
+# (node*-tap-*):
+#   node22-*-isolation-none-load-failure
+#                       Node 22.22.0, `node --test
+#                       --experimental-test-isolation=none config.test.mjs
+#                       other.test.mjs`: the mutant (`mode = 'strict'` to
+#                       `'loose'` in config.mjs) makes config.mjs throw as
+#                       config.test.mjs imports it
+#   node22-*-isolation-none-kill-beside-a-load-failure
+#                       Node 22.22.0, the same over a.test.mjs and b.test.mjs:
+#                       `cap is pinned` fails in a.test.mjs, and limit.mjs
+#                       throws as b.test.mjs imports it
+#   node22-*-isolation-none-throws-undefined
+#   node-*-isolation-none-throws-undefined
+#                       Node 22.22.0 and 24.21.0, isolation none over
+#                       z.test.mjs and zz.test.mjs: the mutant (`v = 1` to `2`
+#                       in mod.mjs) makes mod.mjs `throw undefined` as
+#                       z.test.mjs imports it; zz.test.mjs's `row passes`
+#                       passes
+#   node-*-isolation-none-exits-after-the-test-passes
+#                       Node 24.21.0, `node --test --test-isolation=none
+#                       a.test.mjs`: the mutant (`code = 0` to `1` in
+#                       flush.mjs) makes a timer `flush` starts call
+#                       `process.exit(1)` after `flush keeps its value` passes
+#   node-*-isolation-none-exits-after-a-kill
+#                       the same, with a test before it, `flush drops
+#                       nothing`, that fails
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node22-spec-isolation-none-load-failure", "mode is strict"),
+        ("node22-tap-isolation-none-load-failure", "mode is strict"),
+        ("node22-spec-isolation-none-throws-undefined", "row passes"),
+        ("node22-tap-isolation-none-throws-undefined", "row passes"),
+        ("node-spec-isolation-none-throws-undefined", "row passes"),
+        ("node-tap-isolation-none-throws-undefined", "row passes"),
+    ],
+)
+def test_a_node_22_or_falsy_load_failure_in_the_runner_s_own_process_reads_0_failed(tmp_path, capture, expect_red):
+    """Node 22 gives the test of a file that cannot load in the runner's own
+    process no location, so it was never found, and the row read as a kill.
+    It is found now as a failed test with no location whose error is not
+    Node's own: no other test lacks one. A file that throws `undefined` gets
+    no error line, and the spec reporter's run read as a kill when its entry
+    ended the output (TAP's already read 0 failed); it reads 0 failed now."""
+    proc = _read_capture(tmp_path, capture, expect_red)
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "capture",
+    ["node22-spec-isolation-none-kill-beside-a-load-failure", "node22-tap-isolation-none-kill-beside-a-load-failure"],
+)
+def test_a_node_22_kill_beside_a_file_that_cannot_load_in_the_runner_s_own_process_is_one_kill(tmp_path, capture):
+    """The twin: the failing test beside it is located where it is declared,
+    so it is never read as a file's test, and stands as the one kill."""
+    proc = _read_capture(tmp_path, capture, "cap is pinned")
+    assert _ledger_rows(proc.stdout) == {0: ("KILLED", "exactly 'cap is pinned' went red")}, proc.stdout + proc.stderr
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("capture", "old", "new"),
+    [
+        ("node22-spec-isolation-none-load-failure", "  Error: config: unknown mode loose", "  'test failed'"),
+        ("node22-tap-isolation-none-load-failure", "  type: 'test'",
+         "  type: 'test'\n  failureType: 'testCodeFailure'"),
+        ("node22-tap-isolation-none-load-failure", "  type: 'test'", "  extra: 'not node'"),
+    ],
+)
+def test_a_failed_node_test_with_no_location_is_read_only_beside_an_error_of_its_own(capture, old, new):
+    """A failed test with no location is the file's own only when its error
+    is not Node's `test failed` (in TAP, a block that a `failureType` does not
+    name, of the shape Node writes, its `type:` included): one that is, or a
+    block of another shape, is not read, and counts as before."""
+    module = _mutate_check_module()
+    output = (LOAD_FAILURES / f"{capture}.txt").read_text(encoding="utf-8")
+    lines, _ = module._output_tasks(output)
+    assert list(module._node_file_tests(lines).values()) == [True]
+    changed, _ = module._output_tasks(output.replace(old, new))
+    assert module._node_file_tests(changed) == {}
+
+
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize(
+    ("capture", "expect_red", "reading"),
+    [
+        ("exits-after-the-test-passes", "flush keeps its value", ("MISATTRIBUTED", _ZERO_FAILED)),
+        # The twins: a test Node never reported (the process ended first), and a test that went red.
+        ("exits-after-the-test-passes", "flush keeps another value",
+         ("MISATTRIBUTED", _NEVER_APPEARS.format("flush keeps another value"))),
+        ("exits-after-a-kill", "flush keeps its value",
+         ("MISATTRIBUTED", _NEVER_APPEARS.format("flush keeps its value"))),
+        ("exits-after-a-kill", "flush drops nothing",
+         ("KILLED+others", "'flush drops nothing' went red; failure count unparseable")),
+    ],
+)
+def test_a_runner_s_own_process_that_exits_after_the_row_s_test_passes_reads_0_failed(
+    tmp_path, reporter, capture, expect_red, reading
+):
+    """Under `--test-isolation=none` a module that calls `process.exit` ends
+    the runner itself, so Node prints neither a file's test nor a summary.
+    When it ends after the row's test passed it read as a kill, though no
+    test went red. Output that reports a pass of the row's test, no failed
+    test and no summary reads 0 failed now, as a test file whose process
+    exits after that pass does. An exit before Node reports the row's test is
+    a death during a test, and a test that failed before the exit is a kill,
+    so both still read as one."""
+    proc = _read_capture(tmp_path, f"node-{reporter}-isolation-none-{capture}", expect_red)
+    assert _ledger_rows(proc.stdout) == {0: reading}, proc.stdout + proc.stderr
+
+
+STDERR_AFTER_STDOUT_CHECKER = """\
+import sys
+from pathlib import Path
+if "LIMIT = 5" in open("code.py", encoding="utf-8").read():
+    print("all green")
+    sys.exit(0)
+sys.stdout.buffer.write(Path("capture.txt").read_bytes().rstrip(b"\\n"))
+sys.stdout.flush()
+sys.stderr.write("(node:4242) Warning: a module wrote this to stderr\\n")
+sys.exit(1)
+"""
+
+
+def test_the_last_line_of_stdout_is_read_apart_from_the_first_line_of_stderr(tmp_path):
+    """The spec reporter ends its output with no line break, so the first line
+    a module wrote to stderr was read on one line with the last entry of its
+    list of failing tests, and the file's test was never found: the row read
+    as a kill. The two streams' lines are read apart now."""
+    project = _project(tmp_path)
+    _custom_checker(project, STDERR_AFTER_STDOUT_CHECKER)
+    capture = (LOAD_FAILURES / "node-spec-isolation-none-throws-undefined.txt").read_bytes()
+    (project / "capture.txt").write_bytes(capture)
+    proc = _run_table(project, [_row(expect_red="row passes")])
+    assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+# The timer leaves the reporter time to write the pass before the exit; Node
+# prints no summary before it fires, since the runner ends only once nothing
+# else is pending.
+_FLUSH_EXITS = (
+    "export const code = 0;\n"
+    "export function flush(v) { setTimeout(() => { if (code) process.exit(code); }, 100); return v; }\n"
+)
+_FLUSH_EXITS_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import { flush } from './flush.mjs';\n"
+    "test('flush keeps its value', () => { assert.equal(flush(3), 3); });\n"
+)
+_UNDEFINED = "export const v = 1;\nif (v !== 1) throw undefined;\nexport function twice(x) { return x * 2; }\n"
+_TWICE_TEST = (
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+    "import { twice } from './mod.mjs';\ntest('twice doubles', () => { assert.equal(twice(2), 4); });\n"
+)
+_ISOLATION_NONE = "node --test --experimental-test-isolation=none --test-reporter={reporter}"
+# `--experimental-test-isolation` is the option's only name on Node 22 and an
+# alias of `--test-isolation` on Node 24, so each case runs on both.
+_REAL_NODE_REVIEW = {
+    "load-failure": (
+        {"config.mjs": _CONFIG, "config.test.mjs": _CONFIG_TEST, "other.test.mjs": _OTHER_TEST},
+        [
+            (f"{_ISOLATION_NONE} config.test.mjs other.test.mjs", "export const mode = 'strict';",
+             "export const mode = 'loose';", "mode is strict", None),
+            (f"{_ISOLATION_NONE} config.test.mjs other.test.mjs", "{ return mode; }", "{ return 'lax'; }",
+             "mode is strict", "KILLED"),
+        ],
+    ),
+    "throws-undefined": (
+        {"mod.mjs": _UNDEFINED, "z.test.mjs": _TWICE_TEST, "zz.test.mjs": "import { test } from 'node:test';\n"
+         "test('row passes', () => {});\n"},
+        [
+            (f"{_ISOLATION_NONE} z.test.mjs zz.test.mjs", "export const v = 1;", "export const v = 2;", "row passes",
+             None),
+            (f"{_ISOLATION_NONE} z.test.mjs zz.test.mjs", "return x * 2;", "return x * 3;", "twice doubles", "KILLED"),
+        ],
+    ),
+    "exits-after-the-test-passes": (
+        {"flush.mjs": _FLUSH_EXITS, "a.test.mjs": _FLUSH_EXITS_TEST},
+        [
+            (f"{_ISOLATION_NONE} a.test.mjs", "export const code = 0;", "export const code = 1;",
+             "flush keeps its value", None),
+            # The twin: the process exits during the row's test, a death that reads as a kill.
+            (f"{_ISOLATION_NONE} a.test.mjs", "return v; }", "process.exit(1); }", "flush keeps its value", "kill"),
+        ],
+    ),
+}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize("case", list(_REAL_NODE_REVIEW))
+def test_real_node_runner_s_own_process_in_which_no_test_went_red_reads_0_failed(tmp_path, case, reporter):
+    """The real `node --test --experimental-test-isolation=none`, with each
+    reporter, on whichever Node runs the suite (22 locates no file's test, 24
+    does): a file that cannot load, one that throws `undefined` as it loads,
+    and a module that ends the runner's process after the row's test passed
+    each read 0 failed, and each twin reads as a kill."""
+    if not _node_takes("--experimental-test-isolation"):
+        pytest.skip("this node does not take --experimental-test-isolation")
+    files, rows = _REAL_NODE_REVIEW[case]
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8", newline="\n")
+    module = next(name for name in files if not name.endswith(".test.mjs"))
+    table = [
+        {"file": module, "anchor": anchor, "replacement": replacement, "command": command.format(reporter=reporter),
+         "expect_red": expect_red}
+        for command, anchor, replacement, expect_red, _ in rows
+    ]
+    readings = {
+        None: lambda name: ("MISATTRIBUTED", _ZERO_FAILED),
+        "kill": lambda name: ("MISATTRIBUTED", _NEVER_APPEARS.format(name)),
+        "KILLED": lambda name: ("KILLED", f"exactly {name!r} went red"),
+    }
+    expected = {index: readings[row[4]](row[3]) for index, row in enumerate(rows)}
+    proc = _run_table(tmp_path, table)
+    assert _ledger_rows(proc.stdout) == expected, proc.stdout + proc.stderr
     assert proc.returncode == 1

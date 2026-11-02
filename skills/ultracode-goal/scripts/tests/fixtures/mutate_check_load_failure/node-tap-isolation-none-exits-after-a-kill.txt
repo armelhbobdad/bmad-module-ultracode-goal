@@ -1,0 +1,31 @@
+TAP version 13
+# Subtest: flush drops nothing
+not ok 1 - flush drops nothing
+  ---
+  duration_ms: 1.764614
+  type: 'test'
+  location: '/home/dev/work/isolation-none/a.test.mjs:4:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///home/dev/work/isolation-none/a.test.mjs:4:44)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.start (node:internal/test_runner/test:1262:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+  ...
+# Subtest: flush keeps its value
+ok 2 - flush keeps its value
+  ---
+  duration_ms: 0.2584
+  type: 'test'
+  ...

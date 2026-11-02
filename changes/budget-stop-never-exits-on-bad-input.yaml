@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The turn-budget `Stop` hook now exits 0 whatever it is given, and counts the turn wherever it knows the story and can write that story's counter; when it cannot write the counter, it says so on stderr and the turn goes uncounted. A Stop event that is not a JSON object, or that is nested past what Python reads, reads as no event, so the turn counts against the story `ULTRACODE_STORY_ID` or `.current-story` names; a story pointer that holds a NUL byte counts against `unknown`, as an unreadable pointer does. The hook names each of these on stderr. It exited 1 on them before, and since Claude Code ignores `onFailure` on `Stop`, the turn went uncounted and the story's turn ceiling never saw it.
+issues: [186]

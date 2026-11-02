@@ -1,0 +1,18 @@
+✔ other passes (17.049806ms)
+✔ strip drops a # comment (14.193955ms)
+✔ split cuts a path at each \ (26.188636ms)
+✖ parse.test.mjs (480.055472ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 3
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 660.606163
+
+✖ failing tests:
+
+test at parse.test.mjs:1:1
+✖ parse.test.mjs (480.055472ms)
+  'test failed'

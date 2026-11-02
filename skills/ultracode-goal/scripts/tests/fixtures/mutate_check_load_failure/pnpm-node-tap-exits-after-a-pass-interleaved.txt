@@ -1,0 +1,59 @@
+Scope: 2 of 3 workspace projects
+packages/guard test$ node --test $REPORTER guard.test.mjs
+packages/other test$ node --test $REPORTER other.test.mjs
+packages/guard test: TAP version 13
+packages/other test: TAP version 13
+packages/guard test: # Subtest: clamp at the bound
+packages/guard test: ok 1 - clamp at the bound
+packages/guard test:   ---
+packages/guard test:   duration_ms: 17.962648
+packages/guard test:   type: 'test'
+packages/guard test:   ...
+packages/other test: # Subtest: other starts
+packages/other test: ok 1 - other starts
+packages/other test:   ---
+packages/other test:   duration_ms: 102.496132
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: # Subtest: other passes
+packages/other test: ok 2 - other passes
+packages/other test:   ---
+packages/other test:   duration_ms: 102.592389
+packages/other test:   type: 'test'
+packages/other test:   ...
+packages/other test: 1..2
+packages/other test: # tests 2
+packages/other test: # suites 0
+packages/other test: # pass 2
+packages/other test: # fail 0
+packages/other test: # cancelled 0
+packages/other test: # skipped 0
+packages/other test: # todo 0
+packages/other test: # duration_ms 679.437246
+packages/other test: Done
+packages/guard test: # Subtest: guard.test.mjs
+packages/guard test: not ok 1 - guard.test.mjs
+packages/guard test:   ---
+packages/guard test:   duration_ms: 968.862231
+packages/guard test:   type: 'test'
+packages/guard test:   location: '/home/dev/work/exits-after-a-pass/packages/guard/guard.test.mjs:1:1'
+packages/guard test:   failureType: 'testCodeFailure'
+packages/guard test:   exitCode: 1
+packages/guard test:   signal: ~
+packages/guard test:   error: 'test failed'
+packages/guard test:   code: 'ERR_TEST_FAILURE'
+packages/guard test:   ...
+packages/guard test: 1..2
+packages/guard test: # tests 2
+packages/guard test: # suites 0
+packages/guard test: # pass 1
+packages/guard test: # fail 1
+packages/guard test: # cancelled 0
+packages/guard test: # skipped 0
+packages/guard test: # todo 0
+packages/guard test: # duration_ms 1030.6374
+packages/guard test: Failed
+/home/dev/work/exits-after-a-pass/packages/guard:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  guard@0.0.0 test: `node --test $REPORTER guard.test.mjs`
+Exit status 1
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?

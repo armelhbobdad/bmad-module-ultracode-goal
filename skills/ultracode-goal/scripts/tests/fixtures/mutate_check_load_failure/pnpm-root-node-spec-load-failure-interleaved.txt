@@ -1,0 +1,48 @@
+Scope: 2 of 3 workspace projects
+guard test$ node --test $REPORTER guard.test.mjs
+other test$ node --test $REPORTER other.test.mjs
+other test: ✔ other step 0 (6.239375ms)
+other test: ✔ other step 1 (4.971772ms)
+other test: ✔ other step 2 (4.818774ms)
+other test: ✔ other step 3 (4.769938ms)
+other test: ✔ other step 4 (5.739221ms)
+other test: ✔ other step 5 (5.788883ms)
+other test: ✔ other step 6 (5.799153ms)
+other test: ✔ other step 7 (5.733011ms)
+other test: ✔ other step 8 (6.02526ms)
+guard test: file:///home/dev/work/pnpm-root-load-failure/guard/clamp.mjs:4
+guard test: if (!(LIMIT < 5)) throw new Error(`LIMIT out of range: ${LIMIT}`);
+guard test:                         ^
+guard test: Error: LIMIT out of range: 5
+guard test:     at file:///home/dev/work/pnpm-root-load-failure/guard/clamp.mjs:4:25
+guard test: Node.js v24.21.0
+other test: ✔ other step 9 (5.873753ms)
+guard test: ✖ guard.test.mjs (100.119381ms)
+guard test: ℹ tests 1
+guard test: ℹ suites 0
+guard test: ℹ pass 0
+guard test: ℹ fail 1
+guard test: ℹ cancelled 0
+guard test: ℹ skipped 0
+guard test: ℹ todo 0
+guard test: ℹ duration_ms 107.514991
+guard test: ✖ failing tests:
+guard test: test at guard.test.mjs:1:1
+guard test: ✖ guard.test.mjs (100.119381ms)
+guard test:   'test failed'
+other test: ✔ other step 10 (5.521489ms)
+guard test: Failed
+/home/dev/work/pnpm-root-load-failure/guard:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  guard@0.0.0 test: `node --test $REPORTER guard.test.mjs`
+Exit status 1
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?
+other test: ✔ other step 11 (4.523748ms)
+other test: ℹ tests 12
+other test: ℹ suites 0
+other test: ℹ pass 12
+other test: ℹ fail 0
+other test: ℹ cancelled 0
+other test: ℹ skipped 0
+other test: ℹ todo 0
+other test: ℹ duration_ms 123.70769
+other test: Done

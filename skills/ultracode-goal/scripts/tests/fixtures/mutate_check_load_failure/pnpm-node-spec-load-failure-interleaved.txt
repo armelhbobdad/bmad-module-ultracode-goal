@@ -1,0 +1,48 @@
+Scope: 2 of 3 workspace projects
+packages/guard test$ node --test $REPORTER guard.test.mjs
+packages/other test$ node --test $REPORTER other.test.mjs
+packages/other test: ✔ other step 0 (17.205737ms)
+packages/other test: ✔ other step 1 (4.18212ms)
+packages/other test: ✔ other step 2 (7.402388ms)
+packages/other test: ✔ other step 3 (5.288513ms)
+packages/other test: ✔ other step 4 (7.123151ms)
+packages/other test: ✔ other step 5 (4.33789ms)
+packages/other test: ✔ other step 6 (5.159828ms)
+packages/guard test: file:///home/dev/work/pnpm-load-failure/packages/guard/clamp.mjs:4
+packages/guard test: if (!(LIMIT < 5)) throw new Error(`LIMIT out of range: ${LIMIT}`);
+packages/guard test:                         ^
+packages/guard test: Error: LIMIT out of range: 5
+packages/guard test:     at file:///home/dev/work/pnpm-load-failure/packages/guard/clamp.mjs:4:25
+packages/guard test: Node.js v24.21.0
+packages/other test: ✔ other step 7 (6.746105ms)
+packages/other test: ✔ other step 8 (5.612763ms)
+packages/other test: ✔ other step 9 (7.726627ms)
+packages/guard test: ✖ guard.test.mjs (151.170808ms)
+packages/guard test: ℹ tests 1
+packages/guard test: ℹ suites 0
+packages/guard test: ℹ pass 0
+packages/guard test: ℹ fail 1
+packages/guard test: ℹ cancelled 0
+packages/guard test: ℹ skipped 0
+packages/guard test: ℹ todo 0
+packages/guard test: ℹ duration_ms 171.492781
+packages/other test: ✔ other step 10 (4.216903ms)
+packages/other test: ✔ other step 11 (9.447975ms)
+packages/guard test: ✖ failing tests:
+packages/guard test: test at guard.test.mjs:1:1
+packages/guard test: ✖ guard.test.mjs (151.170808ms)
+packages/guard test:   'test failed'
+packages/guard test: Failed
+/home/dev/work/pnpm-load-failure/packages/guard:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  guard@0.0.0 test: `node --test $REPORTER guard.test.mjs`
+Exit status 1
+packages/other test: ℹ tests 12
+packages/other test: ℹ suites 0
+packages/other test: ℹ pass 12
+packages/other test: ℹ fail 0
+packages/other test: ℹ cancelled 0
+packages/other test: ℹ skipped 0
+packages/other test: ℹ todo 0
+packages/other test: ℹ duration_ms 285.214016
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?
+packages/other test: Done

@@ -47,6 +47,7 @@ Run: uv run --with pytest pytest scripts/tests/test_preflight_assert_armed.py
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import os
@@ -165,13 +166,36 @@ def _arm(
     )
 
 
+# The manifest reads the Claude Code version with `claude --version`. A test
+# must not depend on whichever `claude` the machine has, or on none, so `_run`
+# loads the script as a module and replaces its version reader with one that
+# returns `claude_version`, the way test_preflight_check.py monkeypatches it,
+# then calls its main() in the child process. The real reader is exercised
+# by its own test below, with a stub `claude` on PATH.
+_SUPPORTED_CLAUDE = "2.1.306 (Claude Code)"
+_BOOT = (
+    "import importlib.util, json, sys\n"
+    "spec = importlib.util.spec_from_file_location('preflight_check', sys.argv[1])\n"
+    "module = importlib.util.module_from_spec(spec)\n"
+    "spec.loader.exec_module(module)\n"
+    "raw = json.loads(sys.argv[2])\n"
+    "module._cc_version = lambda: (raw, module._parse_semver(raw) if raw else None)\n"
+    "sys.exit(module.main(sys.argv[3:]))\n"
+)
+
+
 def _run(
     root: Path,
     *extra: str,
     impl: Path | None = None,
     env: dict | None = None,
     timeout: float | None = None,
+    claude_version: str | None = _SUPPORTED_CLAUDE,
+    real_version_reader: bool = False,
 ) -> tuple[int, dict]:
+    """Run --assert-armed as a resume does. `claude_version` is what the
+    version reader returns (None for a `claude` it cannot run), unless
+    `real_version_reader` keeps the script's own reader."""
     impl_dir = impl if impl is not None else root / "impl"
     impl_dir.mkdir(exist_ok=True)
     # Start from the real environment (Windows needs SystemRoot et al.), then
@@ -190,10 +214,12 @@ def _run(
     base_env.update({"HOME": str(home), "USERPROFILE": str(home)})
     if env:
         base_env.update(env)
+    launch = [sys.executable, str(SCRIPT)]
+    if not real_version_reader:
+        launch = [sys.executable, "-c", _BOOT, str(SCRIPT), json.dumps(claude_version)]
     proc = subprocess.run(
         [
-            sys.executable,
-            str(SCRIPT),
+            *launch,
             "--assert-armed",
             "--project-root",
             str(root),
@@ -379,12 +405,14 @@ def test_a_guard_under_stop_with_on_failure_is_still_not_armed(tmp_path: Path) -
 # unquoted space. Preflight writes `<env> uv run '<script>'` with each injected
 # value and the script path in single quotes, so a path with a space stays one
 # word. Unquoted, the rest of that path becomes the command the shell runs (it
-# exits 127) or the file `uv run` is given, so the hook never starts: under the
-# guard's "onFailure": "block" every tool call is refused, and the Stop budget
-# hook silently does not run. The manifest reads each command the way the
-# shell splits it, and never runs it.
+# exits 127) or the file `uv run` is given (uv exits 2), so the hook never
+# starts: under the guard's "onFailure": "block" every tool call is refused. On
+# Stop, exit 127 is a non-blocking error, so the budget hook lets each stop
+# through uncounted, and uv's exit 2 sends each stop back, up to eight times in
+# a row. The manifest reads each command the way the shell splits it, and never
+# runs it.
 
-_SPLIT_REASON = "UCG hook command does not start its script as written"
+_SPLIT_REASON = "UCG hook command would not run its script as preflight writes it"
 
 
 def _split_reason(out: dict) -> str:
@@ -478,8 +506,8 @@ def test_an_unquoted_guard_under_a_path_with_a_space_is_not_armed(
 
 
 def test_an_unquoted_budget_hook_is_not_armed_either(tmp_path: Path) -> None:
-    """A Stop hook that cannot start is skipped without a word: the budget
-    layer is then gone while the arming reads as complete."""
+    """A Stop hook that cannot start counts no turn: the budget layer is then
+    gone while the arming reads as complete."""
     root = _repo(tmp_path)
     _arm(
         root,
@@ -491,6 +519,40 @@ def test_an_unquoted_budget_hook_is_not_armed_either(tmp_path: Path) -> None:
     problems = out["checks"]["hooks"]["command_problems"]
     assert len(problems) == 1 and problems[0].startswith("budget_stop.py under Stop: ")
     assert "budget_stop.py under Stop" in _split_reason(out)
+
+
+def test_the_reason_says_what_each_kind_of_command_costs(tmp_path: Path) -> None:
+    """Review of #186's fix (4.1.0): the reason said every such hook never
+    starts, and that Claude Code skips a budget hook that cannot start without
+    a word. A command handed to a Python does start it, and a budget command
+    uv refuses exits 2, which on Stop sends the stop back (uv 0.12.15, an
+    unquoted script path: "Failed to spawn", exit 2), up to the eight blocks in
+    a row after which Claude Code lets it through."""
+    root = _repo(tmp_path)
+    _arm(
+        root,
+        guard_command="uv run python 'scripts/hooks/guard_pretooluse.py'",
+        budget_command="uv -p 3.12 run 'scripts/hooks/budget_stop.py'",
+    )
+    code, out = _run(root, env=_process_env(root))
+    assert code == 1
+    reason = _split_reason(out)
+    assert "and the hook never starts" not in reason
+    assert "without a word" not in reason
+    assert "A guard command that does not start the guard refuses every tool call" in reason
+    assert "one that prints and exits 0 lets every call through unchecked" in reason
+    assert "A budget command the shell cannot start lets each stop through uncounted" in reason
+    assert "one uv refuses sends each stop back with uv's error, up to eight times in a row" in reason
+    # Final pass: uv syncs the project in the hook's folder before it looks for
+    # the script, and exits 1 where that project fails to build or its
+    # requirements cannot be satisfied. Its review: a network failure in that
+    # sync exits 2, so that stop is sent back.
+    assert "fails to build or resolve" not in reason
+    assert (
+        "up to eight times in a row, unless the project uv syncs first fails to build, or its requirements cannot "
+        "be satisfied, when uv exits 1 and each stop goes through uncounted too; a network failure in that sync "
+        "exits 2, and sends each stop back." in reason
+    )
 
 
 @pytest.mark.parametrize(
@@ -511,6 +573,87 @@ def test_an_unquoted_budget_hook_is_not_armed_either(tmp_path: Path) -> None:
         pytest.param("ULTRACODE_MAX_TURNS=guard_pretooluse.py", "the shell would run nothing", id="assignments-only"),
         pytest.param(
             "uv run 'scripts/hooks/guard_pretooluse.py.bak'", "uv run would be given", id="another-file"
+        ),
+        # Twins of the option forms below: the same words with the script
+        # missing, or put where an option's value goes, or run as a module,
+        # start nothing.
+        pytest.param(
+            "uv run --python 3.12 --with 'scripts/hooks/guard_pretooluse.py'",
+            "uv run would be given nothing",
+            id="option-value-then-nothing",
+        ),
+        pytest.param(
+            "uv run --python 'scripts/hooks/guard_pretooluse.py'",
+            "uv run would be given nothing",
+            id="script-as-an-option-value",
+        ),
+        pytest.param(
+            "uv run -qp 'scripts/hooks/guard_pretooluse.py'",
+            "uv run would be given nothing",
+            id="script-as-a-clustered-option-value",
+        ),
+        pytest.param("uv --directory run 'scripts/hooks/guard_pretooluse.py'", "uv is given", id="run-as-a-value"),
+        pytest.param(
+            "uv run -m 'scripts/hooks/guard_pretooluse.py'", "uv run would run a module", id="uv-run-module"
+        ),
+        # A guard command that prints and exits 0 never starts the guard, and
+        # Claude Code reads its exit 0 as no objection to every call.
+        pytest.param(
+            "uv run --help 'scripts/hooks/guard_pretooluse.py'", "uv run would print its help and exit", id="uv-run-help"
+        ),
+        # Review of #186's fix: uv takes only its global options before `run`,
+        # and `--` there leaves it no command, so uv 0.12.15 exits 2 on each.
+        pytest.param(
+            "uv -- run 'scripts/hooks/guard_pretooluse.py'",
+            'uv would take no command after "--"',
+            id="end-of-options-before-run",
+        ),
+        pytest.param(
+            "uv --python 3.12 run 'scripts/hooks/guard_pretooluse.py'",
+            'uv would refuse "--python", an option it takes only after run',
+            id="run-option-before-run",
+        ),
+        # `uv run --script` runs the word after it as the script.
+        pytest.param(
+            "uv run --script python 'scripts/hooks/guard_pretooluse.py'",
+            'uv run would be given "python" as the script',
+            id="script-flag-then-python",
+        ),
+        # A value outside the set uv's parser takes (uv 0.12.15 exits 2).
+        pytest.param(
+            "uv --color bogus run 'scripts/hooks/guard_pretooluse.py'",
+            'uv would not take "bogus" as the value of "--color"',
+            id="enum-value-uv-refuses",
+        ),
+        pytest.param(
+            "uv run --max-recursion-depth x 'scripts/hooks/guard_pretooluse.py'",
+            'uv run would not take "x" as the value of "--max-recursion-depth"',
+            id="number-value-uv-refuses",
+        ),
+        # A script handed to a Python runs without its inline metadata: no
+        # Python minimum, and the project's environment, not an isolated one.
+        # `python3.12` also starts only where uv finds that program: uv
+        # 0.12.15 fails to spawn it, with a 3.12 it manages installed, when it
+        # selects another Python.
+        pytest.param(
+            "uv run python 'scripts/hooks/guard_pretooluse.py'",
+            'uv run would hand the script to "python" without reading its inline metadata',
+            id="uv-run-python",
+        ),
+        pytest.param(
+            "ULTRACODE_HOOK=guard_pretooluse.py uv run python",
+            'uv run would hand the script to "python" without reading its inline metadata',
+            id="python-alone",
+        ),
+        pytest.param(
+            "uv run python3.12 'scripts/hooks/guard_pretooluse.py'",
+            'uv run would hand the script to "python3.12" without reading its inline metadata',
+            id="uv-run-python3-12",
+        ),
+        pytest.param(
+            "uv run /usr/bin/python3 'scripts/hooks/guard_pretooluse.py'",
+            'uv run would hand the script to "/usr/bin/python3" without reading its inline metadata',
+            id="python-by-path",
         ),
     ],
 )
@@ -536,6 +679,26 @@ def test_a_guard_command_that_would_not_start_the_guard_is_not_armed(
             "ULTRACODE_IMPL_ARTIFACTS='/srv/it'\\''s here/impl' uv run \"/srv/it's here/guard_pretooluse.py\"",
             id="a-quote-inside-a-value",
         ),
+        # Issue #186: an option of uv's that takes a value, in its own word or
+        # glued, starts the script. It read as a command that would not, so a
+        # resume rewrote it.
+        pytest.param("uv run --python 3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="python-option-value"),
+        pytest.param("uv run -p 3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="short-python-option"),
+        pytest.param("uv run --python=3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="glued-long-value"),
+        pytest.param("uv run -p3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="glued-short-value"),
+        pytest.param("uv run -qp 3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="clustered-short-value"),
+        pytest.param(
+            "uv run --with pyyaml --no-project --python 3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'",
+            id="several-options",
+        ),
+        pytest.param("uv --directory /srv/p run '/srv/p/scripts/hooks/guard_pretooluse.py'", id="option-before-run"),
+        pytest.param("uv run -- '/srv/p/scripts/hooks/guard_pretooluse.py'", id="end-of-options"),
+        pytest.param("uv --color=never run '/srv/p/scripts/hooks/guard_pretooluse.py'", id="enum-value-uv-takes"),
+        # An option `uv run --help` does not list still takes its value.
+        pytest.param(
+            "uv run --python-preference only-system '/srv/p/scripts/hooks/guard_pretooluse.py'",
+            id="hidden-option-value",
+        ),
     ],
 )
 def test_a_guard_command_the_shell_splits_as_written_is_armed(tmp_path: Path, command: str) -> None:
@@ -545,6 +708,1047 @@ def test_a_guard_command_the_shell_splits_as_written_is_armed(tmp_path: Path, co
     _arm(root, guard_command=command)
     code, out = _run(root, env=_process_env(root))
     assert out["reasons"] == [] and code == 0, out["reasons"]
+
+
+# The read is in-process, so the many forms below cost no subprocess.
+_GUARD = "'/srv/p/scripts/hooks/guard_pretooluse.py'"
+
+
+@functools.cache
+def _preflight_module():
+    return _load("preflight_check")
+
+
+# Review of #186's fix (4.1.0), final pass. The check read each leading word
+# as an assignment after shlex had taken its quotes off, and read `<`, `>`,
+# `||`, `;` and `&` as words. The shell does neither: a word whose name or "="
+# is quoted is no assignment, so the shell runs it as the command (dash and
+# bash both exit 127, "KEY=v w: not found"), and an operator runs more than
+# the script or redirects it. Through dash and bash, with a stub uv that
+# prints a verdict and exits 2: `< /dev/null` and `&` handed the script an
+# empty stdin in place of the hook event, `|| true`, `; true` and a second
+# line exited 0, `> /dev/null` dropped the verdict, `2>&1` moved the reason
+# into it, and `KEY=v; uv run` ran uv without KEY. A comment that starts a
+# word ends the command there and changes nothing. 4.0.0 passed each of these.
+_QUOTED_ASSIGNMENT = "the shell would run %s as the command, not uv, since a word whose name or \"=\" is quoted is no assignment"
+
+
+@pytest.mark.parametrize(
+    "command,shown",
+    [
+        (f"'ULTRACODE_IMPL_ARTIFACTS=/My Projects/x' uv run {_GUARD}", '"ULTRACODE_IMPL_ARTIFACTS=/My Projects/x"'),
+        (f'"ULTRACODE_IMPL_ARTIFACTS=/My Projects/x" uv run {_GUARD}', '"ULTRACODE_IMPL_ARTIFACTS=/My Projects/x"'),
+        (f'ULTRACODE_IMPL_ARTIFACTS"=/x" uv run {_GUARD}', '"ULTRACODE_IMPL_ARTIFACTS=/x"'),
+        (f"\\ULTRACODE_MAX_TURNS=25 uv run {_GUARD}", '"ULTRACODE_MAX_TURNS=25"'),
+        (f"ULTRACODE_MAX_TURN'S'=25 uv run {_GUARD}", '"ULTRACODE_MAX_TURNS=25"'),
+        # After an assignment the shell does take, a quoted one still runs.
+        (f"ULTRACODE_MAX_TURNS='25' 'ULTRACODE_IMPL_ARTIFACTS=/x' uv run {_GUARD}", '"ULTRACODE_IMPL_ARTIFACTS=/x"'),
+    ],
+)
+def test_a_quoted_assignment_is_the_command_the_shell_runs(command: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(command, "guard_pretooluse.py")
+    assert problem == _QUOTED_ASSIGNMENT % shown, problem
+
+
+@pytest.mark.parametrize(
+    "command,shown",
+    [
+        # Input from elsewhere than the hook event.
+        (f"uv run {_GUARD} < /dev/null", '"< /dev/null"'),
+        (f"uv run {_GUARD} <<EOF\n{{}}\nEOF", '"<<EOF"'),
+        # Output, or the reason, sent elsewhere than where Claude Code reads it.
+        (f"uv run {_GUARD} > /dev/null", '"> /dev/null"'),
+        (f"uv run {_GUARD} >>/tmp/log", '">>/tmp/log"'),
+        (f"uv run {_GUARD} 2>&1", '"2>&1"'),
+        (f"uv run {_GUARD} 2>/dev/null", '"2>/dev/null"'),
+        (f"uv run {_GUARD} &>/dev/null", '"&>/dev/null"'),
+        (f"uv run {_GUARD} >| x", '">| x"'),
+        (f"< /dev/null uv run {_GUARD}", '"< /dev/null"'),
+    ],
+)
+def test_a_redirection_is_refused(command: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(command, "guard_pretooluse.py")
+    assert problem is not None and problem.startswith("the shell would read %s as a redirection" % shown), problem
+
+
+@pytest.mark.parametrize(
+    "command,shown",
+    [
+        (f"uv run {_GUARD} || true", '"||"'),
+        (f"uv run {_GUARD} ; true", '";"'),
+        (f"uv run {_GUARD}; exit 0", '";"'),
+        (f"uv run {_GUARD} && true", '"&&"'),
+        (f"uv run {_GUARD} &", '"&"'),
+        (f"uv run {_GUARD} | cat", '"|"'),
+        (f"uv run {_GUARD} |& cat", '"|&"'),
+        (f"uv run {_GUARD}\ntrue", '"\\n"'),
+        (f"uv run {_GUARD} > /dev/null || true", '"> /dev/null"'),  # the first operator is named
+        # Before the script too: `KEY=v;` sets a variable uv never sees.
+        (f"ULTRACODE_MAX_TURNS=25; uv run {_GUARD}", '";"'),
+        (f"cd /srv && uv run {_GUARD}", '"&&"'),
+        (f"(uv run {_GUARD})", '"("'),
+    ],
+)
+def test_a_control_operator_is_refused(command: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(command, "guard_pretooluse.py")
+    assert problem is not None and problem.startswith("the shell would read %s as" % shown), problem
+    if not shown.startswith('">'):
+        assert problem.startswith("the shell would read %s as a control operator" % shown), problem
+
+
+# Its review: the shell expands a `$` or a backtick outside single quotes
+# before it runs uv, in double quotes too, and the check read each as the
+# characters written. Through dash and bash, `uv run '<script>' "$(cat)"`,
+# `KEY="$(cat)" uv run '<script>'` and `uv run '<script>' \`cat\`` handed
+# the script an empty stdin in place of the hook event, and the real guard
+# then allowed a `git commit` it denies otherwise (exit 0). `KEY=${A:- uv run
+# '<script>' }` and `KEY="$(echo " uv run '<script>' ")"` are one
+# assignment, so the shell ran nothing and exited 0. With X unset, `uv run -p
+# $X '<script>'` handed `-p` the script, and `$'25'` reads as `25` in bash and
+# `$25` in dash. Preflight writes no `$` and no backtick outside single
+# quotes, and no pattern outside quotes, so any one is refused.
+@pytest.mark.parametrize(
+    "command,shown",
+    [
+        (f'uv run {_GUARD} "$(cat)"', '"$(cat)"'),
+        (f'ULTRACODE_MAX_TURNS="$(cat)" uv run {_GUARD}', '"$(cat)"'),
+        (f"uv run {_GUARD} `cat`", '"`cat`"'),
+        (f'uv run {_GUARD} "`cat`"', '"`cat`"'),
+        (f"uv run {_GUARD} $(cat)", '"$(cat)"'),
+        (f"ULTRACODE_MAX_TURNS=${{A:- uv run {_GUARD} }}", json.dumps(f"${{A:- uv run {_GUARD} }}")),
+        (f'ULTRACODE_MAX_TURNS="$(echo " uv run {_GUARD} ")"', json.dumps(f'$(echo " uv run {_GUARD} ")')),
+        (f"uv run -p $X {_GUARD}", '"$X"'),
+        (f'ULTRACODE_IMPL_ARTIFACTS="$HOME/x" uv run {_GUARD}', '"$HOME"'),
+        (f"ULTRACODE_IMPL_ARTIFACTS=${{HOME}}/x uv run {_GUARD}", '"${HOME}"'),
+        (f"ULTRACODE_MAX_TURNS=$((20+5)) uv run {_GUARD}", '"$((20+5))"'),
+        (f'ULTRACODE_MAX_TURNS="$[20+5]" uv run {_GUARD}', '"$[20+5]"'),
+        (f"ULTRACODE_MAX_TURNS=$'25' uv run {_GUARD}", json.dumps("$'25'")),
+        (f'ULTRACODE_MAX_TURNS=$"25" uv run {_GUARD}', json.dumps('$"25"')),
+        ('uv run "$CLAUDE_PROJECT_DIR"/scripts/hooks/guard_pretooluse.py', '"$CLAUDE_PROJECT_DIR"'),
+        (f"uv run {_GUARD} $1", '"$1"'),
+        (f"uv run {_GUARD} $@", '"$@"'),
+        # A pattern the shell matches against file names, or bash's brace
+        # expansion. In a folder holding `a` and `b.py`, through dash and
+        # bash, `uv run --no-project --with * '<script>'` ran b.py as the
+        # script (exit 0), and so did `--with {a,b.py}` through bash.
+        (f"uv run --no-project --with * {_GUARD}", '"*"'),
+        (f"uv run --no-project --with {{a,b.py}} {_GUARD}", '"{a,b.py}"'),
+        (f"uv run -p 3.1? {_GUARD}", '"?"'),
+        (f"uv run --with [ab].py {_GUARD}", '"[ab]"'),
+        ("uv run /srv/p/scripts/hooks/guard_*.py", '"*"'),
+        # Even where the shell leaves it as written: no pattern is matched in
+        # an assignment, but preflight writes none outside quotes.
+        (f"ULTRACODE_IMPL_ARTIFACTS=/srv/a* uv run {_GUARD}", '"*"'),
+    ],
+)
+def test_an_expansion_is_refused(command: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(command, "guard_pretooluse.py")
+    assert problem is not None and problem.startswith("the shell would expand %s before uv starts" % shown), problem
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The template preflight writes, and the twins of the refusals above:
+        # each starts the script with the hook event, under dash and bash.
+        pytest.param(f"ULTRACODE_IMPL_ARTIFACTS='/My Projects/x' uv run {_GUARD}", id="quoted-value"),
+        pytest.param(f'ULTRACODE_IMPL_ARTIFACTS="/My Projects/x" uv run {_GUARD}', id="double-quoted-value"),
+        pytest.param(f"ULTRACODE_IMPL_ARTIFACTS=/My\\ Projects/x uv run {_GUARD}", id="escaped-space"),
+        pytest.param(f"ULTRACODE_MAX_TURNS= uv run {_GUARD}", id="empty-value"),
+        # The form 4.0.0 armed: unquoted, with no space to split.
+        pytest.param(
+            "ULTRACODE_PROTECTED_BRANCHES=main,master ULTRACODE_MAX_TURNS=25 "
+            "uv run /srv/skill/scripts/hooks/guard_pretooluse.py",
+            id="4-0-0-form",
+        ),
+        # Operator characters inside quotes, or escaped, are part of a word.
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS='a|b>c;d&e' uv run " + _GUARD, id="operators-quoted"),
+        pytest.param('ULTRACODE_IMPL_ARTIFACTS="(a) <b>" uv run ' + _GUARD, id="operators-double-quoted"),
+        pytest.param("uv run /srv/a\\;b/scripts/hooks/guard_pretooluse.py", id="operator-escaped"),
+        pytest.param("uv run '/srv/a#b/guard_pretooluse.py'", id="hash-in-a-word"),
+        # A comment that starts a word ends the command and changes nothing.
+        pytest.param(f"uv run {_GUARD} # armed by hand", id="trailing-comment"),
+        # A line continuation joins its two lines into one word.
+        pytest.param("uv run /srv/p/scripts/hooks/guard_pre\\\ntooluse.py", id="line-continuation"),
+        # A `$` or a backtick the shell leaves as it is: in single quotes,
+        # escaped, or a `$` that starts no expansion.
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS='$(cat) `cat` ${A} $HOME' uv run " + _GUARD, id="expansions-quoted"),
+        pytest.param('ULTRACODE_IMPL_ARTIFACTS="\\$(cat) \\`cat\\`" uv run ' + _GUARD, id="expansions-escaped-in-dq"),
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS=\\$HOME uv run " + _GUARD, id="expansion-escaped"),
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS=a$ uv run " + _GUARD, id="dollar-ending-a-word"),
+        pytest.param('ULTRACODE_IMPL_ARTIFACTS="a$" uv run ' + _GUARD, id="dollar-ending-dq"),
+        pytest.param('ULTRACODE_IMPL_ARTIFACTS="a $ b" uv run ' + _GUARD, id="dollar-before-a-space"),
+        pytest.param(f"uv run {_GUARD} # $(cat) in a comment", id="expansion-in-a-comment"),
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS='/srv/a*{b,c}[d]?' uv run " + _GUARD, id="patterns-quoted"),
+        pytest.param('ULTRACODE_IMPL_ARTIFACTS="/srv/a*{b,c}[d]?" uv run ' + _GUARD, id="patterns-double-quoted"),
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS=/srv/a\\*\\{b\\} uv run " + _GUARD, id="patterns-escaped"),
+        # A leading `~` becomes the home folder, which moves no word.
+        pytest.param("uv run ~/skill/scripts/hooks/guard_pretooluse.py", id="tilde"),
+    ],
+)
+def test_a_command_with_its_operators_quoted_starts_the_guard(command: str) -> None:
+    assert _preflight_module()._command_problem(command, "guard_pretooluse.py") is None
+
+
+def test_a_wholly_quoted_arming_is_not_armed(tmp_path: Path) -> None:
+    """End to end, the finding's arming: every value quoted with its name.
+    Each hook var reads as set in the command, and the command starts no
+    hook."""
+    root = _repo(tmp_path)
+    env = " ".join(f"'{var}=x'" for var in _ENV_VARS)
+    _arm(
+        root,
+        guard_command=f"{env} uv run 'scripts/hooks/guard_pretooluse.py'",
+        budget_command=f"{env} uv run 'scripts/hooks/budget_stop.py'",
+    )
+    code, out = _run(root)
+    assert code == 1 and out["armed"] is False
+    problems = out["checks"]["hooks"]["command_problems"]
+    assert [p.split(": ", 1)[0] for p in problems] == ["guard_pretooluse.py under PreToolUse", "budget_stop.py under Stop"]
+    assert all('the shell would run "ULTRACODE_PROTECTED_BRANCHES=x" as the command, not uv' in p for p in problems)
+
+
+def _through_sh(command: str, tmp_path: Path) -> tuple[int, dict | None]:
+    """(exit code, what a stub uv recorded) for the command run as Claude
+    Code runs a hook, through `sh -c` with the event on stdin. The stub
+    records its argv and stdin, prints a verdict and exits 2, as the guard
+    does on a refusal."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    record = tmp_path / "uv-call.json"
+    dump = tmp_path / "dump.py"
+    dump.write_text(
+        "import json, os, sys\n"
+        "data = {'argv': sys.argv[1:], 'stdin': sys.stdin.read()}\n"
+        "with open(os.environ['UCG_STUB_OUT'], 'w', encoding='utf-8') as fh:\n"
+        "    json.dump(data, fh)\n"
+        "print('{\"decision\": \"deny\"}')\n"
+        "sys.exit(2)\n",
+        encoding="utf-8",
+    )
+    stub = bin_dir / "uv"
+    stub.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{dump}' \"$@\"\n", encoding="utf-8")
+    stub.chmod(0o755)
+    if record.exists():
+        record.unlink()
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}", "UCG_STUB_OUT": str(record)}
+    proc = subprocess.run(["sh", "-c", command], input='{"event": 1}', capture_output=True, text=True, env=env, timeout=60)
+    return proc.returncode, json.loads(record.read_text(encoding="utf-8")) if record.exists() else None
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("sh") is None, reason="runs the hook command through a POSIX sh")
+@pytest.mark.parametrize(
+    "command,starts",
+    [
+        # Each refusal above, as the shell runs it: the script never starts,
+        # never reads the event, or its exit code is not what Claude Code reads.
+        (f"'ULTRACODE_MAX_TURNS=25' uv run {_GUARD}", False),
+        (f"uv run {_GUARD} < /dev/null", False),
+        (f"uv run {_GUARD} || true", False),
+        (f"uv run {_GUARD} ; true", False),
+        (f'uv run {_GUARD} "$(cat)"', False),
+        (f"uv run {_GUARD} `cat`", False),
+        (f"ULTRACODE_MAX_TURNS=${{A:- uv run {_GUARD} }}", False),
+        # Their twins start it with the event and keep its exit code.
+        (f"ULTRACODE_MAX_TURNS='25' uv run {_GUARD}", True),
+        (f"uv run {_GUARD} # armed by hand", True),
+        (f"ULTRACODE_IMPL_ARTIFACTS='$(cat)' uv run {_GUARD}", True),
+    ],
+)
+def test_the_shell_runs_each_form_as_the_check_reads_it(command: str, starts: bool, tmp_path: Path) -> None:
+    code, call = _through_sh(command, tmp_path)
+    ran = code == 2 and call is not None and call["argv"][-1].endswith("guard_pretooluse.py") and call["stdin"]
+    assert bool(ran) is starts, (code, call)
+    assert (_preflight_module()._command_problem(command, "guard_pretooluse.py") is None) is starts
+
+
+# Review of #186's fix: once uv's options were read, a command that hands the
+# script to an option which prints and exits read as one that starts it,
+# though 12e0a9d refused `uv --version run`. Each form below was run against
+# uv 0.12.15: it exits without running the script (0, or 2 for `uv run -V`,
+# which uv run does not take).
+@pytest.mark.parametrize(
+    "words,shown",
+    [
+        ("uv --version run", "uv would print its version and exit"),
+        ("uv -V run", "uv would print its version and exit"),
+        ("uv -qV run", "uv would print its version and exit"),
+        ("uv --help run", "uv would print its help and exit"),
+        ("uv -h run", "uv would print its help and exit"),
+        ("uv --show-settings run", "uv would print its settings and exit"),
+        ("uv run --help", "uv run would print its help and exit"),
+        ("uv run -h", "uv run would print its help and exit"),
+        ("uv run -qh", "uv run would print its help and exit"),
+        ("uv run --show-settings", "uv run would print its settings and exit"),
+        ("uv run -V", 'uv run would refuse "-V", an option it does not take'),
+        ("uv run --version", 'uv run would refuse "--version", an option it does not take'),
+    ],
+)
+def test_a_command_that_prints_and_exits_starts_no_guard(words: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py")
+    assert problem is not None and problem.startswith(shown), problem
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        # Twins: the same letters as a value, or flags that run on. Each was
+        # run, and ran the script.
+        "uv run -qCh=1",  # -C takes the rest, its "h" too
+        "uv run -qCV=1",
+        "uv run -qCm=1",
+        "uv -q run",
+        "uv run -q",
+        # The value options `uv run --help` hides (uv 0.12.15).
+        "uv run --python-preference only-system",
+        "uv run --python-fetch automatic",
+        "uv run --preview-features python-upgrade",
+        "uv run --preview-feature python-upgrade",
+        "uv run --trusted-host example.org",
+        "uv run --max-recursion-depth 10",
+        "uv --python-preference only-system run",
+    ],
+)
+def test_a_command_whose_options_run_on_starts_the_guard(words: str) -> None:
+    assert _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py") is None
+
+
+# Review of #186's fix (4.1.0): the options were read with one table on both
+# sides of `run`, `--` ended them before it, any option was read as one uv
+# takes with any value, and any word that looked like a Python as the
+# interpreter the script is handed to. Each form below was run as Claude Code
+# runs a hook (`sh -c`) against uv 0.12.15. All but the interpreter forms
+# started no script: uv refused the command and exited 2, found no
+# `python3.12` to spawn, or (`uv run --script`) handed Python the word
+# "python" as the script. A form that hands the script to a Python is refused
+# even where it starts (`uv run python`, `python3` where it is on PATH): uv
+# then runs the script without its inline metadata, so the Python minimum
+# does not hold (uv ran 3.10 where a `.python-version` named it) and the
+# script runs in the project's environment, which uv syncs first (a project
+# that fails to build stops it, exit 1). The re-merge rewrites it to
+# `uv run '<script>'`.
+@pytest.mark.parametrize(
+    "words,shown",
+    [
+        # Before `run`, uv takes its global options alone.
+        ("uv -- run", 'uv would take no command after "--"'),
+        ("uv -q -- run", 'uv would take no command after "--"'),
+        ("uv --python 3.12 run", 'uv would refuse "--python", an option it takes only after run'),
+        ("uv -p 3.12 run", 'uv would refuse "-p", an option it takes only after run'),
+        ("uv -qp 3.12 run", 'uv would refuse "-p", an option it takes only after run'),
+        ("uv --with x run", 'uv would refuse "--with", an option it takes only after run'),
+        ("uv -w x run", 'uv would refuse "-w", an option it takes only after run'),
+        ("uv --bogus run", 'uv would refuse "--bogus", an option it does not take'),
+        ("uv --offline=true run", 'uv would refuse "--offline=true", a value for an option that takes none'),
+        ("uv --directory -x run", 'uv would not take "-x" as the value of "--directory"'),
+        ("uv --offline --offline run", 'uv would refuse "--offline" twice'),
+        ("uv -n --no-cache-dir run", 'uv would refuse "--no-cache" twice'),
+        ("uv -q -v run", 'uv would refuse "--quiet" beside "--verbose"'),
+        ("uv --color never --no-color run", 'uv would refuse "--color" beside "--no-color"'),
+        # After it, `uv run`'s own options join them, and no other.
+        ("uv run --bogus", 'uv run would refuse "--bogus", an option it does not take'),
+        ("uv run -Z", 'uv run would refuse "-Z", an option it does not take'),
+        ("uv run --no-project=1", 'uv run would refuse "--no-project=1", a value for an option that takes none'),
+        ("uv run --python -q", 'uv run would not take "-q" as the value of "--python"'),
+        ("uv run -p --", 'uv run would not take "--" as the value of "-p"'),
+        ("uv run --with --", 'uv run would not take "--" as the value of "--with"'),
+        ("uv run --python 3.12 -p 3.13", 'uv run would refuse "--python" twice'),
+        ("uv run --script --script", 'uv run would refuse "--script" twice'),
+        ("uv run -ss", 'uv run would refuse "--script" twice'),
+        ("uv run --locked --frozen", 'uv run would refuse "--locked" beside "--frozen"'),
+        ("uv run -s --gui-script", 'uv run would refuse "--script" beside "--gui-script"'),
+        ("uv run -q -v", 'uv run would refuse "--quiet" beside "--verbose"'),
+        ("uv run --no-project --package x", 'uv run would refuse "--no-project" beside "--package"'),
+        # Review of #186's fix (4.1.0), final pass: the pairs uv 0.12.15
+        # refuses in one place that the table missed, each found by running
+        # every pair of its options, on each side of `run`, through `sh -c`.
+        ("uv run --managed-python --python-preference managed", 'uv run would refuse "--managed-python" beside'),
+        ("uv run --python-preference managed --no-managed-python", 'uv run would refuse "--python-preference" beside'),
+        ("uv --managed-python --python-preference managed run", 'uv would refuse "--managed-python" beside'),
+        ("uv run --offline --refresh", 'uv run would refuse "--offline" beside "--refresh"'),
+        ("uv run --refresh-package x --offline", 'uv run would refuse "--refresh-package" beside "--offline"'),
+        ("uv run --allow-python-downloads --no-python-downloads", 'uv run would refuse "--allow-python-downloads" beside'),
+        ("uv --no-python-downloads --allow-python-downloads run", 'uv would refuse "--no-python-downloads" beside'),
+        # And those it refuses across `run`, one before it and one after.
+        ("uv --offline run --no-offline", 'uv would refuse "--offline" before run beside "--no-offline" after it'),
+        ("uv --no-offline run --offline", 'uv would refuse "--no-offline" before run beside "--offline" after it'),
+        ("uv --preview run --no-preview", 'uv would refuse "--preview" before run beside "--no-preview" after it'),
+        ("uv --no-preview run --preview", 'uv would refuse "--no-preview" before run beside "--preview" after it'),
+        ("uv --native-tls run --no-native-tls", 'uv would refuse "--native-tls" before run beside "--no-native-tls"'),
+        ("uv --no-native-tls run --native-tls", 'uv would refuse "--no-native-tls" before run beside "--native-tls"'),
+        ("uv --system-certs run --no-system-certs", 'uv would refuse "--system-certs" before run beside'),
+        ("uv --no-system-certs run --system-certs", 'uv would refuse "--no-system-certs" before run beside'),
+        ("uv --allow-python-downloads run --no-python-downloads", 'uv would refuse "--allow-python-downloads" before'),
+        ("uv --offline run --refresh", 'uv would refuse "--offline" before run beside "--refresh" after it'),
+        ("uv --offline run --refresh-package x", 'uv would refuse "--offline" before run beside "--refresh-package"'),
+        ("uv --python-preference managed run --managed-python", 'uv would refuse "--python-preference" before run'),
+        ("uv --managed-python run --python-preference managed", 'uv would refuse "--managed-python" before run'),
+        ("uv --no-managed-python run --python-preference managed", 'uv would refuse "--no-managed-python" before'),
+        ("uv -q --offline run -v --no-offline", 'uv would refuse "--offline" before run beside "--no-offline" after it'),
+        # A value outside the set uv's parser takes, or no whole number in
+        # range: a usage error, exit 2. Case counts, and a name uv's config
+        # files take (`auto` for `--python-fetch`) is not one its parser does.
+        ("uv --color bogus run", 'uv would not take "bogus" as the value of "--color"'),
+        ("uv run --color bogus", 'uv run would not take "bogus" as the value of "--color"'),
+        ("uv run --color=AUTO", 'uv run would not take "AUTO" as the value of "--color"'),
+        ("uv --python-fetch auto run", 'uv would not take "auto" as the value of "--python-fetch"'),
+        ("uv run --python-preference bogus", 'uv run would not take "bogus" as the value of "--python-preference"'),
+        ("uv run --link-mode bogus", 'uv run would not take "bogus" as the value of "--link-mode"'),
+        ("uv run --resolution bogus", 'uv run would not take "bogus" as the value of "--resolution"'),
+        ("uv run --prerelease bogus", 'uv run would not take "bogus" as the value of "--prerelease"'),
+        ("uv run --index-strategy bogus", 'uv run would not take "bogus" as the value of "--index-strategy"'),
+        ("uv run --keyring-provider auto", 'uv run would not take "auto" as the value of "--keyring-provider"'),
+        ("uv run --fork-strategy fewer-forks", 'uv run would not take "fewer-forks" as the value of "--fork-strategy"'),
+        ("uv run --python-platform bogus", 'uv run would not take "bogus" as the value of "--python-platform"'),
+        (
+            "uv run --python-platform x8664-manylinux2014",
+            'uv run would not take "x8664-manylinux2014" as the value of "--python-platform"',
+        ),
+        ("uv run --max-recursion-depth x", 'uv run would not take "x" as the value of "--max-recursion-depth"'),
+        ("uv run --max-recursion-depth 5.0", 'uv run would not take "5.0" as the value of "--max-recursion-depth"'),
+        ("uv run --max-recursion-depth=-1", 'uv run would not take "-1" as the value of "--max-recursion-depth"'),
+        (
+            "uv run --max-recursion-depth 4294967296",
+            'uv run would not take "4294967296" as the value of "--max-recursion-depth"',
+        ),
+        ("uv run --max-recursion-depth=", 'uv run would not take "" as the value of "--max-recursion-depth"'),
+        # `--script`, `-s` or `--gui-script` makes the next word the script.
+        ("uv run --script python", 'uv run would be given "python" as the script'),
+        ("uv run -s python", 'uv run would be given "python" as the script'),
+        ("uv run -qs python", 'uv run would be given "python" as the script'),
+        ("uv run --gui-script python", 'uv run would be given "python" as the script'),
+        # A Python handed the script, by any name, in any case, or by path,
+        # with or without its own options: those that start it included.
+        ("uv run python", 'uv run would hand the script to "python" without reading its inline metadata'),
+        ("uv run PYTHON", 'uv run would hand the script to "PYTHON" without reading its inline metadata'),
+        ("uv run -- python", 'uv run would hand the script to "python" without reading its inline metadata'),
+        ("uv run --python 3.12 python", 'uv run would hand the script to "python" without reading'),
+        ("uv run python -u", 'uv run would hand the script to "python" without reading its inline metadata'),
+        ("uv run python -V", 'uv run would hand the script to "python" without reading its inline metadata'),
+        ("uv run python -m", 'uv run would hand the script to "python" without reading its inline metadata'),
+        ("uv run python3", 'uv run would hand the script to "python3" without reading its inline metadata'),
+        ("uv run python3.12", 'uv run would hand the script to "python3.12" without reading its inline metadata'),
+        ("uv run pythonw", 'uv run would hand the script to "pythonw" without reading its inline metadata'),
+        ("uv run python.exe", 'uv run would hand the script to "python.exe" without reading its inline metadata'),
+        ("uv run /usr/bin/python", 'uv run would hand the script to "/usr/bin/python" without reading'),
+        (r"uv run 'C:\Python311\python.exe'", r'uv run would hand the script to "C:\\Python311\\python.exe"'),
+    ],
+)
+def test_a_command_uv_would_refuse_or_run_without_the_scripts_metadata_starts_no_guard(
+    words: str, shown: str
+) -> None:
+    problem = _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py")
+    assert problem is not None and problem.startswith(shown), problem
+
+
+def test_a_python_handed_the_script_is_refused_for_the_metadata_it_skips() -> None:
+    """The problem names both losses, so the operator reading the reason knows
+    why a command that starts the guard is rewritten."""
+    problem = _preflight_module()._command_problem(f"uv run python {_GUARD}", "guard_pretooluse.py")
+    assert problem is not None
+    assert "the Python minimum its header sets would not hold" in problem
+    assert "the project's environment, where there is one, not an isolated one" in problem
+
+
+def test_the_pairs_are_the_ones_uv_0_12_15_refuses() -> None:
+    """Pinned as measured: every pair of uv's options (by the name uv gives
+    each), given on one side of `run` and across it, run through `sh -c`
+    against uv 0.12.15 with a value each takes alone. These pairs, and only
+    these, exited 2 with "cannot be used with" or "cannot be used together".
+    In one place uv refuses `--quiet --verbose` and `--color --no-color`, not
+    across `run`; across it, each flag and its negation that uv reads as one
+    setting, which in one place it reads last-wins (`--offline --no-offline`),
+    but for `--allow-python-downloads`. A change here is a change of uv's, to
+    measure again."""
+    module = _preflight_module()
+    assert module._UV_CONFLICTS == {
+        frozenset(pair)
+        for pair in (
+            ("--all-extras", "--extra"), ("--all-extras", "--only-group"), ("--all-groups", "--only-dev"),
+            ("--all-groups", "--only-group"), ("--all-packages", "--package"),
+            ("--allow-python-downloads", "--no-python-downloads"), ("--color", "--no-color"),
+            ("--dev", "--only-group"), ("--extra", "--only-group"), ("--frozen", "--locked"),
+            ("--frozen", "--no-sources"), ("--frozen", "--upgrade"), ("--group", "--only-dev"),
+            ("--group", "--only-group"), ("--gui-script", "--script"), ("--locked", "--upgrade"),
+            ("--managed-python", "--python-preference"), ("--no-dev", "--only-dev"),
+            ("--no-managed-python", "--python-preference"), ("--no-project", "--package"),
+            ("--offline", "--refresh"), ("--offline", "--refresh-package"), ("--quiet", "--verbose"),
+        )
+    }
+    assert module._UV_ACROSS_CONFLICTS == {
+        frozenset(pair)
+        for pair in (
+            ("--allow-python-downloads", "--no-python-downloads"), ("--managed-python", "--python-preference"),
+            ("--native-tls", "--no-native-tls"), ("--no-managed-python", "--python-preference"),
+            ("--offline", "--no-offline"), ("--offline", "--refresh"), ("--offline", "--refresh-package"),
+            ("--preview", "--no-preview"), ("--system-certs", "--no-system-certs"),
+        )
+    }
+
+
+def test_the_value_sets_are_the_ones_uv_0_12_15_takes() -> None:
+    """Pinned as measured: clap's names and aliases, hidden ones included,
+    each of which started the script, while every other value tried exited 2.
+    A change here is a change of uv's, to measure again."""
+    choices = _preflight_module()._UV_CHOICES
+    assert {name: len(values) for name, values in choices.items()} == {
+        "--color": 3, "--fork-strategy": 2, "--index-strategy": 5, "--keyring-provider": 2, "--link-mode": 5,
+        "--prerelease": 5, "--python-fetch": 3, "--python-preference": 4, "--resolution": 3, "--python-platform": 137,
+    }
+    assert choices["--index-strategy"] >= {"first-match", "unsafe-any-match"}  # hidden aliases
+    assert choices["--link-mode"] >= {"reflink"}
+    platforms = choices["--python-platform"]
+    assert {"linux", "manylinux_2_28_x86_64", "s390x-manylinux_2_17", "manylinux_2_40_loongarch64"} <= platforms
+    assert not {"x8664-manylinux2014", "Linux", "loongarch64-manylinux_2_35"} & platforms
+    assert _preflight_module()._UV_NUMBERS == {"--max-recursion-depth": 4294967295}
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        # Twins of the refusals above, each run against uv 0.12.15, each
+        # starting the script.
+        "uv -qq run",
+        "uv run -qq",
+        "uv --offline run --offline",  # twice, but once in each place
+        "uv -q run -v",  # together, but in two places
+        "uv --color never run",
+        "uv --color=never run",
+        "uv --no-cache run -n",
+        "uv --isolated run --isolated",
+        "uv --directory /srv/p --project /srv/p run",
+        "uv run --with a --with b",
+        "uv run -w a -w b",
+        "uv run --script",
+        "uv run -s",
+        "uv run --gui-script",
+        "uv run --color=always",
+        "uv --python-fetch manual run",
+        "uv --python-preference=only-managed run --python-preference system",
+        # Twins of the final pass's refusals: uv 0.12.15 took each.
+        "uv run --offline --no-offline",  # the last one wins, in one place
+        "uv run --no-preview --preview",
+        "uv --native-tls --no-native-tls run",
+        "uv --offline run --offline",
+        "uv --color never run --no-color",  # refused in one place only
+        "uv --managed-python run --no-managed-python",
+        "uv --python-preference managed run --python-preference system",
+        "uv run --offline --no-refresh",
+        "uv run --link-mode reflink",  # a hidden alias
+        "uv run --index-strategy unsafe-any-match",  # another
+        "uv run --keyring-provider subprocess",
+        "uv run --fork-strategy fewest",
+        "uv run --resolution lowest-direct",
+        "uv run --prerelease if-necessary-or-explicit",
+        "uv run --python-platform manylinux_2_28_x86_64",
+        "uv run --python-platform s390x-manylinux_2_17",  # hidden from help
+        "uv run --max-recursion-depth 4294967295",
+        "uv run --max-recursion-depth=+5",
+        "uv run --max-recursion-depth=-0",
+        "uv run --max-recursion-depth 007",
+        # Past the digits Python's int() reads from one string by default.
+        pytest.param("uv run --max-recursion-depth=" + "0" * 5000 + "7", id="number-with-5000-leading-zeros"),
+    ],
+)
+def test_a_command_uv_takes_as_written_starts_the_guard(words: str) -> None:
+    assert _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py") is None
+
+
+# Review of #186's fix (4.1.0), second pass. Each form below was run as Claude
+# Code runs a hook (`sh -c`, hook JSON on stdin) against uv 0.12.15, beside a
+# script whose header sets `requires-python = ">=3.11"`:
+# - `--frozen` or `--locked` makes uv look for the script's lockfile, which
+#   preflight never writes and the skill does not ship: "Unable to find
+#   lockfile for Python script", exit 2, in a project folder and out of one.
+# - A Python request uv takes runs the script on the Python it selects, the
+#   newest installed one the request admits, with only a warning when the
+#   header does not allow it: `--python 3.10` ran 3.10.21, `-p 3.9` ran 3.9.25
+#   (where the real guard crashes at import, exit 1), `--python '<=3.11'` ran
+#   3.10.21 with no 3.11.0 installed. A request passes only when every Python
+#   it admits meets the minimum, so that it holds on any machine.
+# - uv's parser refuses an empty value for most options, in its own word or
+#   glued (`--package ''`, `--extra=`), exit 2, and takes one for the others.
+@pytest.mark.parametrize(
+    "words,shown",
+    [
+        ("uv run --frozen", 'uv run would find no lockfile for the script, which "--frozen" needs'),
+        ("uv run --locked", 'uv run would find no lockfile for the script, which "--locked" needs'),
+        ("uv run -q --frozen", 'uv run would find no lockfile for the script, which "--frozen" needs'),
+        ("uv run --no-sync --locked", 'uv run would find no lockfile for the script, which "--locked" needs'),
+        ("uv run --frozen --script", 'uv run would find no lockfile for the script, which "--frozen" needs'),
+        # Below the minimum, in each spelling uv reads as a version.
+        ("uv run --python 3.10", 'uv run would let "--python 3.10" select a Python below the 3.11'),
+        ("uv run -p 3.9", 'uv run would let "-p 3.9" select a Python below the 3.11'),
+        ("uv run -p3.10", 'uv run would let "-p 3.10" select a Python below the 3.11'),
+        ("uv run -qp 3.10", 'uv run would let "-p 3.10" select a Python below the 3.11'),
+        ("uv run --python=3.10.21", 'uv run would let "--python 3.10.21" select a Python below the 3.11'),
+        ("uv run --python ' 3.10 '", 'uv run would let "--python 3.10" select a Python below the 3.11'),
+        ("uv run --python 03.10", 'uv run would let "--python 03.10" select a Python below'),
+        ("uv run --python v3.10", 'uv run would let "--python v3.10" select a Python below'),
+        ("uv run --python 310", 'uv run would let "--python 310" select a Python below'),
+        ("uv run --python 39", 'uv run would let "--python 39" select a Python below'),
+        ("uv run --python 3.1", 'uv run would let "--python 3.1" select a Python below'),
+        ("uv run --python 2", 'uv run would let "--python 2" select a Python below'),
+        ("uv run --python cpython@3.10", 'uv run would let "--python cpython@3.10" select a Python below'),
+        ("uv run --python CPython@3.9", 'uv run would let "--python CPython@3.9" select a Python below'),
+        ("uv run --python cpython3.10", 'uv run would let "--python cpython3.10" select a Python below'),
+        ("uv run --python cpython-3.10", 'uv run would let "--python cpython-3.10" select a Python below'),
+        ("uv run --python cp310", 'uv run would let "--python cp310" select a Python below'),
+        ("uv run --python cp-3.10", 'uv run would let "--python cp-3.10" select a Python below'),
+        ("uv run --python python3.10", 'uv run would let "--python python3.10" select a Python below'),
+        ("uv run --python python@3.10", 'uv run would let "--python python@3.10" select a Python below'),
+        ("uv run --python python39", 'uv run would let "--python python39" select a Python below'),
+        ("uv run --python 3.10+gil", 'uv run would let "--python 3.10+gil" select a Python below'),
+        ("uv run --python 3.10t", 'uv run would let "--python 3.10t" select a Python below'),
+        ("uv run --python 3.10rc1", 'uv run would let "--python 3.10rc1" select a Python below'),
+        ("uv run --python pypy3.10", 'uv run would let "--python pypy3.10" select a Python below'),
+        (
+            "uv run --python cpython-3.10-linux-x86_64-gnu",
+            'uv run would let "--python cpython-3.10-linux-x86_64-gnu" select a Python below',
+        ),
+        ("uv run --python '<3.11'", 'uv run would let "--python <3.11" select a Python below'),
+        ("uv run --python '<=3.11'", 'uv run would let "--python <=3.11" select a Python below'),
+        ("uv run --python '==3.10.*'", 'uv run would let "--python ==3.10.*" select a Python below'),
+        ("uv run --python '~=3.10.0'", 'uv run would let "--python ~=3.10.0" select a Python below'),
+        ("uv run --python '>=3.9,<3.11'", 'uv run would let "--python >=3.9,<3.11" select a Python below'),
+        ("uv run --python 'cpython@<3.11'", 'uv run would let "--python cpython@<3.11" select a Python below'),
+        # Admitting one below the minimum is enough: uv picks among what the
+        # machine has installed, not what the header allows.
+        ("uv run --python 3", 'uv run would let "--python 3" select a Python below'),
+        ("uv run --python python3", 'uv run would let "--python python3" select a Python below'),
+        ("uv run --python cpython", 'uv run would let "--python cpython" select a Python below'),
+        ("uv run --python python", 'uv run would let "--python python" select a Python below'),
+        ("uv run --python any", 'uv run would let "--python any" select a Python below'),
+        ("uv run --python '>=3.9'", 'uv run would let "--python >=3.9" select a Python below'),
+        ("uv run --python '>3.10'", 'uv run would let "--python >3.10" select a Python below'),
+        ("uv run --python '~=3.10'", 'uv run would let "--python ~=3.10" select a Python below'),
+        ("uv run --python '<3.12'", 'uv run would let "--python <3.12" select a Python below'),
+        ("uv run --python '!=3.12'", 'uv run would let "--python !=3.12" select a Python below'),
+        # An empty value uv's parser refuses.
+        ("uv run --package ''", 'uv run would not take "" as the value of "--package"'),
+        ("uv run --extra ''", 'uv run would not take "" as the value of "--extra"'),
+        ("uv run --extra=", 'uv run would not take "" as the value of "--extra"'),
+        ("uv run -C ''", 'uv run would not take "" as the value of "-C"'),
+        ("uv run -P ''", 'uv run would not take "" as the value of "-P"'),
+        ("uv run --upgrade-package=", 'uv run would not take "" as the value of "--upgrade-package"'),
+        ("uv --directory '' run", 'uv would not take "" as the value of "--directory"'),
+        ("uv --cache-dir= run", 'uv would not take "" as the value of "--cache-dir"'),
+        ("uv --preview-feature '' run", 'uv would not take "" as the value of "--preview-feature"'),
+        ("uv run --directory ''", 'uv run would not take "" as the value of "--directory"'),
+        # Review of #186's fix (4.1.0), final pass: clap takes `-p=3.9` as the
+        # value 3.9, the "=" stripped, in a cluster too, and uv reads a
+        # request with whitespace after the implementation name (`cpython
+        # 3.10`, `cpython@ 3.10`, `cpython- 3.10`, `cpython >=3.9`). uv 0.12.15
+        # ran each on 3.9 or 3.10 with only a warning, and refused `-C=` and
+        # `-P=` ("invalid value ''"), exit 2. The check passed all of them.
+        ("uv run -p=3.9", 'uv run would let "-p 3.9" select a Python below the 3.11'),
+        ("uv run -p=3.10", 'uv run would let "-p 3.10" select a Python below the 3.11'),
+        ("uv run -qp=3.9", 'uv run would let "-p 3.9" select a Python below the 3.11'),
+        ("uv run --python 'cpython 3.10'", 'uv run would let "--python cpython 3.10" select a Python below'),
+        ("uv run --python 'python 3.10'", 'uv run would let "--python python 3.10" select a Python below'),
+        ("uv run --python 'cp 3.9'", 'uv run would let "--python cp 3.9" select a Python below'),
+        ("uv run --python 'CPython 3.10'", 'uv run would let "--python CPython 3.10" select a Python below'),
+        ("uv run --python 'cpython  3.10'", 'uv run would let "--python cpython  3.10" select a Python below'),
+        ("uv run --python 'cpython\t3.10'", 'uv run would let "--python cpython\t3.10" select a Python below'),
+        ("uv run --python 'cpython@ 3.10'", 'uv run would let "--python cpython@ 3.10" select a Python below'),
+        ("uv run --python 'python@ 3.9'", 'uv run would let "--python python@ 3.9" select a Python below'),
+        ("uv run --python 'cpython- 3.10'", 'uv run would let "--python cpython- 3.10" select a Python below'),
+        ("uv run --python 'cpython v3.10'", 'uv run would let "--python cpython v3.10" select a Python below'),
+        ("uv run --python 'python 39'", 'uv run would let "--python python 39" select a Python below'),
+        ("uv run --python 'cpython 3.10 '", 'uv run would let "--python cpython 3.10" select a Python below'),
+        ("uv run --python 'cpython >=3.9'", 'uv run would let "--python cpython >=3.9" select a Python below'),
+        ("uv run --python 'python <3.12'", 'uv run would let "--python python <3.12" select a Python below'),
+        ("uv run --python 'cpython@ <3.11'", 'uv run would let "--python cpython@ <3.11" select a Python below'),
+        # Its review: a "-" joins a name to a set of specifiers as it joins one
+        # to a version. uv 0.12.15 ran `cpython-<3.11`, `cp-<3.11`,
+        # `cpython- <3.11`, `CPython-<3.11`, `cpython-<v3.11`,
+        # `cpython-<3.11,>=3.10`, `cpython-==3.10` and `cp-==3.10` on
+        # 3.10.21, `cpython-<=3.10` on 3.9.25 and `pypy-<3.11` on PyPy 3.10,
+        # each with only a warning. `cpython->=3.9`, `-~=3.10` and `-!=3.12`
+        # admit one below the minimum too, though uv picked a newer one on the
+        # machine it was measured on. The check passed them all.
+        ("uv run --python 'cpython-<3.11'", 'uv run would let "--python cpython-<3.11" select a Python below'),
+        ("uv run --python 'cpython-<=3.10'", 'uv run would let "--python cpython-<=3.10" select a Python below'),
+        ("uv run -p 'cp-==3.10'", 'uv run would let "-p cp-==3.10" select a Python below'),
+        ("uv run --python 'cp-<3.11'", 'uv run would let "--python cp-<3.11" select a Python below'),
+        ("uv run --python 'cpython- <3.11'", 'uv run would let "--python cpython- <3.11" select a Python below'),
+        ("uv run --python 'CPython-<3.11'", 'uv run would let "--python CPython-<3.11" select a Python below'),
+        ("uv run --python 'cpython-<v3.11'", 'uv run would let "--python cpython-<v3.11" select a Python below'),
+        (
+            "uv run --python 'cpython-<3.11,>=3.10'",
+            'uv run would let "--python cpython-<3.11,>=3.10" select a Python below',
+        ),
+        ("uv run --python 'cpython->=3.9'", 'uv run would let "--python cpython->=3.9" select a Python below'),
+        ("uv run --python 'cpython-~=3.10'", 'uv run would let "--python cpython-~=3.10" select a Python below'),
+        ("uv run --python 'cpython-!=3.12'", 'uv run would let "--python cpython-!=3.12" select a Python below'),
+        ("uv run --python 'pypy-<3.11'", 'uv run would let "--python pypy-<3.11" select a Python below'),
+        ("uv run -C=", 'uv run would not take "" as the value of "-C"'),
+        ("uv run -P=", 'uv run would not take "" as the value of "-P"'),
+        ("uv run -qC=", 'uv run would not take "" as the value of "-C"'),
+    ],
+)
+def test_a_command_with_no_lockfile_an_older_python_or_an_empty_value_starts_no_guard(words: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py")
+    assert problem is not None and problem.startswith(shown), problem
+
+
+def test_an_older_python_is_refused_for_the_minimum_it_skips() -> None:
+    """The problem says why a command that may start the guard is rewritten."""
+    problem = _preflight_module()._command_problem(f"uv run --python 3.10 {_GUARD}", "guard_pretooluse.py")
+    assert problem is not None
+    assert "below the 3.11 minimum the script's header sets" in problem
+    assert "uv runs the script on one with only a warning, so that minimum would not hold" in problem
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        # Twins of the refusals above, each run against uv 0.12.15, each
+        # starting the script on a Python the header allows.
+        "uv run --no-frozen",
+        "uv run --no-locked",
+        "uv run --python 3.11",
+        "uv run --python 3.12",
+        "uv run -p 3.12",
+        "uv run -p3.12",
+        "uv run --python=3.12.14",
+        "uv run --python 0312",
+        "uv run --python 3.012",
+        "uv run --python V3.12",
+        "uv run --python 311",
+        "uv run --python 312",
+        "uv run --python cp311",
+        "uv run --python CPython@3.12",
+        "uv run --python cpythonv3.12",
+        "uv run --python cpython-3.12.14-linux-x86_64-gnu",
+        "uv run --python python3.12",
+        "uv run --python python@3.12",
+        "uv run --python 3.12+gil",
+        "uv run --python 3.12-linux",
+        "uv run --python '>=3.11'",
+        "uv run --python '>3.11'",
+        "uv run --python '~=3.11'",
+        "uv run --python '==3.12.*'",
+        "uv run --python '>=3.11,<3.13'",
+        "uv run --python '>= 3.11 , < 3.13'",
+        "uv run --python 'cpython>=3.11'",
+        # No request at all: the header chooses the Python.
+        "uv run --python ''",
+        "uv run --python=",
+        "uv run -p ''",
+        # A path or a program name names no version; not judged.
+        "uv run --python /usr/bin/python3.12",
+        r"uv run --python 'C:\Python312\python.exe'",
+        # An empty value uv takes.
+        "uv run --with ''",
+        "uv run -w ''",
+        "uv run --with-requirements=",
+        "uv run --index-url ''",
+        "uv run -i ''",
+        "uv run -f ''",
+        "uv run --env-file=",
+        "uv --trusted-host '' run",
+        "uv --allow-insecure-host= run",
+        # Twins of the final pass's refusals, each run against uv 0.12.15:
+        # each started the script on a Python the header allows.
+        "uv run -p=3.12",
+        "uv run -qp=3.12",
+        "uv run -p=",  # no request: the header chooses
+        "uv run -w=",  # an empty value uv takes
+        "uv run --python 'cpython 3.12'",
+        "uv run --python 'python 3.12'",
+        "uv run --python 'cpython@ 3.12'",
+        "uv run -p 'cp 3.12'",
+        "uv run --python 'cpython >= 3.11'",
+        # Twins of its review's: each ran the script on 3.11 or later.
+        "uv run --python 'cpython->=3.11'",
+        "uv run -p 'cp->=3.12'",
+        "uv run --python 'cpython- >=3.11'",
+        "uv run --python 'cpython->=3.11,<3.14'",
+        "uv run --python 'cpython-==3.12.*'",
+        "uv run --python 'pypy->=3.11'",
+    ],
+)
+def test_a_command_with_a_python_the_header_allows_starts_the_guard(words: str) -> None:
+    assert _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py") is None
+
+
+def test_the_python_minimum_is_the_one_each_hook_s_header_sets() -> None:
+    """The minimum a `--python` request is read against is the hooks' own: a
+    header that moves it makes this a value to move with it."""
+    module = _preflight_module()
+    assert module._SCRIPT_PYTHON_MINIMUM == (3, 11)
+    for script in ("guard_pretooluse.py", "budget_stop.py"):
+        text = (SCRIPTS / "hooks" / script).read_text(encoding="utf-8")
+        header = text.split("# /// script\n", 1)[1].split("# ///\n", 1)[0]
+        assert '# requires-python = ">=3.11"\n' in header, script
+
+
+def test_the_options_that_take_an_empty_value_are_the_ones_uv_0_12_15_takes() -> None:
+    """Pinned as measured: every value option of uv's, given an empty value in
+    its own word and glued, on the side of `run` it is taken on. These started
+    the script; every other one exited 2 ("a value is required" or "invalid
+    value ''"). A change here is a change of uv's, to measure again."""
+    module = _preflight_module()
+    assert module._UV_EMPTY_OK == {
+        "--allow-insecure-host", "--default-index", "--env-file", "--extra-index-url", "--find-links", "--index",
+        "--index-url", "--python", "--with", "--with-editable", "--with-requirements",
+    }
+    for option in sorted(module._UV_GLOBAL_VALUES | module._UV_RUN_VALUES):
+        words = f"uv run {option} '' {_GUARD}" if option in module._UV_RUN_VALUES else f"uv {option} '' run {_GUARD}"
+        takes_it = module._UV_ALIASES.get(option, option) in module._UV_EMPTY_OK
+        assert (module._command_problem(words, "guard_pretooluse.py") is None) == takes_it, option
+
+
+def test_a_lockfile_option_or_an_older_python_fails_the_arming(tmp_path: Path) -> None:
+    """End to end: each names its command, under its event."""
+    root = _repo(tmp_path)
+    _arm(
+        root,
+        guard_command="uv run --frozen 'scripts/hooks/guard_pretooluse.py'",
+        budget_command="uv run --python 3.9 'scripts/hooks/budget_stop.py'",
+    )
+    code, out = _run(root, env=_process_env(root))
+    assert code == 1 and out["armed"] is False
+    problems = out["checks"]["hooks"]["command_problems"]
+    assert len(problems) == 2, problems
+    assert problems[0].startswith('guard_pretooluse.py under PreToolUse: uv run would find no lockfile')
+    assert problems[1].startswith('budget_stop.py under Stop: uv run would let "--python 3.9" select a Python below')
+    assert len(out["reasons"]) == 1, out["reasons"]
+
+
+# --- arming: the Claude Code version -----------------------------------------
+# Issue #186: the guard's `"onFailure": "block"` does nothing before Claude
+# Code 2.1.295, which ignores the key, and a fresh preflight refuses to launch
+# below it. A resume never ran `claude --version`, so a run in flight on an
+# older Claude Code re-armed with the key and the assertion passed.
+
+_VERSION_REASON = "Claude Code "
+
+
+def _version_reason(out: dict) -> str:
+    matches = [r for r in out["reasons"] if r.startswith(_VERSION_REASON)]
+    assert len(matches) == 1, out["reasons"]
+    return matches[0]
+
+
+def test_a_claude_code_below_the_floor_is_not_armed(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root, claude_version="2.1.294 (Claude Code)")
+    assert code == 1 and out["armed"] is False
+    version = out["checks"]["cc_version"]
+    assert version == {
+        "version": "2.1.294 (Claude Code)",
+        "read": True,
+        "minimum": "2.1.295",
+        "below": ["hook-onFailure>=2.1.295"],
+        "ok": False,
+    }
+    reason = _version_reason(out)
+    # The same words the fresh preflight's cc_version blocker uses, then why
+    # a resume stops on it rather than fixing it.
+    assert reason.startswith("Claude Code 2.1.294 (Claude Code) is below the minimum for: hook-onFailure>=2.1.295")
+    assert '"onFailure": "block"' in reason
+    assert "claude update" in reason
+    assert "A resume does not fix this" in reason
+    assert "Escalate the story about to be driven" in reason
+    # Every other fact about this arming holds.
+    assert len(out["reasons"]) == 1, out["reasons"]
+    assert out["checks"]["hooks"]["ok"] is True
+
+
+def test_a_claude_code_below_every_floor_names_each(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root, claude_version="2.1.50")
+    assert code == 1
+    assert out["checks"]["cc_version"]["below"] == [
+        "/goal>=2.1.139",
+        "workflows>=2.1.154",
+        "auto-memory>=2.1.59",
+        "hook-onFailure>=2.1.295",
+    ]
+
+
+@pytest.mark.parametrize("version", ["2.1.295 (Claude Code)", "2.1.316 (Claude Code)", "2.2.0", "3.0.0"])
+def test_a_claude_code_at_or_past_the_floor_is_armed(tmp_path: Path, version: str) -> None:
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root, claude_version=version)
+    assert out["reasons"] == [] and code == 0, out["reasons"]
+    assert out["checks"]["cc_version"]["ok"] is True
+    assert out["checks"]["cc_version"]["below"] == []
+
+
+@pytest.mark.parametrize("version", [None, "Claude Code (dev build)"])
+def test_a_version_it_cannot_read_is_reported_and_fails_nothing(tmp_path: Path, version: str | None) -> None:
+    """A spawn `drive_epic.py --claude-bin` started may have no `claude` on its
+    PATH, and its fresh preflight read the version at launch: an unreadable
+    version is reported, and the resume goes on."""
+    root = _repo(tmp_path)
+    _arm(root)
+    code, out = _run(root, claude_version=version)
+    assert out["reasons"] == [] and code == 0, out["reasons"]
+    assert out["checks"]["cc_version"] == {
+        "version": version,
+        "read": False,
+        "minimum": "2.1.295",
+        "below": [],
+        "ok": True,
+    }
+
+
+def test_a_version_below_the_floor_never_flips_a_failed_arming_green(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root, on_failure=None)
+    code, out = _run(root, claude_version="2.1.200")
+    assert code == 1
+    assert len(out["reasons"]) == 2, out["reasons"]
+    _version_reason(out)
+    _on_failure_reason(out)
+
+
+# Review of #186's fix (4.1.0), final pass: execute.md's sweep escalates an
+# operator's reason first and fixes none of the others, but the reasons the
+# conductor reads listed the hooks ones first, each ending "Re-merge the
+# hooks ... then assert again", and the version reason said only to escalate.
+# A conductor taking the first reason made the protected settings write that
+# the sweep says must wait.
+_ESCALATE_FIRST = (
+    "Escalate the story about to be driven before fixing any other reason this assertion names, as execute.md's "
+    "re-assertion sweep says: a hooks re-merge waits for the resume after the operator's fix"
+)
+_RE_MERGE_WAITS = (
+    "unless a reason that is the operator's to fix (story skills not installed, or a Claude Code below the minimum) "
+    "stands beside this one: that one is escalated first, and the resume after the operator's fix re-merges"
+)
+
+
+def test_an_operator_s_reason_is_listed_first_and_says_it_goes_first(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root, on_failure=None, guard_command="uv run python 'scripts/hooks/guard_pretooluse.py'")
+    shutil.rmtree(root / ".claude" / "skills" / "ucg-dev-story")
+    code, out = _run(root, env=_process_env(root), claude_version="2.1.290 (Claude Code)")
+    assert code == 1
+    reasons = out["reasons"]
+    assert len(reasons) == 4, reasons
+    assert reasons[0].startswith("UCG story skill(s) not installed: ucg-dev-story.")
+    assert reasons[1].startswith("Claude Code 2.1.290 (Claude Code) is below the minimum")
+    assert reasons[2].startswith(_ON_FAILURE_REASON) and reasons[3].startswith(_SPLIT_REASON)
+    for reason in reasons[:2]:
+        assert _ESCALATE_FIRST in reason, reason
+    for reason in reasons[2:]:
+        assert _RE_MERGE_WAITS in reason, reason
+
+
+def test_the_module_docstring_says_an_operator_s_reason_goes_first() -> None:
+    doc = " ".join((_preflight_module().__doc__ or "").split())
+    assert "an arming made by UCG 3.x or earlier has none, and its resume re-merges the hooks" in doc
+    assert (
+        "unless a reason that is the operator's to fix stands beside that one (the story skills, or the Claude Code "
+        "version): the resume escalates it first, and those reasons come first in `reasons`" in doc
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the stub `claude` is a POSIX shell script")
+@pytest.mark.parametrize(
+    "printed,armed", [("2.1.294 (Claude Code)", False), ("2.1.295 (Claude Code)", True)]
+)
+def test_the_manifest_runs_claude_version_itself(tmp_path: Path, printed: str, armed: bool) -> None:
+    """End to end with the script's own reader: it runs the `claude` on PATH."""
+    root = _repo(tmp_path)
+    _arm(root)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text(f"#!/bin/sh\necho '{printed}'\n", encoding="utf-8")
+    stub.chmod(0o755)
+    path = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+    code, out = _run(root, env={"PATH": path}, real_version_reader=True)
+    assert out["checks"]["cc_version"]["version"] == printed
+    assert out["armed"] is armed and (code == 0) is armed, out["reasons"]
+
+
+# Review of #186's fix: a run armed by UCG 3.x on a Claude Code below the
+# floor fails both the version and the guard's onFailure. The sweep did not
+# say which goes first, so a conductor could make the protected hooks
+# re-merge (refused headless, and useless on a version that ignores the key)
+# and then write one sidecar quoting one of two reasons. The decision-pending
+# paragraph's list of routes that write a sidecar also left the version out.
+
+
+def _operator_reason_goes_first(execute: str) -> bool:
+    flat = " ".join(execute.split())
+    return (
+        "For either, or both, take the sub-skill halt catch-all's route (below) for the story about to be driven: "
+        "write `escalation-<story_id>.json` with `decision_needed` quoting each such reason the `reasons` name, "
+        "then stop." in flat
+        and "When one stands beside other reasons, a hooks reason included, take this route first and fix none of "
+        "the others" in flat
+        and "the skills, Claude Code version, refused-write and turn-ceiling routes in this file each write" in flat
+    )
+
+
+def test_an_operator_s_reason_is_escalated_before_any_other_is_fixed() -> None:
+    assert _operator_reason_goes_first((SCRIPTS.parent / "references" / "execute.md").read_text(encoding="utf-8"))
+
+
+def test_the_operator_first_predicate_rejects_the_pre_review_sweep() -> None:
+    execute = (SCRIPTS.parent / "references" / "execute.md").read_text(encoding="utf-8")
+    flat = " ".join(execute.split())
+    start = flat.index("For either, or both,")
+    end = flat.index("The resume after the operator's fix meets the others again and fixes them then.")
+    pre_review = (
+        flat[:start]
+        + "For either, take the sub-skill halt catch-all's route (below) for the story about to be driven: write "
+        "`escalation-<story_id>.json` with `decision_needed` quoting that reason, then stop."
+        + flat[end + len("The resume after the operator's fix meets the others again and fixes them then.") :]
+    ).replace("the skills, Claude Code version, refused-write", "the skills, refused-write")
+    assert not _operator_reason_goes_first(pre_review)
+    # One clause back at a time: each is load-bearing.
+    assert not _operator_reason_goes_first(flat.replace(", Claude Code version, refused-write", ", refused-write"))
+    assert not _operator_reason_goes_first(flat.replace("take this route first and fix none of the others", "x"))
+
+
+def test_troubleshooting_says_which_claude_the_version_check_reads() -> None:
+    """The check runs the `claude` first on PATH, as the fresh preflight does,
+    and an update takes effect only when Claude Code next starts."""
+    text = " ".join((SCRIPTS.parents[2] / "docs" / "troubleshooting.md").read_text(encoding="utf-8").split())
+    assert (
+        "Update Claude Code, then resume in a new session, since an update takes effect only when Claude Code "
+        "next starts" in text
+    )
+    assert "Both checks run the `claude` first on `PATH`, not the binary the session runs on." in text
+
+
+# Review of #186's fix: the script's command runner caught only a missing
+# program and a timeout. A `claude` it finds but cannot start (no execute
+# bit, a script with no `#!` line, or on Windows a file that is no program)
+# raised, so the manifest ended in a traceback and printed no JSON. The fresh
+# preflight shared that path.
+
+
+def test_a_program_it_cannot_start_reads_as_not_found(tmp_path: Path) -> None:
+    stub = tmp_path / ("claude.exe" if os.name == "nt" else "claude")
+    stub.write_text("echo '2.1.306 (Claude Code)'\n", encoding="utf-8")  # no `#!`, no execute bit
+    code, out, err = _preflight_module()._run([str(stub), "--version"])
+    assert code == 127 and out == "" and err
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the execute bit is a POSIX permission")
+def test_a_claude_on_path_it_cannot_start_is_a_version_it_cannot_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text("#!/bin/sh\necho '2.1.306 (Claude Code)'\n", encoding="utf-8")
+    stub.chmod(0o644)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    module = _preflight_module()
+    assert module._cc_version() == (None, None)
+    assert module._assert_cc_version()["read"] is False
 
 
 def test_missing_settings_file_is_not_armed(tmp_path: Path) -> None:
@@ -590,7 +1794,10 @@ def test_the_help_and_the_docs_name_the_ucg_story_skills() -> None:
     doc = " ".join(SCRIPT.read_text(encoding="utf-8").split())
     assert "the UCG story skills (a manual deletion between spawns" in doc
     step5 = " ".join(preflight_md.read_text(encoding="utf-8").split())
-    assert "injected env, and the UCG story skills `ucg-create-story` and `ucg-dev-story`) in one read" in step5
+    assert (
+        "injected env, the UCG story skills `ucg-create-story` and `ucg-dev-story`, and the Claude Code version "
+        "against step 1's minimums) in one read" in step5
+    )
 
 
 def test_an_unexpandable_config_dir_still_emits_the_manifest(tmp_path: Path) -> None:

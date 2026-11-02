@@ -1,0 +1,43 @@
+TAP version 13
+# Subtest: other passes
+ok 1 - other passes
+  ---
+  duration_ms: 0.907042
+  type: 'test'
+  ...
+# <--- Last few GCs --->
+# [256385:0x369f7000]      145 ms: Mark-Compact 61.0 (64.8) -> 61.0 (65.8) MB, pooled: 0 MB, 5.92 / 0.00 ms  (average mu = 0.152, current mu = 0.137) allocation failure; GC in old space requested
+# [256385:0x369f7000]      150 ms: Mark-Compact 61.0 (65.8) -> 61.0 (65.8) MB, pooled: 0 MB, 4.92 / 0.00 ms  (average mu = 0.129, current mu = 0.098) allocation failure; GC in old space requested
+# FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+# ----- Native stack trace -----
+#  1: 0x931db0  [/usr/local/bin/node]
+#  2: 0x75968e node::OOMErrorHandler(char const*, v8::OOMDetails const&) [/usr/local/bin/node]
+#  3: 0xc70d60  [/usr/local/bin/node]
+#  4: 0xc70e4f  [/usr/local/bin/node]
+#  5: 0xf14725  [/usr/local/bin/node]
+#  6: 0xf14752  [/usr/local/bin/node]
+#  7: 0xf14a4a  [/usr/local/bin/node]
+#  8: 0xf2574a  [/usr/local/bin/node]
+#  9: 0xf29af0  [/usr/local/bin/node]
+# 10: 0x19c77d1  [/usr/local/bin/node]
+# Subtest: walk.test.mjs
+not ok 2 - walk.test.mjs
+  ---
+  duration_ms: 1744.017318
+  type: 'test'
+  location: '/home/dev/work/heap-runs-out-as-it-loads/walk.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: ~
+  signal: 'SIGABRT'
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1757.505459

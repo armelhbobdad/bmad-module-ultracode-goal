@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `scripts/probe_servers.py` now names the folder of the server that answered a URL when another server listens at the same port on a wildcard address. It counted every socket at the family's wildcard as one that could have taken the connection, `::` included for an IPv4 URL, so beside a server on `127.0.0.1` it gave a `cwd` of `null` when another folder's server listened on `[::]` with `IPV6_V6ONLY` set (nginx's `listen [::]`, Go's `tcp6` listeners), which takes no IPv4 connection, or on `0.0.0.0` or `[::]` under `SO_REUSEPORT`. It now counts the sockets in the order Linux gives a connection to one: at the address itself (for IPv4, an IPv4 socket before an IPv4-mapped one), then at the family's wildcard, and for IPv4 `0.0.0.0` before `::`, so a `::` socket counts for an IPv4 URL only when no socket listens at the address, its IPv4-mapped form or `0.0.0.0`.

@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `mutate_check.py` now removes pnpm's line prefix when the package's folder sits directly in the folder pnpm runs in (`guard test: `), or is that folder (`. test: `), as its documentation says it removes pnpm's `<package dir> <script>: ` prefix. It removed only a prefix whose folder path holds a `/` (`packages/guard test: `), so in a workspace that lists its packages at its root no line behind the prefix was read as the test runner printed it: a Node test file the mutant stopped loading read as a kill in every run, and a kill's count went unread, so a row that killed exactly one test read `KILLED+others`. Such a prefix is removed once pnpm announces it with the line it prints as each script starts (`guard test$ node --test`), and that package's lines are read apart from the others'.
+issues: [186]

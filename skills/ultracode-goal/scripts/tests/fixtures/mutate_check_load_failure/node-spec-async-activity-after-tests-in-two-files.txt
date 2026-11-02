@@ -1,0 +1,24 @@
+✔ remember returns the value (0.916334ms)
+ℹ Error: Test "remember returns the value" at a.test.mjs:4:1 generated asynchronous activity after the test ended. This activity created the error "Error: cache overflow at a" and would have caused the test to fail, but instead triggered an uncaughtException event.
+✖ a.test.mjs (71.144535ms)
+✔ remember keeps a second key (0.957871ms)
+ℹ Error: Test "remember keeps a second key" at b.test.mjs:4:1 generated asynchronous activity after the test ended. This activity created the error "Error: cache overflow at b" and would have caused the test to fail, but instead triggered an uncaughtException event.
+✖ b.test.mjs (68.71603ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 88.84829
+
+✖ failing tests:
+
+test at a.test.mjs:1:1
+✖ a.test.mjs (71.144535ms)
+  'test failed'
+
+test at b.test.mjs:1:1
+✖ b.test.mjs (68.71603ms)
+  'test failed'

@@ -144,6 +144,60 @@ caveat said every row whose run stopped before any test cannot run, while
 its web server: the caveat now names that case alone, and says that a run
 Playwright stopped because it could not load a spec, a support file or its
 config reads as a kill.
+
+Then a run found the caveat forbidding a stop the run owed (#190): Execute's
+step 5 sweep runs the browser tests in the main tree right before the gate,
+and the server its runner started through turbo outlived it, so at the gate's
+first check it answered from the main tree, and "A server that answers is not
+the gate's to stop" left the worktree's runs reusing it. And a scratch runner
+config whose only start command is a launcher left a server up at each run,
+which nothing ever stopped, so they piled up over an Epic (#186). The probe now
+stops a server only when /proc shows this run started it, at every check and
+once more when the story's gate ends, and the decision log names each one it
+stopped; every other server stays the gate's to leave up. Each condition is
+pinned below with a mutant twin.
+
+A review of that change found four gaps, each pinned below with a twin. The
+conditions are signs, not proof (an operator's background server meets them
+too), so the caveat says so. The stops at automate's checks reached no record,
+so automate names them in its summary and the decision log takes them from it.
+The last probe ran after the verdict, so a session that ended between the two
+left servers up past an advance that no later story's marker counts: it now
+runs before the verdict, a red backfill sweep's main-tree run included. And
+the operating tip said the window was a drive, though a resume keeps the
+marker: it now names the time between a run and its resume too.
+
+A later review found the probe read only the server's own process groups. A
+watcher of the operator's, started before the story or still running as the
+server's parent, starts its server again in a new group when the run's edits
+change a file, and the probe stopped that server, though the caveat said only
+servers started after the marker read as the run's. The probe now reads the
+server's session and parents too, and the caveat names both conditions and
+the watcher's case that still reads as the run's, each pinned with a twin.
+
+Its review found two sentences of troubleshooting wrong. One said a watcher
+keeps its server up while it runs as the server's parent, though only a
+parent in the server's session counts: a subreaper watcher that adopts back a
+server it gave a session of its own had that server stopped. The other named
+only a killed runner's server as one the run leaves up, though the parent
+rule now leaves up the run's own server too when a watcher its start command
+runs (a launcher task that runs watchexec) runs it in a group of its own.
+Both are pinned with twins.
+
+The final review of the branch that holds #186's fixes found runs of Node's
+test runner in which no test went red read as a kill, each pinned below with a
+mutant twin. Two files that each failed because a timer their test started
+threw after it ended, a file that cannot load under `--test-isolation=none`
+and a global setup that throws now read 0 failed, and the bullet names the
+last two and the first whatever test it names. Two files whose processes exit
+non-zero after all their tests pass still read as a kill, since Node prints
+them as it prints a process that dies during a test: the bullet states that
+limit and tells automate to write each Node row to run only the row's test
+file. A review of that fix found three more such runs, measured below on the
+bullet as it stands, which names each already: a file that cannot load in
+the runner's own process under Node 22, a file that throws `undefined` as it
+loads there, and a module that ends that process after the row's test
+passes. Each now reads 0 failed.
 """
 
 from __future__ import annotations
@@ -230,7 +284,44 @@ _REUSED_SAYS = (
     "it runs, and name in its summary each URL that answers at one of those checks:",
     "that is a server the gate set reuses, whoever started it, one a run in the worktree left up included, and with "
     "reuse on each row of a table after which it answers ran through it.",
-    "A server that answers is not the gate's to stop.",
+    # Who stops a server the run itself started (#190), and that no other server is stopped.
+    "A server the run itself started is the run's to stop, and no other server is.",
+    "`references/execute.md` step 5 re-runs the full sweep, browser tests included, in the main tree right before the "
+    "gate, so a server its runner started through a launcher can still answer at the first check, from the main tree, "
+    "and the worktree's runs would reuse it.",
+    "So run the probe at every check this caveat names, automate's included, with the stop flags added: "
+    "`--stop-since {workflow.implementation_artifacts}/.baseline-<story_id> --root {project-root} --root <tmp-path>`.",
+    "The probe then stops a server that answers only when it reads as one this run left up: every process in the "
+    "server's process group is this user's, has no controlling terminal and started after the story's baseline "
+    "marker was written, the process that led its session has exited, as a runner's start command has once the "
+    "runner ends, no other process that still runs in that session started before that marker or is the parent of a "
+    "process in the group, as a watcher that can start the server again is, and the server runs from inside one of "
+    "those folders.",
+    # Those conditions do not prove who started a server: the conductor is told so, a watcher's restart included.
+    "Those are signs, not proof: a server the operator started inside the project after that marker, in the "
+    "background with no terminal or from a terminal since closed, with nothing older than the marker still running "
+    "in its session, reads the same way, and so does one that a watcher of the operator's restarts after the marker, "
+    "when the watcher too started after it and runs in the server's process group, or starts the server through a "
+    "command that then exits and either started after the marker or had that command give the server a session of "
+    "its own.",
+    "A resume keeps that marker, so a server an earlier session of the story started counts.",
+    # A stop at one of automate's checks reaches the decision log only through its summary.
+    "Have automate name in its summary each server the probe stopped at one of its checks, before a table or after "
+    "one, by the `url` and `cwd` of its `stopped` entry, since only its summary can tell you of those stops.",
+    "At automate's check after a table, a URL whose server the probe stopped still counts as one that answers there, "
+    "since with reuse on the table's rows ran through that server.",
+    "It leaves every other server up and lists it under `left` with its reason, and on a system without Linux's "
+    "`/proc` it stops nothing.",
+    "A server the probe leaves up is not the gate's to stop: never stop it any other way, since it may be the "
+    "operator's own.",
+    # The servers a story's runs left up do not pile up over an Epic (#186).
+    "Once the cycle's last test run has finished, a backfill sweep's in the main tree included, and before you log "
+    "the cycle's verdict, run the probe with the stop flags once more over every URL the gate set may reuse and every "
+    "URL of the scratch config, so that no server this story's runs left up outlives its gate:",
+    # Before the verdict: a session that ends after an advance leaves servers no later story's marker counts.
+    "Run it before the verdict, not after: a story whose verdict is not logged is gated again under the same marker, "
+    "and that gate's checks stop what an ended session left up, but a server still up once the story has advanced "
+    "started before the next story's marker, so no later check stops it.",
     # The own-server route, where the runner config allows one, whether or not a server answers.
     "When the runner config lets the worktree's runs have their own server without editing a tracked file, give them "
     "one, whether or not a server answers:",
@@ -244,10 +335,10 @@ _REUSED_SAYS = (
     "server an earlier run left up keeps it.",
     "So give the scratch config a start command that runs the server in the process group the runner stops, where "
     "the project has one (the package's own dev script rather than a task runner's),",
-    "check its URLs with the same probe before each assessor starts, moving each one that answers to a port the "
-    "probe reports free, and run no two assessors under it at once.",
-    "Have automate check its URLs at the same points, before and after each table, and move a port that answers "
-    "before it runs the next one.",
+    "check its URLs with the same probe before each assessor starts, moving each one that still answers to a port "
+    "the probe reports free, and run no two assessors under it at once.",
+    "Have automate check its URLs at the same points, before and after each table, and move a port that still "
+    "answers before it runs the next one.",
     # The one stop before any test that reads as a row that cannot run, how a conductor tells it, and the others.
     "A row whose run stopped because the runner could not start its web server reads as one that cannot run, by the "
     "detail `mutate_check.py` gives it, that no test ran",
@@ -336,8 +427,78 @@ def test_reused_server_predicate_rejects_the_three_caveat_section():
         # Nothing for the conductor to name in the decision log.
         ("and name in its summary each URL that answers at one of those checks:",
          "and stop at each URL that answers at one of those checks:"),
-        # The operator's server stopped by the run.
-        ("A server that answers is not the gate's to stop.", "Stop a server that answers."),
+        # The operator's server stopped by the run: any server that answers, or one the probe leaves up.
+        ("A server the run itself started is the run's to stop, and no other server is.",
+         "Stop a server that answers."),
+        ("A server the probe leaves up is not the gate's to stop: never stop it any other way, since it may be the "
+         "operator's own.", "Stop a server the probe leaves up some other way."),
+        # #190's wording: no stop at all, so the server step 5 left up in the main tree serves the worktree's runs.
+        ("A server the run itself started is the run's to stop, and no other server is.",
+         "A server that answers is not the gate's to stop."),
+        (" So run the probe at every check this caveat names, automate's included, with the stop flags added: "
+         "`--stop-since {workflow.implementation_artifacts}/.baseline-<story_id> --root {project-root} --root "
+         "<tmp-path>`.", ""),
+        # Automate's checks without the stop flags: each table's left-up server piles up within its pass.
+        ("every check this caveat names, automate's included,", "every check this caveat names,"),
+        # A condition dropped: a terminal's server, one from before the story's work (the operator's own dev
+        # server), one whatever started it still runs beside, or another project's.
+        ("has no controlling terminal and started after", "started after"),
+        ("is this user's, has no controlling terminal and started after the story's baseline marker was written,",
+         "is this user's and has no controlling terminal,"),
+        (" the process that led its session has exited, as a runner's start command has once the runner ends,", ""),
+        (", and the server runs from inside one of those folders.", "."),
+        # The first wording, which read the server's process group only: a watcher of the operator's that started
+        # before the story, or still runs as the server's parent, restarted it in a new group after the marker, and
+        # the probe stopped it.
+        (" no other process that still runs in that session started before that marker or is the parent of a process "
+         "in the group, as a watcher that can start the server again is,", ""),
+        ("started before that marker or is the parent of a process in the group",
+         "is the parent of a process in the group"),
+        ("started before that marker or is the parent of a process in the group", "started before that marker"),
+        # A marker a resume rewrites: a server an earlier session of the story started reads as older than it.
+        ("`--stop-since {workflow.implementation_artifacts}/.baseline-<story_id>",
+         "`--stop-since {workflow.implementation_artifacts}/.current-story"),
+        # A table's rows read by their ledger once its after-check stopped the server they ran through.
+        (" At automate's check after a table, a URL whose server the probe stopped still counts as one that answers "
+         "there, since with reuse on the table's rows ran through that server.", ""),
+        # Where the probe cannot read /proc, stopped anyway by other means.
+        ("on a system without Linux's `/proc` it stops nothing.",
+         "on a system without Linux's `/proc` stop each server that answers yourself."),
+        # #186: the servers a story's runs left up outlive its gate and pile up over the Epic.
+        (" Once the cycle's last test run has finished, a backfill sweep's in the main tree included, and before you "
+         "log the cycle's verdict, run the probe with the stop flags once more over every URL the gate set may reuse "
+         "and every URL of the scratch config, so that no server this story's runs left up outlives its gate: over an "
+         "Epic they would pile up, each holding a port.", ""),
+        # The first wording's end probe, after the verdict: a session that ends between the two leaves the story's
+        # servers up past its advance, and the next story's newer marker never counts them.
+        ("Once the cycle's last test run has finished, a backfill sweep's in the main tree included, and before you "
+         "log the cycle's verdict,", "Once the story's verdict is recorded, and before the worktree is removed,"),
+        (" Run it before the verdict, not after: a story whose verdict is not logged is gated again under the same "
+         "marker, and that gate's checks stop what an ended session left up, but a server still up once the story has "
+         "advanced started before the next story's marker, so no later check stops it.", ""),
+        # The end probe taken before a red backfill sweep, whose main-tree run can leave a server up.
+        ("Once the cycle's last test run has finished, a backfill sweep's in the main tree included,",
+         "Once the cycle's last run in the worktree has finished,"),
+        # The conditions read as proof, though an operator's background server meets them too.
+        ("only when it reads as one this run left up:", "only when it can show this run started it:"),
+        (" Those are signs, not proof: a server the operator started inside the project after that marker, in the "
+         "background with no terminal or from a terminal since closed, with nothing older than the marker still "
+         "running in its session, reads the same way, and so does one that a watcher of the operator's restarts after "
+         "the marker, when the watcher too started after it and runs in the server's process group, or starts the "
+         "server through a command that then exits and either started after the marker or had that command give the "
+         "server a session of its own.", ""),
+        # The servers a watcher of the operator's restarts left out of what reads as the run's.
+        (", and so does one that a watcher of the operator's restarts after the marker, when the watcher too started "
+         "after it and runs in the server's process group, or starts the server through a command that then exits and "
+         "either started after the marker or had that command give the server a session of its own.", "."),
+        # Stops at automate's checks named nowhere, or its stops before a table left out.
+        (" Have automate name in its summary each server the probe stopped at one of its checks, before a table or "
+         "after one, by the `url` and `cwd` of its `stopped` entry, since only its summary can tell you of those "
+         "stops.", ""),
+        ("at one of its checks, before a table or after one, by", "at its check after a table, by"),
+        ("by the `url` and `cwd` of its `stopped` entry,", "by the `url` of its `stopped` entry,"),
+        ("over every URL the gate set may reuse and every URL of the scratch config,",
+         "over every URL the gate set may reuse,"),
         # No own-server route, so every project takes the stated limit.
         ("give them one, whether or not a server answers:", "say so in the brief:"),
         # The own-server route only where a server answers: with reuse on, a run's own server is reused.
@@ -351,10 +512,10 @@ def test_reused_server_predicate_rejects_the_three_caveat_section():
          "worktree itself."),
         # The scratch port checked once: a server an earlier run left up keeps it, and each later run stops before
         # any test, which read as another test's kill.
-        ("before each assessor starts, moving each one that answers to a port the probe reports free",
+        ("before each assessor starts, moving each one that still answers to a port the probe reports free",
          "before the first assessor starts"),
-        (" Have automate check its URLs at the same points, before and after each table, and move a port that answers "
-         "before it runs the next one.", ""),
+        (" Have automate check its URLs at the same points, before and after each table, and move a port that still "
+         "answers before it runs the next one.", ""),
         # The scratch port checked before each table only: a server the table's own runs left up holds it.
         ("check its URLs at the same points, before and after each table,", "check its URLs before each table,"),
         ("So give the scratch config a start command that runs the server in the process group the runner stops, "
@@ -855,11 +1016,67 @@ def test_honesty_predicate_rejects_a_line_that_hides_what_the_server_measured(ol
     assert not _honest_about_a_reused_server(mutant)
 
 
+# The gate now stops a server the run itself left up (#190): a process
+# stopped is an action on the operator's machine, so the line names each one.
+_HONEST_ABOUT_A_STOP = (
+    "It also names each server the probe stopped, by its URL and the folder it ran from, those automate's summary "
+    "names included, since a server the operator started can read as one the run left up."
+)
+
+
+def _honest_about_a_stop(section: str) -> bool:
+    return _HONEST_ABOUT_A_STOP in re.sub(r"\s+", " ", _honesty_line(section))
+
+
+def test_worktree_honesty_line_names_each_server_the_probe_stopped():
+    assert _honest_about_a_stop(_worktree_section())
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (" " + _HONEST_ABOUT_A_STOP, ""),
+        # A stop named without the tree its server ran from: the main tree's, or an old worktree's.
+        ("by its URL and the folder it ran from, those", "by its URL, those"),
+        # The stops at automate's checks, which only its summary records, left out of the line.
+        (", those automate's summary names included,", ","),
+    ],
+    ids=["no-stop-named", "no-folder", "not-automates-stops"],
+)
+def test_honesty_predicate_rejects_a_line_that_hides_a_stop(old, new):
+    section = _worktree_section()
+    mutant = section.replace(old, new)
+    assert mutant != section, "the mutant must actually change the text"
+    assert not _honest_about_a_stop(mutant)
+
+
 _TIP_SAYS = (
     "**Stop a dev server before an unattended drive.**",
     "a mutation the gate writes into the worktree never reaches them.",
-    "The gate checks the URLs a runner config may reuse and never stops a server it did not start:",
+    # A server the run itself left up is the run's to stop (#190): the gate did not start step 5's, but stops it.
+    "The gate checks the URLs a runner config may reuse and never stops a server unless it reads as one the run "
+    "itself left up (below):",
     "when a scratch runner config can, whether or not one answers,",
+    "On Linux the gate stops a server the run itself left up, such as one the sweep right before the gate started "
+    "through turbo, at each of its checks and once more when the story's gate ends, so those servers do not pile up "
+    "over an Epic, and the decision log names each one it stopped.",
+    "It stops one only when every process of it is yours, has no controlling terminal and started after the current "
+    "story's baseline marker was written, the process that started its session has exited, nothing else that still "
+    "runs in that session started before the marker or is the parent of one of its processes (a watcher or "
+    "supervisor that can start it again), and it runs from your project or the gate's worktree.",
+    # The servers of yours that meet every condition, the time they can start in, and how to keep one up.
+    "A server of yours can meet all of that: one inside the project and on a port the gate checks, started in the "
+    "background by a command that has since exited (a script's, or another agent session's) or from a terminal you "
+    "then close (a `nohup ... &`), with nothing that began before the story still running in its session, reads as "
+    "the run's and is stopped.",
+    # A watcher of yours that starts its server again: the case that still reads as the run's.
+    "So does one that a watcher of yours starts again after the story began, when the watcher too began after the "
+    "story and runs in the server's process group, or starts the server through a command that then exits and "
+    "either began after the story or had that command give the server a session of its own.",
+    "That marker is written when the story starts, and the resume of a stopped or blocked run keeps it, so such a "
+    "server you start between a run and its resume is stopped too.",
+    "So stop it before you start or resume a drive, as this tip says, or start it outside the project, on another "
+    "port or from a terminal you keep open.",
     # A stopped dev server is not the end of it: a server the runner starts through turbo outlives the run.
     "but a server it starts through a launcher such as turbo, which runs it in a process group of its own, outlives "
     "the run that started it, and with reuse on the runs after it reuse it,",
@@ -888,7 +1105,38 @@ def test_the_operating_tips_say_to_stop_a_dev_server_before_a_drive():
     ("old", "new"),
     [
         ("**Stop a dev server before an unattended drive.**", "**A dev server can stay up during a drive.**"),
-        ("and never stops a server it did not start:", "and stops any server that answers:"),
+        ("and never stops a server unless it reads as one the run itself left up (below):",
+         "and stops any server that answers:"),
+        # #190's tip: the gate stops nothing, though it stops step 5's server.
+        ("and never stops a server unless it reads as one the run itself left up (below):",
+         "and never stops a server it did not start:"),
+        # The first wording: a stop the probe proves the run's, though its conditions are signs.
+        ("and never stops a server unless it reads as one the run itself left up (below):",
+         "and never stops a server it cannot show the run started:"),
+        # A condition left out, or the stop said to happen without a word in the decision log.
+        ("has no controlling terminal and started after", "started after"),
+        (" the process that started its session has exited,", ""),
+        # The first wording, which named the server's own processes only, though a watcher of yours that started
+        # before the story, or runs as its parent, starts it again in a new process group after the marker.
+        (" nothing else that still runs in that session started before the marker or is the parent of one of its "
+         "processes (a watcher or supervisor that can start it again),", ""),
+        (", with nothing that began before the story still running in its session,", ","),
+        (" So does one that a watcher of yours starts again after the story began, when the watcher too began after "
+         "the story and runs in the server's process group, or starts the server through a command that then exits "
+         "and either began after the story or had that command give the server a session of its own.", ""),
+        (", and the decision log names each one it stopped.", "."),
+        # The case where it stops a server of yours, left unsaid.
+        (" A server of yours can meet all of that: one inside the project and on a port the gate checks, started in "
+         "the background by a command that has since exited (a script's, or another agent session's) or from a "
+         "terminal you then close (a `nohup ... &`), with nothing that began before the story still running in its "
+         "session, reads as the run's and is stopped.", ""),
+        # Only a server whose terminal was closed, though one that never had a terminal reads the same way.
+        ("started in the background by a command that has since exited (a script's, or another agent session's) or "
+         "from a terminal you then close", "started from a terminal you then close"),
+        # The window said to be the drive, though a resume keeps the marker through the time between runs.
+        (" That marker is written when the story starts, and the resume of a stopped or blocked run keeps it, so such "
+         "a server you start between a run and its resume is stopped too.", ""),
+        ("So stop it before you start or resume a drive,", "So stop it before you start a drive,"),
         # The first tip's promise, kept beside the rest: with the dev server stopped, nothing goes unmeasured.
         ("keeps it from outliving the run.", "keeps it from outliving the run, and nothing goes unmeasured for this "
          "reason."),
@@ -902,6 +1150,63 @@ def test_tip_predicate_rejects_a_tip_that_contradicts_the_gate(old, new):
     mutant = tips.replace(old, new)
     assert mutant != tips, "the mutant must actually change the text"
     assert _tip_gaps(mutant)
+
+
+_STOPPED_SERVER_SAYS = (
+    # A watcher keeps its server up only from inside the server's session: a subreaper that adopts back a server it
+    # gave a session of its own is its parent from another session, which the probe does not count.
+    "keeps it up only while it runs in the server's session and either began before the marker or is the parent of "
+    "one of the server's processes from a process group of its own;",
+    "the server reads as the run's when the watcher began after the marker and either runs in the server's process "
+    "group or starts it through a command that then exits and is not its parent afterwards (a subreaper adopts it "
+    "back), or, whenever the watcher began, when that command gave the server a session of its own.",
+    # The run's own server that the probe leaves up: a killed runner's, and one a watcher the run started keeps up.
+    "When the run left that server up, stop it yourself once the drive is done:",
+    "and a watcher the run's own start command runs (a launcher task that runs watchexec, cargo-watch or air, say) "
+    "keeps up the server it runs in a process group of its own, as a watcher of yours does, so stop that watcher too.",
+)
+# The first wording, which a subreaper watcher's server, adopted back from another session, contradicts.
+_STOPPED_SERVER_NEVER_SAYS = ("keeps it up while it runs as the server's parent in a process group of its own",)
+
+
+def _stopped_server_gaps(text: str) -> list[str]:
+    flat = re.sub(r"\s+", " ", text)
+    return [phrase for phrase in _STOPPED_SERVER_SAYS if phrase not in flat] + [
+        phrase for phrase in _STOPPED_SERVER_NEVER_SAYS if phrase in flat
+    ]
+
+
+def _troubleshooting() -> str:
+    return (_REPO_ROOT / "docs" / "troubleshooting.md").read_text(encoding="utf-8")
+
+
+def test_troubleshooting_says_which_watcher_keeps_a_server_up_and_which_servers_the_run_leaves():
+    assert _stopped_server_gaps(_troubleshooting()) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The first wording: any parent in a group of its own, though one in another session counts for nothing.
+        ("keeps it up only while it runs in the server's session and either began before the marker or is the parent "
+         "of one of the server's processes from a process group of its own;",
+         "keeps it up while it runs as the server's parent in a process group of its own, or began before the marker "
+         "in the server's session;"),
+        ("in the server's session and either began", "and either began"),
+        (" and is not its parent afterwards (a subreaper adopts it back),", ""),
+        (", or, whenever the watcher began, when that command gave the server a session of its own.", "."),
+        # The run's own server a watcher keeps up, left unsaid, or its watcher left running.
+        (", and a watcher the run's own start command runs (a launcher task that runs watchexec, cargo-watch or air, "
+         "say) keeps up the server it runs in a process group of its own, as a watcher of yours does, so stop that "
+         "watcher too.", "."),
+        (", so stop that watcher too.", "."),
+    ],
+)
+def test_stopped_server_predicate_rejects_a_wrong_watcher_case(old, new):
+    text = re.sub(r"\s+", " ", _troubleshooting())
+    mutant = text.replace(old, new)
+    assert mutant != text, "the mutant must actually change the text"
+    assert _stopped_server_gaps(mutant)
 
 
 _REUSED_FRAGMENT_SAYS = (
@@ -2060,7 +2365,8 @@ _EVIDENCE_HOOK_ESCALATES = (
     "step 0, as the `escalate` route below stops."
 )
 _EVIDENCE_STAYS_STAGED = (
-    "The story keeps its `advance` verdict, and its evidence stays staged for the commit a resume makes."
+    "The story keeps the verdict it advanced on (`advance`, or `defer`, whose route advances anyway), and its "
+    "evidence stays staged for the commit a resume makes."
 )
 _EVIDENCE_RESUME_WAITS = (
     "While that story's `evidence-commit-rejected` escalation is still open, the resume commits nothing and stops on "
@@ -2130,6 +2436,9 @@ def test_the_evidence_commit_hook_rule_reaches_only_the_gates_own_files():
          "closed already)", ""),
         ("gate", "write `.evidence-owed-<story_id>` beside it, listing those paths one per line, ", ""),
         ("gate", _EVIDENCE_STAYS_STAGED, "Unstage its evidence and move to the next story."),
+        # The first wording named `advance` alone, though the `defer` route advances too.
+        ("gate", _EVIDENCE_STAYS_STAGED,
+         "The story keeps its `advance` verdict, and its evidence stays staged for the commit a resume makes."),
         ("gate", " " + _EVIDENCE_RESUME_WAITS, ""),
         ("execute", " " + _EXECUTE_RESUME_WAITS, ""),
         ("execute", "while its `escalation` reads `open`, make no commit", "while its `escalation` reads `open`, commit"),
@@ -2159,13 +2468,16 @@ _EVIDENCE_COMMIT = re.compile(r"evidence commit|evidence-commit|\.evidence-owed"
 _HOOK_REJECTION_SENTENCES = {
     "execute.md": (
         ("**A commit can also be rejected by something that is NOT the guard, and ", "0f2c634952fd"),
-        ("**A hooks reason is fixed in place, not by a return to Stage 2.** When t", "ce0d320951ba"),
+        # Reviewed (#186 review, 4.1.0): the hooks re-merge a resume makes now
+        # waits behind an operator's reason, which escalates first; a settings
+        # write, and nothing of a hook's rejection of the evidence commit.
+        ("**A hooks reason is fixed in place, not by a return to Stage 2.** When t", "a178c4791343"),
         ("**Commit at green** (one implementation commit per green story; the gate", "50b2448580e8"),
         ("A fix that writes `.claude/settings.local.json` (a hook, its env, the al", "9df5f7b5d3f4"),
         ("Before the next story's step 0, also check whether the last advanced sto", "88ce12f730cc"),
         ("Check every `.evidence-owed-<story_id>` of this Epic's stories this way,", "ca850de04101"),
         ("Evaluate it only after the story's Stage-5 verdict has landed, and after", "502e14ca0ed3"),
-        ("Exit 0 asserts the branch, both hooks with the all-tools matcher and the", "55af39a6bdde"),
+        ("Exit 0 asserts the branch, both hooks with the all-tools matcher and the", "78e63e004d78"),
         ("Said that way rather than \"the guard never sees Write/Edit\", because pre", "4dd6e00dabed"),
         ("Skip the write and both hooks keep reading whatever the file last named:", "381bdfbe5299"),
         ("So is `evidence-commit-rejected`: the story advanced, and a repo commit ", "96b74b528b7e"),
@@ -2176,9 +2488,15 @@ _HOOK_REJECTION_SENTENCES = {
         ("The hook itself only records and warns (a Stop hook **cannot force `/goa", "e875fa4537ca"),
         ("Treat a hook rejection exactly as step 5 treats a post-commit red: remed", "90ca77631228"),
         ("Unlike the baseline, **this marker is refreshed, not preserved**: step 5", "6428639f8eb2"),
+        # Reviewed (#186 review): an operator's reason on a resume goes before a
+        # hooks re-merge, a settings write the permission layer may refuse; the
+        # resume stops, and nothing of a hook's rejection of the evidence commit.
+        ("When one stands beside other reasons, a hooks reason included, take this", "b29df6d0f3c8"),
     ),
     "finalize.md": (
-        ("A run that stopped on an `evidence-commit-rejected` escalation keeps tha", "e2cb75bb035a"),
+        # Reviewed: it now names the verdict the story advanced on, `advance` or
+        # `defer`; it answers no hook and commits nothing.
+        ("A run that stopped on an `evidence-commit-rejected` escalation keeps the", "b3906fe95f18"),
         ("A story whose escalation is still open (`escalation-<story_id>.json` on ", "e3f7c53b9b93"),
         ("On a `blocked` run (a story escalated, so the Epic never advanced or the", "b59ae034f8db"),
         ("This hook fires **only on a `blocked` run** (a story escalated, so the E", "168e3ecabf77"),
@@ -2203,30 +2521,80 @@ _HOOK_REJECTION_SENTENCES = {
     "preflight.md": (
         ("**Arm the guard so that a guard that fails refuses the call.** Each UCG ", "4a00a29a754b"),
         ("- The same PreToolUse guard also enforces the Cross-Session Recall latch", "76381c13dda0"),
+        # Reviewed (#186): a settings write the permission layer refuses on a
+        # resume, routed through an escalation /ucg-resolve closes; it says
+        # nothing of a hook's rejection of the evidence commit.
+        ("A resume never reaches this stage: when its hooks need re-arming and the", "c5d3cb28c9ca"),
         ("Claude Code only invokes a PreToolUse group for tools its matcher select", "5df2ca1f552d"),
         ("Deleting it costs nothing a later step needs: step 0 writes it afresh be", "df83ff84a5f2"),
-        ("Left unquoted, a project or skill path that holds a space (a project und", "95ae297070e0"),
+        # Reviewed (#186 review, 4.1.0): an unquoted hook command's cost, now
+        # the budget hook's as the shell or uv exits (a stop let through, or
+        # sent back up to eight times in a row); nothing of a hook's rejection
+        # of the evidence commit. Reviewed again (final pass) when it gained
+        # the project uv syncs first, whose failed build lets each stop
+        # through: still a Stop hook's exit on stopping, and nothing of the
+        # evidence commit. Reviewed again (its review) when that failure was
+        # narrowed to a build or requirements that cannot be satisfied, and a
+        # network failure in that sync, which exits 2, sends each stop back:
+        # still a Stop hook's exit on stopping, and nothing of the evidence
+        # commit.
+        ("Left unquoted, a project or skill path that holds a space (a project und", "d0797efaddc8"),
         ("Now that the group is armed for every tool, the hook IS invoked for a `W", "54ce49130885"),
         ("The Stop budget hook carries no `onFailure`: Claude Code ignores the key", "63209639b79d"),
         ("The guard's item carries `\"onFailure\": \"block\"` beside `\"type\"` and `\"co", "dcd78ba37079"),
-        ("The same assertion is scriptable: `preflight_check.py --assert-armed` pe", "a1805a990206"),
+        ("The same assertion is scriptable: `preflight_check.py --assert-armed` pe", "09a4c30a9245"),
         ("What it cannot catch itself (an interpreter or `uv` that cannot start, a", "f6c954ccd14a"),
         ("Without it each of those lets the call run unchecked, because Claude Cod", "b8668e309a48"),
         ("Written out, with `<env>` the `KEY='value'` prefix the env bullet below ", "a4897c01949e"),
-        ("`--assert-armed` reads each UCG hook command the way the shell splits it", "e1e405c199e5"),
+        # Reviewed (#186 review, 4.1.0, final pass): what the check fails in a
+        # hook command as written, a shell operator or redirection now too; it
+        # answers no hook's rejection and says nothing of the evidence commit.
+        # Reviewed again (its review) when it gained what the shell expands
+        # before uv starts: still what the check fails in a command as
+        # written, and nothing of a hook's rejection or the evidence commit.
+        ("`--assert-armed` reads each UCG hook command the way the shell splits it", "1aee77e4219b"),
     ),
     "SKILL.md": (
         ("An Epic whose stories all read `done` while a story's `.evidence-owed-<s", "a5bb6b9a9f94"),
         ("The hook-enforced latch (`.mem-state.json`) fails closed while it is pre", "ed3ddc055043"),
     ),
+    # Reviewed (#190): the symptom flowchart, which gained a node for a dev
+    # server the gate stopped, and the last sentence of that new section, which
+    # runs into the "Hooks not firing" heading and symptom; neither says how a
+    # hook's rejection is answered. Reviewed again when that section gained a
+    # last sentence (a drive that stops before a gate's verdict, whose server
+    # the story's next gate stops): it names no hook and no evidence commit of
+    # its own, and joins the scan only through the heading after it.
     "troubleshooting.md": (
         ("**What to check.** - **Older Claude Code.** The hook returns a `deny` de", "b9349b662d21"),
         ("- **A refused settings write.** Preflight writes its hooks and allow rul", "298ba71ea2eb"),
         ("--- title: Troubleshooting description: Maps the real failure modes of a", "74417cea7b2a"),
+        # Reviewed (#186): the same refused settings write on a resume; no
+        # hook's rejection of the evidence commit. Reviewed again (4.1.0) when
+        # it gained the operator's reason that escalates before that write.
+        ("A resume rewrites the file too when the hooks need re-arming (the first ", "bf3d8f2d3b0c"),
+        # Reviewed (#186 review, 4.1.0): a missing budget script, whose uv exit 2
+        # a Stop hook reads as a block on stopping, and whose exit 1, where the
+        # project uv syncs first fails to build or resolve, it reads as a
+        # non-blocking error; neither says anything of a hook's rejection of
+        # the evidence commit. Reviewed again when the first gained the eight
+        # blocks in a row after which Claude Code lets the stop through: still
+        # a Stop hook's exit on stopping, and nothing of the evidence commit.
+        # Reviewed again (its review) when the second was narrowed to a build
+        # or requirements that cannot be satisfied (a network failure exits
+        # 2, as the sentence after it says): still a Stop hook's exit on
+        # stopping, and nothing of the evidence commit.
+        ("`uv` exits 2 when it cannot find the script, which on a `Stop` hook Clau", "4341789b0ad0"),
+        ("When that project fails to build, or its requirements cannot be satisfie", "ddb8784447bb"),
         ("Most read like `PreToolUse:Bash hook error: [<command>]: failed; blockin", "03a6eaa3f853"),
         ("It names each primitive the version lacks. 2.1.295 is the floor, the rel", "d3fb84ee20ae"),
-        ("See the cap sections in the [gate model](./gate-model.md). ## Hooks not ", "b86d92214a9b"),
-        ("Start from the symptom you observed and follow it to the section that ex", "e7d26b0d82f1"),
+        # Reviewed (#186 review, 4.1.0, final pass): the resume after a Claude
+        # Code update re-arms the hooks of a run UCG 3.x armed, a settings
+        # write a headless session may be refused; nothing of a hook's
+        # rejection of the evidence commit.
+        ("On a run UCG 3.x armed, that resume is also the one that re-arms the hoo", "f128489bf7e7"),
+        ("Start from the symptom you observed and follow it to the section that ex", "b8cdcd44aae2"),
+        ("A drive that stops before a story's gate logs its verdict can leave one ", "c624e906aef8"),
     ),
     "operating-tips.md": (
         ("The Epic is finished. | | `evidence-owed` | Every story is `done`, but a", "2dbc62bde6cc"),
@@ -3655,11 +4023,25 @@ def test_a_mutant_that_breaks_a_module_is_a_row_that_cannot_run(tmp_path):
 _ZERO_FAILED_CASES = (
     "(a collection or harness error, not a test: a mutant reads this way when pytest then cannot collect a test "
     "module or class or load a conftest.py, or jest, vitest or Node's test runner cannot load a test file, since no "
-    "test in that file or class runs, or when a Node test file's process exits non-zero after the row's test passes "
-    "or is skipped, and no other test fails; a Node test file's process that exits or crashes during a test, before "
-    "Node reports the row's test, still reads as a kill, since the row's `expect_red` then never appears beside a "
-    "failure token, though it can read 0 failed when a test of the same name passes or is skipped in a file Node lists "
-    "before it, or when the last thing Node prints for that file is an uncaught error that a child process printed)"
+    "test in that file or class runs, or Node's test runner cannot run its global setup, since no test runs at all, "
+    "or when a Node test file's process exits non-zero after the row's test passes or is skipped, or reports that a "
+    "test generated asynchronous activity after it ended, whatever test that names, and no other test fails; a Node "
+    "test file's process that exits or crashes during a test, before Node reports the row's test, still reads as a "
+    "kill, since the row's `expect_red` then never appears beside a failure token, though it can read 0 failed when a "
+    "test whose name holds the row's `expect_red` passes or is skipped in that file before the process dies or in a "
+    "file Node lists before it, when that file reports such asynchronous activity before the process dies, or when "
+    "the last thing Node prints for that file is an uncaught error that a child process printed; Node prints a test "
+    "file whose process exits non-zero after all its tests pass as it prints one whose process dies during a test, so "
+    "such a file whose lines report no pass of a test whose name holds the row's `expect_red` reads as that death, "
+    "and the row as a kill though no test went red, and when you delegate automate, tell it to write each Node row's "
+    "`command` to run only the test file that holds the row's test, though a row's second run, through the full "
+    "sweep, can still read so; a module that calls `process.exit` "
+    "while a Node test file loads, or that kills its process then by filling the heap or by a signal, stops the file "
+    "loading, yet Node reports it as it reports a process that exits or crashes during the file's first test, so it "
+    "reads as that kill does, and when you delegate automate, tell it to write no replacement that makes a module "
+    "exit, fill the heap or raise a signal while a Node test file loads; and in output that interleaves the lines of "
+    "several runs with no task-runner prefix to tell them apart, a Node test file that cannot load, or whose process "
+    "exits non-zero after the row's test passes, can still read as a kill)"
 )
 # 3.2.0's wording, which named neither a class pytest cannot collect nor Node's test runner.
 _ZERO_FAILED_CASES_BEFORE = (
@@ -3679,6 +4061,25 @@ _NODE_CAPTURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_lo
         ("node-spec-exits-after-a-skipped-test", "clamp at the bound"),
         ("node-spec-top-level-await-never-settles", "store opens"),
         ("node-tap-imported-top-level-await-never-settles", "store opens"),
+        ("pnpm-node-spec-load-failure-interleaved", "clamp at the bound"),
+        ("pnpm-node-tap-exits-after-a-pass-interleaved", "clamp at the bound"),
+        ("node-tap-exits-after-a-tagged-pass", "clamp at the bound"),
+        ("node-tap-exits-after-a-pass-of-a-longer-name", "run reads its file"),
+        ("npm-node-spec-load-failure-in-two-workspaces", "api clamps at the bound"),
+        ("node-tap-exits-after-an-escaped-pass", "strip drops a # comment"),
+        ("node-tap-load-failure-outside-the-folder", "clamp at the bound"),
+        ("pnpm-root-node-tap-load-failure-interleaved", "clamp at the bound"),
+        ("node-tap-load-failure-in-a-file-named-with-an-apostrophe", "clamp at the bound"),
+        ("node-tap-exits-after-an-escaped-pass", "strip drops a \\# comment"),
+        ("node-tap-async-activity-after-a-test-named-with-a-hash", "remember returns \\#1"),
+        ("node-spec-async-activity-after-tests-in-two-files", "remember returns the value"),
+        ("node-tap-async-activity-after-tests-in-two-files", "remember keeps a second key"),
+        ("node-spec-isolation-none-load-failure", "mode is strict"),
+        ("node-tap-isolation-none-syntax-error", "clamp at the bound"),
+        ("node-global-setup-throws", "rows are seeded"),
+        ("node22-spec-isolation-none-load-failure", "mode is strict"),
+        ("node-spec-isolation-none-throws-undefined", "row passes"),
+        ("node-tap-isolation-none-exits-after-the-test-passes", "flush keeps its value"),
     ],
 )
 def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_red):
@@ -3689,7 +4090,32 @@ def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_re
     read as another test's kill; it now reads 0 failed, which the cannot-run
     bullet names, Node and the non-zero exit included. A second review of that
     fix found a top-level await the mutant leaves pending read as a kill: no
-    test in that file runs either, and it reads 0 failed too."""
+    test in that file runs either, and it reads 0 failed too. A review of #185
+    (#186, the seven captures before the last two) found such a file read as
+    a kill when pnpm printed another package's lines among its own, when the
+    test that passed had a name that held the row's (a TEA tag in front of
+    it, or more words after it), when a second run failed a file of the same
+    name, when TAP escaped a `#` in the test's name, and when TAP located a
+    file outside the folder node ran in by its absolute path. A review of that
+    fix (the two captures after those) found it read as a kill behind a pnpm
+    prefix with no `/` (`guard test: `), and when TAP located a file whose
+    name holds an apostrophe in double quotes; each reads 0 failed now. The
+    review of the branch that holds both fixes (the two captures after those)
+    found a row that names its test as TAP writes it, `\\#` and all, read as a
+    kill when the file exited after that test passed, or failed because a timer
+    the test started threw after it ended; it reads 0 failed too. Its final
+    review (the five captures before the last three) found three runs in which
+    no test went red read as a kill: two files that each failed because a
+    timer their test started threw after it ended, a file that cannot load
+    under `--test-isolation=none`, which imports every file in the runner's
+    own process, and a global setup that throws; each reads 0 failed now. The
+    review of that fix (the last three captures) found three more: a file
+    that cannot load in the runner's own process under Node 22, which gives
+    its test no location, one that throws `undefined` as it loads, and a
+    module that ends the runner's own process after the row's test passes;
+    each reads 0 failed now, which the cannot-run bullet names already (a
+    test file Node's test runner cannot load, and a Node test file's process
+    that exits non-zero after the row's test passes)."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
     status, detail, _ = mutate_check._classify_red(output, expect_red)
@@ -3709,15 +4135,35 @@ _ZERO_FAILED_ALL = frozenset(
         "a test file Node's test runner cannot load",
         "a Node test file's process that exits non-zero after the row's test passes",
         "a Node test file's process that exits non-zero after the row's test is skipped",
+        "a global setup Node's test runner cannot run",
+        "a Node test file that reports asynchronous activity after a test ended",
     }
 )
 _DIES_DURING_A_TEST = (
     "a Node test file's process that exits or crashes during a test, before Node reports the row's test, still "
     "reads as a kill"
 )
-# The two such kills `mutate_check.py` cannot always tell from a harness error (no
+# The kills `mutate_check.py` cannot always tell from a harness error (no
 # line says which file a passing test or an error is from), which can read 0 failed.
+# Since #186 the pass is of any test whose name holds the row's `expect_red`, in
+# the dying file too, where it was only a test of that exact name. Since the
+# final review of the branch that holds #186's fixes, a file whose lines report a
+# test's asynchronous activity after it ended comes off the count, whatever test
+# it names, so a process that dies after such a report reads 0 failed as well.
 _DIES_BUT_READS_0_FAILED = (
+    "though it can read 0 failed when a test whose name holds the row's `expect_red` passes or is skipped in that file "
+    "before the process dies or in a file Node lists before it, when that file reports such asynchronous activity "
+    "before the process dies, or when the last thing Node prints for that file is an uncaught error that a child "
+    "process printed"
+)
+# The branch's wording, before that review, which left that third kill out.
+_DIES_BUT_READS_0_FAILED_BEFORE_ASYNC = (
+    "though it can read 0 failed when a test whose name holds the row's `expect_red` passes or is skipped in that file "
+    "before the process dies or in a file Node lists before it, or when the last thing Node prints for that file is "
+    "an uncaught error that a child process printed"
+)
+# #179's wording, which named only a test of the same name, in another file.
+_DIES_BUT_READS_0_FAILED_BY_ITS_NAME = (
     "though it can read 0 failed when a test of the same name passes or is skipped in a file Node lists before it, or "
     "when the last thing Node prints for that file is an uncaught error that a child process printed"
 )
@@ -3753,13 +4199,18 @@ def _reads_zero_failed(para: str) -> set[str]:
         cases.add("a Node test file's process that exits non-zero after the row's test passes")
     if "when a Node test file's process exits non-zero after the row's test passes or is skipped" in text:
         cases.add("a Node test file's process that exits non-zero after the row's test is skipped")
+    if "or Node's test runner cannot run its global setup" in text:
+        cases.add("a global setup Node's test runner cannot run")
+    # Whatever test the report names: it reports a pass, the row's test or another's.
+    if "or reports that a test generated asynchronous activity after it ended, whatever test that names," in text:
+        cases.add("a Node test file that reports asynchronous activity after a test ended")
     return cases
 
 
 def _keeps_a_dying_process_a_kill(para: str) -> bool:
     """Whether that parenthesis says a Node test file's process that exits or
     crashes during a test, before Node reports the row's test, still reads as
-    a kill, as `mutate_check.py` reads it, and names the two such kills that
+    a kill, as `mutate_check.py` reads it, and names the three such kills that
     can read 0 failed."""
     text = _zero_failed_parenthesis(para)
     return text is not None and _DIES_DURING_A_TEST in text and _DIES_BUT_READS_0_FAILED in text
@@ -3768,24 +4219,28 @@ def _keeps_a_dying_process_a_kill(para: str) -> bool:
 def test_the_cannot_run_bullet_names_each_case_that_reads_0_failed():
     """Each harness error `mutate_check.py` reads 0 failed (pinned in
     test_mutate_check.py, the measured ones here too): pytest's module, class
-    and conftest.py, a test file jest, vitest or Node cannot load, and a Node
-    test file whose process exits non-zero after the row's test passes or is
-    skipped. A Node test file whose process dies during a test still reads as
-    a kill, though two such kills it cannot always tell from a harness
-    error can read 0 failed."""
+    and conftest.py, a test file jest, vitest or Node cannot load, a global
+    setup Node cannot run, a Node test file whose process exits non-zero after
+    the row's test passes or is skipped, and one that reports a test's
+    asynchronous activity after it ended, whatever test that names. A Node test
+    file whose process dies during a test still reads as a kill, though three
+    such kills it cannot always tell from a harness error can read 0 failed."""
     assert _reads_zero_failed(_bound()) == _ZERO_FAILED_ALL
     assert _keeps_a_dying_process_a_kill(_bound())
 
 
 _EXIT_CASE = "a Node test file's process that exits non-zero after the row's test passes"
 _SKIP_CASE = "a Node test file's process that exits non-zero after the row's test is skipped"
+_SETUP_CASE = "a global setup Node's test runner cannot run"
+_ASYNC_CASE = "a Node test file that reports asynchronous activity after a test ended"
 
 
 @pytest.mark.parametrize(
     ("old", "new", "dropped", "dying_kill"),
     [
         (_ZERO_FAILED_CASES, _ZERO_FAILED_CASES_BEFORE,
-         {"a test class pytest cannot collect", "a test file Node's test runner cannot load", _EXIT_CASE, _SKIP_CASE},
+         {"a test class pytest cannot collect", "a test file Node's test runner cannot load", _EXIT_CASE, _SKIP_CASE,
+          _SETUP_CASE, _ASYNC_CASE},
          False),
         ("cannot collect a test module or class or load", "cannot collect a test module or load",
          {"a test class pytest cannot collect"}, True),
@@ -3801,24 +4256,44 @@ _SKIP_CASE = "a Node test file's process that exits non-zero after the row's tes
         # A process that dies during a test read 0 failed, a gap only ever logged `unmeasured`.
         ("; a Node test file's process that exits or crashes during a test, before Node reports the row's test, still "
          "reads as a kill, since the row's `expect_red` then never appears beside a failure token, "
-         + _DIES_BUT_READS_0_FAILED + ")", ")", set(), False),
+         + _DIES_BUT_READS_0_FAILED + ";", ";", set(), False),
         # A second review of #179's fix: the bullet claimed every such kill, the two that can read 0 failed included.
-        (", " + _DIES_BUT_READS_0_FAILED + ")", ")", set(), False),
-        ("when a test of the same name passes or is skipped in a file Node lists before it, or when", "when", set(),
-         False),
-        (", or when the last thing Node prints for that file is an uncaught error that a child process printed)", ")",
+        (", " + _DIES_BUT_READS_0_FAILED + ";", ";", set(), False),
+        ("when a test whose name holds the row's `expect_red` passes or is skipped in that file before the process "
+         "dies or in a file Node lists before it, when", "when", set(), False),
+        (", or when the last thing Node prints for that file is an uncaught error that a child process printed;", ";",
          set(), False),
+        # #186: a pass names the row's test by any name that holds its `expect_red`, and can
+        # stand in the dying file itself, so a bullet that names only a test of the same name in another file
+        # claims as kills the rows that read 0 failed.
+        (_DIES_BUT_READS_0_FAILED, _DIES_BUT_READS_0_FAILED_BY_ITS_NAME, set(), False),
+        ("passes or is skipped in that file before the process dies or in a file Node lists",
+         "passes or is skipped in a file Node lists", set(), False),
+        # The final review of the branch that holds #186's fixes: a global setup that throws, and a file
+        # that reports a test's asynchronous activity after it ended, whatever test that names, read as a
+        # kill, and a process that dies after such a report reads 0 failed.
+        (", or Node's test runner cannot run its global setup, since no test runs at all", "", {_SETUP_CASE}, True),
+        (", or reports that a test generated asynchronous activity after it ended, whatever test that names", "",
+         {_ASYNC_CASE}, True),
+        ("whatever test that names,", "when it names the row's test,", {_ASYNC_CASE}, True),
+        (_DIES_BUT_READS_0_FAILED, _DIES_BUT_READS_0_FAILED_BEFORE_ASYNC, set(), False),
+        (", when that file reports such asynchronous activity before the process dies, or when", ", or when", set(),
+         False),
     ],
     ids=["3.2.0", "no-class", "no-node", "no-exit", "any-test-passing", "no-skip", "beside-a-kill", "no-crash",
-         "every-crash", "no-same-name", "no-child-error"],
+         "every-crash", "no-same-name", "no-child-error", "by-its-name", "no-same-file", "no-global-setup",
+         "no-async", "async-by-the-row-s-name", "no-async-kill", "no-async-kill-clause"],
 )
 def test_zero_failed_predicate_rejects_a_bullet_that_drops_a_case(old, new, dropped, dying_kill):
     """The twin: the cannot-run bullet as 3.2.0 wrote it, or with one of
     #179's cases dropped, with an exit after any test passes in place of the
     row's own, without the process that dies during a test, with every such
     process a kill or without one of the two such kills that can read 0
-    failed, or one that no longer keeps a kill beside a harness error, reads
-    every other case as before and not the one it dropped."""
+    failed, with #179's wording of the first of them (a test of the same name,
+    in another file), or one that no longer keeps a kill beside a harness
+    error, or without the global setup, the report of asynchronous activity
+    whatever test it names, or the kill that reads 0 failed after such a
+    report, reads every other case as before and not the one it dropped."""
     para = _bound()
     mutant = para.replace(old, new)
     assert mutant != para, "the mutant must actually change the text"
@@ -3833,9 +4308,9 @@ def test_zero_failed_predicate_rejects_a_bullet_that_drops_a_case(old, new, drop
         ("node-tap-heap-runs-out-during-a-test", "depth guard fires"),
         ("node-spec-load-failure-beside-an-exit", "run reads its file"),
         ("node-spec-exits-beside-a-pass-of-the-same-name", "run reads its file"),
-        ("node-tap-exits-after-a-pass-of-a-longer-name", "run reads its file"),
         ("node-tap-exits-after-a-child-process-crash", "run reads its file"),
         ("node-spec-exits-after-its-child-process-crash", "run reads its file"),
+        ("pnpm-node-tap-exits-during-a-test-interleaved", "clamp at the bound"),
     ],
 )
 def test_a_node_test_file_that_dies_during_a_test_is_a_kill(capture, expect_red):
@@ -3846,16 +4321,256 @@ def test_a_node_test_file_that_dies_during_a_test_is_a_kill(capture, expect_red)
     #179's fix found it read 0 failed, a row that cannot run, so its gap stayed
     open and was logged `unmeasured`; it reads as a kill again, and the
     cannot-run bullet says so. A second review found it still read 0 failed
-    beside another file's pass of the same or a longer name, and after a test's
-    child process printed an uncaught error (the last four captures): only the
+    beside another file's pass of the same name, and after a test's child
+    process printed an uncaught error (the middle three captures): only the
     lines Node printed after the previous file's test are read now, and a load
-    error only as the last of them."""
+    error only as the last of them. A pass of a longer name, which that review
+    kept a kill, counts as a pass of the row's test since #186, as any name that
+    holds the row's `expect_red` does, so it reads 0 failed (the test below).
+    The last capture is #186's: pnpm prints another package's lines among the
+    dying file's, and the file still reads as a kill."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
     status, detail, _ = mutate_check._classify_red(output, expect_red)
     assert status == "MISATTRIBUTED"
     assert _reading(_bound(), status, detail) == "killed"
     assert _ZERO_FAILED_CASES in re.sub(r"\s+", " ", _bound())
+
+
+# The Node test files that run no test of their own and still read as a kill (the
+# review of the branch that holds #186's fixes): a module that calls
+# `process.exit` as the file loads, which Node reports as it reports an exit during
+# the file's first test, and output in which several runs' lines interleave with
+# no task-runner prefix, so that another run's lines can land between a file's
+# load error and its test, or another run's summary between the row's pass and
+# it. The bullet said a file Node cannot load reads 0 failed, named neither, and
+# never told automate to keep its replacements off the first, as the reused-server
+# caveat tells it for Playwright. The review of that fix found the bullet and the
+# brief named only the exit: a module that fills the heap or raises a signal as the
+# file loads (a top-level loop the mutant leaves unbounded, `process.abort`) stops
+# it loading too, prints no `Node.js v` line, and reads as a kill the same way.
+_DIES_AS_IT_LOADS = (
+    "a module that calls `process.exit` while a Node test file loads, or that kills its process then by filling the "
+    "heap or by a signal, stops the file loading, yet Node reports it as it reports a process that exits or crashes "
+    "during the file's first test, so it reads as that kill does"
+)
+_NO_DEATH_AS_IT_LOADS = (
+    "and when you delegate automate, tell it to write no replacement that makes a module exit, fill the heap or raise "
+    "a signal while a Node test file loads"
+)
+# That fix's wording, which named only a module that calls `process.exit`.
+_EXITS_AS_IT_LOADS = (
+    "a module that calls `process.exit` while a Node test file loads stops the file loading, yet Node prints for it "
+    "what it prints for a process that exits during the file's first test, so it reads as that kill does"
+)
+_NO_EXIT_AS_IT_LOADS = (
+    "and when you delegate automate, tell it to write no replacement that makes a module exit while a Node test file "
+    "loads"
+)
+_INTERLEAVED_KILLS = (
+    "in output that interleaves the lines of several runs with no task-runner prefix to tell them apart, a Node test "
+    "file that cannot load, or whose process exits non-zero after the row's test passes, can still read as a kill"
+)
+_NODE_LOAD_KILLS = frozenset({"dies as it loads", "automate briefed", "interleaved"})
+_PNPM_ANNOUNCED = re.compile(r"^\S+ test\$ ")
+_PNPM_PREFIX = re.compile(r"^\S+ test: ")
+
+
+def _node_load_kills(para: str) -> set[str]:
+    """What the cannot-run bullet's parenthesis names among the Node test
+    files that run no test and still read as a kill, and whether it tells
+    automate to write no replacement that makes a module exit, fill the heap or
+    raise a signal as one loads."""
+    text = _zero_failed_parenthesis(para)
+    if text is None:
+        return set()
+    named = set()
+    if _DIES_AS_IT_LOADS in text:
+        named.add("dies as it loads")
+    if _NO_DEATH_AS_IT_LOADS in text:
+        named.add("automate briefed")
+    if _INTERLEAVED_KILLS in text:
+        named.add("interleaved")
+    return named
+
+
+def _unprefixed(output: str) -> str:
+    """A pnpm capture as a command that runs the same packages at once prints
+    it with no prefix on their lines: each prefix removed, and the lines with
+    which pnpm announces each script dropped."""
+    return "".join(
+        _PNPM_PREFIX.sub("", line) for line in output.splitlines(keepends=True) if not _PNPM_ANNOUNCED.match(line)
+    )
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red", "case"),
+    [
+        ("node-spec-exits-as-it-loads", "mode is strict", "dies as it loads"),
+        ("node-tap-exits-as-it-loads", "mode is strict", "dies as it loads"),
+        ("node-spec-heap-runs-out-as-it-loads", "walk keeps ten levels", "dies as it loads"),
+        ("node-tap-heap-runs-out-as-it-loads", "walk keeps ten levels", "dies as it loads"),
+        ("node-spec-aborts-as-it-loads", "mode is strict", "dies as it loads"),
+        ("node-tap-aborts-as-it-loads", "mode is strict", "dies as it loads"),
+        ("pnpm-node-spec-load-failure-interleaved", "clamp at the bound", "interleaved"),
+        ("pnpm-node-tap-load-failure-interleaved", "clamp at the bound", "interleaved"),
+        ("pnpm-node-spec-exits-after-a-pass-interleaved", "clamp at the bound", "interleaved"),
+        ("pnpm-node-tap-exits-after-a-pass-interleaved", "clamp at the bound", "interleaved"),
+    ],
+)
+def test_a_node_test_file_that_runs_no_test_yet_reads_as_a_kill_is_named(capture, expect_red, case):
+    """Measured on `mutate_check.py`, over real `node --test` output: a
+    module that calls `process.exit`, fills the heap or calls `process.abort`
+    at its top level stops its test file loading, and a file that cannot load,
+    or whose process exits after the row's test passes, does so too when
+    pnpm's lines reach it with their prefixes removed, as a command that runs
+    several packages at once with no prefix prints them. No test in that file
+    ran, yet each reads as a kill, and the cannot-run bullet, which said a
+    file Node's test runner cannot load reads 0 failed, now names each, and
+    tells automate to write no replacement that makes a module exit, fill the
+    heap or raise a signal as a test file loads."""
+    mutate_check = _load_script("mutate_check")
+    output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
+    if case == "interleaved":
+        assert _reading(_bound(), *mutate_check._classify_red(output, expect_red)[:2]) == "cannot run"
+        output = _unprefixed(output)
+    status, detail, _ = mutate_check._classify_red(output, expect_red)
+    assert status == "MISATTRIBUTED"
+    assert _reading(_bound(), status, detail) == "killed"
+    assert case in _node_load_kills(_bound())
+
+
+def test_the_cannot_run_bullet_names_each_node_file_that_runs_no_test_yet_reads_as_a_kill():
+    assert _node_load_kills(_bound()) == _NODE_LOAD_KILLS
+    assert _ZERO_FAILED_CASES in re.sub(r"\s+", " ", _bound())
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "dropped"),
+    [
+        # The branch's wording: neither case, and no brief.
+        ("; " + _DIES_AS_IT_LOADS + ", " + _NO_DEATH_AS_IT_LOADS + "; and " + _INTERLEAVED_KILLS + ")", ")",
+         _NODE_LOAD_KILLS),
+        ("; " + _DIES_AS_IT_LOADS + ", " + _NO_DEATH_AS_IT_LOADS + ";", ";", {"dies as it loads", "automate briefed"}),
+        (", " + _NO_DEATH_AS_IT_LOADS, "", {"automate briefed"}),
+        ("so it reads as that kill does", "so it reads 0 failed", {"dies as it loads"}),
+        ("; and " + _INTERLEAVED_KILLS + ")", ")", {"interleaved"}),
+        ("a Node test file that cannot load, or whose process exits non-zero after the row's test passes, can",
+         "a Node test file whose process exits non-zero after the row's test passes can", {"interleaved"}),
+        # The first fix's wording: only a module that exits, in the case and in the brief.
+        (_DIES_AS_IT_LOADS, _EXITS_AS_IT_LOADS, {"dies as it loads"}),
+        (_NO_DEATH_AS_IT_LOADS, _NO_EXIT_AS_IT_LOADS, {"automate briefed"}),
+        (" by filling the heap or by a signal,", " by a signal,", {"dies as it loads"}),
+        ("exit, fill the heap or raise a signal while", "exit or raise a signal while", {"automate briefed"}),
+    ],
+    ids=["the-branch", "no-death-at-load", "no-brief", "death-at-load-0-failed", "no-interleaving", "no-load-failure",
+         "exit-only", "exit-only-brief", "no-heap", "no-heap-brief"],
+)
+def test_node_load_kill_predicate_rejects_a_bullet_that_drops_one(old, new, dropped):
+    """The twin: the bullet as the branch wrote it, or with one of the two
+    cases dropped or misread, or without the brief, or as the first fix wrote
+    it, naming only a module that calls `process.exit` in the case or in the
+    brief, or without the heap in either, reads every other case as before and
+    not the one it dropped."""
+    para = _bound()
+    mutant = para.replace(old, new)
+    assert mutant != para, "the mutant must actually change the text"
+    assert _node_load_kills(mutant) == _NODE_LOAD_KILLS - dropped
+    assert _reads_zero_failed(mutant) == _ZERO_FAILED_ALL
+    assert _keeps_a_dying_process_a_kill(mutant)
+
+
+# A Node test file whose process exits non-zero after all its tests pass (a
+# `process.exitCode` the mutant sets in a module several test files import), the
+# final review of the branch that holds #186's fixes. Node prints it as it prints
+# a process that dies during a test, so a file whose lines report no pass of the
+# row's test reads as that death, and the row as a kill though no test went red.
+# No reading can tell the two apart, so the bullet states the limit, tells automate
+# to write each Node row's command to run only the row's test file, and says that
+# a row's second run, through the full sweep, can still read so.
+_EXITS_AFTER_ALL_PASS = (
+    "Node prints a test file whose process exits non-zero after all its tests pass as it prints one whose process "
+    "dies during a test, so such a file whose lines report no pass of a test whose name holds the row's `expect_red` "
+    "reads as that death, and the row as a kill though no test went red"
+)
+_ONE_FILE_PER_ROW = (
+    "and when you delegate automate, tell it to write each Node row's `command` to run only the test file that holds "
+    "the row's test"
+)
+_SECOND_RUN_CAN_STILL = "though a row's second run, through the full sweep, can still read so"
+_EXIT_LIMIT = frozenset({"exits after its tests pass", "one file per row", "second run"})
+
+
+def _exit_limit(para: str) -> set[str]:
+    """What the cannot-run bullet's parenthesis says of a Node test file whose
+    process exits non-zero after all its tests pass: that it reads as a death
+    during a test, that automate writes each Node row to run only the row's
+    test file, and that a row's second run can still read so."""
+    text = _zero_failed_parenthesis(para)
+    if text is None:
+        return set()
+    named = set()
+    if _EXITS_AFTER_ALL_PASS in text:
+        named.add("exits after its tests pass")
+    if _ONE_FILE_PER_ROW in text:
+        named.add("one file per row")
+    if _SECOND_RUN_CAN_STILL in text:
+        named.add("second run")
+    return named
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node-spec-exits-after-tests-pass-in-two-files", "flush keeps its value"),
+        ("node-tap-exits-after-tests-pass-in-two-files", "flush keeps its value"),
+        ("node-spec-exits-after-tests-pass-in-two-files", "flush keeps another value"),
+        ("node-tap-exits-after-tests-pass-in-two-files", "flush keeps another value"),
+    ],
+)
+def test_a_node_test_file_that_exits_after_all_its_tests_pass_beside_the_row_s_is_named(capture, expect_red):
+    """Measured on `mutate_check.py`, over real `node --test` output: a
+    mutant makes two test files' processes exit 1 after each file's one test
+    passes. Only the file whose lines report a pass of the row's test comes
+    off the count, so the row reads as a kill, though no test went red. The
+    cannot-run bullet said such an exit reads 0 failed, with no limit; it now
+    states the limit and how automate keeps a row's first run clear of it."""
+    mutate_check = _load_script("mutate_check")
+    output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
+    status, detail, _ = mutate_check._classify_red(output, expect_red)
+    assert status == "MISATTRIBUTED"
+    assert _reading(_bound(), status, detail) == "killed"
+    assert _exit_limit(_bound()) == _EXIT_LIMIT
+    assert _ZERO_FAILED_CASES in re.sub(r"\s+", " ", _bound())
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "dropped"),
+    [
+        # The branch's wording: no limit, no brief.
+        ("; " + _EXITS_AFTER_ALL_PASS + ", " + _ONE_FILE_PER_ROW + ", " + _SECOND_RUN_CAN_STILL + ";", ";", _EXIT_LIMIT),
+        (", " + _ONE_FILE_PER_ROW + ", " + _SECOND_RUN_CAN_STILL, "", {"one file per row", "second run"}),
+        (", " + _SECOND_RUN_CAN_STILL, "", {"second run"}),
+        ("reads as that death, and the row as a kill though no test went red", "reads 0 failed",
+         {"exits after its tests pass"}),
+        ("such a file whose lines report no pass of a test whose name holds the row's `expect_red`",
+         "every such file but one", {"exits after its tests pass"}),
+        ("to run only the test file that holds the row's test", "to run the full sweep", {"one file per row"}),
+    ],
+    ids=["the-branch", "no-brief", "no-second-run", "reads-0-failed", "all-but-one", "full-sweep-brief"],
+)
+def test_exit_limit_predicate_rejects_a_bullet_that_drops_one(old, new, dropped):
+    """The twin: the bullet as the branch wrote it, with no limit and no
+    brief, or with the brief or the second run left out, the limit misread
+    as 0 failed or narrowed to more than one such file, or a brief that runs
+    the full sweep, reads every other part as before and not the one it
+    dropped."""
+    para = _bound()
+    mutant = para.replace(old, new)
+    assert mutant != para, "the mutant must actually change the text"
+    assert _exit_limit(mutant) == _EXIT_LIMIT - dropped
+    assert _reads_zero_failed(mutant) == _ZERO_FAILED_ALL
+    assert _keeps_a_dying_process_a_kill(mutant)
 
 
 def test_a_red_with_no_failed_test_is_a_row_that_cannot_run():

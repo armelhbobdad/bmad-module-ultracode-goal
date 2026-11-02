@@ -1,0 +1,2 @@
+✖ flush drops nothing (2.407295ms)
+✔ flush keeps its value (0.316437ms)
