@@ -62,10 +62,14 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      command lookup. So only mem_recall.py changes the latch: `latch` writes
      it, and `unlatch` removes it when it carries the caller's run_id.
      Accepted residual, stated like the exec-wrapper one below: indirection
-     (for the store, a `cd` then a relative path; for both, a variable
-     holding part of the path or the name, a script that names the store or
-     the latch in its contents, whether a file tool or a heredoc fed to `cat`
-     or `tee` wrote it), commands on an ancestor directory (a search
+     (for the store, a `cd` then a relative path, or a glob that matches a
+     symlink's own name on the way to it, such as the `[H]` or `?` in
+     `cat [H]/.ultracode-goal/recall/*` after `ln -s ~ H`, at any length,
+     since the guard resolves the links a path spells and expands no glob
+     against the file system; for both, a variable holding part of the path
+     or the name, a script that names the store or the latch in its
+     contents, whether a file tool or a heredoc fed to `cat` or `tee` wrote
+     it), commands on an ancestor directory (a search
      of it, removing the implementation artifacts folder, a `git clean` or
      `git stash --all`), repo-wide searches that reach a store inside the
      workspace, the interpreter `uv` or `python` resolves to, with the
@@ -2212,33 +2216,81 @@ def _fold(path: str) -> str:
     return folded
 
 
-# No system opens a path longer than this as written (Linux takes 4096 bytes,
-# macOS 1024, Windows 32767 UTF-16 units), so a longer one names no file and
-# has no symlink to resolve. os.path.realpath walks a path one component at a
-# time and hands the system the whole path so far at each step, which costs
-# time in the square of its length: one Bash word of a few MB spelled as a
-# path (`a/a/a/...`) kept the guard past Claude Code's 600 s hook timeout
-# while a run latch is present.
+# No system looks up a path longer than this (Linux takes 4096 bytes, macOS
+# 1024, Windows 32767 UTF-16 units). os.path.realpath walks a path one name at
+# a time and hands the system the whole path resolved so far at each step,
+# which costs time in the square of its length: one Bash word of a few MB
+# spelled as a path (`a/a/a/...`) kept the guard past Claude Code's 600 s hook
+# timeout while a run latch is present. A longer word can still name a file,
+# though: the shell reads a glob of 33,000 `*` as the short name it matches,
+# and `mkdir -p` walks a path a folder at a time. So _real_long still resolves
+# it, in stretches no longer than this.
 _MAX_RESOLVED = 32_768
 
 
 @functools.lru_cache(maxsize=None)
 def _real(path: str) -> str:
-    """os.path.realpath, memoized; the path unchanged when it cannot resolve,
-    or when it is longer than any system opens (_MAX_RESOLVED).
-
-    The deny side (_abs_forms, _roots) hands it a path abspath already
-    normalized, so a `..` that brings a long path under the bound is applied
-    first. _is_pinned hands it a path with its `..` steps still in it, and a
-    long one left unresolved is no pinned script, which withholds the
-    exemption: it fails closed.
-    """
-    if len(path) > _MAX_RESOLVED:
-        return path
+    """os.path.realpath, memoized; the path unchanged when it cannot resolve.
+    A path longer than _MAX_RESOLVED gets realpath's answer from _real_long,
+    in time linear in its length."""
     try:
+        if len(path) > _MAX_RESOLVED:
+            return _real_long(path)
         return os.path.realpath(path)
     except (OSError, ValueError, RuntimeError):
         return path
+
+
+def _real_long(path: str) -> str:
+    """os.path.realpath of a path longer than _MAX_RESOLVED, from realpath
+    calls on stretches of it no longer than the bound.
+
+    realpath looks up the path resolved so far with the next name joined to
+    it, follows a symlink it finds there, and keeps a name it cannot look up
+    as written. So resolving the path a stretch of whole names at a time,
+    with the path resolved so far in front, gives realpath's answer; and once
+    that path joined to the next name is longer than the bound, no lookup of
+    it or of any longer path succeeds, and the rest is kept as written. It is
+    the path resolved so far that is measured, not the path as written: a
+    link to `.` keeps the resolved path short however often it repeats, and
+    realpath follows a link after it.
+
+    Windows looks a path up whole, never one longer than a written path can
+    be, so there the first stretch is resolved and the rest kept: that finds
+    every link realpath on the whole path could. A path with a `..` step,
+    which realpath applies to the path resolved so far, goes to realpath
+    whole: the deny side (_abs_forms, _roots) hands only abspath's output,
+    which has none, and _is_pinned never hands a long path.
+    """
+    sep = os.sep
+    drive, rest = os.path.splitdrive(path)
+    names = rest.split(sep)
+    if not os.path.isabs(path) or os.pardir in names:
+        return os.path.realpath(path)
+    names = [name for name in names if name and name != os.curdir]
+    resolved = drive + sep
+    done = 0
+    while done < len(names):
+        size, end = len(resolved), done
+        while end < len(names) and size + len(sep) + len(names[end]) <= _MAX_RESOLVED:
+            size += len(sep) + len(names[end])
+            end += 1
+        if end == done:
+            break
+        resolved = os.path.realpath(_joined(resolved, names[done:end]))
+        done = end
+        if os.name == "nt":
+            break
+    return _joined(resolved, names[done:])
+
+
+def _joined(head: str, names: list[str]) -> str:
+    """The names joined under head, by the separator alone (os.path.join
+    would read a name holding a drive as a new start)."""
+    if not names:
+        return head
+    sep = os.sep
+    return (head if head.endswith(sep) else head + sep) + sep.join(names)
 
 
 def _roots(path: str) -> tuple[str, ...]:
@@ -2656,8 +2708,12 @@ def _is_pinned(path: str | None) -> bool:
     """True when the path is a pinned script as written (lexically, `.` and
     `..` folded away) AND leads to one when walked step by step with its
     symlinks resolved, so a `..` that leaves a symlinked folder for another
-    file of the pinned name is not exempt."""
-    if path is None:
+    file of the pinned name is not exempt.
+
+    A path longer than _MAX_RESOLVED is never exempt: its `..` steps are
+    still in it, and realpath on such a path costs time in the square of its
+    length. Withholding the exemption fails closed."""
+    if path is None or len(path) > _MAX_RESOLVED:
         return False
     try:
         lexical = os.path.normcase(os.path.abspath(path))

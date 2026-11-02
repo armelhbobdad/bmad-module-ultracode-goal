@@ -7607,10 +7607,14 @@ def test_one_long_word_is_read_in_linear_time(guard_module) -> None:
     assert elapsed < 120.0, f"took {elapsed:.1f}s"
 
 
-def test_a_path_longer_than_any_system_opens_is_not_resolved(guard_module, monkeypatch, tmp_path: Path) -> None:
+def test_a_path_longer_than_the_bound_is_resolved_a_stretch_at_a_time(
+    guard_module, monkeypatch, tmp_path: Path
+) -> None:
     """os.path.realpath on a path of k components hands the system each prefix:
-    time in k times the path's length. Past _MAX_RESOLVED characters no system
-    opens the path, so it is left as written; a shorter one still resolves."""
+    time in k times the path's length. A path longer than _MAX_RESOLVED goes to
+    realpath a stretch of whole names at a time, none longer than the bound,
+    and on POSIX comes back as realpath gives it whole (on Windows realpath
+    may refuse a path that long); a shorter one goes whole."""
     calls: list[str] = []
     real = os.path.realpath
 
@@ -7622,8 +7626,11 @@ def test_a_path_longer_than_any_system_opens_is_not_resolved(guard_module, monke
     bound = guard_module._MAX_RESOLVED
     long_path = os.path.join(str(tmp_path), *(["a"] * (bound // 2 + 1)))
     assert len(long_path) > bound
-    assert guard_module._real(long_path) == long_path
-    assert calls == []
+    resolved = guard_module._real(long_path)
+    assert calls and all(len(call) <= bound for call in calls)
+    if sys.platform != "win32":
+        assert resolved == real(long_path)
+    calls.clear()
     short_path = str(tmp_path / "a")
     guard_module._real(short_path)
     assert calls == [short_path]
@@ -7634,6 +7641,187 @@ def test_a_path_longer_than_any_system_opens_is_not_resolved(guard_module, monke
     resolved = os.path.abspath(str(tmp_path / "b"))
     assert calls[-1] == resolved
     assert guard_module._fold(real(resolved)) in forms
+
+
+def test_a_pinned_script_spelled_past_the_bound_is_not_exempt(guard_module, monkeypatch) -> None:
+    """_is_pinned hands _real a path with its `..` steps still in it, which
+    realpath would walk whole, in time in the square of its length. A
+    spelling longer than _MAX_RESOLVED is never exempt, and never resolved."""
+    pinned = guard_module._pinned_paths()[0]
+    folder, name = os.path.split(pinned)
+    count = guard_module._MAX_RESOLVED // 4
+    spelled = os.path.join(folder, *(["a"] * count), *([os.pardir] * count), name)
+    assert os.path.normcase(os.path.abspath(spelled)) in guard_module._pinned_scripts()
+    assert guard_module._is_pinned(pinned)
+    monkeypatch.setattr(guard_module, "_real", lambda path: pytest.fail(f"resolved a {len(path)}-character path"))
+    assert not guard_module._is_pinned(spelled)
+
+
+# A word longer than _MAX_RESOLVED can still name a file. The shell reads a
+# glob of 33,000 `*` as the short name it matches before any system sees the
+# path, and GNU `mkdir -p` walks a path one folder at a time, so neither is
+# held to the length a system looks up whole. The 4.1.0 review found that a
+# guard leaving such a word unresolved let through what v4.0.0 refused; each
+# twin below is refused under the bound and past it. They run on POSIX, where
+# the review reproduced them and realpath walks a path a name at a time;
+# Windows looks a path up whole.
+_POSIX_WALK = pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX realpath walks a path a name at a time; Windows looks it up whole"
+)
+
+
+@_POSIX_WALK
+def test_a_glob_past_the_bound_through_a_home_link_is_denied(store_world: _StoreWorld) -> None:
+    """After `ln -s ~ H`, which the guard allows, bash prints the store for
+    `cat H/.ultracode-goal/recall/<33,000 *>jsonl`."""
+    _symlink_or_skip(store_world.cwd / "H", store_world.home)
+    for stars in (1, 33_000):
+        code, out = _bash(store_world, "cat H/.ultracode-goal/recall/" + "*" * stars + "jsonl")
+        _assert_latch_denied(code, out, store_world.latch)
+
+
+@_POSIX_WALK
+def test_mkdir_p_past_the_bound_through_a_store_link_is_denied(store_world: _StoreWorld) -> None:
+    """With L a link to the store, GNU `mkdir -p L/a/a/...` past the bound
+    created 17,000 folders in it."""
+    _symlink_or_skip(store_world.cwd / "L", store_world.store)
+    for count in (16_000, 16_500):
+        code, out = _bash(store_world, "mkdir -p L/" + "a/" * count)
+        _assert_latch_denied(code, out, store_world.latch)
+
+
+@_POSIX_WALK
+def test_a_run_of_links_to_dot_past_the_bound_still_reaches_the_store(store_world: _StoreWorld) -> None:
+    """realpath stops finding links once the path it has resolved so far is
+    too long to look up, not the path as written: with `s` a link to `.`, the
+    resolved path stays at the cwd however often `s/` repeats, so v4.0.0
+    still followed L after 17,000 of them, and `mkdir -p` walks it the same
+    way. Resolving only the first _MAX_RESOLVED characters as written would
+    miss L."""
+    _symlink_or_skip(store_world.cwd / "s", Path("."))
+    _symlink_or_skip(store_world.cwd / "L", store_world.store)
+    for count in (16_000, 17_000):
+        code, out = _bash(store_world, "mkdir -p " + "s/" * count + "L/a")
+        _assert_latch_denied(code, out, store_world.latch)
+
+
+def _v4_0_0_real(path: str) -> str:
+    """The guard's _real as v4.0.0 shipped it, the bar a long path is held to."""
+    try:
+        return os.path.realpath(path)
+    except (OSError, ValueError, RuntimeError):
+        return path
+
+
+@_POSIX_WALK
+def test_a_long_path_resolves_as_v4_0_0_resolved_it(guard_module, tmp_path: Path) -> None:
+    """Differential: _real gives v4.0.0's answer on paths around and past
+    _MAX_RESOLVED, as abspath hands them to it, through links to `.`, `..`,
+    `/`, the store and the home folder, two kinds of loop, a dangling link, a
+    link whose target ends near the longest path the system looks up, a file,
+    real folders, missing names, a name no file system takes, and one longer
+    than the bound; and on a long path holding `..` steps, as _is_pinned's are.
+
+    `dot`, a long name for a link to `.`, keeps the path resolved so far
+    short over many stretches at little cost; a long run of `s` costs v4.0.0
+    time in the square of the path, so only the fixed paths hold one."""
+    import random
+
+    bound = guard_module._MAX_RESOLVED
+    home = tmp_path / "home"
+    store = home / ".ultracode-goal" / "recall"
+    top = tmp_path / "top"
+    # `far`'s target and the deepest real folder stay short of the longest
+    # path the system looks up (4096 bytes on Linux, 1024 on macOS, which
+    # refuses to create a folder or a link past it): 18 and 11 names of 200
+    # on Linux, fewer on macOS.
+    try:
+        limit = os.pathconf(str(tmp_path), "PC_PATH_MAX")
+    except (OSError, ValueError):
+        limit = -1
+    limit = 4096 if limit <= 0 else min(limit, 4096)
+    far_names = min(18, (limit - len(str(top)) - 80) // 201)
+    deep = top / "d" / "e"
+    for name in ("n" * 200,) * (far_names * 11 // 18):
+        deep = deep / name
+    deep.mkdir(parents=True)
+    store.mkdir(parents=True)
+    (top / "f").write_text("x", encoding="utf-8")
+    dot = "t" * 200
+    links = {
+        top / "s": ".",
+        top / dot: ".",
+        top / "u": "..",
+        top / "r": "/",
+        top / "L": str(store),
+        top / "H": str(home),
+        top / "loop": "loop",
+        top / "la": "lb",
+        top / "lb": "la",
+        top / "dang": "nowhere/x",
+        top / "far": "d/" + "/".join(["m" * 200] * far_names),
+        top / "deep": str(deep),
+        deep / "s": ".",
+        deep / dot: ".",
+        deep / "L": str(store),
+    }
+    for link, target in links.items():
+        _symlink_or_skip(link, Path(target))
+    words = [
+        "s", "u", "r", "L", "H", "loop", "la", "dang", "far", "deep", "d", "e", "f",
+        "missing", ".ultracode-goal", "recall", "n" * 200, "*" * 300, "q" * 5_000,
+    ]  # fmt: skip
+    rng = random.Random(410)
+    paths = [
+        os.path.join(str(top), *(["s"] * 17_000), "L", "a"),
+        os.path.join(str(top), "deep", *(["s"] * 17_000), "L", "a"),
+        os.path.join(str(top), "H", ".ultracode-goal", "recall", "*" * 33_000 + "jsonl"),
+        os.path.join(str(top), "L", *(["a"] * 16_500)),
+        os.path.join(str(top), "far", *(["s"] * 2_000)),
+        os.path.join(str(top), *([dot] * 500), "deep", *([dot] * 500), "L", "a"),
+        os.path.join(str(top), "*" * (bound + 1), "L"),
+    ]
+    for _ in range(300):
+        names: list[str] = []
+        size = len(str(top))
+        goal = rng.randint(bound - 2_000, 3 * bound)
+        while size < goal:
+            pick = rng.random()
+            if pick < 0.15:
+                run = [dot] * rng.randint(1, 600)
+            elif pick < 0.2:
+                run = ["s"] * rng.randint(1, 300)
+            else:
+                run = [rng.choice(words)]
+            names.extend(run)
+            size += sum(len(name) + 1 for name in run)
+        paths.append(os.path.abspath(os.path.join(str(top), *names)))
+    for path in paths:
+        assert guard_module._real(path) == _v4_0_0_real(path), path[:300]
+    with_dotdot = os.path.join(str(top), *(["n" * 200] * 170), *([".."] * 170), "L", "x")
+    assert len(with_dotdot) > bound
+    assert guard_module._real(with_dotdot) == _v4_0_0_real(with_dotdot)
+
+
+def test_a_glob_over_a_links_own_name_is_a_residual(store_world: _StoreWorld) -> None:
+    """Accepted residual, as in v4.0.0: after `ln -s ~ H`, a glob that matches
+    the link's own name (`[H]`, `?`) is not resolved, short or past the
+    bound, since the guard resolves the links a path spells and expands no
+    glob against the file system; bash expands it to `H` and reads the
+    store. The guard's docstring and SECURITY.md list it, and the change
+    fragment claims only a link the word names, not every glob the shell
+    reads as a short name."""
+    _symlink_or_skip(store_world.cwd / "H", store_world.home)
+    for head, stars in (("[H]", 1), ("?", 1), ("[H]", 33_000)):
+        _assert_allowed(*_bash(store_world, f"cat {head}/.ultracode-goal/recall/" + "*" * stars + "jsonl"))
+    doc = " ".join(_load_guard_module().__doc__.split())
+    assert "a glob that matches a symlink's own name on the way to it" in doc
+    security = " ".join((_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8").split())
+    assert "a glob that matches a symlink's own name on the way to the store" in security
+    fragment = " ".join((_REPO_ROOT / "changes" / "guard-long-word-linear.yaml").read_text(encoding="utf-8").split())
+    assert "a long word that reaches the recall store through a link it names is still refused" in fragment
+    assert "A glob that matches a link's own name, such as the `[H]`" in fragment
+    assert "a glob the shell reads as a short name" not in fragment
 
 
 def test_one_long_path_word_under_a_latch_is_decided_in_time(store_world: _StoreWorld) -> None:
