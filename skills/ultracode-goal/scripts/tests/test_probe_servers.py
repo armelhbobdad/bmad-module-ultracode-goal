@@ -746,6 +746,111 @@ def test_a_server_whose_session_leader_still_runs_is_left_up(tmp_path, capsys):
     assert out["left"][0]["reason"] == f"process {start.pid}, which leads its session, still runs"
 
 
+# A watcher (watchexec, cargo-watch) runs its server in a process group of its own and, when a file changes, as the
+# run's own edits make one do, starts it again in a new group, while it runs on in the session it started in.
+_WATCHER = (
+    "import os, signal, subprocess, sys\n"
+    "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR1})\n"
+    "def start():\n"
+    "    server = subprocess.Popen(\n"
+    "        [sys.executable, '-c', sys.argv[1], sys.argv[2]], process_group=0, stdin=subprocess.DEVNULL,\n"
+    "        stdout=subprocess.PIPE, text=True,\n"
+    "    )\n"
+    "    print(os.getpid(), server.pid, server.stdout.readline().strip(), flush=True)\n"
+    "    return server\n"
+    "server = start()\n"
+    "while True:\n"
+    "    signal.sigwait({signal.SIGUSR1})\n"
+    "    os.killpg(server.pid, signal.SIGKILL)\n"
+    "    server.wait()\n"
+    "    server = start()\n"
+)
+# The watcher started in the background with no terminal, by a command that leads a session of its own and exits at
+# once: `setsid sh -c 'watcher &'`, a `nohup watcher &` from a terminal then closed, or another agent session's.
+_IN_THE_BACKGROUND = (
+    "import subprocess, sys\n"
+    "subprocess.Popen([sys.executable, '-c', *sys.argv[1:]], stdin=subprocess.DEVNULL)\n"
+)
+
+
+@contextlib.contextmanager
+def _watched(cwd: Path, port: int):
+    """A server a watcher runs from `cwd`: the watcher's pid and the server's, then a function that makes the
+    watcher start the server again and gives the new pair."""
+    start = subprocess.Popen(
+        [sys.executable, "-c", _IN_THE_BACKGROUND, _WATCHER, _SERVE, str(port)],
+        cwd=cwd,
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    pairs: list[tuple[int, int]] = []
+
+    def read() -> tuple[int, int]:
+        line = start.stdout.readline().split()
+        if len(line) < 3 or line[2] != "ready":
+            pytest.skip(f"no watched server started on 127.0.0.1:{port}")
+        pairs.append((int(line[0]), int(line[1])))
+        return pairs[-1]
+
+    def again() -> tuple[int, int]:
+        os.kill(pairs[-1][0], signal.SIGUSR1)
+        return read()
+
+    try:
+        first = read()
+        start.wait(timeout=10)
+        yield first, again
+    finally:
+        if start.poll() is None:
+            start.kill()
+            start.wait(timeout=10)
+        # The watcher runs in the group the command that started it led; each server in a group of its own.
+        for group in (start.pid, *(server for _, server in pairs)):
+            with contextlib.suppress(OSError):
+                os.killpg(group, signal.SIGKILL)
+
+
+_WATCHER_REASON = (
+    "process {watcher}, outside its process group, still runs in its session as the parent of process {server}: a "
+    "watcher or supervisor that can start it again"
+)
+
+
+@_LINUX_ONLY
+@pytest.mark.parametrize("began", ["before-the-story", "after-the-story"])
+def test_a_server_a_watcher_of_the_operators_starts_is_left_up(tmp_path, capsys, began):
+    """The operator starts a watcher in the background with no terminal, and
+    it runs a dev server in a process group of its own. The probe left that
+    server up while it had started before the story's marker, but once the
+    run's edits made the watcher start it again, every process of its group
+    had started after the marker, its session's first process was gone, and
+    the probe stopped it, while the watcher, started before the story, ran on
+    in that session and nothing examined it. A watcher started after the
+    marker had its server stopped the same way. Now a process that still runs
+    in the server's session as the parent of one of its processes, outside
+    its group, keeps it up, and so does any process in that session that
+    started before the marker."""
+    main_tree = tmp_path / "main"
+    main_tree.mkdir()
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}"
+    with _watched(main_tree, port) as ((watcher, server), again):
+        if began == "before-the-story":
+            # Written once the watcher and its first server had started, and the server started again more than the
+            # probe's clock slack (two seconds after the marker) later, with a second for /proc's whole-second boot time.
+            marker = _baseline(tmp_path, age=probe_servers._CLOCK_SLACK)
+            time.sleep(1.5)
+            watcher, server = again()
+        else:
+            marker = _baseline(tmp_path)
+        code, out = _left_up_reason(capsys, url, marker, main_tree)
+        assert not _gone(server) and not _gone(watcher)
+    assert code == 1
+    assert out["left"][0]["reason"] == _WATCHER_REASON.format(watcher=watcher, server=server)
+
+
 @_LINUX_ONLY
 def test_the_probes_own_server_is_left_up(tmp_path, capsys):
     """A listener in the process that runs the probe: never its own to stop."""
@@ -956,6 +1061,61 @@ def test_a_session_leader_that_has_exited_but_is_not_reaped_does_not_run(tmp_pat
 def test_a_pid_given_to_another_session_since_does_not_lead_this_one(tmp_path):
     reused = {"pid": 30, "ppid": 1, "pgrp": 30, "session": 29, "tty": 0, "start": 19_000, "uid": 1000, "cwd": "/p"}
     assert _verdict(tmp_path, _RUN_LEFT_UP + (reused,)) is None
+
+
+# As measured with turbo: `bun run dev` reparented to `systemd --user`, which leads a session of its own and started
+# at login, long before the marker, and turbo's other task, a server in a process group of its own in the server's
+# session, started during the sweep too.
+_REAPER = {"pid": 7, "ppid": 1, "pgrp": 7, "session": 7, "tty": 0, "start": 500, "uid": 1000, "cwd": "/"}
+_TURBO_LEFT_UP = (
+    _REAPER,
+    {**_RUN_LEFT_UP[0], "ppid": 7},
+    _RUN_LEFT_UP[1],
+    {"pid": 50, "ppid": 7, "pgrp": 50, "session": 30, "tty": 0, "start": 20_050, "uid": 1000, "cwd": "/p/apps/api"},
+)
+
+
+def test_a_server_reparented_to_a_reaper_in_another_session_is_the_runs(tmp_path):
+    """The run's own case still passes: its parent, `systemd --user`, runs
+    and started before the marker, but in a session of its own, which it took
+    the server into by adopting it, not by starting it, and every process of
+    the server's session started during the sweep."""
+    proc = _proc_with(tmp_path, _TURBO_LEFT_UP)
+    stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
+    reason, members = probe_servers._not_the_runs(proc, 3001, _V4, stop, _CALLER, _TICKS)
+    assert reason is None
+    assert sorted(member.pid for member in members) == [40, 41]
+
+
+@pytest.mark.parametrize(
+    ("watcher_start", "its_parent", "reason"),
+    [
+        (9_000, True, _WATCHER_REASON.format(watcher=35, server=40)),
+        (19_500, True, _WATCHER_REASON.format(watcher=35, server=40)),
+        (9_000, False, "process 35 in its session started before /p/.baseline-1-1 was written"),
+        # The case the docs name: a watcher that started after the marker and starts the server through a process
+        # that has since exited, so it is no longer its parent, reads like turbo's other task.
+        (19_500, False, None),
+    ],
+    ids=["began-before-its-parent", "began-after-its-parent", "began-before-not-its-parent",
+         "began-after-not-its-parent"],
+)
+def test_a_watcher_in_the_servers_session_keeps_it_up(tmp_path, watcher_start, its_parent, reason):
+    """A watcher of the operator's in the server's session, outside its
+    process group: 35, in the group of the command that started it and led
+    the session (30, gone)."""
+    watcher = {"pid": 35, "ppid": 7, "pgrp": 30, "session": 30, "tty": 0, "start": watcher_start, "uid": 1000,
+               "cwd": "/p"}
+    processes = (_REAPER, {**_RUN_LEFT_UP[0], "ppid": 35 if its_parent else 7}, _RUN_LEFT_UP[1], watcher)
+    assert _verdict(tmp_path, processes) == reason
+
+
+def test_a_supervisor_of_one_of_its_processes_keeps_it_up(tmp_path):
+    """The parent rule reads every process of the group, not its leader only."""
+    supervisor = {"pid": 45, "ppid": 7, "pgrp": 45, "session": 30, "tty": 0, "start": 19_500, "uid": 1000,
+                  "cwd": "/p"}
+    processes = (_REAPER, {**_RUN_LEFT_UP[0], "ppid": 7}, {**_RUN_LEFT_UP[1], "ppid": 45}, supervisor)
+    assert _verdict(tmp_path, processes) == _WATCHER_REASON.format(watcher=45, server=41)
 
 
 def test_a_socket_no_readable_process_holds_is_left_up(tmp_path):

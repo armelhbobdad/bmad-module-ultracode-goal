@@ -36,7 +36,8 @@ family's wildcard address (`0.0.0.0`, or `::`, which takes IPv4 connections
 too). A connection to the unspecified address (`0.0.0.0`, `::`) reaches the
 family's loopback address, and one to an IPv4-mapped address
 (`::ffff:127.0.0.1`) the IPv4 address it maps, as Linux routes them, so the
-probe reads it there. The folder is `null` on another system, when the
+probe reads it there. The folder is `null`
+on another system, when the
 address the connection reached is not one of this host's own (a container's,
 say), since no socket here took it, when /proc does not say, or when those
 sockets are not all held from one folder by processes it can read, since it
@@ -64,21 +65,33 @@ run's only when every process in its process group belongs to this user, has
 no controlling terminal and started after `<file>` was last written (the gate
 passes the story's baseline marker, which Execute writes before any of the
 story's work and a resume keeps, so a server an earlier session started still
-counts); when the process that led its session no longer runs; and when the
-folder it runs from is inside a `--root`. A runner starts its server's command
-in a session of its own, which has no controlling terminal, and ends that
-command when it ends, so a server a launcher ran in a group of its own lives
-on without the process that led its session. A server started from a terminal
-has a controlling terminal while that terminal's shell runs, and the shell
-leads its session. Measured with turbo 2.11.9 and Claude Code 2.1.316 on
-Linux: the server turbo left up had no terminal, its session's first process
-was gone and its parent was `systemd --user`; a server started from a terminal
-had one. These are signs, not proof: a server started with `nohup ... &` from
-a terminal that is closed afterwards, or in the background by a command that
-has since exited, with no terminal, reads as the run's too when it also
-started after the marker and runs from inside a root. The marker can be days
-old, since a resume keeps it. The probe never stops its own process group, or
-one that holds a process that started it, and it stops nothing for a URL whose
+counts); when the process that led its session no longer runs; when no
+other process that still runs in that session started before `<file>` was
+written or is the parent of one of the group's processes (a watcher or
+supervisor, which can start it again: watchexec and cargo-watch run their
+server in a group of their own and start it in a new one when a file
+changes, as the run's own edits make them do); and when the folder it runs
+from is inside a `--root`. A runner starts its server's command in a session
+of its own, which has no controlling terminal, and ends that command when it
+ends, so a server a launcher ran in a group of its own lives on without the
+process that led its session. A server started from a terminal has a
+controlling terminal while that terminal's shell runs, and the shell leads
+its session. Measured with turbo 2.11.9 and Claude Code 2.1.316 on Linux: the
+server turbo left up had no terminal, its session's first process was gone,
+its parent was `systemd --user`, which leads a session of its own and adopted
+it, and every process of its session had started during the sweep; a server
+started from a terminal had one. These are signs, not proof: a server started
+with `nohup ... &` from a terminal that is closed afterwards, or in the
+background by a command that has since exited, with no terminal, reads as the
+run's too when it started after the marker, as did everything else that still
+runs in its session, and runs from inside a root. So does one that a watcher
+started that way restarts after the marker, when the watcher started after
+the marker too and runs in the server's process group, or when it starts the
+server through a command that then exits, so that it is no longer the
+server's parent, and either started after the marker or had that command give
+the server a session of its own. The marker can be days old, since a resume
+keeps it. The probe never stops its own process group, or one that holds a
+process that started it, and it stops nothing for a URL whose
 connection no process here took: /proc lists no socket here that could have
 taken it, or it reached an address that is not one of this host's own (a
 container's, say). It sends the group SIGTERM, then SIGKILL to what is left
@@ -439,7 +452,12 @@ def _not_the_runs(
 ) -> tuple[str | None, list[_Process]]:
     """Why the server listening where a connection to `reached` lands is not
     one the run can be shown to have started, or None and the processes of
-    its process groups when it is."""
+    its process groups when it is. Past its own groups, it reads the session
+    they are in: a process that still runs there outside them as the parent
+    of one of their processes is a watcher or supervisor that started it (a
+    process in another session is a parent only by adopting it, as `systemd
+    --user` adopts the server a runner's launcher left up), and one that
+    started there before the marker is one a run could not have started."""
     holders, complete = _holders(port, proc, reached)
     if not complete:
         return (
@@ -469,10 +487,26 @@ def _not_the_runs(
             return f"process {member.pid} in its process group has a controlling terminal", []
         if boot + member.start / ticks < stop.since + _CLOCK_SLACK:
             return f"process {member.pid} in its process group started before {stop.marker} was written", []
-    for session in sorted({member.session for member in members}):
+    sessions = {member.session for member in members}
+    for session in sorted(sessions):
         leader = _running(proc, session)
         if leader is not None and leader.session == session:
             return f"process {session}, which leads its session, still runs", []
+    # A watcher (watchexec, cargo-watch) runs its server in a process group of its own and starts it again in a new
+    # one when a file changes, as the run's own edits make it do: the new group then passes every check above.
+    outside = {
+        process.pid: process for process in processes if process.session in sessions and process.pgrp not in groups
+    }
+    for member in members:
+        parent = outside.get(member.ppid)
+        if parent is not None and parent.session == member.session:
+            return (
+                f"process {parent.pid}, outside its process group, still runs in its session as the parent of process "
+                f"{member.pid}: a watcher or supervisor that can start it again"
+            ), []
+    for process in outside.values():
+        if boot + process.start / ticks < stop.since + _CLOCK_SLACK:
+            return f"process {process.pid} in its session started before {stop.marker} was written", []
     return None, members
 
 

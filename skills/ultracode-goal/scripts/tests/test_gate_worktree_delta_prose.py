@@ -166,6 +166,14 @@ left servers up past an advance that no later story's marker counts: it now
 runs before the verdict, a red backfill sweep's main-tree run included. And
 the operating tip said the window was a drive, though a resume keeps the
 marker: it now names the time between a run and its resume too.
+
+A later review found the probe read only the server's own process groups. A
+watcher of the operator's, started before the story or still running as the
+server's parent, starts its server again in a new group when the run's edits
+change a file, and the probe stopped that server, though the caveat said only
+servers started after the marker read as the run's. The probe now reads the
+server's session and parents too, and the caveat names both conditions and
+the watcher's case that still reads as the run's, each pinned with a twin.
 """
 
 from __future__ import annotations
@@ -262,10 +270,16 @@ _REUSED_SAYS = (
     "The probe then stops a server that answers only when it reads as one this run left up: every process in the "
     "server's process group is this user's, has no controlling terminal and started after the story's baseline "
     "marker was written, the process that led its session has exited, as a runner's start command has once the "
-    "runner ends, and the server runs from inside one of those folders.",
-    # Those conditions do not prove who started a server: the conductor is told so.
+    "runner ends, no other process that still runs in that session started before that marker or is the parent of a "
+    "process in the group, as a watcher that can start the server again is, and the server runs from inside one of "
+    "those folders.",
+    # Those conditions do not prove who started a server: the conductor is told so, a watcher's restart included.
     "Those are signs, not proof: a server the operator started inside the project after that marker, in the "
-    "background with no terminal or from a terminal since closed, reads the same way.",
+    "background with no terminal or from a terminal since closed, with nothing older than the marker still running "
+    "in its session, reads the same way, and so does one that a watcher of the operator's restarts after the marker, "
+    "when the watcher too started after it and runs in the server's process group, or starts the server through a "
+    "command that then exits and either started after the marker or had that command give the server a session of "
+    "its own.",
     "A resume keeps that marker, so a server an earlier session of the story started counts.",
     # A stop at one of automate's checks reaches the decision log only through its summary.
     "Have automate name in its summary each server the probe stopped at one of its checks, before a table or after "
@@ -407,9 +421,16 @@ def test_reused_server_predicate_rejects_the_three_caveat_section():
         ("has no controlling terminal and started after", "started after"),
         ("is this user's, has no controlling terminal and started after the story's baseline marker was written,",
          "is this user's and has no controlling terminal,"),
-        (" the process that led its session has exited, as a runner's start command has once the runner ends, and",
-         " and"),
+        (" the process that led its session has exited, as a runner's start command has once the runner ends,", ""),
         (", and the server runs from inside one of those folders.", "."),
+        # The first wording, which read the server's process group only: a watcher of the operator's that started
+        # before the story, or still runs as the server's parent, restarted it in a new group after the marker, and
+        # the probe stopped it.
+        (" no other process that still runs in that session started before that marker or is the parent of a process "
+         "in the group, as a watcher that can start the server again is,", ""),
+        ("started before that marker or is the parent of a process in the group",
+         "is the parent of a process in the group"),
+        ("started before that marker or is the parent of a process in the group", "started before that marker"),
         # A marker a resume rewrites: a server an earlier session of the story started reads as older than it.
         ("`--stop-since {workflow.implementation_artifacts}/.baseline-<story_id>",
          "`--stop-since {workflow.implementation_artifacts}/.current-story"),
@@ -437,7 +458,15 @@ def test_reused_server_predicate_rejects_the_three_caveat_section():
         # The conditions read as proof, though an operator's background server meets them too.
         ("only when it reads as one this run left up:", "only when it can show this run started it:"),
         (" Those are signs, not proof: a server the operator started inside the project after that marker, in the "
-         "background with no terminal or from a terminal since closed, reads the same way.", ""),
+         "background with no terminal or from a terminal since closed, with nothing older than the marker still "
+         "running in its session, reads the same way, and so does one that a watcher of the operator's restarts after "
+         "the marker, when the watcher too started after it and runs in the server's process group, or starts the "
+         "server through a command that then exits and either started after the marker or had that command give the "
+         "server a session of its own.", ""),
+        # The servers a watcher of the operator's restarts left out of what reads as the run's.
+        (", and so does one that a watcher of the operator's restarts after the marker, when the watcher too started "
+         "after it and runs in the server's process group, or starts the server through a command that then exits and "
+         "either started after the marker or had that command give the server a session of its own.", "."),
         # Stops at automate's checks named nowhere, or its stops before a table left out.
         (" Have automate name in its summary each server the probe stopped at one of its checks, before a table or "
          "after one, by the `url` and `cwd` of its `stopped` entry, since only its summary can tell you of those "
@@ -1008,12 +1037,18 @@ _TIP_SAYS = (
     "through turbo, at each of its checks and once more when the story's gate ends, so those servers do not pile up "
     "over an Epic, and the decision log names each one it stopped.",
     "It stops one only when every process of it is yours, has no controlling terminal and started after the current "
-    "story's baseline marker was written, the process that started its session has exited, and it runs from your "
-    "project or the gate's worktree.",
+    "story's baseline marker was written, the process that started its session has exited, nothing else that still "
+    "runs in that session started before the marker or is the parent of one of its processes (a watcher or "
+    "supervisor that can start it again), and it runs from your project or the gate's worktree.",
     # The servers of yours that meet every condition, the time they can start in, and how to keep one up.
     "A server of yours can meet all of that: one inside the project and on a port the gate checks, started in the "
     "background by a command that has since exited (a script's, or another agent session's) or from a terminal you "
-    "then close (a `nohup ... &`), reads as the run's and is stopped.",
+    "then close (a `nohup ... &`), with nothing that began before the story still running in its session, reads as "
+    "the run's and is stopped.",
+    # A watcher of yours that starts its server again: the case that still reads as the run's.
+    "So does one that a watcher of yours starts again after the story began, when the watcher too began after the "
+    "story and runs in the server's process group, or starts the server through a command that then exits and "
+    "either began after the story or had that command give the server a session of its own.",
     "That marker is written when the story starts, and the resume of a stopped or blocked run keeps it, so such a "
     "server you start between a run and its resume is stopped too.",
     "So stop it before you start or resume a drive, as this tip says, or start it outside the project, on another "
@@ -1057,11 +1092,20 @@ def test_the_operating_tips_say_to_stop_a_dev_server_before_a_drive():
         # A condition left out, or the stop said to happen without a word in the decision log.
         ("has no controlling terminal and started after", "started after"),
         (" the process that started its session has exited,", ""),
+        # The first wording, which named the server's own processes only, though a watcher of yours that started
+        # before the story, or runs as its parent, starts it again in a new process group after the marker.
+        (" nothing else that still runs in that session started before the marker or is the parent of one of its "
+         "processes (a watcher or supervisor that can start it again),", ""),
+        (", with nothing that began before the story still running in its session,", ","),
+        (" So does one that a watcher of yours starts again after the story began, when the watcher too began after "
+         "the story and runs in the server's process group, or starts the server through a command that then exits "
+         "and either began after the story or had that command give the server a session of its own.", ""),
         (", and the decision log names each one it stopped.", "."),
         # The case where it stops a server of yours, left unsaid.
         (" A server of yours can meet all of that: one inside the project and on a port the gate checks, started in "
          "the background by a command that has since exited (a script's, or another agent session's) or from a "
-         "terminal you then close (a `nohup ... &`), reads as the run's and is stopped.", ""),
+         "terminal you then close (a `nohup ... &`), with nothing that began before the story still running in its "
+         "session, reads as the run's and is stopped.", ""),
         # Only a server whose terminal was closed, though one that never had a terminal reads the same way.
         ("started in the background by a command that has since exited (a script's, or another agent session's) or "
          "from a terminal you then close", "started from a terminal you then close"),
