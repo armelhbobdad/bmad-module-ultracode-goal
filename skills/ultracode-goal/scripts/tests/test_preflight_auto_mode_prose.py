@@ -80,8 +80,8 @@ def test_refused_write_predicate_rejects_the_pre_edit_disarm():
 
 
 def _operator_route_is_bounded(rule: str) -> bool:
-    """The `!` route skips every guard check for its one command, so it must be
-    limited to a refused disarm, on the Epic branch, before Execute, with no push."""
+    """The terminal route skips every guard check for its one command, so it must
+    be limited to a refused disarm, on the Epic branch, before Execute, with no push."""
     return bool(
         re.search(r"A refused \*\*disarm\*\* has one more route", rule)
         and re.search(
@@ -119,6 +119,89 @@ def test_refusal_stop_covers_every_call_until_the_assertion_passes():
 
 def test_headless_route_names_the_way_back():
     assert re.search(r"The way back is that attended pass, not `/ucg-resolve`", _refused_write_rule())
+
+
+def _operator_route_needs_no_bang(rule: str) -> bool:
+    """Issue #186: Claude Code's docs do not say whether a `!` command passes
+    the PreToolUse hooks, so the route hands a command for a terminal outside
+    the session, and says not to offer it as a `!` command."""
+    return bool(
+        re.search(r"one command, to run in a terminal outside this session", rule)
+        and re.search(r"A command run there is no tool call, so no PreToolUse hook reads it", rule)
+        and re.search(r"Do not offer it as a `!` command in the session", rule)
+        and "`!`-prefixed command" not in rule
+        and "A `!` command runs outside the PreToolUse hooks" not in rule
+    )
+
+
+def test_the_operator_route_does_not_rest_on_bang_mode():
+    assert _operator_route_needs_no_bang(_refused_write_rule())
+
+
+def test_the_bang_predicate_rejects_the_4_0_0_route():
+    pre_edit = (
+        "A refused **disarm** has one more route. Hand the operator one `!`-prefixed command that stages the "
+        "named remediation paths and commits them on the current branch, with no push. A `!` command runs "
+        "outside the PreToolUse hooks, so the commit needs no disarm and the hooks stay armed."
+    )
+    assert not _operator_route_needs_no_bang(pre_edit)
+
+
+def _resume_way_back_is_named(rule: str) -> bool:
+    """Issue #186: a headless resume escalates a refused write, so its way back
+    closes that escalation with /ucg-resolve, unlike Stage 2's."""
+    return bool(
+        re.search(r"A resume never reaches this stage", rule)
+        and re.search(r"it escalates the story it was about to drive instead", rule)
+        and re.search(r"an attended resume that makes the write, with `/ucg-resolve` closing that escalation", rule)
+    )
+
+
+def test_the_refused_write_rule_names_a_resume_s_way_back():
+    assert _resume_way_back_is_named(_refused_write_rule())
+
+
+_DOCS = _SKILL_ROOT.parents[1] / "docs"
+
+
+def _troubleshooting_refused_write() -> str:
+    text = (_DOCS / "troubleshooting.md").read_text(encoding="utf-8")
+    bullet = re.search(r"^- \*\*A refused settings write\.\*\*.*$", text, re.M)
+    assert bullet
+    return bullet.group(0)
+
+
+def test_troubleshooting_gives_a_headless_resume_its_way_back():
+    """Issue #186: the bullet said /ucg-resolve is not the way back, while a
+    headless resume's refused write leaves an escalation only /ucg-resolve
+    closes. And a headless session is not always refused the write."""
+    bullet = _troubleshooting_refused_write()
+    assert "At preflight the run then stops, and `/ucg-resolve` is not the way back" in bullet
+    assert "a headless resume whose write is refused escalates the story it was about to drive instead" in bullet
+    assert "close that escalation with `/ucg-resolve`, which the resume offers before it drives the story" in bullet
+    assert "under `bypassPermissions` the write lands, under Auto Mode the classifier decides" in bullet
+
+
+def test_getting_started_no_longer_says_a_headless_session_cannot_approve_the_write():
+    text = " ".join((_DOCS / "getting-started.md").read_text(encoding="utf-8").split())
+    assert "A headless session cannot approve that write" not in text
+    assert "A headless session may be refused that write, and then nobody is there to approve it" in text
+    assert "Only `bypassPermissions` lets it land unreviewed." in text
+
+
+def test_troubleshooting_names_the_ancestor_project_a_missing_guard_syncs():
+    text = " ".join((_DOCS / "troubleshooting.md").read_text(encoding="utf-8").split())
+    assert (
+        "When the project, or a folder above it, holds a `pyproject.toml`, `uv run` syncs that project on every call "
+        "before it finds the script missing" in text
+    )
+
+
+def test_the_resume_predicate_rejects_the_4_0_0_rule():
+    mutant = _refused_write_rule()
+    cut = mutant.index(" A resume never reaches this stage")
+    mutant = mutant[:cut] + mutant[mutant.index("\n", cut) :]
+    assert not _resume_way_back_is_named(mutant)
 
 
 def test_step5_skips_a_no_op_write_and_points_at_the_rule():

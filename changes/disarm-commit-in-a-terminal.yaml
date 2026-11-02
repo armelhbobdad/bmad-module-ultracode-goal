@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  When a refused disarm at preflight leaves the remediation commit to the operator, the run now hands that commit as a command to run in a terminal outside the session, where it is no tool call and no `PreToolUse` hook reads it, instead of as a `!` command in the session. Claude Code's docs say a `!` command runs without going through Claude, but not whether the `PreToolUse` hooks see it, so the route no longer rests on it. The route's bounds are unchanged: the Epic branch only, before Execute, and no push.
+issues: [186]

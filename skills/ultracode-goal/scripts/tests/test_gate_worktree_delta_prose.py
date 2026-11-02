@@ -2389,6 +2389,10 @@ _HOOK_REJECTION_SENTENCES = {
     "preflight.md": (
         ("**Arm the guard so that a guard that fails refuses the call.** Each UCG ", "4a00a29a754b"),
         ("- The same PreToolUse guard also enforces the Cross-Session Recall latch", "76381c13dda0"),
+        # Reviewed (#186): a settings write the permission layer refuses on a
+        # resume, routed through an escalation /ucg-resolve closes; it says
+        # nothing of a hook's rejection of the evidence commit.
+        ("A resume never reaches this stage: when its hooks need re-arming and the", "c5d3cb28c9ca"),
         ("Claude Code only invokes a PreToolUse group for tools its matcher select", "5df2ca1f552d"),
         ("Deleting it costs nothing a later step needs: step 0 writes it afresh be", "df83ff84a5f2"),
         ("Left unquoted, a project or skill path that holds a space (a project und", "95ae297070e0"),
@@ -2416,6 +2420,9 @@ _HOOK_REJECTION_SENTENCES = {
         ("**What to check.** - **Older Claude Code.** The hook returns a `deny` de", "b9349b662d21"),
         ("- **A refused settings write.** Preflight writes its hooks and allow rul", "298ba71ea2eb"),
         ("--- title: Troubleshooting description: Maps the real failure modes of a", "74417cea7b2a"),
+        # Reviewed (#186): the same refused settings write on a resume; no
+        # hook's rejection of the evidence commit.
+        ("A resume rewrites the file too when the hooks need re-arming (the first ", "e507cf59b477"),
         ("Most read like `PreToolUse:Bash hook error: [<command>]: failed; blockin", "03a6eaa3f853"),
         ("It names each primitive the version lacks. 2.1.295 is the floor, the rel", "d3fb84ee20ae"),
         ("Start from the symptom you observed and follow it to the section that ex", "b8cdcd44aae2"),
