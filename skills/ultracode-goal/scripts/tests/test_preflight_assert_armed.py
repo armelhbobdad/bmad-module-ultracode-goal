@@ -981,6 +981,32 @@ def test_a_command_whose_options_run_on_starts_the_guard(words: str) -> None:
         ("uv run -s --gui-script", 'uv run would refuse "--script" beside "--gui-script"'),
         ("uv run -q -v", 'uv run would refuse "--quiet" beside "--verbose"'),
         ("uv run --no-project --package x", 'uv run would refuse "--no-project" beside "--package"'),
+        # Review of #186's fix (4.1.0), final pass: the pairs uv 0.12.15
+        # refuses in one place that the table missed, each found by running
+        # every pair of its options, on each side of `run`, through `sh -c`.
+        ("uv run --managed-python --python-preference managed", 'uv run would refuse "--managed-python" beside'),
+        ("uv run --python-preference managed --no-managed-python", 'uv run would refuse "--python-preference" beside'),
+        ("uv --managed-python --python-preference managed run", 'uv would refuse "--managed-python" beside'),
+        ("uv run --offline --refresh", 'uv run would refuse "--offline" beside "--refresh"'),
+        ("uv run --refresh-package x --offline", 'uv run would refuse "--refresh-package" beside "--offline"'),
+        ("uv run --allow-python-downloads --no-python-downloads", 'uv run would refuse "--allow-python-downloads" beside'),
+        ("uv --no-python-downloads --allow-python-downloads run", 'uv would refuse "--no-python-downloads" beside'),
+        # And those it refuses across `run`, one before it and one after.
+        ("uv --offline run --no-offline", 'uv would refuse "--offline" before run beside "--no-offline" after it'),
+        ("uv --no-offline run --offline", 'uv would refuse "--no-offline" before run beside "--offline" after it'),
+        ("uv --preview run --no-preview", 'uv would refuse "--preview" before run beside "--no-preview" after it'),
+        ("uv --no-preview run --preview", 'uv would refuse "--no-preview" before run beside "--preview" after it'),
+        ("uv --native-tls run --no-native-tls", 'uv would refuse "--native-tls" before run beside "--no-native-tls"'),
+        ("uv --no-native-tls run --native-tls", 'uv would refuse "--no-native-tls" before run beside "--native-tls"'),
+        ("uv --system-certs run --no-system-certs", 'uv would refuse "--system-certs" before run beside'),
+        ("uv --no-system-certs run --system-certs", 'uv would refuse "--no-system-certs" before run beside'),
+        ("uv --allow-python-downloads run --no-python-downloads", 'uv would refuse "--allow-python-downloads" before'),
+        ("uv --offline run --refresh", 'uv would refuse "--offline" before run beside "--refresh" after it'),
+        ("uv --offline run --refresh-package x", 'uv would refuse "--offline" before run beside "--refresh-package"'),
+        ("uv --python-preference managed run --managed-python", 'uv would refuse "--python-preference" before run'),
+        ("uv --managed-python run --python-preference managed", 'uv would refuse "--managed-python" before run'),
+        ("uv --no-managed-python run --python-preference managed", 'uv would refuse "--no-managed-python" before'),
+        ("uv -q --offline run -v --no-offline", 'uv would refuse "--offline" before run beside "--no-offline" after it'),
         # A value outside the set uv's parser takes, or no whole number in
         # range: a usage error, exit 2. Case counts, and a name uv's config
         # files take (`auto` for `--python-fetch`) is not one its parser does.
@@ -1046,6 +1072,42 @@ def test_a_python_handed_the_script_is_refused_for_the_metadata_it_skips() -> No
     assert "the project's environment, where there is one, not an isolated one" in problem
 
 
+def test_the_pairs_are_the_ones_uv_0_12_15_refuses() -> None:
+    """Pinned as measured: every pair of uv's options (by the name uv gives
+    each), given on one side of `run` and across it, run through `sh -c`
+    against uv 0.12.15 with a value each takes alone. These pairs, and only
+    these, exited 2 with "cannot be used with" or "cannot be used together".
+    In one place uv refuses `--quiet --verbose` and `--color --no-color`, not
+    across `run`; across it, each flag and its negation that uv reads as one
+    setting, which in one place it reads last-wins (`--offline --no-offline`),
+    but for `--allow-python-downloads`. A change here is a change of uv's, to
+    measure again."""
+    module = _preflight_module()
+    assert module._UV_CONFLICTS == {
+        frozenset(pair)
+        for pair in (
+            ("--all-extras", "--extra"), ("--all-extras", "--only-group"), ("--all-groups", "--only-dev"),
+            ("--all-groups", "--only-group"), ("--all-packages", "--package"),
+            ("--allow-python-downloads", "--no-python-downloads"), ("--color", "--no-color"),
+            ("--dev", "--only-group"), ("--extra", "--only-group"), ("--frozen", "--locked"),
+            ("--frozen", "--no-sources"), ("--frozen", "--upgrade"), ("--group", "--only-dev"),
+            ("--group", "--only-group"), ("--gui-script", "--script"), ("--locked", "--upgrade"),
+            ("--managed-python", "--python-preference"), ("--no-dev", "--only-dev"),
+            ("--no-managed-python", "--python-preference"), ("--no-project", "--package"),
+            ("--offline", "--refresh"), ("--offline", "--refresh-package"), ("--quiet", "--verbose"),
+        )
+    }
+    assert module._UV_ACROSS_CONFLICTS == {
+        frozenset(pair)
+        for pair in (
+            ("--allow-python-downloads", "--no-python-downloads"), ("--managed-python", "--python-preference"),
+            ("--native-tls", "--no-native-tls"), ("--no-managed-python", "--python-preference"),
+            ("--offline", "--no-offline"), ("--offline", "--refresh"), ("--offline", "--refresh-package"),
+            ("--preview", "--no-preview"), ("--system-certs", "--no-system-certs"),
+        )
+    }
+
+
 def test_the_value_sets_are_the_ones_uv_0_12_15_takes() -> None:
     """Pinned as measured: clap's names and aliases, hidden ones included,
     each of which started the script, while every other value tried exited 2.
@@ -1085,6 +1147,15 @@ def test_the_value_sets_are_the_ones_uv_0_12_15_takes() -> None:
         "uv run --color=always",
         "uv --python-fetch manual run",
         "uv --python-preference=only-managed run --python-preference system",
+        # Twins of the final pass's refusals: uv 0.12.15 took each.
+        "uv run --offline --no-offline",  # the last one wins, in one place
+        "uv run --no-preview --preview",
+        "uv --native-tls --no-native-tls run",
+        "uv --offline run --offline",
+        "uv --color never run --no-color",  # refused in one place only
+        "uv --managed-python run --no-managed-python",
+        "uv --python-preference managed run --python-preference system",
+        "uv run --offline --no-refresh",
         "uv run --link-mode reflink",  # a hidden alias
         "uv run --index-strategy unsafe-any-match",  # another
         "uv run --keyring-provider subprocess",
@@ -1186,6 +1257,33 @@ def test_a_command_uv_takes_as_written_starts_the_guard(words: str) -> None:
         ("uv --cache-dir= run", 'uv would not take "" as the value of "--cache-dir"'),
         ("uv --preview-feature '' run", 'uv would not take "" as the value of "--preview-feature"'),
         ("uv run --directory ''", 'uv run would not take "" as the value of "--directory"'),
+        # Review of #186's fix (4.1.0), final pass: clap takes `-p=3.9` as the
+        # value 3.9, the "=" stripped, in a cluster too, and uv reads a
+        # request with whitespace after the implementation name (`cpython
+        # 3.10`, `cpython@ 3.10`, `cpython- 3.10`, `cpython >=3.9`). uv 0.12.15
+        # ran each on 3.9 or 3.10 with only a warning, and refused `-C=` and
+        # `-P=` ("invalid value ''"), exit 2. The check passed all of them.
+        ("uv run -p=3.9", 'uv run would let "-p 3.9" select a Python below the 3.11'),
+        ("uv run -p=3.10", 'uv run would let "-p 3.10" select a Python below the 3.11'),
+        ("uv run -qp=3.9", 'uv run would let "-p 3.9" select a Python below the 3.11'),
+        ("uv run --python 'cpython 3.10'", 'uv run would let "--python cpython 3.10" select a Python below'),
+        ("uv run --python 'python 3.10'", 'uv run would let "--python python 3.10" select a Python below'),
+        ("uv run --python 'cp 3.9'", 'uv run would let "--python cp 3.9" select a Python below'),
+        ("uv run --python 'CPython 3.10'", 'uv run would let "--python CPython 3.10" select a Python below'),
+        ("uv run --python 'cpython  3.10'", 'uv run would let "--python cpython  3.10" select a Python below'),
+        ("uv run --python 'cpython\t3.10'", 'uv run would let "--python cpython\t3.10" select a Python below'),
+        ("uv run --python 'cpython@ 3.10'", 'uv run would let "--python cpython@ 3.10" select a Python below'),
+        ("uv run --python 'python@ 3.9'", 'uv run would let "--python python@ 3.9" select a Python below'),
+        ("uv run --python 'cpython- 3.10'", 'uv run would let "--python cpython- 3.10" select a Python below'),
+        ("uv run --python 'cpython v3.10'", 'uv run would let "--python cpython v3.10" select a Python below'),
+        ("uv run --python 'python 39'", 'uv run would let "--python python 39" select a Python below'),
+        ("uv run --python 'cpython 3.10 '", 'uv run would let "--python cpython 3.10" select a Python below'),
+        ("uv run --python 'cpython >=3.9'", 'uv run would let "--python cpython >=3.9" select a Python below'),
+        ("uv run --python 'python <3.12'", 'uv run would let "--python python <3.12" select a Python below'),
+        ("uv run --python 'cpython@ <3.11'", 'uv run would let "--python cpython@ <3.11" select a Python below'),
+        ("uv run -C=", 'uv run would not take "" as the value of "-C"'),
+        ("uv run -P=", 'uv run would not take "" as the value of "-P"'),
+        ("uv run -qC=", 'uv run would not take "" as the value of "-C"'),
     ],
 )
 def test_a_command_with_no_lockfile_an_older_python_or_an_empty_value_starts_no_guard(words: str, shown: str) -> None:
@@ -1250,6 +1348,17 @@ def test_an_older_python_is_refused_for_the_minimum_it_skips() -> None:
         "uv run --env-file=",
         "uv --trusted-host '' run",
         "uv --allow-insecure-host= run",
+        # Twins of the final pass's refusals, each run against uv 0.12.15:
+        # each started the script on a Python the header allows.
+        "uv run -p=3.12",
+        "uv run -qp=3.12",
+        "uv run -p=",  # no request: the header chooses
+        "uv run -w=",  # an empty value uv takes
+        "uv run --python 'cpython 3.12'",
+        "uv run --python 'python 3.12'",
+        "uv run --python 'cpython@ 3.12'",
+        "uv run -p 'cp 3.12'",
+        "uv run --python 'cpython >= 3.11'",
     ],
 )
 def test_a_command_with_a_python_the_header_allows_starts_the_guard(words: str) -> None:

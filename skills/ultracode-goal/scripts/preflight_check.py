@@ -1170,7 +1170,7 @@ _UV_ALIASES = {
 }
 # The options uv takes twice in one place. It refuses any other given twice
 # there (`--offline --offline` exits 2), though once before `run` and once
-# after it is fine; so is each pair below, which it refuses in one place.
+# after it is fine.
 _UV_REPEATABLE = frozenset(
     {
         "--allow-insecure-host", "--config-setting", "--config-settings-package", "--env-file",
@@ -1181,6 +1181,17 @@ _UV_REPEATABLE = frozenset(
         "--upgrade-package", "--verbose", "--with", "--with-editable", "--with-requirements",
     }
 )
+# The pairs of options uv 0.12.15 refuses together, by the names uv gives
+# them, measured by running every pair of its options through `sh -c`, each
+# with a value it takes alone: those it refuses in one place, on either side
+# of `run` ("cannot be used with", exit 2), and those it refuses with one
+# before `run` and the other after it. The two lists differ. clap's own pairs
+# hold in one place only (`uv -q run -v` runs the script), and uv's own
+# (`--offline` with `--refresh`, `--managed-python` with
+# `--python-preference`) in both. A flag beside its negation uv reads
+# last-wins in one place (`uv run --offline --no-offline` runs the script),
+# but for `--allow-python-downloads`, and refuses across `run` ("Boolean
+# flags on different levels are currently not supported").
 _UV_CONFLICTS = frozenset(
     frozenset(pair)
     for pair in (
@@ -1189,6 +1200,7 @@ _UV_CONFLICTS = frozenset(
         ("--all-groups", "--only-dev"),
         ("--all-groups", "--only-group"),
         ("--all-packages", "--package"),
+        ("--allow-python-downloads", "--no-python-downloads"),
         ("--color", "--no-color"),
         ("--dev", "--only-group"),
         ("--extra", "--only-group"),
@@ -1199,9 +1211,27 @@ _UV_CONFLICTS = frozenset(
         ("--group", "--only-group"),
         ("--gui-script", "--script"),
         ("--locked", "--upgrade"),
+        ("--managed-python", "--python-preference"),
         ("--no-dev", "--only-dev"),
+        ("--no-managed-python", "--python-preference"),
         ("--no-project", "--package"),
+        ("--offline", "--refresh"),
+        ("--offline", "--refresh-package"),
         ("--quiet", "--verbose"),
+    )
+)
+_UV_ACROSS_CONFLICTS = frozenset(
+    frozenset(pair)
+    for pair in (
+        ("--allow-python-downloads", "--no-python-downloads"),
+        ("--managed-python", "--python-preference"),
+        ("--native-tls", "--no-native-tls"),
+        ("--no-managed-python", "--python-preference"),
+        ("--offline", "--no-offline"),
+        ("--offline", "--refresh"),
+        ("--offline", "--refresh-package"),
+        ("--preview", "--no-preview"),
+        ("--system-certs", "--no-system-certs"),
     )
 )
 # The options that end a command line without running the script, as the
@@ -1285,14 +1315,20 @@ _SCRIPT_PYTHON_MINIMUM = (3, 11)
 # How uv reads a `--python` request as a version, in any case, trimmed: an
 # optional implementation name, joined by nothing, "@" or "-", then a version
 # (`3.10`, `v3.10.21`, `310`, with a suffix such as `t`, `+gil`, `rc1` or a
-# platform) or a set of specifiers (`>=3.11,<3.13`). A name alone, `any` or
+# platform) or a set of specifiers (`>=3.11,<3.13`). uv 0.12.15 reads
+# whitespace after the name or its "@" or "-" as nothing (`cpython 3.10`,
+# `cpython@ 3.10` and `cpython- 3.10` ran 3.10), and none before them
+# (`cpython @3.10` named no Python it found). A name alone, `any` or
 # `default` asks for any version. A path or a program name names none.
 _PY_IMPLEMENTATION = r"(?:cpython|cp|python|pypy|pp|graalpy|gp|pyodide)"
 _PY_ANY_VERSION = re.compile(r"%s@?|any|default" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII)
 _PY_VERSION = re.compile(
-    r"(?:%s[@-]?)?v?(?P<version>[0-9]+(?:\.[0-9]+){0,2})[a-z0-9_+.-]*" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII
+    r"(?:%s[@-]?\s*)?v?(?P<version>[0-9]+(?:\.[0-9]+){0,2})[a-z0-9_+.-]*" % _PY_IMPLEMENTATION,
+    re.IGNORECASE | re.ASCII,
 )
-_PY_SPECIFIERS = re.compile(r"(?:%s@?)?(?P<specifiers>[<>=!~].*)" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII)
+_PY_SPECIFIERS = re.compile(
+    r"(?:%s@?\s*)?(?P<specifiers>[<>=!~].*)" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII
+)
 _PY_SPECIFIER = re.compile(
     r"\s*(?P<operator>===|==|!=|~=|<=|>=|<|>)\s*v?(?P<version>[0-9]+(?:\.[0-9]+)*)(?:\.\*)?\s*", re.ASCII
 )
@@ -1458,7 +1494,10 @@ def _uv_options(words: list[str], index: int, after_run: bool) -> tuple[int, str
             problem = None
             if name in values:
                 if position < len(word) - 1:
-                    problem = value_problem(name, word[position + 1 :], separate=False)
+                    # clap takes `-p=3.12` as `-p3.12`: one "=" after the
+                    # letter is no part of the value (`-C=` gives an empty one).
+                    glued = word[position + 1 :]
+                    problem = value_problem(name, glued[1:] if glued.startswith("=") else glued, separate=False)
                 else:
                     problem = value_problem(name, words[index] if index < len(words) else None, separate=True)
                     index += 1  # its value is the next word
@@ -1505,7 +1544,9 @@ def _command_problem(command: str, script: str) -> str | None:
     --help`), starts nothing: under the guard's key the first refuses every
     call, and the second's exit 0 reads as no objection. So does one with
     `--frozen` or `--locked`, which makes uv look for a lockfile beside the
-    script that preflight never writes (`_UV_LOCKFILE_FLAGS`). A command that
+    script that preflight never writes (`_UV_LOCKFILE_FLAGS`), and one with a
+    pair of options uv refuses together, in one place or across `run`
+    (`_UV_CONFLICTS`, `_UV_ACROSS_CONFLICTS`). A command that
     hands the script to a Python (`uv run python <script>`) fails too, since
     the script then runs without its inline metadata (`_PYTHON`), and so does
     a Python request that admits one below the minimum the script's header
@@ -1555,7 +1596,7 @@ def _command_problem(command: str, script: str) -> str | None:
         )
     if not words or _last_path_part(words[0]) not in ("uv", "uv.exe"):
         return "the shell would run %s as the command, not uv" % (json.dumps(words[0]) if words else "nothing")
-    index, problem, _ = _uv_options(words, 1, after_run=False)
+    index, problem, before = _uv_options(words, 1, after_run=False)
     if problem is not None:
         return problem
     if index >= len(words) or words[index] != "run":
@@ -1563,6 +1604,10 @@ def _command_problem(command: str, script: str) -> str | None:
     index, problem, read = _uv_options(words, index + 1, after_run=True)
     if problem is not None:
         return problem
+    for later in read:
+        for earlier in before:
+            if frozenset((earlier, later)) in _UV_ACROSS_CONFLICTS:
+                return 'uv would refuse "%s" before run beside "%s" after it, and run no script' % (earlier, later)
     for flag in _UV_LOCKFILE_FLAGS:
         if flag in read:
             return (
