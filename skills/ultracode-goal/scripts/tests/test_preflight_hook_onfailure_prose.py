@@ -297,6 +297,21 @@ def test_the_bullet_says_to_quote_and_why():
     assert "each command quoted as the templates below write it" in no_write
 
 
+def test_the_bullet_says_what_an_unquoted_budget_command_costs():
+    """Review of #186's fix (4.1.0): the bullet said Claude Code skips a budget
+    hook that cannot start without a word. Where the shell cannot run the
+    command (exit 127) the stop goes through, but an unquoted script path
+    leaves `uv run` a script it cannot find, and uv 0.12.15 exits 2 ("Failed
+    to spawn"), which on Stop sends the stop back, up to the eight blocks in a
+    row after which Claude Code lets it through."""
+    flat = _flat(_hooks_bullet())
+    assert "skips the budget hook without a word" not in flat
+    assert (
+        "and the budget hook counts no turn (a command the shell cannot run lets each stop through; a script `uv` "
+        "cannot find sends each stop back with uv's error, up to eight times in a row)." in flat
+    )
+
+
 # --- what the setting does, and what it costs --------------------------------
 
 

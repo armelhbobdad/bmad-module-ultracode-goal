@@ -2402,7 +2402,11 @@ _HOOK_REJECTION_SENTENCES = {
         ("A resume never reaches this stage: when its hooks need re-arming and the", "c5d3cb28c9ca"),
         ("Claude Code only invokes a PreToolUse group for tools its matcher select", "5df2ca1f552d"),
         ("Deleting it costs nothing a later step needs: step 0 writes it afresh be", "df83ff84a5f2"),
-        ("Left unquoted, a project or skill path that holds a space (a project und", "95ae297070e0"),
+        # Reviewed (#186 review, 4.1.0): an unquoted hook command's cost, now
+        # the budget hook's as the shell or uv exits (a stop let through, or
+        # sent back up to eight times in a row); nothing of a hook's rejection
+        # of the evidence commit.
+        ("Left unquoted, a project or skill path that holds a space (a project und", "f7e8639f223b"),
         ("Now that the group is armed for every tool, the hook IS invoked for a `W", "54ce49130885"),
         ("The Stop budget hook carries no `onFailure`: Claude Code ignores the key", "63209639b79d"),
         ("The guard's item carries `\"onFailure\": \"block\"` beside `\"type\"` and `\"co", "dcd78ba37079"),
