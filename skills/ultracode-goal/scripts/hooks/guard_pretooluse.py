@@ -62,20 +62,25 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      command lookup. So only mem_recall.py changes the latch: `latch` writes
      it, and `unlatch` removes it when it carries the caller's run_id.
      Accepted residual, stated like the exec-wrapper one below: indirection
-     (for the store, a `cd` then a relative path, or a glob that matches a
-     symlink's own name on the way to it, such as the `[H]` or `?` in
-     `cat [H]/.ultracode-goal/recall/*` after `ln -s ~ H`, at any length,
-     since the guard resolves the links a path spells and expands no glob
-     against the file system; for both, a variable holding part of the path
-     or the name, a script that names the store or the latch in its
-     contents, whether a file tool or a heredoc fed to `cat` or `tee` wrote
-     it), commands on an ancestor directory (a search
-     of it, removing the implementation artifacts folder, a `git clean` or
-     `git stash --all`), repo-wide searches that reach a store inside the
-     workspace, the interpreter `uv` or `python` resolves to, with the
-     configuration it reads, and a pinned call itself: the exemption checks
-     the script's path, not its arguments, so a model that ignores the deny
-     note can still run `latch` or `unlatch` on its own.
+     (for the store, a `cd` then a relative path; a glob that matches a
+     symlink on the way to it or a folder before that symlink, such as the
+     `[H]` or `?` in `cat [H]/.ultracode-goal/recall/*` after `ln -s ~ H`,
+     or the `d*` in `cat d*/H/.ultracode-goal/recall/*` with H such a link
+     in d, a brace group in a word longer than _BRACE_WORD_CAP counting as
+     such a glob; and a `..` that climbs back over a symlink, as in
+     `cat L/../recall/*` with L a link to the store. Each at any length: the
+     guard expands no glob against the file system, and resolves the links a
+     path spells only after abspath has applied its `..` steps to the path
+     as written. For both, a variable holding part of the path or the name,
+     a script that names the store or the latch in its contents, whether a
+     file tool or a heredoc fed to `cat` or `tee` wrote it), commands on an
+     ancestor directory (a search of it, removing the implementation
+     artifacts folder, a `git clean` or `git stash --all`), repo-wide
+     searches that reach a store inside the workspace, the interpreter `uv`
+     or `python` resolves to, with the configuration it reads, and a pinned
+     call itself: the exemption checks the script's path, not its arguments,
+     so a model that ignores the deny note can still run `latch` or
+     `unlatch` on its own.
   Invariants 6 and 7 count a present latch as a live run: the guard reads no
   clock and detects no dead run, so a latch a dead run left behind keeps
   denying until the next Stage 1 replaces it or the user deletes it by hand.

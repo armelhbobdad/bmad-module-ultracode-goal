@@ -7803,25 +7803,48 @@ def test_a_long_path_resolves_as_v4_0_0_resolved_it(guard_module, tmp_path: Path
     assert guard_module._real(with_dotdot) == _v4_0_0_real(with_dotdot)
 
 
-def test_a_glob_over_a_links_own_name_is_a_residual(store_world: _StoreWorld) -> None:
-    """Accepted residual, as in v4.0.0: after `ln -s ~ H`, a glob that matches
-    the link's own name (`[H]`, `?`) is not resolved, short or past the
-    bound, since the guard resolves the links a path spells and expands no
-    glob against the file system; bash expands it to `H` and reads the
-    store. The guard's docstring and SECURITY.md list it, and the change
-    fragment claims only a link the word names, not every glob the shell
-    reads as a short name."""
-    _symlink_or_skip(store_world.cwd / "H", store_world.home)
-    for head, stars in (("[H]", 1), ("?", 1), ("[H]", 33_000)):
-        _assert_allowed(*_bash(store_world, f"cat {head}/.ultracode-goal/recall/" + "*" * stars + "jsonl"))
-    doc = " ".join(_load_guard_module().__doc__.split())
-    assert "a glob that matches a symlink's own name on the way to it" in doc
+def test_a_glob_or_dotdot_on_the_way_to_a_link_is_a_residual(store_world: _StoreWorld) -> None:
+    """Accepted residual, as in v4.0.0 (review findings GB-2 and GB2-R): the
+    guard expands no glob against the file system, and applies a `..` to the
+    path as written before it follows any link, so bash reaches the store
+    through a link the guard never follows, short or past the bound: a glob
+    over the link's own name (`[H]`, `?`) or over a folder before it (`d*`,
+    with d/H a link to the home folder), a brace group in a word longer than
+    _BRACE_WORD_CAP, which the guard reads as a `*` (the same group in a short
+    word expands, and is refused), and a `..` that climbs back over a link
+    (`L/..`, with L a link to the store). The guard's docstring and
+    SECURITY.md list each, and the change fragment claims none of them is
+    refused."""
+    world = store_world
+    _symlink_or_skip(world.cwd / "H", world.home)
+    _symlink_or_skip(world.cwd / "L", world.store)
+    (world.cwd / "d").mkdir()
+    _symlink_or_skip(world.cwd / "d" / "H", world.home)
+    recall = ".ultracode-goal/recall/"
+    for stars in (1, 33_000):
+        glob = "*" * stars + "jsonl"
+        for head in ("[H]", "?", "d*/H", "[d]/H"):
+            _assert_allowed(*_bash(world, f"cat {head}/{recall}{glob}"))
+        _assert_allowed(*_bash(world, f"cat L/../recall/{glob}"))
+    guard = _load_guard_module()
+    cap = guard._BRACE_WORD_CAP
+    assert cap == 1024
+    _assert_latch_denied(*_bash(world, f"cat {{H,x}}/{recall}*jsonl"), world.latch)
+    _assert_allowed(*_bash(world, f"cat {{H,x}}/{recall}" + "*" * cap + "jsonl"))
+
+    doc = " ".join(guard.__doc__.split())
+    assert "a glob that matches a symlink on the way to it or a folder before that symlink" in doc
+    assert "a brace group in a word longer than _BRACE_WORD_CAP counting as such a glob" in doc
+    assert "a `..` that climbs back over a symlink" in doc
     security = " ".join((_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8").split())
-    assert "a glob that matches a symlink's own name on the way to the store" in security
+    assert "a glob that matches a symlink on the way to the store or a folder before that symlink" in security
+    assert "a brace group in a word longer than 1,024 characters, which the guard reads as such a glob" in security
+    assert "a `..` that climbs back over a symlink" in security
     fragment = " ".join((_REPO_ROOT / "changes" / "guard-long-word-linear.yaml").read_text(encoding="utf-8").split())
-    assert "a long word that reaches the recall store through a link it names is still refused" in fragment
-    assert "A glob that matches a link's own name, such as the `[H]`" in fragment
-    assert "a glob the shell reads as a short name" not in fragment
+    assert "reaches the recall store through a link it names is still refused" not in fragment
+    assert "the guard does not follow a link the shell reaches through a glob" in fragment
+    assert "through a brace group in a word longer than 1,024 characters" in fragment
+    assert "by a `..` that climbs back over a link" in fragment
 
 
 def test_one_long_path_word_under_a_latch_is_decided_in_time(store_world: _StoreWorld) -> None:
