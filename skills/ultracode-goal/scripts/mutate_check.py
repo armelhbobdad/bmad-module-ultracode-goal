@@ -94,24 +94,26 @@ asynchronous activity after the test ended"). A process that exits or crashes
 during a test (a `process.exit` the mutant reaches, a heap the test fills)
 reports neither that test nor such an error, so the file's test counts, and
 the row reads as a kill, as a pytest test whose process dies does. A module
-that calls `process.exit` as the file loads stops the file loading, but Node
-prints for it what it prints for a process that exits during the file's first
-test, so it reads as that kill does. No line marks which file a passing test
-or an error is from, so two such kills still read 0 failed: one beside a test
-whose name holds the row's `expect_red` and that passes or is skipped above
-the dying file's test, in that file or in one listed before it, with no failed
-file test between them, and one for which the last thing Node prints is an
-uncaught error that a child process printed. Two runs whose lines interleave
-with no prefix to tell them apart can still read a file that cannot load, or
-one whose process exits after the row's test passes, as a kill. A file Node
-interrupts, as a `timeout` around the command does, is counted as cancelled,
-not failed, so nothing is taken off for it. An error collecting a test module
-or a test class does not count either: pytest names it with an `ERROR
-collecting <path>` header and a short summary line `ERROR <path>` with no `::`
-test id (a directory's path when a conftest.py in it fails to import) or
-`ERROR <path>::<Class>`, an id whose last part starts with a capital letter and
-that holds no parameters' `[...]`, and no test there ran. The path can hold a
-space. Nor does a conftest.py that pytest loads before it collects and
+that calls `process.exit` as the file loads, or kills its process then by
+filling the heap or by a signal (`process.abort`), stops the file loading, but
+Node reports it as it reports a process that exits or crashes during the
+file's first test: the file's own output, then the file's test, with no
+`Node.js v` line. So it reads as that kill does. No line marks which file a
+passing test or an error is from, so two such kills still read 0 failed: one
+beside a test whose name holds the row's `expect_red` and that passes or is
+skipped above the dying file's test, in that file or in one listed before it,
+with no failed file test between them, and one for which the last thing Node
+prints is an uncaught error that a child process printed. Two runs whose lines
+interleave with no prefix to tell them apart can still read a file that cannot
+load, or one whose process exits after the row's test passes, as a kill. A
+file Node interrupts, as a `timeout` around the command does, is counted as
+cancelled, not failed, so nothing is taken off for it. An error collecting a
+test module or a test class does not count either: pytest names it with an
+`ERROR collecting <path>` header and a short summary line `ERROR <path>` with
+no `::` test id (a directory's path when a conftest.py in it fails to import)
+or `ERROR <path>::<Class>`, an id whose last part starts with a capital letter
+and that holds no parameters' `[...]`, and no test there ran. The path can
+hold a space. Nor does a conftest.py that pytest loads before it collects and
 cannot import: it writes `ImportError while loading conftest '<path>'.` and
 stops, with no summary, before any test runs. So a mutant that breaks a module
 such a file imports (a dropped colon, say) reads 0 failed rather than a kill.

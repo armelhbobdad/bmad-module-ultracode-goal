@@ -2216,6 +2216,18 @@ def test_real_node_test_file_is_read_by_its_own_lines(tmp_path, case, reporter):
 #                       `remember returns #1` passes, and a timer it started
 #                       throws after it ends, which TAP reports as an error of
 #                       `remember returns \#1`
+#
+# And from the review of the fix that named, in the gate's reference, a module
+# that calls `process.exit` as its test file loads:
+#   node-*-heap-runs-out-as-it-loads
+#                       `node --max-old-space-size=64 --test walk.test.mjs
+#                       other.test.mjs`: the mutant (`depth < 10` to
+#                       `depth >= 0` in walk.mjs) makes the module's top-level
+#                       loop fill the heap as the file loads
+#   node-*-aborts-as-it-loads
+#                       `node --test mode.test.mjs other.test.mjs`: the mutant
+#                       (`MODE = 'strict'` to `'loose'`) makes mode.mjs call
+#                       `process.abort()` at its top level
 
 
 def _read_capture(tmp_path: Path, capture: str, expect_red: str):
@@ -2428,16 +2440,26 @@ def test_an_error_thrown_after_the_row_s_test_ends_reads_0_failed(tmp_path, capt
     [
         ("node-spec-exits-as-it-loads", "mode is strict"),
         ("node-tap-exits-as-it-loads", "mode is strict"),
+        ("node-spec-heap-runs-out-as-it-loads", "walk keeps ten levels"),
+        ("node-tap-heap-runs-out-as-it-loads", "walk keeps ten levels"),
+        ("node-spec-aborts-as-it-loads", "mode is strict"),
+        ("node-tap-aborts-as-it-loads", "mode is strict"),
         ("node-spec-exits-during-a-test", "run reads its file"),
         ("node-tap-exits-during-a-test", "run reads its file"),
+        ("node-spec-heap-runs-out-during-a-test", "depth guard fires"),
+        ("node-tap-heap-runs-out-during-a-test", "depth guard fires"),
     ],
 )
-def test_a_node_test_file_that_exits_as_it_loads_reads_as_one_that_exits_during_a_test(tmp_path, capture, expect_red):
+def test_a_node_test_file_that_dies_as_it_loads_reads_as_one_that_dies_during_a_test(tmp_path, capture, expect_red):
     """Pinned as it stands (#186 leaves it): a module that calls `process.exit`
     at its top level stops the file loading, and Node prints for it what it
     prints for a process that exits during the file's first test: the file's
-    own output, then the file's test, with no `Node.js v` line. Both read as a
-    kill, since no reading can tell them apart and the second is one."""
+    own output, then the file's test, with no `Node.js v` line. A module that
+    fills the heap or calls `process.abort` as it loads (found by the review
+    of the fix that named the exit in the gate's reference) stops it loading
+    too, and Node prints for it what it prints for a process that crashes
+    during a test. Each reads as a kill, since no reading can tell them apart
+    and the last four are kills."""
     proc = _read_capture(tmp_path, capture, expect_red)
     assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _NEVER_APPEARS.format(expect_red))}, (
         proc.stdout + proc.stderr

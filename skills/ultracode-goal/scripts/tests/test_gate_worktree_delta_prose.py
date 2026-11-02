@@ -3868,11 +3868,12 @@ _ZERO_FAILED_CASES = (
     "failure token, though it can read 0 failed when a test whose name holds the row's `expect_red` passes or is "
     "skipped in that file before the process dies or in a file Node lists before it, or when the last thing Node "
     "prints for that file is an uncaught error that a child process printed; a module that calls `process.exit` "
-    "while a Node test file loads stops the file loading, yet Node prints for it what it prints for a process that "
-    "exits during the file's first test, so it reads as that kill does, and when you delegate automate, tell it to "
-    "write no replacement that makes a module exit while a Node test file loads; and in output that interleaves "
-    "the lines of several runs with no task-runner prefix to tell them apart, a Node test file that cannot load, or "
-    "whose process exits non-zero after the row's test passes, can still read as a kill)"
+    "while a Node test file loads, or that kills its process then by filling the heap or by a signal, stops the file "
+    "loading, yet Node reports it as it reports a process that exits or crashes during the file's first test, so it "
+    "reads as that kill does, and when you delegate automate, tell it to write no replacement that makes a module "
+    "exit, fill the heap or raise a signal while a Node test file loads; and in output that interleaves the lines of "
+    "several runs with no task-runner prefix to tell them apart, a Node test file that cannot load, or whose process "
+    "exits non-zero after the row's test passes, can still read as a kill)"
 )
 # 3.2.0's wording, which named neither a class pytest cannot collect nor Node's test runner.
 _ZERO_FAILED_CASES_BEFORE = (
@@ -4122,7 +4123,20 @@ def test_a_node_test_file_that_dies_during_a_test_is_a_kill(capture, expect_red)
 # load error and its test, or another run's summary between the row's pass and
 # it. The bullet said a file Node cannot load reads 0 failed, named neither, and
 # never told automate to keep its replacements off the first, as the reused-server
-# caveat tells it for Playwright.
+# caveat tells it for Playwright. The review of that fix found the bullet and the
+# brief named only the exit: a module that fills the heap or raises a signal as the
+# file loads (a top-level loop the mutant leaves unbounded, `process.abort`) stops
+# it loading too, prints no `Node.js v` line, and reads as a kill the same way.
+_DIES_AS_IT_LOADS = (
+    "a module that calls `process.exit` while a Node test file loads, or that kills its process then by filling the "
+    "heap or by a signal, stops the file loading, yet Node reports it as it reports a process that exits or crashes "
+    "during the file's first test, so it reads as that kill does"
+)
+_NO_DEATH_AS_IT_LOADS = (
+    "and when you delegate automate, tell it to write no replacement that makes a module exit, fill the heap or raise "
+    "a signal while a Node test file loads"
+)
+# That fix's wording, which named only a module that calls `process.exit`.
 _EXITS_AS_IT_LOADS = (
     "a module that calls `process.exit` while a Node test file loads stops the file loading, yet Node prints for it "
     "what it prints for a process that exits during the file's first test, so it reads as that kill does"
@@ -4135,7 +4149,7 @@ _INTERLEAVED_KILLS = (
     "in output that interleaves the lines of several runs with no task-runner prefix to tell them apart, a Node test "
     "file that cannot load, or whose process exits non-zero after the row's test passes, can still read as a kill"
 )
-_NODE_LOAD_KILLS = frozenset({"exits as it loads", "automate briefed", "interleaved"})
+_NODE_LOAD_KILLS = frozenset({"dies as it loads", "automate briefed", "interleaved"})
 _PNPM_ANNOUNCED = re.compile(r"^\S+ test\$ ")
 _PNPM_PREFIX = re.compile(r"^\S+ test: ")
 
@@ -4143,14 +4157,15 @@ _PNPM_PREFIX = re.compile(r"^\S+ test: ")
 def _node_load_kills(para: str) -> set[str]:
     """What the cannot-run bullet's parenthesis names among the Node test
     files that run no test and still read as a kill, and whether it tells
-    automate to write no replacement that makes a module exit as one loads."""
+    automate to write no replacement that makes a module exit, fill the heap or
+    raise a signal as one loads."""
     text = _zero_failed_parenthesis(para)
     if text is None:
         return set()
     named = set()
-    if _EXITS_AS_IT_LOADS in text:
-        named.add("exits as it loads")
-    if _NO_EXIT_AS_IT_LOADS in text:
+    if _DIES_AS_IT_LOADS in text:
+        named.add("dies as it loads")
+    if _NO_DEATH_AS_IT_LOADS in text:
         named.add("automate briefed")
     if _INTERLEAVED_KILLS in text:
         named.add("interleaved")
@@ -4169,8 +4184,12 @@ def _unprefixed(output: str) -> str:
 @pytest.mark.parametrize(
     ("capture", "expect_red", "case"),
     [
-        ("node-spec-exits-as-it-loads", "mode is strict", "exits as it loads"),
-        ("node-tap-exits-as-it-loads", "mode is strict", "exits as it loads"),
+        ("node-spec-exits-as-it-loads", "mode is strict", "dies as it loads"),
+        ("node-tap-exits-as-it-loads", "mode is strict", "dies as it loads"),
+        ("node-spec-heap-runs-out-as-it-loads", "walk keeps ten levels", "dies as it loads"),
+        ("node-tap-heap-runs-out-as-it-loads", "walk keeps ten levels", "dies as it loads"),
+        ("node-spec-aborts-as-it-loads", "mode is strict", "dies as it loads"),
+        ("node-tap-aborts-as-it-loads", "mode is strict", "dies as it loads"),
         ("pnpm-node-spec-load-failure-interleaved", "clamp at the bound", "interleaved"),
         ("pnpm-node-tap-load-failure-interleaved", "clamp at the bound", "interleaved"),
         ("pnpm-node-spec-exits-after-a-pass-interleaved", "clamp at the bound", "interleaved"),
@@ -4179,14 +4198,15 @@ def _unprefixed(output: str) -> str:
 )
 def test_a_node_test_file_that_runs_no_test_yet_reads_as_a_kill_is_named(capture, expect_red, case):
     """Measured on `mutate_check.py`, over real `node --test` output: a
-    module that calls `process.exit` at its top level stops its test file
-    loading, and a file that cannot load, or whose process exits after the
-    row's test passes, does so too when pnpm's lines reach it with their
-    prefixes removed, as a command that runs several packages at once with no
-    prefix prints them. No test in that file ran, yet each reads as a kill,
-    and the cannot-run bullet, which said a file Node's test runner cannot
-    load reads 0 failed, now names each, and tells automate to write no
-    replacement that makes a module exit as a test file loads."""
+    module that calls `process.exit`, fills the heap or calls `process.abort`
+    at its top level stops its test file loading, and a file that cannot load,
+    or whose process exits after the row's test passes, does so too when
+    pnpm's lines reach it with their prefixes removed, as a command that runs
+    several packages at once with no prefix prints them. No test in that file
+    ran, yet each reads as a kill, and the cannot-run bullet, which said a
+    file Node's test runner cannot load reads 0 failed, now names each, and
+    tells automate to write no replacement that makes a module exit, fill the
+    heap or raise a signal as a test file loads."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
     if case == "interleaved":
@@ -4207,21 +4227,29 @@ def test_the_cannot_run_bullet_names_each_node_file_that_runs_no_test_yet_reads_
     ("old", "new", "dropped"),
     [
         # The branch's wording: neither case, and no brief.
-        ("; " + _EXITS_AS_IT_LOADS + ", " + _NO_EXIT_AS_IT_LOADS + "; and " + _INTERLEAVED_KILLS + ")", ")",
+        ("; " + _DIES_AS_IT_LOADS + ", " + _NO_DEATH_AS_IT_LOADS + "; and " + _INTERLEAVED_KILLS + ")", ")",
          _NODE_LOAD_KILLS),
-        ("; " + _EXITS_AS_IT_LOADS + ", " + _NO_EXIT_AS_IT_LOADS + ";", ";", {"exits as it loads", "automate briefed"}),
-        (", " + _NO_EXIT_AS_IT_LOADS, "", {"automate briefed"}),
-        ("so it reads as that kill does", "so it reads 0 failed", {"exits as it loads"}),
+        ("; " + _DIES_AS_IT_LOADS + ", " + _NO_DEATH_AS_IT_LOADS + ";", ";", {"dies as it loads", "automate briefed"}),
+        (", " + _NO_DEATH_AS_IT_LOADS, "", {"automate briefed"}),
+        ("so it reads as that kill does", "so it reads 0 failed", {"dies as it loads"}),
         ("; and " + _INTERLEAVED_KILLS + ")", ")", {"interleaved"}),
         ("a Node test file that cannot load, or whose process exits non-zero after the row's test passes, can",
          "a Node test file whose process exits non-zero after the row's test passes can", {"interleaved"}),
+        # The first fix's wording: only a module that exits, in the case and in the brief.
+        (_DIES_AS_IT_LOADS, _EXITS_AS_IT_LOADS, {"dies as it loads"}),
+        (_NO_DEATH_AS_IT_LOADS, _NO_EXIT_AS_IT_LOADS, {"automate briefed"}),
+        (" by filling the heap or by a signal,", " by a signal,", {"dies as it loads"}),
+        ("exit, fill the heap or raise a signal while", "exit or raise a signal while", {"automate briefed"}),
     ],
-    ids=["the-branch", "no-exit-at-load", "no-brief", "exit-at-load-0-failed", "no-interleaving", "no-load-failure"],
+    ids=["the-branch", "no-death-at-load", "no-brief", "death-at-load-0-failed", "no-interleaving", "no-load-failure",
+         "exit-only", "exit-only-brief", "no-heap", "no-heap-brief"],
 )
 def test_node_load_kill_predicate_rejects_a_bullet_that_drops_one(old, new, dropped):
     """The twin: the bullet as the branch wrote it, or with one of the two
-    cases dropped or misread, or without the brief, reads every other case as
-    before and not the one it dropped."""
+    cases dropped or misread, or without the brief, or as the first fix wrote
+    it, naming only a module that calls `process.exit` in the case or in the
+    brief, or without the heap in either, reads every other case as before and
+    not the one it dropped."""
     para = _bound()
     mutant = para.replace(old, new)
     assert mutant != para, "the mutant must actually change the text"

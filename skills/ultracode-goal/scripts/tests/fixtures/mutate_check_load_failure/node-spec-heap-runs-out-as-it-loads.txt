@@ -1,0 +1,34 @@
+✔ other passes (1.111413ms)
+
+<--- Last few GCs --->
+
+[256320:0x19b8d000]       79 ms: Mark-Compact 38.5 (55.5) -> 37.8 (103.5) MB, pooled: 0 MB, 5.22 / 0.00 ms  (+ 2.6 ms in 274 steps since start of marking, biggest step 0.2 ms, walltime since start of marking 19 ms) (average mu = 0.899, current mu = 0.899)[256320:0x19b8d000]      114 ms: Mark-Compact 69.8 (103.5) -> 69.2 (135.3) MB, pooled: 0 MB, 17.65 / 0.00 ms  (average mu = 0.769, current mu = 0.490) allocation failure; scavenge might not succeed
+
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+
+ 1: 0x931db0  [/usr/local/bin/node]
+ 2: 0x75968e node::OOMErrorHandler(char const*, v8::OOMDetails const&) [/usr/local/bin/node]
+ 3: 0xc70d60  [/usr/local/bin/node]
+ 4: 0xc70e4f  [/usr/local/bin/node]
+ 5: 0xf14725  [/usr/local/bin/node]
+ 6: 0xf2608c  [/usr/local/bin/node]
+ 7: 0xefb543  [/usr/local/bin/node]
+ 8: 0xed1050  [/usr/local/bin/node]
+ 9: 0x13c8948  [/usr/local/bin/node]
+10: 0x1add9b6  [/usr/local/bin/node]
+✖ walk.test.mjs (1719.624327ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1735.479087
+
+✖ failing tests:
+
+test at walk.test.mjs:1:1
+✖ walk.test.mjs (1719.624327ms)
+  'test failed'
