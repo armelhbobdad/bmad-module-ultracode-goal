@@ -20,7 +20,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parents[1] / "hooks" / "budget_stop.py"
+import pytest
+
+HOOK =Path(__file__).resolve().parents[1] / "hooks" / "budget_stop.py"
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _CUSTOMIZE = _SKILL_ROOT / "customize.toml"
@@ -195,6 +197,116 @@ def test_a_story_marker_that_is_not_utf8_still_counts_against_unknown(tmp_path: 
     assert code == 0
     assert out is None
     assert json.loads((impl / ".budget-unknown.json").read_text())["turns"] == 1
+
+
+# --- #186: bad input never ends the hook on an error --------------------------
+# Claude Code ignores `onFailure` on Stop, so a budget hook that exits 1 is a
+# hook error and nothing more: the stop proceeds, and the turn it should have
+# counted is lost. These inputs each raised out of the hook before it counted.
+
+
+def _run_raw(stdin: str | bytes, cwd: Path, env_extra: dict) -> subprocess.CompletedProcess:
+    env = {**os.environ, **env_extra}
+    data = stdin.encode("utf-8") if isinstance(stdin, str) else stdin
+    return subprocess.run([sys.executable, str(HOOK)], input=data, cwd=cwd, capture_output=True, env=env)
+
+
+def _turns(impl: Path, story: str) -> int:
+    return json.loads((impl / f".budget-{story}.json").read_text(encoding="utf-8"))["turns"]
+
+
+@pytest.mark.parametrize(
+    "stdin,shown",
+    [
+        pytest.param("[1, 2]", "not an object", id="array"),
+        pytest.param('"Stop"', "not an object", id="string"),
+        pytest.param("7", "not an object", id="number"),
+        pytest.param("null", "not an object", id="null"),
+        pytest.param("[" * 100_000, "RecursionError", id="nested-past-what-python-reads"),
+        pytest.param("{not json", "not JSON", id="not-json"),
+        pytest.param(b"\xff\xfe{}", "not JSON", id="not-utf8"),
+    ],
+)
+def test_an_event_it_cannot_read_still_counts_the_turn(tmp_path: Path, stdin: str | bytes, shown: str) -> None:
+    """The env names the state dir and the story, so the turn is counted
+    without the event, and stderr says what was read past."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "25"}
+    proc = _run_raw(stdin, tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == b""
+    assert _turns(impl, "S1") == 1
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert stderr.startswith("budget_stop: ") and shown in stderr, stderr
+    assert "Traceback" not in stderr
+
+
+def test_an_event_it_cannot_read_with_no_state_dir_exits_zero(tmp_path: Path) -> None:
+    """With no event cwd and no ULTRACODE_IMPL_ARTIFACTS there is nowhere to
+    count: exit 0, as for any Stop with no state dir."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ULTRACODE_")}
+    proc = subprocess.run([sys.executable, str(HOOK)], input=b"[]", cwd=tmp_path, capture_output=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_cwd_that_is_not_a_string_reads_as_no_cwd(tmp_path: Path) -> None:
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": 7}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "S1") == 1
+
+
+def test_a_story_pointer_holding_a_nul_counts_against_unknown(tmp_path: Path) -> None:
+    """No file name holds a NUL byte, so the counter could not be written and
+    the hook raised. Such a pointer names no story it can count, so the turn
+    counts against `unknown`, as an unreadable pointer's does."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_bytes(b"S1\x00x\n")
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, _no_story_env(impl, "25"))
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "unknown") == 1
+    assert "NUL" in proc.stderr.decode("utf-8", "replace")
+
+
+def test_a_nul_story_at_its_ceiling_still_exits_zero(tmp_path: Path) -> None:
+    """The overrun path writes a marker named after the story too."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_bytes(b"S1\x00x\n")
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, _no_story_env(impl, "1"))
+    assert proc.returncode == 0, proc.stderr
+    assert (impl / ".escalation-unknown.md").is_file()
+    assert "systemMessage" in json.loads(proc.stdout)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param("[3]", id="array"),
+        pytest.param("[" * 100_000, id="nested-past-what-python-reads"),
+        pytest.param('{"turns": 1e999}', id="infinite"),
+        pytest.param('{"turns": null}', id="null"),
+    ],
+)
+def test_a_counter_it_cannot_read_restarts_as_an_unparseable_one_does(tmp_path: Path, state: str) -> None:
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".budget-S1.json").write_text(state, encoding="utf-8")
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "S1") == 1
+
+
+def test_the_docstring_says_bad_input_never_ends_the_hook() -> None:
+    doc = " ".join(ast.get_docstring(ast.parse(HOOK.read_text(encoding="utf-8"))).split())
+    assert "Claude Code ignores `onFailure` on Stop" in doc
+    assert "exits 0 whatever it is given" in doc
 
 
 def test_token_env_vars_are_inert(tmp_path: Path) -> None:

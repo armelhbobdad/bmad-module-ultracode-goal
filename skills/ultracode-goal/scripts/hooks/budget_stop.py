@@ -32,7 +32,17 @@ A Stop with no current story at all (no ULTRACODE_STORY_ID and no
 hooks are armed) is not a story's turn: nothing is counted and nothing is
 written, so the hook never leaves a stray .budget-unknown.json in the tree.
 An empty or unreadable marker (one that is not UTF-8 included) still counts
-against "unknown", because a story may be in flight behind it.
+against "unknown", because a story may be in flight behind it, and so does one
+that holds a NUL byte, which no counter's file name can.
+
+The hook exits 0 whatever it is given. Claude Code ignores `onFailure` on
+Stop, so a budget hook that exited 1 would only print a hook error, and the
+turn it should have counted would be lost. A Stop event that is not a JSON
+object, or that is nested past what Python reads, reads as no event: the
+injected ULTRACODE_* values still name the state dir and the story, so the
+turn is counted. Each such read-past is said on stderr, which Claude Code
+shows in its debug output, and any other error ends the hook with exit 0 and
+its name on stderr.
 
 Every other Stop counts, including one that ends a response that only
 acknowledged a background task's notification. The Stop input carries the
@@ -69,12 +79,25 @@ from typing import NoReturn
 DEFAULT_MAX_TURNS = 25
 
 
+def _warn(message: str) -> None:
+    """Say on stderr what the hook read past, and go on."""
+    print(f"budget_stop: {message}", file=sys.stderr)
+
+
 def _read_event() -> dict:
+    """The Stop event, or {} for one that is absent or cannot be read as a JSON object."""
     try:
         raw = sys.stdin.read()
-        return json.loads(raw) if raw.strip() else {}
-    except (json.JSONDecodeError, ValueError):
+        event = json.loads(raw) if raw.strip() else {}
+    except (ValueError, RecursionError) as exc:
+        # ValueError covers JSON that does not parse and stdin that is not
+        # text; RecursionError, JSON nested past what Python reads.
+        _warn(f"the Stop event is not JSON it can read ({type(exc).__name__}); reading it as no event")
         return {}
+    if not isinstance(event, dict):
+        _warn(f"the Stop event is a JSON {type(event).__name__}, not an object; reading it as no event")
+        return {}
+    return event
 
 
 def _emit(message: str | None) -> NoReturn:
@@ -103,25 +126,33 @@ def _impl_artifacts(cwd: str | None) -> Path | None:
 def _current_story(impl: Path | None) -> str | None:
     """The current story id, "unknown" for an unusable marker, None for none at all."""
     sid = (os.environ.get("ULTRACODE_STORY_ID") or "").strip()
-    if sid:
-        return sid
-    if impl is not None:
+    if not sid and impl is not None:
         marker = impl / ".current-story"
-        if marker.is_file():
-            # A marker that is not UTF-8 is unreadable too: raising here would
-            # end the hook before it counted the turn.
-            try:
-                return marker.read_text(encoding="utf-8").strip() or "unknown"
-            except (OSError, UnicodeDecodeError):
-                return "unknown"
-    return None
+        if not marker.is_file():
+            return None
+        # A marker that is not UTF-8 is unreadable too: raising here would
+        # end the hook before it counted the turn.
+        try:
+            sid = marker.read_text(encoding="utf-8").strip() or "unknown"
+        except (OSError, UnicodeDecodeError):
+            return "unknown"
+    if "\0" in sid:
+        # Neither the counter nor the marker could be named after it.
+        _warn("the story id holds a NUL byte, which no file name can; counting the turn against unknown")
+        return "unknown"
+    return sid or None
 
 
 def _load_state(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return {"turns": int(data.get("turns", 0))}
-    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+    except FileNotFoundError:
+        return {"turns": 0}
+    except (OSError, ValueError, TypeError, AttributeError, OverflowError, RecursionError) as exc:
+        # Not a count it can read (not JSON, not an object, nested past what
+        # Python reads, an infinite or absent number): it restarts at 0.
+        _warn(f"{path.name} is not a count it can read ({type(exc).__name__}); counting from 0")
         return {"turns": 0}
 
 
@@ -129,13 +160,16 @@ def _save_state(path: Path, state: dict) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(state), encoding="utf-8")
-    except OSError:
-        pass  # state best-effort; never crash a Stop hook
+    except (OSError, ValueError) as exc:
+        _warn(f"could not write {path.name} ({type(exc).__name__}); this turn is not counted")
 
 
 def main() -> None:
     event = _read_event()
     cwd = event.get("cwd")
+    if cwd is not None and not isinstance(cwd, str):
+        _warn(f"the Stop event's cwd is a JSON {type(cwd).__name__}, not a string; reading it as no cwd")
+        cwd = None
     impl = _impl_artifacts(cwd)
 
     if impl is None:
@@ -169,8 +203,8 @@ def main() -> None:
             f"re-loop, are what stop the story.\n",
             encoding="utf-8",
         )
-    except OSError:
-        pass
+    except (OSError, ValueError) as exc:
+        _warn(f"could not write {marker.name} ({type(exc).__name__})")
 
     _emit(
         f"UltraCode-Goal: story {story} reached its turn ceiling ({detail}). "
@@ -180,4 +214,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:  # noqa: BLE001  (exit 1 here is a lost turn and a hook error, nothing more)
+        _warn(f"stopped on {type(exc).__name__}: {exc}; the stop proceeds")
+        sys.exit(0)
