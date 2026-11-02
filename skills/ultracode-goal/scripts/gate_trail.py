@@ -186,8 +186,9 @@ _GATE_READ_FROM = re.compile(
 )
 
 # The one escalation kind the gate's advance route writes (references/gate.md,
-# "Commit the gate's evidence before the next story starts"): the story keeps its
-# `advance` verdict, and only the evidence commit is owed.
+# "Commit the gate's evidence before the next story starts"), which the `defer`
+# route takes too: the story keeps the verdict it advanced on (`advance`, or
+# `defer`), and only the evidence commit is owed.
 EVIDENCE_COMMIT_REJECTED = "evidence-commit-rejected"
 
 

@@ -2060,7 +2060,8 @@ _EVIDENCE_HOOK_ESCALATES = (
     "step 0, as the `escalate` route below stops."
 )
 _EVIDENCE_STAYS_STAGED = (
-    "The story keeps its `advance` verdict, and its evidence stays staged for the commit a resume makes."
+    "The story keeps the verdict it advanced on (`advance`, or `defer`, whose route advances anyway), and its "
+    "evidence stays staged for the commit a resume makes."
 )
 _EVIDENCE_RESUME_WAITS = (
     "While that story's `evidence-commit-rejected` escalation is still open, the resume commits nothing and stops on "
@@ -2130,6 +2131,9 @@ def test_the_evidence_commit_hook_rule_reaches_only_the_gates_own_files():
          "closed already)", ""),
         ("gate", "write `.evidence-owed-<story_id>` beside it, listing those paths one per line, ", ""),
         ("gate", _EVIDENCE_STAYS_STAGED, "Unstage its evidence and move to the next story."),
+        # The first wording named `advance` alone, though the `defer` route advances too.
+        ("gate", _EVIDENCE_STAYS_STAGED,
+         "The story keeps its `advance` verdict, and its evidence stays staged for the commit a resume makes."),
         ("gate", " " + _EVIDENCE_RESUME_WAITS, ""),
         ("execute", " " + _EXECUTE_RESUME_WAITS, ""),
         ("execute", "while its `escalation` reads `open`, make no commit", "while its `escalation` reads `open`, commit"),
@@ -2178,7 +2182,9 @@ _HOOK_REJECTION_SENTENCES = {
         ("Unlike the baseline, **this marker is refreshed, not preserved**: step 5", "6428639f8eb2"),
     ),
     "finalize.md": (
-        ("A run that stopped on an `evidence-commit-rejected` escalation keeps tha", "e2cb75bb035a"),
+        # Reviewed: it now names the verdict the story advanced on, `advance` or
+        # `defer`; it answers no hook and commits nothing.
+        ("A run that stopped on an `evidence-commit-rejected` escalation keeps the", "b3906fe95f18"),
         ("A story whose escalation is still open (`escalation-<story_id>.json` on ", "e3f7c53b9b93"),
         ("On a `blocked` run (a story escalated, so the Epic never advanced or the", "b59ae034f8db"),
         ("This hook fires **only on a `blocked` run** (a story escalated, so the E", "168e3ecabf77"),

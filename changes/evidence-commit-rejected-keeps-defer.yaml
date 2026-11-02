@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  A run that stops on an `evidence-commit-rejected` escalation now keeps the verdict that story advanced on (`advance`, or `defer`) as `last_verdict` in its terminal `run-status.json`, as the gate trail (`gate-trail.md`) already shows it. Before, the gate and finalize references said the story keeps `advance`, though the `defer` route advances the story too and its evidence commit can be rejected the same way, so a story that advanced on `defer` could be reported as `advance`.
+issues: [186]

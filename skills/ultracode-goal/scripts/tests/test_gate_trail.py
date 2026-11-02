@@ -2082,6 +2082,49 @@ def test_the_finalize_pin_reds_without_the_sentence():
     assert len(_finalize_escalation_failures(text[:start] + text[end:])) == 3
 
 
+# The run-status and the gate's own route say what the trail says: a story whose
+# evidence commit was rejected keeps the verdict it advanced on, which the
+# `defer` route reaches too, so neither may name `advance` alone.
+_LAST_VERDICT_CLAUSE = (
+    "A run that stopped on an `evidence-commit-rejected` escalation keeps the verdict that story advanced on "
+    "(`advance`, or `defer`) as `last_verdict`, since the story advanced"
+)
+_GATE_KEEPS_CLAUSE = (
+    "The story keeps the verdict it advanced on (`advance`, or `defer`, whose route advances anyway), and its "
+    "evidence stays staged for the commit a resume makes."
+)
+
+
+def _evidence_verdict_failures(finalize: str, gate: str) -> list[str]:
+    failures = []
+    if _LAST_VERDICT_CLAUSE not in re.sub(r"\s+", " ", finalize):
+        failures.append("finalize.md")
+    if _GATE_KEEPS_CLAUSE not in re.sub(r"\s+", " ", gate):
+        failures.append("gate.md")
+    return failures
+
+
+def test_a_rejected_evidence_commit_keeps_the_verdict_the_story_advanced_on():
+    finalize, gate = FINALIZE.read_text(encoding="utf-8"), GATE.read_text(encoding="utf-8")
+    assert _evidence_verdict_failures(finalize, gate) == []
+
+
+def test_the_evidence_verdict_pin_reds_on_the_wording_that_named_advance_alone():
+    """Twin: each text as it read before, naming `advance` alone."""
+    finalize, gate = FINALIZE.read_text(encoding="utf-8"), GATE.read_text(encoding="utf-8")
+    old_finalize = finalize.replace(
+        "keeps the verdict that story advanced on (`advance`, or `defer`) as `last_verdict`",
+        "keeps that story's `advance` as `last_verdict`",
+    )
+    old_gate = gate.replace(
+        "The story keeps the verdict it advanced on (`advance`, or `defer`, whose route advances anyway), and",
+        "The story keeps its `advance` verdict, and",
+    )
+    assert old_finalize != finalize and old_gate != gate
+    assert _evidence_verdict_failures(old_finalize, gate) == ["finalize.md"]
+    assert _evidence_verdict_failures(finalize, old_gate) == ["gate.md"]
+
+
 # ---------------------------------------------------------------------------
 # The heading the trail reads a recorded verdict under is one gate.md has the
 # run write. No reference named it before, and a real project's logs matched
