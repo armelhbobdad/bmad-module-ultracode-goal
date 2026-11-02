@@ -35,9 +35,15 @@ An empty or unreadable marker (one that is not UTF-8 included) still counts
 against "unknown", because a story may be in flight behind it, and so does a
 story id that holds a NUL byte, which no counter's file name can, or a slash
 or a backslash, which would name the counter and the turn-ceiling marker in
-another folder (outside the state dir, with `..` steps after it), or that is
-too long for a file name: the marker's name, the longer of the two, would
-pass 255 bytes.
+another folder (outside the state dir, with `..` steps after it), or bytes
+that are not UTF-8 (an ULTRACODE_STORY_ID's), which the marker's text cannot
+hold, or a character the file system's encoding cannot spell, or that is too
+long for a file name: the marker's name, the longer of the two, would pass
+255 bytes. An id whose marker's whole path would pass the longest path the
+system takes counts against "unknown" too, when unknown's marker path does
+not; the system says so with ENAMETOOLONG, or on Windows with error 206, and
+where it answers otherwise (Windows may say the path is not found), the turn
+counts against the story and the marker's write says on stderr why it failed.
 
 The hook reads and writes only a regular file at the counter's and the
 marker's names. It opens the counter without following a symlink at its name
@@ -87,6 +93,7 @@ State file: <impl>/.budget-<story>.json  {turns:int}
 Turn-ceiling marker: <impl>/.escalation-<story>.md
 """
 
+import errno
 import json
 import os
 import stat
@@ -120,6 +127,8 @@ _IN_PLACE_FLAGS = (
     | getattr(os, "O_NONBLOCK", 0)
     | getattr(os, "O_BINARY", 0)
 )
+# Windows's ERROR_FILENAME_EXCED_RANGE: a path longer than it takes.
+_WINDOWS_PATH_TOO_LONG = 206
 
 
 class _NotRegular(Exception):
@@ -197,24 +206,62 @@ def _current_story(impl: Path | None) -> str | None:
             "counting the turn against unknown"
         )
         return "unknown"
-    if sid and not _fits_a_file_name(f".escalation-{sid}.md"):
+    if not sid:
+        return None
+    try:
+        sid.encode("utf-8")
+    except UnicodeEncodeError:
+        # An ULTRACODE_STORY_ID holding bytes that are not UTF-8 decodes to
+        # surrogates: its counter could be named, but the marker's UTF-8 text
+        # could not hold the id, so the ceiling never wrote one.
+        _warn(
+            "the story id holds bytes that are not UTF-8, which its turn-ceiling marker cannot hold; "
+            "counting the turn against unknown"
+        )
+        return "unknown"
+    try:
+        name_bytes = len(os.fsencode(f".escalation-{sid}.md"))
+    except UnicodeError:
+        _warn(
+            "the story id holds a character the file system's encoding cannot spell, so no counter "
+            "can be named after it; counting the turn against unknown"
+        )
+        return "unknown"
+    if name_bytes > _NAME_MAX:
         # The marker's name is two bytes longer than the counter's, so an id
-        # that fits it fits both. Past it, the counter could not be read or
-        # written, and the ceiling never fired.
+        # that fits it fits both. Past it, the marker could not be written,
+        # and two bytes further the counter could not be read or written.
         _warn(
             f"the story id is too long for a file name: its turn-ceiling marker's name would pass "
             f"{_NAME_MAX} bytes; counting the turn against unknown"
         )
         return "unknown"
-    return sid or None
+    if (
+        impl is not None
+        and _path_too_long(impl / f".escalation-{sid}.md")
+        and not _path_too_long(impl / ".escalation-unknown.md")
+    ):
+        # The same for the whole path, when unknown's marker still fits: a
+        # shorter id than "unknown" would gain nothing from it.
+        _warn(
+            "the path of the story's turn-ceiling marker would pass the longest path the system takes; "
+            "counting the turn against unknown"
+        )
+        return "unknown"
+    return sid
 
 
-def _fits_a_file_name(name: str) -> bool:
-    """Whether the system can spell name as a file name of at most _NAME_MAX bytes."""
+def _path_too_long(path: Path) -> bool:
+    """Whether the system refuses path as longer than it takes: ENAMETOOLONG,
+    or Windows's "filename or extension is too long". Any other answer, no
+    such file included, is False."""
     try:
-        return len(os.fsencode(name)) <= _NAME_MAX
-    except UnicodeError:  # a character the file system encoding has no bytes for
+        os.lstat(path)
+    except OSError as exc:
+        return exc.errno == errno.ENAMETOOLONG or getattr(exc, "winerror", None) == _WINDOWS_PATH_TOO_LONG
+    except ValueError:
         return False
+    return False
 
 
 def _regular_or_absent(path: Path) -> bool:

@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The turn-budget `Stop` hook now counts a turn against `unknown`, and says so on stderr, when `ULTRACODE_STORY_ID` holds bytes that are not UTF-8, as it already did for a `.current-story` that is not UTF-8, and when the story id holds a character the file system's encoding cannot spell (one outside Latin-1 under a Latin-1 locale, say). An id that was not UTF-8 was counted, but its turn-ceiling marker `.escalation-<story>.md` could not hold its text, so at the ceiling the hook left that marker empty and ended on an error before its overrun message. An id the file system's encoding could not spell was never counted.

@@ -339,11 +339,13 @@ _LONGEST_ID_BYTES = 255 - len(".escalation-.md")
 )
 def test_a_story_id_too_long_for_a_file_name_counts_against_unknown(tmp_path: Path, story: str, source: str) -> None:
     """The counter and the marker are named after the story id, and an id
-    too long for either name was never counted: the counter could not be read
+    too long for both names was never counted: the counter could not be read
     or written (ENAMETOOLONG), every turn was lost with a note on stderr, and
-    the ceiling never fired. Such an id names no story it can count, as a
-    NUL's or a separator's does, so the turn counts against `unknown`. The
-    length is the file system's, in bytes, not in characters."""
+    the ceiling never fired. One too long for the marker's name alone, two
+    bytes longer than the counter's (241 or 242 bytes), was counted but never
+    got its marker. Such an id names no story it can count, as a NUL's or a
+    separator's does, so the turn counts against `unknown`. The length is the
+    file system's, in bytes, not in characters."""
     assert len(os.fsencode(f".escalation-{story}.md")) > 255
     impl = tmp_path / "impl"
     impl.mkdir()
@@ -411,6 +413,40 @@ def _folder_of_length(base: Path, length: int) -> Path:
     return folder
 
 
+_ID_100_BYTES = "1-1-" + "a" * 96
+
+
+def test_a_story_whose_marker_path_is_too_long_counts_against_unknown(tmp_path: Path) -> None:
+    """The counter's path fits the system's longest path and the marker's,
+    two bytes longer, does not: the story was counted but its turn ceiling
+    never wrote a marker. The turn counts against `unknown`, whose marker
+    fits, and stderr says why."""
+    longest = _longest_path(tmp_path)
+    impl = _folder_of_length(tmp_path, longest - len(f"/.budget-{_ID_100_BYTES}.json"))
+    assert len(os.fsencode(str(impl / f".escalation-{_ID_100_BYTES}.md"))) == longest + 2
+    env = {**_no_story_env(impl, "1"), "ULTRACODE_STORY_ID": _ID_100_BYTES}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(path.name for path in impl.iterdir()) == [".budget-unknown.json", ".escalation-unknown.md"]
+    assert _turns(impl, "unknown") == 1
+    assert "Marker written" in json.loads(proc.stdout)["systemMessage"]
+    assert "longest path" in proc.stderr.decode("utf-8", "replace")
+
+
+def test_a_story_whose_marker_path_is_the_longest_counts_as_itself(tmp_path: Path) -> None:
+    """The twin at the bound: a marker path of exactly the longest length the
+    system takes is counted against its story and written at the ceiling."""
+    longest = _longest_path(tmp_path)
+    impl = _folder_of_length(tmp_path, longest - len(f"/.escalation-{_ID_100_BYTES}.md"))
+    env = {**_no_story_env(impl, "1"), "ULTRACODE_STORY_ID": _ID_100_BYTES}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, _ID_100_BYTES) == 1
+    assert (impl / f".escalation-{_ID_100_BYTES}.md").is_file()
+    assert not (impl / ".budget-unknown.json").exists()
+    assert proc.stderr == b""
+
+
 def test_a_short_story_near_the_longest_path_is_still_counted(tmp_path: Path) -> None:
     """A short story id leaves its counter's and its marker's names shorter
     than the new file a write goes through (`.budget-<pid>-<hex>.tmp`), so
@@ -427,6 +463,50 @@ def test_a_short_story_near_the_longest_path_is_still_counted(tmp_path: Path) ->
     assert (impl / ".escalation-S1.md").read_text(encoding="utf-8").startswith("# Turn ceiling reached: story S1")
     assert "Marker written" in json.loads(proc.stdout)["systemMessage"]
     assert proc.stderr == b""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="passes bytes that are not UTF-8 through the environment, as POSIX can")
+def test_a_story_id_holding_bytes_that_are_not_utf8_counts_against_unknown(tmp_path: Path) -> None:
+    """An ULTRACODE_STORY_ID holding a byte that is not UTF-8 named a counter
+    the hook could write, but the marker's UTF-8 text could not hold the id,
+    so its turn ceiling never wrote one. It counts against `unknown`, as a
+    `.current-story` that is not UTF-8 does."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    env = {**_no_story_env(impl, "1"), "ULTRACODE_STORY_ID": os.fsdecode(b"story-\xff")}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(os.listdir(impl)) == [".budget-unknown.json", ".escalation-unknown.md"]
+    assert _turns(impl, "unknown") == 1
+    assert "Marker written" in json.loads(proc.stdout)["systemMessage"]
+    assert "not UTF-8" in proc.stderr.decode("utf-8", "replace")
+
+
+_ASCII_FILE_NAMES = {"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"}
+
+
+def test_a_story_id_the_file_system_cannot_spell_counts_against_unknown(tmp_path: Path) -> None:
+    """Under a file system encoding that has no bytes for a character of the
+    id (ASCII, with Python's UTF-8 mode and locale coercion off), no counter
+    can be named after it. The turn counts against `unknown`, and stderr says
+    the id cannot be spelled rather than that it is too long."""
+    probe = subprocess.run(
+        [sys.executable, "-c", "import sys; print(sys.getfilesystemencoding())"],
+        env={**os.environ, **_ASCII_FILE_NAMES},
+        capture_output=True,
+        text=True,
+    )
+    if probe.stdout.strip() != "ascii":
+        pytest.skip(f"the file system encoding stays {probe.stdout.strip()!r} under the C locale here")
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_text("story-é\n", encoding="utf-8")
+    env = {**_no_story_env(impl, "25"), **_ASCII_FILE_NAMES}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "unknown") == 1
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "cannot spell" in stderr and "too long" not in stderr, stderr
 
 
 # --- A link or a special file at the counter's or the marker's name ----------

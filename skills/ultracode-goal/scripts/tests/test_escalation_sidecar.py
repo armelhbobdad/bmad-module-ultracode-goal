@@ -436,8 +436,9 @@ def test_budget_stop_emits_no_typed_sidecar_and_fires_nothing():
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             roots.add(node.module.split(".")[0])
     # `stat` reads the file type, so the hook neither reads nor writes through
-    # a symlink or a FIFO at its counter's or its marker's name.
-    allowed = {"json", "os", "stat", "sys", "pathlib", "typing"}
+    # a symlink or a FIFO at its counter's or its marker's name, and `errno`
+    # tells a marker path too long for the system from a missing one.
+    allowed = {"errno", "json", "os", "stat", "sys", "pathlib", "typing"}
     assert roots <= allowed, f"the Stop hook grew an import it has no business holding: {sorted(roots - allowed)}"
 
     for node in ast.walk(tree):
