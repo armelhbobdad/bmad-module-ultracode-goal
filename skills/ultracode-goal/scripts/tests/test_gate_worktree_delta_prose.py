@@ -3658,8 +3658,9 @@ _ZERO_FAILED_CASES = (
     "test in that file or class runs, or when a Node test file's process exits non-zero after the row's test passes "
     "or is skipped, and no other test fails; a Node test file's process that exits or crashes during a test, before "
     "Node reports the row's test, still reads as a kill, since the row's `expect_red` then never appears beside a "
-    "failure token, though it can read 0 failed when a test of the same name passes or is skipped in a file Node lists "
-    "before it, or when the last thing Node prints for that file is an uncaught error that a child process printed)"
+    "failure token, though it can read 0 failed when a test whose name holds the row's `expect_red` passes or is "
+    "skipped in that file before the process dies or in a file Node lists before it, or when the last thing Node "
+    "prints for that file is an uncaught error that a child process printed)"
 )
 # 3.2.0's wording, which named neither a class pytest cannot collect nor Node's test runner.
 _ZERO_FAILED_CASES_BEFORE = (
@@ -3679,6 +3680,13 @@ _NODE_CAPTURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_lo
         ("node-spec-exits-after-a-skipped-test", "clamp at the bound"),
         ("node-spec-top-level-await-never-settles", "store opens"),
         ("node-tap-imported-top-level-await-never-settles", "store opens"),
+        ("pnpm-node-spec-load-failure-interleaved", "clamp at the bound"),
+        ("pnpm-node-tap-exits-after-a-pass-interleaved", "clamp at the bound"),
+        ("node-tap-exits-after-a-tagged-pass", "clamp at the bound"),
+        ("node-tap-exits-after-a-pass-of-a-longer-name", "run reads its file"),
+        ("npm-node-spec-load-failure-in-two-workspaces", "api clamps at the bound"),
+        ("node-tap-exits-after-an-escaped-pass", "strip drops a # comment"),
+        ("node-tap-load-failure-outside-the-folder", "clamp at the bound"),
     ],
 )
 def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_red):
@@ -3689,7 +3697,13 @@ def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_re
     read as another test's kill; it now reads 0 failed, which the cannot-run
     bullet names, Node and the non-zero exit included. A second review of that
     fix found a top-level await the mutant leaves pending read as a kill: no
-    test in that file runs either, and it reads 0 failed too."""
+    test in that file runs either, and it reads 0 failed too. A review of #185
+    (#186, the last seven captures) found such a file read as a kill when pnpm
+    printed another package's lines among its own, when the test that passed
+    had a name that held the row's (a TEA tag in front of it, or more words
+    after it), when a second run failed a file of the same name, when TAP
+    escaped a `#` in the test's name, and when TAP located a file outside the
+    folder node ran in by its absolute path; each reads 0 failed now."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
     status, detail, _ = mutate_check._classify_red(output, expect_red)
@@ -3717,7 +3731,15 @@ _DIES_DURING_A_TEST = (
 )
 # The two such kills `mutate_check.py` cannot always tell from a harness error (no
 # line says which file a passing test or an error is from), which can read 0 failed.
+# Since #186 the pass is of any test whose name holds the row's `expect_red`, as
+# the kill path matches it, in the dying file too.
 _DIES_BUT_READS_0_FAILED = (
+    "though it can read 0 failed when a test whose name holds the row's `expect_red` passes or is skipped in that file "
+    "before the process dies or in a file Node lists before it, or when the last thing Node prints for that file is "
+    "an uncaught error that a child process printed"
+)
+# #179's wording, which named only a test of the same name, in another file.
+_DIES_BUT_READS_0_FAILED_BY_ITS_NAME = (
     "though it can read 0 failed when a test of the same name passes or is skipped in a file Node lists before it, or "
     "when the last thing Node prints for that file is an uncaught error that a child process printed"
 )
@@ -3804,21 +3826,28 @@ _SKIP_CASE = "a Node test file's process that exits non-zero after the row's tes
          + _DIES_BUT_READS_0_FAILED + ")", ")", set(), False),
         # A second review of #179's fix: the bullet claimed every such kill, the two that can read 0 failed included.
         (", " + _DIES_BUT_READS_0_FAILED + ")", ")", set(), False),
-        ("when a test of the same name passes or is skipped in a file Node lists before it, or when", "when", set(),
-         False),
+        ("when a test whose name holds the row's `expect_red` passes or is skipped in that file before the process "
+         "dies or in a file Node lists before it, or when", "when", set(), False),
         (", or when the last thing Node prints for that file is an uncaught error that a child process printed)", ")",
          set(), False),
+        # #186: a pass names the row's test as the kill path does, by a name that holds its `expect_red`, and can
+        # stand in the dying file itself, so a bullet that names only a test of the same name in another file
+        # claims as kills the rows that read 0 failed.
+        (_DIES_BUT_READS_0_FAILED, _DIES_BUT_READS_0_FAILED_BY_ITS_NAME, set(), False),
+        ("passes or is skipped in that file before the process dies or in a file Node lists",
+         "passes or is skipped in a file Node lists", set(), False),
     ],
     ids=["3.2.0", "no-class", "no-node", "no-exit", "any-test-passing", "no-skip", "beside-a-kill", "no-crash",
-         "every-crash", "no-same-name", "no-child-error"],
+         "every-crash", "no-same-name", "no-child-error", "by-its-name", "no-same-file"],
 )
 def test_zero_failed_predicate_rejects_a_bullet_that_drops_a_case(old, new, dropped, dying_kill):
     """The twin: the cannot-run bullet as 3.2.0 wrote it, or with one of
     #179's cases dropped, with an exit after any test passes in place of the
     row's own, without the process that dies during a test, with every such
     process a kill or without one of the two such kills that can read 0
-    failed, or one that no longer keeps a kill beside a harness error, reads
-    every other case as before and not the one it dropped."""
+    failed, with #179's wording of the first of them (a test of the same name,
+    in another file), or one that no longer keeps a kill beside a harness
+    error, reads every other case as before and not the one it dropped."""
     para = _bound()
     mutant = para.replace(old, new)
     assert mutant != para, "the mutant must actually change the text"
@@ -3833,9 +3862,9 @@ def test_zero_failed_predicate_rejects_a_bullet_that_drops_a_case(old, new, drop
         ("node-tap-heap-runs-out-during-a-test", "depth guard fires"),
         ("node-spec-load-failure-beside-an-exit", "run reads its file"),
         ("node-spec-exits-beside-a-pass-of-the-same-name", "run reads its file"),
-        ("node-tap-exits-after-a-pass-of-a-longer-name", "run reads its file"),
         ("node-tap-exits-after-a-child-process-crash", "run reads its file"),
         ("node-spec-exits-after-its-child-process-crash", "run reads its file"),
+        ("pnpm-node-tap-exits-during-a-test-interleaved", "clamp at the bound"),
     ],
 )
 def test_a_node_test_file_that_dies_during_a_test_is_a_kill(capture, expect_red):
@@ -3846,10 +3875,14 @@ def test_a_node_test_file_that_dies_during_a_test_is_a_kill(capture, expect_red)
     #179's fix found it read 0 failed, a row that cannot run, so its gap stayed
     open and was logged `unmeasured`; it reads as a kill again, and the
     cannot-run bullet says so. A second review found it still read 0 failed
-    beside another file's pass of the same or a longer name, and after a test's
-    child process printed an uncaught error (the last four captures): only the
+    beside another file's pass of the same name, and after a test's child
+    process printed an uncaught error (the middle three captures): only the
     lines Node printed after the previous file's test are read now, and a load
-    error only as the last of them."""
+    error only as the last of them. A pass of a longer name, which that review
+    kept a kill, names the row's test as the kill path does since #186, so it
+    reads 0 failed (the test below). The last capture is #186's: pnpm prints
+    another package's lines among the dying file's, and the file still reads
+    as a kill."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
     status, detail, _ = mutate_check._classify_red(output, expect_red)

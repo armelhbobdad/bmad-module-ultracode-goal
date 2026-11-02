@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  When a Node test file's process fails, `mutate_check.py` now looks for a pass of the row's own test the way it looks for a kill: a passed or skipped test whose name holds the row's `expect_red`, where it took only the exact name. A row whose `expect_red` leaves out the `[P0]` to `[P3]` tag TEA puts in front of a test's name read as a kill when its file exited non-zero after that test passed; it now reads 0 failed, a row that cannot run, as the gate's reference says such an exit does. A pass of a test whose name holds the row's, such as `run reads its file twice` for a row that names `run reads its file`, in the dying file or in a file Node lists before it, now takes that file's failed test off the count too, so a process that exits during the row's own test beside such a pass reads 0 failed, and the gate measures that gap again, where it read as a kill.
+issues: [186]

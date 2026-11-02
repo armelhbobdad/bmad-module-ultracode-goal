@@ -73,23 +73,35 @@ them, so once a `Tests` line was read neither is: a test file jest or vitest
 cannot load runs no test. Node's test runner reports a test file whose process
 failed as a failed test of its own, named after the file and located at the
 file's line 1, column 1. Node prints all of one file's lines together, the
-files in the order of their paths, and that test last, so the test is read only
-from the lines Node printed after the previous file test or run summary: its
-own file's, and those of any passing file listed before it. That test does not
-count when the file could not load, which Node shows by printing, as the last
-thing above that test, the error that stopped it (whose last line names Node's
-version) or a warning that the file's top-level await never settled, or when
-those lines report the row's own test, by its exact name, passed or skipped,
-since that test then ran to its end: a file whose tests pass and whose process
-then exits non-zero reads 0 failed, a harness error. A process that exits or
-crashes during a test (a `process.exit` the mutant reaches, a heap the test
-fills) reports neither that test nor such an error, so the file's test counts,
-and the row reads as a kill, as a pytest test whose process dies does. No line
-marks which file a passing test or an error is from, so two such kills still
-read 0 failed: one beside a test of the row's exact name that passes or is
-skipped in a file listed before the dying one, with no failed file test between
-them, and one for which the last thing Node prints is an uncaught error that a
-child process printed. A file Node
+files in the order of their paths, and that test last, so each such test is
+read only from the lines its run printed after the previous file test or run
+summary: its own file's, and those of any passing file listed before it. A
+task runner that runs several packages at once (turbo outside CI, pnpm without
+`--aggregate-output`) prints their lines as they come, one package's among
+another's, each behind its package's prefix, so a run's lines are the ones
+that carry its prefix. That test does not count when the file could not load,
+which Node shows by printing, as the last thing above that test, the error
+that stopped it (whose last line names Node's version) or a warning that the
+file's top-level await never settled, or when those lines report a test whose
+name holds the row's `expect_red`, as a failure line must hold it to count as
+the kill, passed or skipped (TAP's `\\#` and `\\\\` read as `#` and `\\`), since
+that test then ran to its end: a file whose tests pass and whose process then
+exits non-zero reads 0 failed, a harness error, and so does a file that fails
+because an error a test's timer threw after the test ended ("generated
+asynchronous activity after the test ended"). A process that exits or crashes
+during a test (a `process.exit` the mutant reaches, a heap the test fills)
+reports neither that test nor such an error, so the file's test counts, and
+the row reads as a kill, as a pytest test whose process dies does. A module
+that calls `process.exit` as the file loads stops the file loading, but Node
+prints for it what it prints for a process that exits during the file's first
+test, so it reads as that kill does. No line marks which file a passing test
+or an error is from, so two such kills still read 0 failed: one beside a test
+whose name holds the row's `expect_red` and that passes or is skipped above
+the dying file's test, in that file or in one listed before it, with no failed
+file test between them, and one for which the last thing Node prints is an
+uncaught error that a child process printed. Two runs whose lines interleave
+with no prefix to tell them apart can still read a file that cannot load, or
+one whose process exits after the row's test passes, as a kill. A file Node
 interrupts, as a `timeout` around the command does, is counted as cancelled,
 not failed, so nothing is taken off for it. An error collecting a test module
 or a test class does not count either: pytest names it with an `ERROR
@@ -277,12 +289,13 @@ _PYTEST_STARTUP_CRASH_RE = re.compile(
 # node ran in (absolute on Node 20). A test of the file's own is located
 # wherever it is declared, so only the runner's test is located at the file's
 # line 1, column 1: `test at <path>:1:1` directly above it in the spec
-# reporter's list of failing tests, `location: '<path>:1:1'` in its TAP block.
-# Node holds each file's lines, its tests' reports and what its process writes,
-# until the files before it are reported, takes the files in the order of their
-# paths, and reports the runner's test after the rest of the file's lines. It
-# reports no such test for a file one of whose own tests failed, so a failed
-# test among the lines above one is another file's.
+# reporter's list of failing tests, where it is named a second time, and
+# `location: '<path>:1:1'` in its TAP block, the path absolute. Node holds each
+# file's lines, its tests' reports and what its process writes, until the files
+# before it are reported, takes the files in the order of their paths, and
+# reports the runner's test after the rest of the file's lines. It reports no
+# such test for a file one of whose own tests failed, so a failed test among
+# the lines above one is another file's.
 _NODE_FAILED_TEST_RE = re.compile(r"^\s*(?:✖|not ok \d+ -) (.+?)(?: \([\d.]+m?s\))?\s*$")
 _NODE_PASSED_TEST_RE = re.compile(r"^\s*ok \d+\b")
 _NODE_SPEC_AT_RE = re.compile(r"^\s*test at (.+):1:1\s*$")
@@ -294,6 +307,13 @@ _NODE_TAP_LOCATION_RE = re.compile(r"^\s*location: '(.+):1:1'\s*$")
 # neither that test nor, unless they ended well before it, the file's other
 # tests.
 _NODE_PASSED_REPORT_RE = re.compile(r"^\s*(?:(?:✔|﹣) (.+?) \([\d.]+m?s\)|ok \d+ - (.+?))(?: # .*)?\s*$")
+# The TAP reporter writes a backslash in a name, a file's included, as two, and
+# `#` as `\#`, so that a `#` it leaves alone opens a directive (`# SKIP`). A
+# tab, a line break or another control character it writes as a backslash and
+# a letter, and then doubles that backslash too. The location it gives a file
+# test keeps its `#`.
+_TAP_ESCAPED_RE = re.compile(r"\\([\\#])")
+_TAP_CONTROL = str.maketrans({"\b": "\\b", "\t": "\\t", "\n": "\\n", "\v": "\\v", "\f": "\\f", "\r": "\\r"})
 # A test file that cannot load (a syntax error, a module it cannot find, a
 # throw or a failed assert at its top level) dies of an uncaught error, which
 # Node prints ending with a line that names its own version (behind `#` in
@@ -465,9 +485,45 @@ def _collection_errors(lines: list[str], root: Path | None = None) -> tuple[int,
 def _same_file(name: str, location: str) -> bool:
     """Whether a test's name and a location's path name one file: equal, or
     one ends with the other after a separator (Node 20 names a file by its
-    absolute path, and TAP doubles each backslash in both)."""
+    absolute path, and TAP doubles each backslash in both). TAP names a file
+    outside the folder node runs in from that folder (`../shared/a.test.mjs`)
+    and locates it by its absolute path, so the name is read without its
+    leading `../` and `./` parts against such a location."""
     name, location = (re.sub(r"[\\/]+", "/", path) for path in (name, location))
-    return name == location or name.endswith("/" + location) or location.endswith("/" + name)
+    inside = re.sub(r"^(?:\.\.?/)+", "", name)
+    return (
+        name == location
+        or name.endswith("/" + location)
+        or (bool(inside) and location.endswith("/" + inside))
+    )
+
+
+def _tap_unescaped(name: str) -> str:
+    """A name as the TAP reporter wrote it, with its `\\\\` and `\\#` read
+    back as the backslash and the `#` they stand for."""
+    return _TAP_ESCAPED_RE.sub(r"\1", name)
+
+
+def _failed_test_name(line: str) -> str | None:
+    """The name a line reports a failed test under, read back from TAP's
+    escaping, or None when it reports none."""
+    failed = _NODE_FAILED_TEST_RE.match(line)
+    if failed is None:
+        return None
+    return failed.group(1) if line.lstrip().startswith("✖") else _tap_unescaped(failed.group(1))
+
+
+def _reports_a_pass_of(line: str, expect_red: str) -> bool:
+    """Whether a line reports, as Node does when a test ends, a passed or
+    skipped test whose name holds the row's `expect_red`, as a failure line
+    must hold it to count as the row's kill (a row can leave out the `[P0]`
+    tag TEA puts in front of a name)."""
+    passed = _NODE_PASSED_REPORT_RE.match(line)
+    if passed is None:
+        return False
+    if passed.group(1) is not None:
+        return expect_red in passed.group(1)
+    return expect_red.translate(_TAP_CONTROL) in _tap_unescaped(passed.group(2))
 
 
 def _interrupted_file(listed: str) -> str | None:
@@ -497,66 +553,97 @@ def _ends_in_a_load_error(own: list[str]) -> bool:
     return len(tail) >= 3 and bool(_NODE_CARET_RE.match(tail[-1]) and _NODE_UNSETTLED_AWAIT_RE.match(tail[-3]))
 
 
-def _node_file_failures(lines: list[str], expect_red: str | None = None) -> int:
-    """How many of the failed tests Node's `fail N` counts are the runner's own
-    and no test's failure. The runner's test for a file whose process failed is
-    named after the file and located at its line 1, column 1, and it is read
-    only from the lines Node printed after the previous such test or run
-    summary: that file's own, and those of any passing file listed before it.
-    It is no test's failure when those lines end in what Node prints for a
-    file that cannot load, or report the row's own test, by its exact name,
-    passed or skipped: that test ran to its end, so the process failed outside
-    it, as one that exits non-zero after its tests pass does. Otherwise a
-    process died during a test, before Node reported the row's test, and its
-    runner's test is that test's failure. A file Node interrupted is counted
-    as cancelled, not in `fail N`, so it is never taken off."""
-    files: set[str] = set()
-    interrupted: set[str] = set()
+def _node_file_tests(lines: list[str]) -> list[int]:
+    """The line on which a run reports each runner's test for a file whose
+    process failed, as the run goes on: the TAP line whose block locates it at
+    the file's line 1, column 1, or, in the spec reporter, the latest line
+    above the list of failing tests that reads as that list's entry does (the
+    same name and duration), since the list names it again below its location.
+    Each is found on its own, so two runs that each fail a file of one name
+    (two workspaces' `test/index.test.mjs`) give two."""
+    found: list[int] = []
+    reported: list[int] = []
     spec_at = None
     tap_failed = None
-    for line in lines:
-        failed = _NODE_FAILED_TEST_RE.match(line)
-        if failed:
-            if spec_at is not None and _same_file(failed.group(1), spec_at):
-                files.add(failed.group(1))
-            tap_failed = failed.group(1)
+    for index, line in enumerate(lines):
+        name = _failed_test_name(line)
+        if name is not None and line.lstrip().startswith("✖"):
+            if spec_at is not None and _same_file(name, spec_at):
+                same = [at for at in reported if _failed_test_name(lines[at]) == name]
+                exact = [at for at in same if lines[at].strip() == line.strip()]
+                if exact or same:
+                    claimed = (exact or same)[-1]
+                    found.append(claimed)
+                    reported.remove(claimed)
+            else:
+                reported.append(index)
+            tap_failed = None
+        elif name is not None:
+            tap_failed = (index, name)
         elif _NODE_PASSED_TEST_RE.match(line):
             tap_failed = None
         location = _NODE_TAP_LOCATION_RE.match(line)
         if location:
-            if tap_failed is not None and _same_file(tap_failed, location.group(1)):
-                files.add(tap_failed)
+            if tap_failed is not None and _same_file(tap_failed[1], location.group(1)):
+                found.append(tap_failed[0])
             tap_failed = None
-        stopped = _NODE_INTERRUPTED_RE.match(line)
-        path = _interrupted_file(stopped.group(1)) if stopped else None
-        if path is not None:
-            interrupted.add(path)
         # The spec reporter's location line sits directly above its test.
         at = _NODE_SPEC_AT_RE.match(line)
         spec_at = at.group(1) if at else None
+    return sorted(found)
+
+
+def _node_file_failures(lines: list[str], expect_red: str | None = None) -> int:
+    """How many of the failed tests Node's `fail N` counts are the runner's own
+    and no test's failure, in the lines one task printed (all of them, when no
+    task runner put its prefix on them). The runner's test for a file whose
+    process failed is named after the file and located at its line 1, column
+    1, and it is read only from the lines Node printed after the previous such
+    test or run summary: that file's own, and those of any passing file listed
+    before it. It is no test's failure when those lines end in what Node
+    prints for a file that cannot load, or report a test whose name holds the
+    row's, passed or skipped: that test ran to its end, so the process failed
+    outside it, as one that exits non-zero after its tests pass does.
+    Otherwise a process died during a test, before Node reported the row's
+    test, and its runner's test is that test's failure. A file Node
+    interrupted is counted as cancelled, not in `fail N`, so it is never taken
+    off."""
+    file_tests = set(_node_file_tests(lines))
+    interrupted: list[str] = []
     taken_off = 0
     start = 0
     for index, line in enumerate(lines):
         if _NODE_FAIL_SUMMARY_RE.match(line):
             start = index + 1
             continue
-        failed = _NODE_FAILED_TEST_RE.match(line)
-        if not failed or failed.group(1) not in files:
+        stopped = _NODE_INTERRUPTED_RE.match(line)
+        path = _interrupted_file(stopped.group(1)) if stopped else None
+        if path is not None:
+            # Listed under `Interrupted while running:` above the file's test.
+            interrupted.append(path)
+        if index not in file_tests:
             continue
-        # The spec reporter names the test again in its list of failing tests.
-        files.discard(failed.group(1))
+        name = _failed_test_name(line)
         own, start = lines[start:index], index + 1
-        if failed.group(1) in interrupted:
+        if name in interrupted:
+            interrupted.remove(name)
             continue
-        passed = (_NODE_PASSED_REPORT_RE.match(test) for test in own)
         if _ends_in_a_load_error(own) or (
-            expect_red is not None and any(found and expect_red in found.groups() for found in passed)
+            expect_red is not None and any(_reports_a_pass_of(test, expect_red) for test in own)
         ):
             taken_off += 1
     return taken_off
 
 
-def _fail_count(lines: list[str], root: Path | None = None, expect_red: str | None = None) -> int | None:
+def _fail_count(
+    lines: list[str],
+    root: Path | None = None,
+    expect_red: str | None = None,
+    tasks: list[list[str]] | None = None,
+) -> int | None:
+    """The output's failure count, or None when it holds none. `tasks` holds
+    the same lines grouped by the task runner's prefix each carried, in which
+    Node's runner's tests are read; without it they are read in `lines`."""
     summed: int | None = None
     others: list[str] = []
     tests_read = False
@@ -565,7 +652,7 @@ def _fail_count(lines: list[str], root: Path | None = None, expect_red: str | No
     # quote any count, so none is read for another runner's count.
     in_report = False
     # Taken off Node's summaries, once in all.
-    node_files = _node_file_failures(lines, expect_red)
+    node_files = sum(_node_file_failures(task, expect_red) for task in (tasks if tasks is not None else [lines]))
     # The current pytest run's lines. Its collection errors are taken off its
     # own stats line only: a command that runs pytest twice, with flags that
     # print different signs of them, does not pool the two runs' counts.
@@ -678,7 +765,9 @@ _PYTEST_SECTION_RE = re.compile(r"^=+ (.+?) =+$")
 # A task runner's prefix on each line of a task's output: turbo writes
 # `<package>:<task>: ` and pnpm's recursive run `<package dir> <script>: `.
 # Removed, a pass mark behind it leads the line again and a summary behind it
-# is a whole line again.
+# is a whole line again. Both print each task's lines as they come when they
+# run several at once (turbo outside CI, pnpm without `--aggregate-output`), so
+# one package's lines land among another's, and the prefix tells them apart.
 _TASK_PREFIX_RE = re.compile(
     r"^(?:[\w@.-]+(?:/[\w@.-]+)*:[\w.:-]+|[\w@.-]*(?:/[\w@.-]+)+ [\w.:-]+): "
 )
@@ -688,12 +777,19 @@ _TASK_PREFIX_RE = re.compile(
 _ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def _output_lines(output: str) -> list[str]:
-    """The output's lines without colour codes or a task runner's prefix."""
-    return [
-        _TASK_PREFIX_RE.sub("", line, count=1)
-        for line in _ANSI_SGR_RE.sub("", output).splitlines()
-    ]
+def _output_tasks(output: str) -> tuple[list[str], list[list[str]]]:
+    """The output's lines without colour codes or a task runner's prefix, and
+    the same lines grouped by the prefix each carried (the lines that carried
+    none are one group), each group in the order it was printed."""
+    lines: list[str] = []
+    tasks: dict[str, list[str]] = {}
+    for line in _ANSI_SGR_RE.sub("", output).splitlines():
+        prefix = _TASK_PREFIX_RE.match(line)
+        key = prefix.group(0) if prefix else ""
+        line = line[len(key) :]
+        lines.append(line)
+        tasks.setdefault(key, []).append(line)
+    return lines, list(tasks.values())
 
 
 def _named_in_failure_context(lines: list[str], expect_red: str) -> bool:
@@ -742,8 +838,8 @@ _WEB_SERVER_FAILED_RE = re.compile(r"^\s*Error: .*\bconfig\.webServer\b")
 def _classify_red(output: str, expect_red: str, root: Path | None = None) -> tuple[str, str, bool]:
     """(status, detail, is_finding) for a red run. `root` is the directory the
     command ran in, so a bare name in pytest's short summary can be checked."""
-    lines = _output_lines(output)
-    count = _fail_count(lines, root, expect_red)
+    lines, tasks = _output_tasks(output)
+    count = _fail_count(lines, root, expect_red, tasks)
     if count == 0:
         # A red exit whose own summary counts zero failures is a collection or
         # harness error wearing a red exit code, not the observer firing. It
