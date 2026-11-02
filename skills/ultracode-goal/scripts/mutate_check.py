@@ -83,9 +83,11 @@ that carry its prefix. That test does not count when the file could not load,
 which Node shows by printing, as the last thing above that test, the error
 that stopped it (whose last line names Node's version) or a warning that the
 file's top-level await never settled, or when those lines report a test whose
-name holds the row's `expect_red`, as a failure line must hold it to count as
-the kill, passed or skipped (TAP's `\\#` and `\\\\` read as `#` and `\\`), since
-that test then ran to its end: a file whose tests pass and whose process then
+name holds the row's `expect_red` passed or skipped, since that test then ran
+to its end. The test's name and the row's `expect_red` are each read as written
+and with TAP's `\\#` and `\\\\` read back as `#` and `\\`, so a row can name the
+test as the spec reporter prints it or as TAP writes it (the form a TAP kill is
+read by), under either reporter. A file whose tests pass and whose process then
 exits non-zero reads 0 failed, a harness error, and so does a file that fails
 because an error a test's timer threw after the test ended ("generated
 asynchronous activity after the test ended"). A process that exits or crashes
@@ -522,15 +524,26 @@ def _failed_test_name(line: str) -> str | None:
 
 def _reports_a_pass_of(line: str, expect_red: str) -> bool:
     """Whether a line reports, as Node does when a test ends, a passed or
-    skipped test whose name holds the row's `expect_red`, as a failure line
-    must hold it to count as the row's kill (a row can leave out the `[P0]`
-    tag TEA puts in front of a name)."""
+    skipped test whose name holds the row's `expect_red` (a row can leave out
+    the `[P0]` tag TEA puts in front of a name). The row can name the test as
+    the spec reporter prints it or as TAP writes it, since a TAP kill is read
+    by the second form, and either reporter can run a row written against the
+    other, so the name is read both as the line prints it and with TAP's
+    escapes read back, the row's own included."""
     passed = _NODE_PASSED_REPORT_RE.match(line)
     if passed is None:
         return False
     if passed.group(1) is not None:
-        return expect_red in passed.group(1)
-    return expect_red.translate(_TAP_CONTROL) in _tap_unescaped(passed.group(2))
+        printed = passed.group(1)
+        read_back = printed.translate(_TAP_CONTROL)
+    else:
+        printed = passed.group(2)
+        read_back = _tap_unescaped(printed)
+    return (
+        expect_red in printed
+        or expect_red.translate(_TAP_CONTROL) in read_back
+        or _tap_unescaped(expect_red) in read_back
+    )
 
 
 def _interrupted_file(listed: str) -> str | None:

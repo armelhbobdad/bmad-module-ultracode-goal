@@ -2209,6 +2209,13 @@ def test_real_node_test_file_is_read_by_its_own_lines(tmp_path, case, reporter):
 #   node-tap-load-failure-in-a-file-named-with-three-quote-marks
 #                       the same for a"b'c`d.test.mjs, located in `'` with its
 #                       `'` written `\'`
+#
+# And from the review of the branch that holds both fixes:
+#   node-*-async-activity-after-a-test-named-with-a-hash
+#                       `node --test cache.test.mjs other.test.mjs`: the test
+#                       `remember returns #1` passes, and a timer it started
+#                       throws after it ends, which TAP reports as an error of
+#                       `remember returns \#1`
 
 
 def _read_capture(tmp_path: Path, capture: str, expect_red: str):
@@ -2339,14 +2346,30 @@ def test_each_node_file_test_of_one_name_is_read(tmp_path, capture):
         ("node-spec-exits-after-an-escaped-pass", "strip drops a # comment"),
         ("node-spec-exits-after-an-escaped-pass", "split cuts a path at each \\"),
         ("node-spec-load-failure-in-a-file-named-with-a-hash", "clamp at the bound"),
+        # Each name as TAP writes it, the form a TAP kill is read by.
+        ("node-tap-exits-after-an-escaped-pass", "strip drops a \\# comment"),
+        ("node-tap-exits-after-an-escaped-pass", "split cuts a path at each \\\\"),
+        ("node-tap-async-activity-after-a-test-named-with-a-hash", "remember returns \\#1"),
+        ("node-tap-async-activity-after-a-test-named-with-a-hash", "remember returns #1"),
+        ("node-spec-exits-after-an-escaped-pass", "strip drops a \\# comment"),
+        ("node-spec-exits-after-an-escaped-pass", "split cuts a path at each \\\\"),
+        ("node-spec-async-activity-after-a-test-named-with-a-hash", "remember returns \\#1"),
+        ("node-spec-async-activity-after-a-test-named-with-a-hash", "remember returns #1"),
     ],
 )
-def test_a_name_the_tap_reporter_escapes_is_read_unescaped(tmp_path, capture, expect_red):
+def test_a_name_the_tap_reporter_escapes_is_read_in_either_form(tmp_path, capture, expect_red):
     """The TAP reporter writes `#` as `\\#` and `\\` as `\\\\` in a test's
     name, a file's included, but not in the file's location. A row whose test
     name holds either read as a kill when its file exited after the test
     passed, and a file whose name holds `#` that could not load read as a kill
-    too. The spec reporter's twins read right already."""
+    too. The spec reporter's twins read right already. That fix read a TAP
+    pass only with its escapes read back, so a row that names the test as TAP
+    writes it, the form a kill under TAP is read by, read as a kill instead
+    when its file exited after the test passed, and when a timer the test
+    started threw after it ended (Node then reports an error of the test,
+    which names it as the row does). A pass is now read in either form, under
+    either reporter, since a row written against one reporter can be run
+    under the other."""
     proc = _read_capture(tmp_path, capture, expect_red)
     assert _ledger_rows(proc.stdout) == {0: ("MISATTRIBUTED", _ZERO_FAILED)}, proc.stdout + proc.stderr
     assert proc.returncode == 1
@@ -2461,7 +2484,24 @@ _REAL_NODE_186 = {
         },
         "node --test --test-reporter={reporter} parse.test.mjs",
         {"file": "parse.mjs", "anchor": _EXITS_AFTER_ITS_TESTS, "replacement": "process.exitCode = 1;"},
-        ["strip drops a # comment", "split cuts a path at each \\"],
+        # Each name as the spec reporter prints it, then as TAP writes it.
+        ["strip drops a # comment", "split cuts a path at each \\", "strip drops a \\# comment",
+         "split cuts a path at each \\\\"],
+    ),
+    # From the review of the branch that holds both fixes: a timer the test starts throws after it ends.
+    "an-error-after-a-test-named-with-a-hash": (
+        {
+            "cache.mjs": "const FLUSH = false;\nexport function remember(key, value) {\n"
+            "  if (FLUSH) setTimeout(() => { throw new Error(`cache flush failed for ${key}`); }, 5);\n"
+            "  return value;\n}\n",
+            "cache.test.mjs": "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n"
+            "import { remember } from './cache.mjs';\n"
+            "test('remember returns #1', () => { assert.equal(remember('a', 1), 1); });\n",
+            "other.test.mjs": "import { test } from 'node:test';\ntest('other passes', () => {});\n",
+        },
+        "node --test --test-reporter={reporter} cache.test.mjs other.test.mjs",
+        {"file": "cache.mjs", "anchor": "const FLUSH = false;", "replacement": "const FLUSH = true;"},
+        ["remember returns #1", "remember returns \\#1"],
     ),
     "a-file-outside-the-folder": (
         {
@@ -2504,9 +2544,11 @@ _REAL_NODE_186 = {
 def test_real_node_test_file_that_cannot_run_reads_0_failed(tmp_path, case, reporter):
     """The real `node --test`, with each reporter: a file whose process exits
     non-zero after a test whose name holds the row's passes (behind a TEA tag,
-    or with a `#` or `\\` the TAP reporter escapes in it), a file outside the
-    folder node runs in, or named with an apostrophe, that cannot load, and
-    two runs that each cannot load a file of one name, each read 0 failed."""
+    or with a `#` or `\\` the TAP reporter escapes in it, the row naming it in
+    either form), or fails because a timer such a test started threw after it
+    ended, a file outside the folder node runs in, or named with an
+    apostrophe, that cannot load, and two runs that each cannot load a file of
+    one name, each read 0 failed."""
     files, command, mutation, names = _REAL_NODE_186[case]
     for name, text in files.items():
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
@@ -2514,5 +2556,23 @@ def test_real_node_test_file_that_cannot_run_reads_0_failed(tmp_path, case, repo
     rows = [dict(mutation, command=command.format(reporter=reporter), expect_red=name) for name in names]
     proc = _run_table(tmp_path, rows)
     expected = {index: ("MISATTRIBUTED", _ZERO_FAILED) for index in range(len(rows))}
+    assert _ledger_rows(proc.stdout) == expected, proc.stdout + proc.stderr
+    assert proc.returncode == 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+def test_real_node_test_file_that_exits_during_a_test_named_with_a_hash_is_a_kill(tmp_path, reporter):
+    """The twin of the case above: when the mutant makes the test `strip
+    drops a # comment` reach `process.exit(1)`, Node reports no pass of it, so
+    a row that names it in either form, as the spec reporter prints it or as
+    TAP writes it, still reads as a kill."""
+    files, command, _, names = _REAL_NODE_186["an-escaped-pass"]
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8", newline="\n")
+    mutation = {"file": "parse.mjs", "anchor": "line.split('#')[0]", "replacement": "(process.exit(1), line)"}
+    rows = [dict(mutation, command=command.format(reporter=reporter), expect_red=name) for name in names[::2]]
+    proc = _run_table(tmp_path, rows)
+    expected = {index: ("MISATTRIBUTED", _NEVER_APPEARS.format(row["expect_red"])) for index, row in enumerate(rows)}
     assert _ledger_rows(proc.stdout) == expected, proc.stdout + proc.stderr
     assert proc.returncode == 1

@@ -3896,6 +3896,8 @@ _NODE_CAPTURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_lo
         ("node-tap-load-failure-outside-the-folder", "clamp at the bound"),
         ("pnpm-root-node-tap-load-failure-interleaved", "clamp at the bound"),
         ("node-tap-load-failure-in-a-file-named-with-an-apostrophe", "clamp at the bound"),
+        ("node-tap-exits-after-an-escaped-pass", "strip drops a \\# comment"),
+        ("node-tap-async-activity-after-a-test-named-with-a-hash", "remember returns \\#1"),
     ],
 )
 def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_red):
@@ -3913,9 +3915,13 @@ def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_re
     it, or more words after it), when a second run failed a file of the same
     name, when TAP escaped a `#` in the test's name, and when TAP located a
     file outside the folder node ran in by its absolute path. A review of that
-    fix (the last two captures) found it read as a kill behind a pnpm prefix
-    with no `/` (`guard test: `), and when TAP located a file whose name holds
-    an apostrophe in double quotes; each reads 0 failed now."""
+    fix (the two captures after those) found it read as a kill behind a pnpm
+    prefix with no `/` (`guard test: `), and when TAP located a file whose
+    name holds an apostrophe in double quotes; each reads 0 failed now. The
+    review of the branch that holds both fixes (the last two captures) found
+    a row that names its test as TAP writes it, `\\#` and all, read as a kill
+    when the file exited after that test passed, or failed because a timer the
+    test started threw after it ended; it reads 0 failed too."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
     status, detail, _ = mutate_check._classify_red(output, expect_red)
