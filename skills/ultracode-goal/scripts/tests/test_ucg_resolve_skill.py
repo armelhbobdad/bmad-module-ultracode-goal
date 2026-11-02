@@ -17,6 +17,8 @@ Cross-file assertions locate the resume rule by CONTENT in `references/execute.m
 the parent `SKILL.md`, never by hardcoded line number. Stdlib + pytest only.
 """
 
+import importlib.util
+import json
 import re
 from pathlib import Path
 
@@ -272,3 +274,149 @@ def test_handoff_does_not_author_a_second_resume_rule():
     assert re.search(r"re-read, never regenerated", handoff, re.IGNORECASE), (
         "the baseline marker is re-read, never regenerated"
     )
+
+
+# --- an earlier answer is never dropped (#189) -----------------------------
+#
+# Measured on a real project: 4 of 47 `.decisions.json` entries held
+# multi-sentence rulings with no `action` key, written by an earlier version of
+# this surface. A scoped pass that deferred them replaced each entry, as the
+# read-modify-write rule said, and each ruling was gone; only the entry count
+# (47 + 51 answers) showed it. An entry with no `action` is neither closed nor
+# deferred, so the pass must offer it again, show what it held, carry every
+# replaced answer forward, and say which entries it replaced.
+
+
+_NO_ACTION_PENDING = (
+    "An entry with no `action`, or with an `action` that is neither `close` nor `defer`, is pending as well"
+)
+_SHOW_EARLIER = (
+    "When an item you present already has an entry, show its `answer`, and each earlier answer its `history` "
+    "holds (section 3), beside the decision needed."
+)
+_CARRY_LEAD = "**A replacement never drops an earlier answer.**"
+_CARRY_RULE = (
+    "copy the replaced entry's `history` list as it stands, then append the replaced entry itself, with every "
+    "field but `id` and `history` copied verbatim"
+)
+_CARRY_DUPLICATES = "carry each forward, in file order, and write one entry in their place"
+_READERS_IGNORE = "Every reader of the file keys on `id` and `action` alone"
+_REPORT_REPLACED = (
+    "Name every entry this pass replaced, by `id`, with the earlier answer it carried into `history`"
+)
+
+
+def _history_checks() -> dict:
+    return {
+        "an entry with no action is pending, and presented again": lambda t: (
+            _NO_ACTION_PENDING in _norm(_section(t, "2."))
+            and "Present it again, as you present a deferred one." in _norm(_section(t, "2."))
+        ),
+        "the pass shows the earlier answers when it presents an item": lambda t: (
+            _SHOW_EARLIER in _norm(_section(t, "2."))
+        ),
+        "the recorded shape carries history": lambda t: '"history": [' in _section(t, "3."),
+        "a replacement carries the replaced entry forward": lambda t: (
+            _CARRY_LEAD in _section(t, "3.") and _CARRY_RULE in _norm(_section(t, "3."))
+        ),
+        "every entry for the id is carried forward": lambda t: _CARRY_DUPLICATES in _norm(_section(t, "3.")),
+        "the readers ignore history": lambda t: _READERS_IGNORE in _norm(_section(t, "3.")),
+        "the summary names every replaced entry": lambda t: _REPORT_REPLACED in _norm(_section(t, "4.")),
+    }
+
+
+def _history_failures(text: str) -> list[str]:
+    return [name for name, check in _history_checks().items() if not check(text)]
+
+
+def test_no_replacement_drops_an_earlier_answer():
+    assert _history_failures(_text()) == []
+
+
+def _mutate(text: str, old: str, new: str) -> str:
+    """`text` with its one `old` replaced, whatever whitespace (a line wrap
+    included) stands where `old` has a space."""
+    pattern = re.compile(r"\s+".join(map(re.escape, old.split(" "))))
+    assert len(pattern.findall(text)) == 1, old
+    return pattern.sub(lambda _: new, text, count=1)
+
+
+def test_the_history_pin_reds_on_the_rule_that_replaced_an_entry_whole():
+    """Twin: section 3 as it read before, a new answer replacing the entry and
+    nothing carried forward, with no history in the shape."""
+    text = _text()
+    section = _section(text, "3.")
+    start = section.index(_CARRY_LEAD)
+    old = text.replace(section, section[:start] + section[section.index("**If an existing", start) :])
+    old = old.replace(',\n                "history": [', "]}]}\n#", 1)
+    failures = _history_failures(old)
+    assert {
+        "the recorded shape carries history",
+        "a replacement carries the replaced entry forward",
+        "every entry for the id is carried forward",
+        "the readers ignore history",
+    } <= set(failures), failures
+
+
+def test_the_history_pin_reds_without_each_rule():
+    """Twin: each sentence cut on its own reds its check, and only that one."""
+    text = _text()
+    cuts = {
+        "an entry with no action is pending, and presented again": _NO_ACTION_PENDING,
+        "the pass shows the earlier answers when it presents an item": _SHOW_EARLIER,
+        "every entry for the id is carried forward": _CARRY_DUPLICATES,
+        "the readers ignore history": _READERS_IGNORE,
+        "the summary names every replaced entry": _REPORT_REPLACED,
+    }
+    for name, sentence in cuts.items():
+        assert _history_failures(_mutate(text, sentence, "")) == [name], name
+
+
+def _load_script(name: str):
+    spec = importlib.util.spec_from_file_location(f"_resolve_{name}", _SKILL_ROOT / "scripts" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+def _shape(**fields) -> dict:
+    """One entry of the documented `.decisions.json` shape, as section 3's fence
+    gives it, with `fields` set over its placeholders."""
+    fence = re.search(r"```json\n(\{\"decisions\".*?)\n```", _section(_text(), "3."), re.DOTALL)
+    assert fence is not None, "section 3 must show the recorded shape"
+    entry = json.loads(fence.group(1))["decisions"][0]
+    return {**entry, **fields}
+
+
+def test_the_readers_read_the_documented_shape_with_history(tmp_path):
+    """Every reader of `.decisions.json` keys on `id` and `action` alone: a
+    `close` carrying `history` (and a key no reader knows) still suppresses its
+    RED and closes its escalation, and an entry with no `action` closes
+    nothing, so its question is still pending."""
+    red_ids, preflight_check = _load_script("red_ids"), _load_script("preflight_check")
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    sidecar = {
+        "source": "impl/coupled-7-1.md",
+        "kind": "coupled-stories",
+        "decision_needed": "Move AC 7 (a) from 7-1 to 7-2 as measured, or re-plan the rows.",
+        "evidence": "AC 7 (a): the handler it needs lands only in 7-2's build.",
+    }
+    (impl / "escalation-7-1.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    sidecar_id = red_ids.mint_id(sidecar["kind"], sidecar["source"], sidecar["decision_needed"])
+    red_id = red_ids.mint_id("undecided-product", "docs/prd.md:14", "Which retention period applies?")
+    earlier = {"answer": "Ninety days, as legal ruled on 2026-10-01. Revisit after the audit.", "note": "kept"}
+    decisions = impl / ".decisions.json"
+
+    closed = [
+        _shape(id=sidecar_id, answer="Move AC 7 (a) as proposed.", action="close", history=[earlier], extra=1),
+        _shape(id=red_id, answer="Ninety days.", action="close", history=[earlier]),
+    ]
+    decisions.write_text(json.dumps({"decisions": closed}), encoding="utf-8")
+    assert red_ids.closed_ids(decisions) == {sidecar_id, red_id}
+    assert preflight_check._escalation_of(impl, "7-1", tmp_path)["state"] == "closed"
+
+    pending = [{k: v for k, v in entry.items() if k != "action"} for entry in closed]
+    decisions.write_text(json.dumps({"decisions": pending}), encoding="utf-8")
+    assert red_ids.closed_ids(decisions) == set()
+    assert preflight_check._escalation_of(impl, "7-1", tmp_path)["state"] == "open"

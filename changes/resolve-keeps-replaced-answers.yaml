@@ -1,0 +1,5 @@
+type: changed
+scope: ucg-resolve
+summary: |
+  `/ucg-resolve` no longer drops an earlier answer when it records a new one for the same id. The new `.decisions.json` entry carries the entry it replaced in a `history` list, after that entry's own `history`, with every field but `id` and `history` copied verbatim (its `answer`, and its `action` when it had one). The pass shows an item's earlier answers when it presents the item again, and its closing summary names every entry it replaced. An entry with no `action`, as an earlier version wrote some, is pending and is presented again, like a deferred one. Before, a pass that only deferred such an item replaced the entry with its one-line answer, and the operator's earlier ruling was lost without a word. Preflight and the resume read only an entry's `id` and `action`, so `history` changes no suppression.
+issues: [189]
