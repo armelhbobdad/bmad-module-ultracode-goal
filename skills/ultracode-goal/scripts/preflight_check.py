@@ -81,7 +81,7 @@ the resume escalates it first, and those reasons come first in `reasons`;
 references/execute.md), each UCG hook command splitting, the way the shell
 splits it, into `<env> uv run <script>` (an unquoted path with a space, or an
 assignment quoted with its name, does not, and that hook never starts; a
-shell operator or redirection fails it too), the five injected hook env vars
+shell operator, redirection or expansion fails it too), the five injected hook env vars
 (accepted from the hook command strings OR the inherited process env, both
 of which preflight step 5 permits), the UCG
 story skills (a manual deletion between spawns, or an interrupted UCG install
@@ -1023,6 +1023,56 @@ def _last_path_part(word: str) -> str:
     return re.split(r"[/\\]", word)[-1]
 
 
+# A `$` the shell expands before it runs the command: a parameter (`$HOME`,
+# `$1`, `$@`), `${...}`, `$(...)`, `$((...))` or bash's `$[...]`, in double
+# quotes or outside them, and outside them bash's `$'...'` and `$"..."` too,
+# which dash reads as a `$` and a quoted word (`$'25'` is `25` in bash, `$25`
+# in dash). A `$` before anything else (a space, the end of the word) stays a
+# `$`. A backtick starts a command substitution in double quotes or outside
+# them; outside them a `*`, `?` or `[` makes a word a pattern the shell
+# matches against file names, and a `{` may start bash's brace expansion
+# (`{a,b}`).
+_EXPANDS_IN_DOUBLE_QUOTES = re.compile(r"\$[A-Za-z0-9_{(\[@*#?$!-]|`")
+_EXPANDS = re.compile(r"\$[A-Za-z0-9_{(\[@*#?$!'\"-]|[`*?[{]")
+_PARAMETER = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])")
+_BRACKET = re.compile(r"\[[^\]\s]*\]?")
+
+
+def _expansion_end(command: str, index: int) -> int:
+    """Where the expansion that starts at `index` (`_EXPANDS`) ends, to show
+    it in a problem: past its closing backtick, quote, parenthesis, brace or
+    bracket, nested parentheses and braces counted and quotes not read, or at
+    the end of the command where none closes it."""
+    opener = command[index : index + 2]
+    if opener[0] == "{" or opener in ("$(", "${"):
+        bracket = "(" if opener == "$(" else "{"
+        depth = 0
+        for cursor in range(index, len(command)):
+            if command[cursor] == bracket:
+                depth += 1
+            elif command[cursor] == (")" if bracket == "(" else "}"):
+                depth -= 1
+                if depth == 0:
+                    return cursor + 1
+        return len(command)
+    if opener[0] == "`" or opener in ("$'", '$"'):
+        quote = opener[-1] if opener[0] == "$" else "`"
+        close = command.find(quote, index + (2 if opener[0] == "$" else 1))
+        return len(command) if close < 0 else close + 1
+    if opener == "$[":
+        match = _BRACKET.match(command, index + 1)
+    else:
+        match = (_BRACKET if opener[0] == "[" else _PARAMETER).match(command, index)
+    return match.end() if match is not None else index + 1
+
+
+def _substitutes_a_command(expansion: str) -> bool:
+    """Is this expansion a command substitution, which runs a command that
+    reads the stdin the script would read (`$(cat)`, a backtick), rather
+    than arithmetic (`$((1+1))`) or a parameter?"""
+    return expansion.startswith("`") or (expansion.startswith("$(") and not expansion.startswith("$(("))
+
+
 def _shell_tokens(command: str) -> list[tuple[str, str, str, int, int]] | None:
     """The command's tokens as a POSIX shell reads them, or None when its
     quoting does not parse (a quote left open).
@@ -1030,14 +1080,18 @@ def _shell_tokens(command: str) -> list[tuple[str, str, str, int, int]] | None:
     Each is (kind, text, raw, start, end): kind "word", with its text the word
     once its quotes and escapes are removed and raw the word as written, or
     "control" or "redirect" for an operator, with a redirection's file
-    descriptor (`2>`) in it. start and end place the token in `command`.
-    Single quotes keep everything to the next one; in double quotes a
-    backslash escapes only `$`, a backtick, `"`, `\\` and a newline; outside
+    descriptor (`2>`) in it, or "expansion" for what the shell expands
+    (`_EXPANDS`), with its text as far as `_expansion_end` reads it,
+    right after the word that holds it. start and end place the token in
+    `command`. Single quotes keep everything to the next one; in double quotes
+    a backslash escapes only `$`, a backtick, `"`, `\\` and a newline; outside
     them it escapes the next character, and a backslash before a newline joins
     the two lines. A `#` that starts a word starts a comment, to the end of
-    the line. Nothing is expanded: a `$NAME` stays as written.
+    the line. Nothing is expanded: a word holds `$NAME` as written, beside the
+    expansion token that names it.
     """
     tokens: list[tuple[str, str, str, int, int]] = []
+    expansions: list[tuple[str, str, str, int, int]] = []  # in the word under way
     text: list[str] = []
     raw: list[str] = []
     start = -1  # where the word under way starts; -1 while there is none
@@ -1047,9 +1101,15 @@ def _shell_tokens(command: str) -> list[tuple[str, str, str, int, int]] | None:
         nonlocal start
         if start >= 0:
             tokens.append(("word", "".join(text), "".join(raw), start, end))
+            tokens.extend(expansions)
+            expansions.clear()
             text.clear()
             raw.clear()
             start = -1
+
+    def expansion(at: int) -> None:
+        end = _expansion_end(command, at)
+        expansions.append(("expansion", command[at:end], command[at:end], at, end))
 
     while index < size:
         char = command[index]
@@ -1099,6 +1159,8 @@ def _shell_tokens(command: str) -> list[tuple[str, str, str, int, int]] | None:
                         text.append(command[cursor + 1])
                     cursor += 2
                     continue
+                if _EXPANDS_IN_DOUBLE_QUOTES.match(command, cursor):
+                    expansion(cursor)
                 text.append(command[cursor])
                 cursor += 1
             if cursor >= size:
@@ -1106,6 +1168,8 @@ def _shell_tokens(command: str) -> list[tuple[str, str, str, int, int]] | None:
             raw.append(command[index : cursor + 1])
             index = cursor + 1
         else:
+            if _EXPANDS.match(command, index):
+                expansion(index)
             text.append(char)
             raw.append(char)
             index += 1
@@ -1544,6 +1608,20 @@ def _command_problem(command: str, script: str) -> str | None:
     since the re-merge that answers it costs nothing. A comment that starts a
     word ends the command there, as it does in the shell.
 
+    So does an expansion (`_EXPANDS`): a `$` that starts one outside single
+    quotes (`$HOME`, `${A}`, `"$(cat)"`, `$((1))`, bash's `$'...'`), a
+    backtick outside single quotes, or outside any quotes a `*`, `?`, `[` or
+    `{`. The shell replaces it before uv starts, so the words uv and the
+    script get are not the ones read here: a command substitution can read
+    the hook event first (`"$(cat)"` leaves the guard an empty stdin, and the
+    guard then allows the call), `KEY=${A:- uv run <script> }` is one
+    assignment, so the shell runs nothing, `-p $X` with X unset hands `-p`
+    the script, and `--with *` hands uv a file in the hook's folder as the
+    script. Preflight writes none outside single quotes, so even one the
+    shell leaves as written (`KEY=a*`) is read as a problem. A leading `~`,
+    which the shell turns into the home folder, is read as written: it
+    moves no word and runs nothing.
+
     uv's options are read as uv reads them (`uv run --python 3.12 <script>`
     starts the script; `_uv_options`). A command uv would refuse, or one where
     it prints a version, help or settings and exits (`uv --version`, `uv run
@@ -1571,13 +1649,22 @@ def _command_problem(command: str, script: str) -> str | None:
     it cannot find, `-p-3`). The values of the leading NAME=value words are
     not read either: what a variable does to uv or Python (`PATH`,
     `UV_PYTHON`, `UV_FROZEN`, `PYTHONINSPECT`) is theirs to find when the hook
-    runs, and so is what the shell expands (`$HOME`, a command substitution in
-    backticks).
+    runs.
     """
     tokens = _shell_tokens(command)
     if tokens is None:
         return "its quoting does not parse"
     for position, (kind, shown, _, _, _) in enumerate(tokens):
+        if kind == "expansion":
+            reads_stdin = (
+                ", and the command it runs for it can read the hook event Claude Code sends before the script does"
+                if _substitutes_a_command(shown)
+                else ""
+            )
+            return (
+                "the shell would expand %s before uv starts, so the words uv and the script get need not be the "
+                "ones written here%s" % (json.dumps(shown), reads_stdin)
+            )
         if kind == "control":
             return (
                 "the shell would read %s as a control operator, so the command would be more than <env> uv run "

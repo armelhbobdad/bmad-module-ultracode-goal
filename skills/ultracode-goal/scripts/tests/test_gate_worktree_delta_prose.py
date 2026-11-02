@@ -2424,7 +2424,10 @@ _HOOK_REJECTION_SENTENCES = {
         # Reviewed (#186 review, 4.1.0, final pass): what the check fails in a
         # hook command as written, a shell operator or redirection now too; it
         # answers no hook's rejection and says nothing of the evidence commit.
-        ("`--assert-armed` reads each UCG hook command the way the shell splits it", "90a8208b2811"),
+        # Reviewed again (its review) when it gained what the shell expands
+        # before uv starts: still what the check fails in a command as
+        # written, and nothing of a hook's rejection or the evidence commit.
+        ("`--assert-armed` reads each UCG hook command the way the shell splits it", "1aee77e4219b"),
     ),
     "SKILL.md": (
         ("An Epic whose stories all read `done` while a story's `.evidence-owed-<s", "a5bb6b9a9f94"),

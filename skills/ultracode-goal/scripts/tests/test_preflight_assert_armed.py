@@ -796,6 +796,56 @@ def test_a_control_operator_is_refused(command: str, shown: str) -> None:
         assert problem.startswith("the shell would read %s as a control operator" % shown), problem
 
 
+# Its review: the shell expands a `$` or a backtick outside single quotes
+# before it runs uv, in double quotes too, and the check read each as the
+# characters written. Through dash and bash, `uv run '<script>' "$(cat)"`,
+# `KEY="$(cat)" uv run '<script>'` and `uv run '<script>' \`cat\`` handed
+# the script an empty stdin in place of the hook event, and the real guard
+# then allowed a `git commit` it denies otherwise (exit 0). `KEY=${A:- uv run
+# '<script>' }` and `KEY="$(echo " uv run '<script>' ")"` are one
+# assignment, so the shell ran nothing and exited 0. With X unset, `uv run -p
+# $X '<script>'` handed `-p` the script, and `$'25'` reads as `25` in bash and
+# `$25` in dash. Preflight writes no `$` and no backtick outside single
+# quotes, and no pattern outside quotes, so any one is refused.
+@pytest.mark.parametrize(
+    "command,shown",
+    [
+        (f'uv run {_GUARD} "$(cat)"', '"$(cat)"'),
+        (f'ULTRACODE_MAX_TURNS="$(cat)" uv run {_GUARD}', '"$(cat)"'),
+        (f"uv run {_GUARD} `cat`", '"`cat`"'),
+        (f'uv run {_GUARD} "`cat`"', '"`cat`"'),
+        (f"uv run {_GUARD} $(cat)", '"$(cat)"'),
+        (f"ULTRACODE_MAX_TURNS=${{A:- uv run {_GUARD} }}", json.dumps(f"${{A:- uv run {_GUARD} }}")),
+        (f'ULTRACODE_MAX_TURNS="$(echo " uv run {_GUARD} ")"', json.dumps(f'$(echo " uv run {_GUARD} ")')),
+        (f"uv run -p $X {_GUARD}", '"$X"'),
+        (f'ULTRACODE_IMPL_ARTIFACTS="$HOME/x" uv run {_GUARD}', '"$HOME"'),
+        (f"ULTRACODE_IMPL_ARTIFACTS=${{HOME}}/x uv run {_GUARD}", '"${HOME}"'),
+        (f"ULTRACODE_MAX_TURNS=$((20+5)) uv run {_GUARD}", '"$((20+5))"'),
+        (f'ULTRACODE_MAX_TURNS="$[20+5]" uv run {_GUARD}', '"$[20+5]"'),
+        (f"ULTRACODE_MAX_TURNS=$'25' uv run {_GUARD}", json.dumps("$'25'")),
+        (f'ULTRACODE_MAX_TURNS=$"25" uv run {_GUARD}', json.dumps('$"25"')),
+        ('uv run "$CLAUDE_PROJECT_DIR"/scripts/hooks/guard_pretooluse.py', '"$CLAUDE_PROJECT_DIR"'),
+        (f"uv run {_GUARD} $1", '"$1"'),
+        (f"uv run {_GUARD} $@", '"$@"'),
+        # A pattern the shell matches against file names, or bash's brace
+        # expansion. In a folder holding `a` and `b.py`, through dash and
+        # bash, `uv run --no-project --with * '<script>'` ran b.py as the
+        # script (exit 0), and so did `--with {a,b.py}` through bash.
+        (f"uv run --no-project --with * {_GUARD}", '"*"'),
+        (f"uv run --no-project --with {{a,b.py}} {_GUARD}", '"{a,b.py}"'),
+        (f"uv run -p 3.1? {_GUARD}", '"?"'),
+        (f"uv run --with [ab].py {_GUARD}", '"[ab]"'),
+        ("uv run /srv/p/scripts/hooks/guard_*.py", '"*"'),
+        # Even where the shell leaves it as written: no pattern is matched in
+        # an assignment, but preflight writes none outside quotes.
+        (f"ULTRACODE_IMPL_ARTIFACTS=/srv/a* uv run {_GUARD}", '"*"'),
+    ],
+)
+def test_an_expansion_is_refused(command: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(command, "guard_pretooluse.py")
+    assert problem is not None and problem.startswith("the shell would expand %s before uv starts" % shown), problem
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -820,6 +870,20 @@ def test_a_control_operator_is_refused(command: str, shown: str) -> None:
         pytest.param(f"uv run {_GUARD} # armed by hand", id="trailing-comment"),
         # A line continuation joins its two lines into one word.
         pytest.param("uv run /srv/p/scripts/hooks/guard_pre\\\ntooluse.py", id="line-continuation"),
+        # A `$` or a backtick the shell leaves as it is: in single quotes,
+        # escaped, or a `$` that starts no expansion.
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS='$(cat) `cat` ${A} $HOME' uv run " + _GUARD, id="expansions-quoted"),
+        pytest.param('ULTRACODE_IMPL_ARTIFACTS="\\$(cat) \\`cat\\`" uv run ' + _GUARD, id="expansions-escaped-in-dq"),
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS=\\$HOME uv run " + _GUARD, id="expansion-escaped"),
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS=a$ uv run " + _GUARD, id="dollar-ending-a-word"),
+        pytest.param('ULTRACODE_IMPL_ARTIFACTS="a$" uv run ' + _GUARD, id="dollar-ending-dq"),
+        pytest.param('ULTRACODE_IMPL_ARTIFACTS="a $ b" uv run ' + _GUARD, id="dollar-before-a-space"),
+        pytest.param(f"uv run {_GUARD} # $(cat) in a comment", id="expansion-in-a-comment"),
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS='/srv/a*{b,c}[d]?' uv run " + _GUARD, id="patterns-quoted"),
+        pytest.param('ULTRACODE_IMPL_ARTIFACTS="/srv/a*{b,c}[d]?" uv run ' + _GUARD, id="patterns-double-quoted"),
+        pytest.param("ULTRACODE_IMPL_ARTIFACTS=/srv/a\\*\\{b\\} uv run " + _GUARD, id="patterns-escaped"),
+        # A leading `~` becomes the home folder, which moves no word.
+        pytest.param("uv run ~/skill/scripts/hooks/guard_pretooluse.py", id="tilde"),
     ],
 )
 def test_a_command_with_its_operators_quoted_starts_the_guard(command: str) -> None:
@@ -882,9 +946,13 @@ def _through_sh(command: str, tmp_path: Path) -> tuple[int, dict | None]:
         (f"uv run {_GUARD} < /dev/null", False),
         (f"uv run {_GUARD} || true", False),
         (f"uv run {_GUARD} ; true", False),
+        (f'uv run {_GUARD} "$(cat)"', False),
+        (f"uv run {_GUARD} `cat`", False),
+        (f"ULTRACODE_MAX_TURNS=${{A:- uv run {_GUARD} }}", False),
         # Their twins start it with the event and keep its exit code.
         (f"ULTRACODE_MAX_TURNS='25' uv run {_GUARD}", True),
         (f"uv run {_GUARD} # armed by hand", True),
+        (f"ULTRACODE_IMPL_ARTIFACTS='$(cat)' uv run {_GUARD}", True),
     ],
 )
 def test_the_shell_runs_each_form_as_the_check_reads_it(command: str, starts: bool, tmp_path: Path) -> None:
