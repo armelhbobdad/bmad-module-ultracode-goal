@@ -318,13 +318,18 @@ def test_the_bullet_says_what_an_unquoted_budget_command_costs():
     project in the hook's folder before it looks for the script, and where
     that project fails to build or resolve it exits 1 (a non-blocking error
     on Stop), so the stop goes through, as docs/troubleshooting.md says for a
-    moved skill."""
+    moved skill. Its review: a resolve that fails on the network exits 2,
+    not 1 (uv 0.12.15 behind a proxy it could not reach, for the project's
+    dependencies and for its build backend alike), so that stop is sent back;
+    only a build that fails, or requirements no index satisfies, exit 1."""
     flat = _flat(_hooks_bullet())
     assert "skips the budget hook without a word" not in flat
+    assert "fails to build or resolve" not in flat
     assert (
         "and the budget hook counts no turn (a command the shell cannot run lets each stop through; a script `uv` "
         "cannot find sends each stop back with uv's error, up to eight times in a row, unless the project `uv` "
-        "syncs first fails to build or resolve, when `uv` exits 1 and each stop goes through too)." in flat
+        "syncs first fails to build, or its requirements cannot be satisfied, when `uv` exits 1 and each stop "
+        "goes through too; a network failure in that sync exits 2, and sends each stop back)." in flat
     )
 
 

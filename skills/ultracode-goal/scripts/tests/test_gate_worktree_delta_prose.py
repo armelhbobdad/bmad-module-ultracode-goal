@@ -2408,8 +2408,12 @@ _HOOK_REJECTION_SENTENCES = {
         # of the evidence commit. Reviewed again (final pass) when it gained
         # the project uv syncs first, whose failed build lets each stop
         # through: still a Stop hook's exit on stopping, and nothing of the
-        # evidence commit.
-        ("Left unquoted, a project or skill path that holds a space (a project und", "1cafdedb3da1"),
+        # evidence commit. Reviewed again (its review) when that failure was
+        # narrowed to a build or requirements that cannot be satisfied, and a
+        # network failure in that sync, which exits 2, sends each stop back:
+        # still a Stop hook's exit on stopping, and nothing of the evidence
+        # commit.
+        ("Left unquoted, a project or skill path that holds a space (a project und", "d0797efaddc8"),
         ("Now that the group is armed for every tool, the hook IS invoked for a `W", "54ce49130885"),
         ("The Stop budget hook carries no `onFailure`: Claude Code ignores the key", "63209639b79d"),
         ("The guard's item carries `\"onFailure\": \"block\"` beside `\"type\"` and `\"co", "dcd78ba37079"),
@@ -2448,8 +2452,12 @@ _HOOK_REJECTION_SENTENCES = {
         # the evidence commit. Reviewed again when the first gained the eight
         # blocks in a row after which Claude Code lets the stop through: still
         # a Stop hook's exit on stopping, and nothing of the evidence commit.
+        # Reviewed again (its review) when the second was narrowed to a build
+        # or requirements that cannot be satisfied (a network failure exits
+        # 2, as the sentence after it says): still a Stop hook's exit on
+        # stopping, and nothing of the evidence commit.
         ("`uv` exits 2 when it cannot find the script, which on a `Stop` hook Clau", "4341789b0ad0"),
-        ("When that project fails to build, or its dependencies cannot be resolved", "b48ad9ab6c20"),
+        ("When that project fails to build, or its requirements cannot be satisfie", "ddb8784447bb"),
         ("Most read like `PreToolUse:Bash hook error: [<command>]: failed; blockin", "03a6eaa3f853"),
         ("It names each primitive the version lacks. 2.1.295 is the floor, the rel", "d3fb84ee20ae"),
         # Reviewed (#186 review, 4.1.0, final pass): the resume after a Claude

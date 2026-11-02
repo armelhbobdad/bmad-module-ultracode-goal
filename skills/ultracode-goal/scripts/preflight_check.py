@@ -1523,7 +1523,8 @@ def _command_problem(command: str, script: str) -> str | None:
     to a shell, which splits it at every unquoted space, so an unquoted value
     or path that holds one (a project under `~/My Projects`) makes the rest of
     it the command the shell runs (exit 127), or the file `uv run` is given
-    (uv exits 2, or 1 where the project it syncs first fails to build), and
+    (uv exits 2, or 1 where the project it syncs first fails to build or its
+    requirements cannot be satisfied, though 2 where the network fails), and
     the hook never starts. Under the guard's `"onFailure": "block"` each
     refuses every tool call. On Stop, exit 127 and exit 1 are non-blocking
     errors, so each stop goes through uncounted, and exit 2 sends each stop
@@ -1746,8 +1747,9 @@ def _command_reason(problems: list[str]) -> str:
         "call through unchecked. A budget command the shell cannot start lets "
         "each stop through uncounted, and one uv refuses sends each stop back "
         "with uv's error, up to eight times in a row, unless the project uv "
-        "syncs first fails to build or resolve, when uv exits 1 and each stop "
-        "goes through uncounted too. Re-merge the hooks as "
+        "syncs first fails to build, or its requirements cannot be satisfied, "
+        "when uv exits 1 and each stop goes through uncounted too; a network "
+        "failure in that sync exits 2, and sends each stop back. Re-merge the hooks as "
         "preflight.md step 5's Hooks bullet says, each injected value and the "
         "script path in single quotes (KEY='value' uv run '<path>'; replace, "
         "never append; on a resume purge nothing, as execute.md's re-assertion "

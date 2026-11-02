@@ -226,12 +226,15 @@ def test_troubleshooting_says_a_project_that_fails_to_build_lets_each_stop_throu
     script blocks each stop. Where the ancestor project fails to build, or to
     resolve, uv 0.12.15 stops there and exits 1, not 2, and exit 1 on a Stop
     hook is a non-blocking error: the stop goes through, and the turn goes
-    uncounted."""
+    uncounted. Its review: a resolve that fails on the network exits 2, not 1
+    (uv 0.12.15 behind a proxy it could not reach, for the project's
+    dependencies and for its build backend alike), so that stop is sent back."""
     text = " ".join((_DOCS / "troubleshooting.md").read_text(encoding="utf-8").split())
+    assert "or its dependencies cannot be resolved" not in text
     assert (
-        "When that project fails to build, or its dependencies cannot be resolved, `uv` stops there and exits 1, "
+        "When that project fails to build, or its requirements cannot be satisfied, `uv` stops there and exits 1, "
         "which Claude Code reads on a `Stop` hook as a non-blocking error: the session stops, and the turn goes "
-        "uncounted." in text
+        "uncounted. A network failure in that sync exits 2 instead, and each stop is sent back as above." in text
     )
 
 

@@ -544,10 +544,14 @@ def test_the_reason_says_what_each_kind_of_command_costs(tmp_path: Path) -> None
     assert "A budget command the shell cannot start lets each stop through uncounted" in reason
     assert "one uv refuses sends each stop back with uv's error, up to eight times in a row" in reason
     # Final pass: uv syncs the project in the hook's folder before it looks for
-    # the script, and exits 1 where that project fails to build or resolve.
+    # the script, and exits 1 where that project fails to build or its
+    # requirements cannot be satisfied. Its review: a network failure in that
+    # sync exits 2, so that stop is sent back.
+    assert "fails to build or resolve" not in reason
     assert (
-        "up to eight times in a row, unless the project uv syncs first fails to build or resolve, when uv exits 1 "
-        "and each stop goes through uncounted too." in reason
+        "up to eight times in a row, unless the project uv syncs first fails to build, or its requirements cannot "
+        "be satisfied, when uv exits 1 and each stop goes through uncounted too; a network failure in that sync "
+        "exits 2, and sends each stop back." in reason
     )
 
 
