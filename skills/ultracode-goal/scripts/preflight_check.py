@@ -1320,7 +1320,9 @@ _SCRIPT_PYTHON_MINIMUM = (3, 11)
 # platform) or a set of specifiers (`>=3.11,<3.13`). uv 0.12.15 reads
 # whitespace after the name or its "@" or "-" as nothing (`cpython 3.10`,
 # `cpython@ 3.10` and `cpython- 3.10` ran 3.10), and none before them
-# (`cpython @3.10` named no Python it found). A name alone, `any` or
+# (`cpython @3.10` named no Python it found). It joins a name to a set of
+# specifiers as it joins one to a version (`cpython-<3.11` and
+# `cpython@<3.11` ran 3.10). A name alone, `any` or
 # `default` asks for any version. A path or a program name names none.
 _PY_IMPLEMENTATION = r"(?:cpython|cp|python|pypy|pp|graalpy|gp|pyodide)"
 _PY_ANY_VERSION = re.compile(r"%s@?|any|default" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII)
@@ -1329,7 +1331,7 @@ _PY_VERSION = re.compile(
     re.IGNORECASE | re.ASCII,
 )
 _PY_SPECIFIERS = re.compile(
-    r"(?:%s@?\s*)?(?P<specifiers>[<>=!~].*)" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII
+    r"(?:%s[@-]?\s*)?(?P<specifiers>[<>=!~].*)" % _PY_IMPLEMENTATION, re.IGNORECASE | re.ASCII
 )
 _PY_SPECIFIER = re.compile(
     r"\s*(?P<operator>===|==|!=|~=|<=|>=|<|>)\s*v?(?P<version>[0-9]+(?:\.[0-9]+)*)(?:\.\*)?\s*", re.ASCII

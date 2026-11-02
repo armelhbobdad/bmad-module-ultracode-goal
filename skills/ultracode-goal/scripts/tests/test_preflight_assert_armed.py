@@ -1287,6 +1287,29 @@ def test_a_command_uv_takes_as_written_starts_the_guard(words: str) -> None:
         ("uv run --python 'cpython >=3.9'", 'uv run would let "--python cpython >=3.9" select a Python below'),
         ("uv run --python 'python <3.12'", 'uv run would let "--python python <3.12" select a Python below'),
         ("uv run --python 'cpython@ <3.11'", 'uv run would let "--python cpython@ <3.11" select a Python below'),
+        # Its review: a "-" joins a name to a set of specifiers as it joins one
+        # to a version. uv 0.12.15 ran `cpython-<3.11`, `cp-<3.11`,
+        # `cpython- <3.11`, `CPython-<3.11`, `cpython-<v3.11`,
+        # `cpython-<3.11,>=3.10`, `cpython-==3.10` and `cp-==3.10` on
+        # 3.10.21, `cpython-<=3.10` on 3.9.25 and `pypy-<3.11` on PyPy 3.10,
+        # each with only a warning. `cpython->=3.9`, `-~=3.10` and `-!=3.12`
+        # admit one below the minimum too, though uv picked a newer one on the
+        # machine it was measured on. The check passed them all.
+        ("uv run --python 'cpython-<3.11'", 'uv run would let "--python cpython-<3.11" select a Python below'),
+        ("uv run --python 'cpython-<=3.10'", 'uv run would let "--python cpython-<=3.10" select a Python below'),
+        ("uv run -p 'cp-==3.10'", 'uv run would let "-p cp-==3.10" select a Python below'),
+        ("uv run --python 'cp-<3.11'", 'uv run would let "--python cp-<3.11" select a Python below'),
+        ("uv run --python 'cpython- <3.11'", 'uv run would let "--python cpython- <3.11" select a Python below'),
+        ("uv run --python 'CPython-<3.11'", 'uv run would let "--python CPython-<3.11" select a Python below'),
+        ("uv run --python 'cpython-<v3.11'", 'uv run would let "--python cpython-<v3.11" select a Python below'),
+        (
+            "uv run --python 'cpython-<3.11,>=3.10'",
+            'uv run would let "--python cpython-<3.11,>=3.10" select a Python below',
+        ),
+        ("uv run --python 'cpython->=3.9'", 'uv run would let "--python cpython->=3.9" select a Python below'),
+        ("uv run --python 'cpython-~=3.10'", 'uv run would let "--python cpython-~=3.10" select a Python below'),
+        ("uv run --python 'cpython-!=3.12'", 'uv run would let "--python cpython-!=3.12" select a Python below'),
+        ("uv run --python 'pypy-<3.11'", 'uv run would let "--python pypy-<3.11" select a Python below'),
         ("uv run -C=", 'uv run would not take "" as the value of "-C"'),
         ("uv run -P=", 'uv run would not take "" as the value of "-P"'),
         ("uv run -qC=", 'uv run would not take "" as the value of "-C"'),
@@ -1365,6 +1388,13 @@ def test_an_older_python_is_refused_for_the_minimum_it_skips() -> None:
         "uv run --python 'cpython@ 3.12'",
         "uv run -p 'cp 3.12'",
         "uv run --python 'cpython >= 3.11'",
+        # Twins of its review's: each ran the script on 3.11 or later.
+        "uv run --python 'cpython->=3.11'",
+        "uv run -p 'cp->=3.12'",
+        "uv run --python 'cpython- >=3.11'",
+        "uv run --python 'cpython->=3.11,<3.14'",
+        "uv run --python 'cpython-==3.12.*'",
+        "uv run --python 'pypy->=3.11'",
     ],
 )
 def test_a_command_with_a_python_the_header_allows_starts_the_guard(words: str) -> None:
