@@ -105,10 +105,29 @@ def test_localhost_answers_when_the_server_listens_on_ipv6_only(capsys):
     assert json.loads(capsys.readouterr().out)["answering"][0]["port"] == port
 
 
-@pytest.mark.parametrize("url", ["http://", "http://localhost:notaport", "http://localhost:70000"])
+# Hosts the lookup cannot encode (Python encodes a host with the `idna` codec before it resolves it): an empty
+# label, at either end or inside, and a label over 63 characters.
+_UNENCODABLE_HOSTS = ["http://localhost..:3000", "http://.localhost:3000", "http://" + "a" * 64 + ".test"]
+
+
+@pytest.mark.parametrize(
+    "url", ["http://", "http://localhost:notaport", "http://localhost:70000", *_UNENCODABLE_HOSTS]
+)
 def test_a_url_with_no_host_or_a_bad_port_is_refused(url, capsys):
     assert probe_servers.main(["--url", url]) == 2
-    assert "REFUSED" in capsys.readouterr().err
+    assert f"REFUSED: {url}: " in capsys.readouterr().err
+
+
+def test_a_host_with_a_trailing_dot_is_no_refusal(capsys):
+    """The twin: `localhost.` is a full name, not an empty label."""
+    port = _free_port()
+    assert probe_servers.main(["--url", f"http://localhost.:{port}"]) in (0, 1)
+    assert "REFUSED" not in capsys.readouterr().err
+
+
+def test_a_host_the_lookup_cannot_encode_reads_as_free():
+    """`_reached` raises nothing: an error it let through would end the probe after an earlier URL's stop."""
+    assert probe_servers._reached("a" * 64 + ".test", 80) is None
 
 
 # The checks gate.md's fourth caveat makes with this script. Its docstring said
@@ -425,6 +444,26 @@ def test_a_server_from_a_folder_of_its_own_tree_is_stopped_once_that_folder_is_r
         assert _gone(server)
     assert code == 0
     assert out["stopped"][0]["cwd"].endswith(" (deleted)")
+
+
+@_LINUX_ONLY
+def test_a_host_the_lookup_cannot_encode_after_a_servers_url_stops_nothing(tmp_path, capsys):
+    """The refusal prints no JSON, so it comes before any stop: the server the
+    first URL reaches, one the probe would stop, still runs. Before, the
+    probe stopped it, then refused the second URL when it resolved it."""
+    main_tree = tmp_path / "main"
+    main_tree.mkdir()
+    marker = _baseline(tmp_path)
+    port = _free_port()
+    with _left_up(main_tree, port) as server:
+        code = probe_servers.main(
+            ["--url", f"http://127.0.0.1:{port}", "--url", _UNENCODABLE_HOSTS[-1], "--stop-since", str(marker),
+             "--root", str(main_tree)]
+        )
+        assert not _gone(server)
+    assert code == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and f"REFUSED: {_UNENCODABLE_HOSTS[-1]}: " in captured.err
 
 
 def _left_up_reason(capsys, url: str, marker: Path, root: Path) -> tuple[int, dict]:
@@ -762,14 +801,25 @@ def test_a_group_that_does_not_exit_is_left_up_and_said_so(tmp_path, monkeypatch
     assert out["left"][0]["reason"] == "its processes still ran after SIGTERM and SIGKILL"
 
 
-@pytest.mark.parametrize("bad", ["http://", "http://localhost:notaport", "http://localhost:99999"])
-def test_a_bad_url_after_an_answering_one_is_refused_before_anything_is_stopped(tmp_path, monkeypatch, bad):
-    """A refusal prints no JSON, so a server stopped before it would be named
-    nowhere: every URL is read before the first stop."""
-    proc = _proc_with(tmp_path, _RUN_LEFT_UP)
+def _stop_mode(monkeypatch) -> None:
+    """The probe's view of a Linux /proc and of its caller, on any system."""
     monkeypatch.setattr(probe_servers, "_reads_processes", lambda _proc: True)
     monkeypatch.setattr(probe_servers, "_caller", lambda _proc: _CALLER)
     monkeypatch.setattr(probe_servers, "_clock_ticks", lambda: _TICKS)
+
+
+@pytest.mark.parametrize(
+    "bad", ["http://", "http://localhost:notaport", "http://localhost:99999", *_UNENCODABLE_HOSTS]
+)
+def test_a_bad_url_after_an_answering_one_is_refused_before_anything_is_stopped(tmp_path, monkeypatch, bad):
+    """A refusal prints no JSON, so a server stopped before it would be named
+    nowhere: every URL is read before the first stop, its host encoded as the
+    lookup encodes it. A host the lookup could not encode was found only when
+    the probe resolved it, after the answering URL's server was stopped."""
+    proc = _proc_with(tmp_path, _RUN_LEFT_UP)
+    _stop_mode(monkeypatch)
+    # Were a stop to start, it would end quickly.
+    monkeypatch.setattr(probe_servers, "_GRACE", 0.1)
     monkeypatch.setattr(probe_servers, "_listening_inodes", lambda _port, _proc, _reached=None: {"777"})
     sent = []
     with _listener() as sock:

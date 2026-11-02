@@ -83,7 +83,8 @@ once it has stopped what it could, and two keys are added: `stopped`, each
 server it stopped (`{"url", "port", "cwd", "process_groups", "pids"}`), and
 `left`, each URL that still answers with the reason it left that server up
 (`{"url", "port", "cwd", "reason"}`). Exit 0 when no URL answers, 1 when any
-does, and 2 when a URL has no host, or a port that is not a number from 0 to
+does, and 2 when a URL has no host, a host the lookup cannot encode (an empty
+label, or one over 63 characters), or a port that is not a number from 0 to
 65535, or when the `--stop-since` file cannot be read: every URL and the file
 are read before anything is stopped, so a refusal stops nothing.
 """
@@ -128,6 +129,13 @@ def _host_and_port(url: str) -> tuple[str, int]:
         raise ValueError(f"{url}: {exc}") from exc
     if not parts.hostname:
         raise ValueError(f"{url}: no host")
+    try:
+        # socket.getaddrinfo encodes the host with this codec before it resolves it, and raises for one it cannot
+        # encode (an empty label, or one over 63 characters): found only there, the host would be refused after an
+        # earlier URL's server was stopped.
+        parts.hostname.encode("idna")
+    except UnicodeError as exc:
+        raise ValueError(f"{url}: {exc}") from exc
     return parts.hostname, port if port is not None else _DEFAULT_PORTS.get(parts.scheme, 80)
 
 
@@ -136,7 +144,9 @@ def _reached(host: str, port: int) -> tuple[int, bytes] | None:
     accepts a connection at `port`, or None when none does."""
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror:
+    except (OSError, UnicodeError):
+        # No address for it (socket.gaierror, an OSError), or a host the lookup cannot encode, which
+        # `_host_and_port` refuses first: an error raised here would end the probe after a stop it then never reports.
         return None
     for family, kind, proto, _, address in infos:
         try:
@@ -424,8 +434,8 @@ def probe(urls: list[str], stop: _Stop | None = None, proc: Path | None = None, 
     readable = stop is not None and _reads_processes(proc)
     caller = _caller(proc) if readable else None
     ticks = _clock_ticks() if readable else 0.0
-    # Every URL is read before the first stop: a refusal prints no JSON, so a server stopped before it would be
-    # named nowhere.
+    # Every URL is read, its host encoded as the lookup encodes it, before the first stop: a refusal prints no JSON,
+    # so a server stopped before it would be named nowhere.
     targets = [(url, *_host_and_port(url)) for url in urls]
     for url, host, port in targets:
         for attempt in range(_STOPS + 1):
