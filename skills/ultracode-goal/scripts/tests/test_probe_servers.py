@@ -60,6 +60,23 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+@functools.cache
+def _ipv6_loopback() -> bool:
+    """Whether a connection to `::1` reaches a socket listening there. IPv6
+    can be built in (`socket.has_ipv6`) and `::` bound while `::1` takes no
+    connection: a container with IPv6 switched off on its loopback device
+    (`disable_ipv6`) has it so."""
+    if not socket.has_ipv6:
+        return False
+    try:
+        with _listener(socket.AF_INET6, "::1") as server, socket.socket(socket.AF_INET6) as client:
+            client.settimeout(probe_servers._TIMEOUT)
+            client.connect(server.getsockname()[:2])
+            return True
+    except OSError:
+        return False
+
+
 def test_a_url_with_a_listener_answers_and_names_its_folder(capsys):
     with _listener() as sock:
         port = sock.getsockname()[1]
@@ -347,6 +364,8 @@ def test_the_sockets_counted_are_the_ones_linux_gives_the_connection_to(listener
     """The same layouts on real sockets: the probe counts exactly the socket
     Linux gave its connection to, which this test reads from the listener that
     has it waiting to be accepted."""
+    if reached.family == socket.AF_INET6 and not _ipv6_loopback():
+        pytest.skip("no connection to ::1 reaches a socket here")
     port = _free_port()
     with contextlib.ExitStack() as stack:
         socks = {
@@ -766,6 +785,8 @@ def test_a_v6only_server_on_the_v6_wildcard_is_neither_stopped_nor_named_for_an_
     the reason it left the server on 127.0.0.1 up. Now it reads only the server
     Linux gave the connection to: it stops it and names its folder, and the
     server on `[::]` keeps running."""
+    if not _ipv6_loopback():
+        pytest.skip("no connection to ::1 reaches a socket here, to show the server on [::] still answers")
     project = tmp_path / "project"
     other = project / "sub"
     other.mkdir(parents=True)
