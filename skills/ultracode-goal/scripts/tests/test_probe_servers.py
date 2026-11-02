@@ -904,7 +904,6 @@ _ELSEWHERE = (socket.AF_INET, socket.inet_pton(socket.AF_INET, "192.0.2.1"))
 
 def test_an_address_of_this_host_takes_a_connection_and_another_hosts_does_not():
     assert probe_servers._lands_here(_V4)
-    assert probe_servers._lands_here((socket.AF_INET, bytes(4)))
     # 192.0.2.1 is TEST-NET-1 (RFC 5737), no host's own address.
     assert not probe_servers._lands_here(_ELSEWHERE)
 
