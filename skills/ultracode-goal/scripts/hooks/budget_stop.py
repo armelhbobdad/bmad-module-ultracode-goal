@@ -37,6 +37,15 @@ story id that holds a NUL byte, which no counter's file name can, or a slash
 or a backslash, which would name the counter and the turn-ceiling marker in
 another folder (outside the state dir, with `..` steps after it).
 
+The hook reads and writes only a regular file at the counter's and the
+marker's names. It opens the counter without following a symlink at its name
+or waiting on a FIFO there, and writes each through a new file in the state
+dir renamed onto the name, so neither write goes through a link put there. A
+name that holds a symlink, a FIFO, a folder or any other file that is not a
+regular one is left as it is and said on stderr: at the counter's, the turn
+counts against "unknown" (and goes uncounted when unknown's counter holds one
+too); at the marker's, no marker is written, and the overrun message says so.
+
 The hook exits 0 whatever it is given. Claude Code ignores `onFailure` on
 Stop, so a budget hook that exited 1 would only print a hook error, and the
 turn it should have counted would be lost. A Stop event that is not a JSON
@@ -74,11 +83,27 @@ Turn-ceiling marker: <impl>/.escalation-<story>.md
 
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 from typing import NoReturn
 
 DEFAULT_MAX_TURNS = 25
+
+# Open the counter without following a symlink at its name or waiting on a
+# FIFO there, where the system has the flags (Windows has neither, nor FIFOs,
+# and _regular_or_absent turns a link away first).
+_READ_FLAGS = (
+    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+)
+# Create the new file a write goes through, refusing any file already there.
+_CREATE_FLAGS = (
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+)
+
+
+class _NotRegular(Exception):
+    """A name holds a symlink or a file that is not a regular one."""
 
 
 def _warn(message: str) -> None:
@@ -155,25 +180,80 @@ def _current_story(impl: Path | None) -> str | None:
     return sid or None
 
 
+def _regular_or_absent(path: Path) -> bool:
+    """Whether path names a regular file or nothing; False for a symlink, a
+    FIFO, a folder or any other file, which the hook neither reads nor writes
+    through. An error that says neither (no access, say) is left to the read
+    or the write to report."""
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except (OSError, ValueError):  # nothing there (FileNotFoundError) included
+        return True
+
+
+def _read_text(path: Path) -> str:
+    """The UTF-8 text of the regular file at path, opened without following a
+    symlink at its name or waiting on a FIFO there; _NotRegular for any other
+    file, FileNotFoundError for none."""
+    fd = os.open(path, _READ_FLAGS)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise _NotRegular(path.name)
+        chunks = []
+        while chunk := os.read(fd, 65536):
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+    return b"".join(chunks).decode("utf-8")
+
+
+def _write_text(path: Path, text: str) -> None:
+    """Write text to path through a new file in its folder, renamed onto the
+    name: whatever sits at the name is replaced, never written through. The
+    new file's name starts with `.budget-` and ends in `.tmp`, so preflight's
+    purge of `.budget-*` takes one a crash left behind."""
+    data = text.encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.parent / f".budget-{os.getpid()}-{os.urandom(4).hex()}.tmp"
+    fd = os.open(temp, _CREATE_FLAGS, 0o666)
+    try:
+        try:
+            while data:
+                data = data[os.write(fd, data) :]
+        finally:
+            os.close(fd)
+        os.replace(temp, path)
+    except BaseException:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+        raise
+
+
 def _load_state(path: Path) -> dict:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(_read_text(path))
         return {"turns": int(data.get("turns", 0))}
     except FileNotFoundError:
         return {"turns": 0}
-    except (OSError, ValueError, TypeError, AttributeError, OverflowError, RecursionError) as exc:
+    except (OSError, ValueError, TypeError, AttributeError, OverflowError, RecursionError, _NotRegular) as exc:
         # Not a count it can read (not JSON, not an object, nested past what
-        # Python reads, an infinite or absent number): it restarts at 0.
+        # Python reads, an infinite or absent number, or a link or a FIFO put
+        # at the name since _regular_or_absent looked): it restarts at 0.
         _warn(f"{path.name} is not a count it can read ({type(exc).__name__}); counting from 0")
         return {"turns": 0}
 
 
 def _save_state(path: Path, state: dict) -> None:
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state), encoding="utf-8")
+        _write_text(path, json.dumps(state))
     except (OSError, ValueError) as exc:
         _warn(f"could not write {path.name} ({type(exc).__name__}); this turn is not counted")
+
+
+def _not_regular_note(path: Path, outcome: str) -> None:
+    _warn(f"{path.name} is a symlink or not a regular file, which it neither reads nor writes through; {outcome}")
 
 
 def main() -> None:
@@ -193,6 +273,13 @@ def main() -> None:
     max_turns = _int_env("ULTRACODE_MAX_TURNS", DEFAULT_MAX_TURNS)
 
     state_path = impl / f".budget-{story}.json"
+    if story != "unknown" and not _regular_or_absent(state_path):
+        _not_regular_note(state_path, "counting the turn against unknown")
+        story = "unknown"
+        state_path = impl / f".budget-{story}.json"
+    if not _regular_or_absent(state_path):
+        _not_regular_note(state_path, "this turn is not counted")
+        _emit(None)
     state = _load_state(state_path)
     state["turns"] += 1
     _save_state(state_path, state)
@@ -203,24 +290,29 @@ def main() -> None:
     detail = f"turns {state['turns']}/{max_turns}"
 
     marker = impl / f".escalation-{story}.md"
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(
-            f"# Turn ceiling reached: story {story}\n\n"
-            f"Story turn ceiling reached ({detail}). Unless this story advances at "
-            f"its gate, UltraCode-Goal escalates it: re-scope, split, or hand off. "
-            f"If it advances, this is a sizing note, not an escalation. A Stop hook "
-            f"cannot interrupt a session mid-turn, so this marker is a record: the "
-            f"conductor's checks against this count, at a resume and before each "
-            f"re-loop, are what stop the story.\n",
-            encoding="utf-8",
-        )
-    except (OSError, ValueError) as exc:
-        _warn(f"could not write {marker.name} ({type(exc).__name__})")
+    written = False
+    if not _regular_or_absent(marker):
+        _not_regular_note(marker, "no marker is written")
+    else:
+        try:
+            _write_text(
+                marker,
+                f"# Turn ceiling reached: story {story}\n\n"
+                f"Story turn ceiling reached ({detail}). Unless this story advances at "
+                f"its gate, UltraCode-Goal escalates it: re-scope, split, or hand off. "
+                f"If it advances, this is a sizing note, not an escalation. A Stop hook "
+                f"cannot interrupt a session mid-turn, so this marker is a record: the "
+                f"conductor's checks against this count, at a resume and before each "
+                f"re-loop, are what stop the story.\n",
+            )
+            written = True
+        except (OSError, ValueError) as exc:
+            _warn(f"could not write {marker.name} ({type(exc).__name__})")
 
+    where = f"Marker written to {marker}." if written else f"No marker was written at {marker}: stderr says why."
     _emit(
         f"UltraCode-Goal: story {story} reached its turn ceiling ({detail}). "
-        f"Marker written to {marker}. It escalates if its gate does not advance it; "
+        f"{where} It escalates if its gate does not advance it; "
         f"if the gate advances it, the overrun becomes a sizing note."
     )
 

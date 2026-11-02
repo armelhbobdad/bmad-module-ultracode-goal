@@ -205,10 +205,14 @@ def test_a_story_marker_that_is_not_utf8_still_counts_against_unknown(tmp_path: 
 # counted is lost. These inputs each raised out of the hook before it counted.
 
 
-def _run_raw(stdin: str | bytes, cwd: Path, env_extra: dict) -> subprocess.CompletedProcess:
+def _run_raw(
+    stdin: str | bytes, cwd: Path, env_extra: dict, timeout: float | None = None
+) -> subprocess.CompletedProcess:
     env = {**os.environ, **env_extra}
     data = stdin.encode("utf-8") if isinstance(stdin, str) else stdin
-    return subprocess.run([sys.executable, str(HOOK)], input=data, cwd=cwd, capture_output=True, env=env)
+    return subprocess.run(
+        [sys.executable, str(HOOK)], input=data, cwd=cwd, capture_output=True, env=env, timeout=timeout
+    )
 
 
 def _turns(impl: Path, story: str) -> int:
@@ -315,6 +319,172 @@ def test_a_story_id_holding_a_path_separator_counts_against_unknown(tmp_path: Pa
     assert set(tmp_path.rglob("*")) - before == {impl / ".budget-unknown.json", impl / ".escalation-unknown.md"}
     assert _turns(impl, "unknown") == 1
     assert "separator" in proc.stderr.decode("utf-8", "replace")
+
+
+# --- A link or a special file at the counter's or the marker's name ----------
+# The hook read and wrote its counter and its marker by name, following a
+# symlink there, so one to a file outside the state dir had that file's
+# contents replaced (by `{"turns": 1}`, or by the marker text at the ceiling),
+# and a FIFO there kept it waiting until Claude Code's hook timeout, with the
+# turn uncounted. It reads and writes neither through such a name now.
+
+
+def _make_special(kind: str, at: Path, target: Path) -> None:
+    """Put a symlink to target, a FIFO or a folder at `at`, or skip where the
+    system cannot make one."""
+    if kind == "symlink":
+        try:
+            os.symlink(target, at)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"cannot create a symlink here: {exc}")
+    elif kind == "fifo":
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("this system has no FIFOs")
+        os.mkfifo(at)
+    else:
+        at.mkdir()
+
+
+def _is_kind(kind: str, path: Path) -> bool:
+    if kind == "symlink":
+        return path.is_symlink()
+    if kind == "fifo":
+        return path.is_fifo()
+    return path.is_dir() and not path.is_symlink()
+
+
+_SPECIAL_KINDS = pytest.mark.parametrize("kind", ["symlink", "fifo", "folder"])
+
+
+@pytest.fixture
+def victim(tmp_path: Path) -> Path:
+    """A file outside the state dir that a link at a counter's or a marker's
+    name points to: its contents must survive the hook."""
+    path = tmp_path / "outside" / "victim.txt"
+    path.parent.mkdir()
+    path.write_text("keep me\nline 2\n", encoding="utf-8")
+    return path
+
+
+def _leftovers(impl: Path) -> list[str]:
+    """Temporary files the hook left in the state dir."""
+    return sorted(path.name for path in impl.iterdir() if path.name.endswith(".tmp"))
+
+
+@_SPECIAL_KINDS
+def test_a_counter_name_holding_a_link_or_a_special_file_counts_against_unknown(
+    tmp_path: Path, victim: Path, kind: str
+) -> None:
+    """The counter's name holds a symlink, a FIFO or a folder: the hook reads
+    nothing through it and writes nothing through it, leaves it as it is, and
+    counts the turn against `unknown`, as for a story id that names no counter
+    it can use. stderr says why. It never waits on the FIFO."""
+    project = tmp_path / "proj"
+    impl = project / "_bmad-output" / "implementation-artifacts"
+    impl.mkdir(parents=True)
+    (impl / ".current-story").write_text("1-1-login\n", encoding="utf-8")
+    counter = impl / ".budget-1-1-login.json"
+    _make_special(kind, counter, victim)
+    event = json.dumps({"hook_event_name": "Stop", "cwd": str(project)})
+    proc = _run_raw(event, project, _no_story_env(impl, "1"), timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert _is_kind(kind, counter)
+    assert _turns(impl, "unknown") == 1
+    assert (impl / ".escalation-unknown.md").is_file()
+    assert not (impl / ".escalation-1-1-login.md").exists()
+    assert "systemMessage" in json.loads(proc.stdout)
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert ".budget-1-1-login.json is a symlink or not a regular file" in stderr, stderr
+    assert "against unknown" in stderr
+    assert _leftovers(impl) == []
+
+
+@_SPECIAL_KINDS
+def test_a_marker_name_holding_a_link_or_a_special_file_is_not_written_through(
+    tmp_path: Path, victim: Path, kind: str
+) -> None:
+    """At the ceiling, the marker's name holds a symlink, a FIFO or a folder:
+    the turn is counted, the overrun message still goes out, and the hook
+    writes no marker through that name and leaves it as it is. The message
+    then says no marker was written, rather than that one was."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    marker = impl / ".escalation-S1.md"
+    _make_special(kind, marker, victim)
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "1"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert _is_kind(kind, marker)
+    assert _turns(impl, "S1") == 1
+    message = json.loads(proc.stdout)["systemMessage"]
+    assert "reached its turn ceiling" in message
+    assert "Marker written" not in message
+    assert f"No marker was written at {marker}" in message
+    assert ".escalation-S1.md is a symlink or not a regular file" in proc.stderr.decode("utf-8", "replace")
+    assert _leftovers(impl) == []
+
+
+def test_a_link_at_unknowns_counter_too_leaves_the_turn_uncounted(tmp_path: Path, victim: Path) -> None:
+    """When `unknown`'s counter name holds a link as well, there is no counter
+    left to count against: the hook writes nothing, says so, and exits 0."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    _make_special("symlink", impl / ".budget-S1.json", victim)
+    _make_special("symlink", impl / ".budget-unknown.json", victim)
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "1"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == b""
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert sorted(path.name for path in impl.iterdir()) == [".budget-S1.json", ".budget-unknown.json"]
+    assert "this turn is not counted" in proc.stderr.decode("utf-8", "replace")
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "mkfifo"), reason="needs O_NOFOLLOW and FIFOs (POSIX)"
+)
+def test_a_link_or_a_fifo_put_at_the_name_after_the_look_is_not_read_through(tmp_path: Path, victim: Path) -> None:
+    """The hook looks at what a name holds before it opens it, and a link or
+    a FIFO could be put there in between. The open itself follows no link at
+    the name and does not wait on a FIFO, the type check after it refuses
+    anything but a regular file, and a write goes through a new file renamed
+    onto the name, which replaces a link there rather than writing through
+    it."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("ucg_budget_stop_under_test", HOOK)
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    link = tmp_path / "link.json"
+    os.symlink(victim, link)
+    with pytest.raises(OSError):
+        hook._read_text(link)
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    with pytest.raises(hook._NotRegular):
+        hook._read_text(fifo)
+    assert hook._load_state(link) == {"turns": 0}
+    hook._write_text(link, '{"turns": 1}')
+    assert not link.is_symlink()
+    assert link.read_text(encoding="utf-8") == '{"turns": 1}'
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["fifo.json", "link.json", "outside"]
+
+
+def test_a_counter_is_replaced_whole_and_leaves_no_temporary_file(tmp_path: Path) -> None:
+    """The positive twin: a regular counter is read and rewritten through a
+    temporary file renamed onto its name, which leaves nothing behind."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".budget-S1.json").write_text(json.dumps({"turns": 4}), encoding="utf-8")
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "5"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert _turns(impl, "S1") == 5
+    assert (impl / ".escalation-S1.md").is_file()
+    assert sorted(path.name for path in impl.iterdir()) == [".budget-S1.json", ".escalation-S1.md"]
 
 
 @pytest.mark.parametrize(
