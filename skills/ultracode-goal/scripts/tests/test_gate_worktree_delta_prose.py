@@ -2431,9 +2431,13 @@ _HOOK_REJECTION_SENTENCES = {
         # hook's rejection of the evidence commit. Reviewed again (4.1.0) when
         # it gained the operator's reason that escalates before that write.
         ("A resume rewrites the file too when the hooks need re-arming (the first ", "bf3d8f2d3b0c"),
-        # Reviewed (#186 review): a missing budget script, whose uv exit 2 a Stop
-        # hook reads as a block on stopping; no hook's rejection of the evidence commit.
-        ("The budget hook's command points at nothing too, and `uv` exits 2 when i", "428357f0c82f"),
+        # Reviewed (#186 review, 4.1.0): a missing budget script, whose uv exit 2
+        # a Stop hook reads as a block on stopping, and whose exit 1, where the
+        # project uv syncs first fails to build or resolve, it reads as a
+        # non-blocking error; neither says anything of a hook's rejection of
+        # the evidence commit.
+        ("`uv` exits 2 when it cannot find the script, which on a `Stop` hook Clau", "4033c8b3b425"),
+        ("When that project fails to build, or its dependencies cannot be resolved", "b48ad9ab6c20"),
         ("Most read like `PreToolUse:Bash hook error: [<command>]: failed; blockin", "03a6eaa3f853"),
         ("It names each primitive the version lacks. 2.1.295 is the floor, the rel", "d3fb84ee20ae"),
         ("Start from the symptom you observed and follow it to the section that ex", "b8cdcd44aae2"),

@@ -202,8 +202,23 @@ def test_troubleshooting_says_a_missing_budget_script_blocks_each_stop():
     on a Stop hook blocks the stop, though the budget script itself never does."""
     text = " ".join((_DOCS / "troubleshooting.md").read_text(encoding="utf-8").split())
     assert (
-        "The budget hook's command points at nothing too, and `uv` exits 2 when it cannot find a script, which on a "
+        "The budget hook's command points at nothing too. `uv` exits 2 when it cannot find the script, which on a "
         "`Stop` hook Claude Code reads as a block" in text
+    )
+    assert "and `uv` exits 2 when it cannot find a script" not in text
+
+
+def test_troubleshooting_says_a_project_that_fails_to_build_lets_each_stop_through():
+    """Review of #186's fix (4.1.0): the sentence said every missing budget
+    script blocks each stop. Where the ancestor project fails to build, or to
+    resolve, uv 0.12.15 stops there and exits 1, not 2, and exit 1 on a Stop
+    hook is a non-blocking error: the stop goes through, and the turn goes
+    uncounted."""
+    text = " ".join((_DOCS / "troubleshooting.md").read_text(encoding="utf-8").split())
+    assert (
+        "When that project fails to build, or its dependencies cannot be resolved, `uv` stops there and exits 1, "
+        "which Claude Code reads on a `Stop` hook as a non-blocking error: the session stops, and the turn goes "
+        "uncounted." in text
     )
 
 
