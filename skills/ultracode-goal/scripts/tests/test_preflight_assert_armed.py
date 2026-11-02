@@ -1501,6 +1501,48 @@ def test_a_version_below_the_floor_never_flips_a_failed_arming_green(tmp_path: P
     _on_failure_reason(out)
 
 
+# Review of #186's fix (4.1.0), final pass: execute.md's sweep escalates an
+# operator's reason first and fixes none of the others, but the reasons the
+# conductor reads listed the hooks ones first, each ending "Re-merge the
+# hooks ... then assert again", and the version reason said only to escalate.
+# A conductor taking the first reason made the protected settings write that
+# the sweep says must wait.
+_ESCALATE_FIRST = (
+    "Escalate the story about to be driven before fixing any other reason this assertion names, as execute.md's "
+    "re-assertion sweep says: a hooks re-merge waits for the resume after the operator's fix"
+)
+_RE_MERGE_WAITS = (
+    "unless a reason that is the operator's to fix (story skills not installed, or a Claude Code below the minimum) "
+    "stands beside this one: that one is escalated first, and the resume after the operator's fix re-merges"
+)
+
+
+def test_an_operator_s_reason_is_listed_first_and_says_it_goes_first(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _arm(root, on_failure=None, guard_command="uv run python 'scripts/hooks/guard_pretooluse.py'")
+    shutil.rmtree(root / ".claude" / "skills" / "ucg-dev-story")
+    code, out = _run(root, env=_process_env(root), claude_version="2.1.290 (Claude Code)")
+    assert code == 1
+    reasons = out["reasons"]
+    assert len(reasons) == 4, reasons
+    assert reasons[0].startswith("UCG story skill(s) not installed: ucg-dev-story.")
+    assert reasons[1].startswith("Claude Code 2.1.290 (Claude Code) is below the minimum")
+    assert reasons[2].startswith(_ON_FAILURE_REASON) and reasons[3].startswith(_SPLIT_REASON)
+    for reason in reasons[:2]:
+        assert _ESCALATE_FIRST in reason, reason
+    for reason in reasons[2:]:
+        assert _RE_MERGE_WAITS in reason, reason
+
+
+def test_the_module_docstring_says_an_operator_s_reason_goes_first() -> None:
+    doc = " ".join((_preflight_module().__doc__ or "").split())
+    assert "an arming made by UCG 3.x or earlier has none, and its resume re-merges the hooks" in doc
+    assert (
+        "unless a reason that is the operator's to fix stands beside that one (the story skills, or the Claude Code "
+        "version): the resume escalates it first, and those reasons come first in `reasons`" in doc
+    )
+
+
 @pytest.mark.skipif(os.name == "nt", reason="the stub `claude` is a POSIX shell script")
 @pytest.mark.parametrize(
     "printed,armed", [("2.1.294 (Claude Code)", False), ("2.1.295 (Claude Code)", True)]

@@ -75,13 +75,15 @@ run makes in place of the tool-action-per-fact environment sweep the resume
 rule otherwise costs (references/execute.md, resume). It asserts the epic
 branch, both hooks with the all-tools PreToolUse matcher, `"onFailure":
 "block"` on every guard item (an arming made by UCG 3.x or earlier has none,
-and its resume re-merges the hooks: references/execute.md), each UCG hook
-command splitting, the way the shell splits it, into `<env> uv run <script>`
-(an unquoted path with a space, or an assignment quoted with its name, does
-not, and that hook never starts; a shell operator or redirection fails it
-too), the five injected hook env vars (accepted from the hook command
-strings OR the inherited process env, both of which preflight step 5
-permits), the UCG
+and its resume re-merges the hooks, unless a reason that is the operator's to
+fix stands beside that one (the story skills, or the Claude Code version):
+the resume escalates it first, and those reasons come first in `reasons`;
+references/execute.md), each UCG hook command splitting, the way the shell
+splits it, into `<env> uv run <script>` (an unquoted path with a space, or an
+assignment quoted with its name, does not, and that hook never starts; a
+shell operator or redirection fails it too), the five injected hook env vars
+(accepted from the hook command strings OR the inherited process env, both
+of which preflight step 5 permits), the UCG
 story skills (a manual deletion between spawns, or an interrupted UCG install
 or update, can remove them), and the Claude Code version against the
 minimums step 1 enforces (`checks.cc_version`: below 2.1.295 Claude Code
@@ -1696,6 +1698,23 @@ def _assert_hooks(project_root: Path) -> dict:
     }
 
 
+# How a reason that is the operator's to fix (the story skills, the Claude
+# Code version) ends on a resume, and how a hooks reason defers to one: the
+# re-assertion sweep in references/execute.md escalates it before it fixes
+# any other, since the run stops on it either way and a hooks re-merge writes
+# a protected file that a headless session may be refused.
+_ESCALATE_FIRST = (
+    "Escalate the story about to be driven before fixing any other reason this "
+    "assertion names, as execute.md's re-assertion sweep says: a hooks re-merge "
+    "waits for the resume after the operator's fix"
+)
+_RE_MERGE_WAITS = (
+    "unless a reason that is the operator's to fix (story skills not installed, "
+    "or a Claude Code below the minimum) stands beside this one: that one is "
+    "escalated first, and the resume after the operator's fix re-merges"
+)
+
+
 def _on_failure_reason(values: list) -> str:
     """The named reason for a guard item without `"onFailure": "block"`."""
     shown = ", ".join("missing" if v is None else json.dumps(v) for v in values)
@@ -1706,7 +1725,7 @@ def _on_failure_reason(values: list) -> str:
         '"block" makes Claude Code drop the item, so the guard does not run at '
         "all. Re-merge the hooks as preflight.md step 5's Hooks bullet says "
         "(replace, never append; on a resume purge nothing, as execute.md's "
-        "re-assertion sweep says), then assert again" % shown
+        "re-assertion sweep says), then assert again, %s" % (shown, _RE_MERGE_WAITS)
     )
 
 
@@ -1727,7 +1746,7 @@ def _command_reason(problems: list[str]) -> str:
         "preflight.md step 5's Hooks bullet says, each injected value and the "
         "script path in single quotes (KEY='value' uv run '<path>'; replace, "
         "never append; on a resume purge nothing, as execute.md's re-assertion "
-        "sweep says), then assert again" % "; ".join(problems)
+        "sweep says), then assert again, %s" % ("; ".join(problems), _RE_MERGE_WAITS)
     )
 
 
@@ -1801,10 +1820,8 @@ def _cc_version_reason(version: dict) -> str:
         "so a guard that cannot start, crashes or times out lets the tool call "
         "run unchecked, and a fresh preflight refuses to launch below it. A "
         "resume does not fix this: updating Claude Code (claude update) is the "
-        "operator's call, and a session keeps the version it started with. "
-        "Escalate the story about to be driven, as execute.md's re-assertion "
-        "sweep says for a skills failure"
-        % (_cc_version_detail(version["version"], version["below"]), version["minimum"])
+        "operator's call, and a session keeps the version it started with. %s"
+        % (_cc_version_detail(version["version"], version["below"]), version["minimum"], _ESCALATE_FIRST)
     )
 
 
@@ -2223,7 +2240,17 @@ def build_assert_armed(
     }
     if story:
         checks["story"] = _assert_story(project_root, impl_artifacts, story, trace_output)
+    # The reasons that are the operator's to fix come first: the sweep
+    # escalates them before it fixes any other, and a conductor reads the
+    # first reason first.
     reasons: list[str] = []
+    if not skills["ok"]:
+        reasons.append(
+            "%s On a resume, installing them is the operator's call. %s"
+            % (_story_skills_detail(project_root, skills["missing"]), _ESCALATE_FIRST)
+        )
+    if not cc_version["ok"]:
+        reasons.append(_cc_version_reason(cc_version))
     if not branch["ok"]:
         reasons.append(
             "branch %r is not an epic branch under prefix %r (or is protected)"
@@ -2250,10 +2277,6 @@ def build_assert_armed(
             "hook env not fully injected; enforcing hardcoded fallbacks for: %s"
             % ", ".join(hook_env["missing"])
         )
-    if not skills["ok"]:
-        reasons.append(_story_skills_detail(project_root, skills["missing"]))
-    if not cc_version["ok"]:
-        reasons.append(_cc_version_reason(cc_version))
     armed = branch["ok"] and hooks["ok"] and hook_env["ok"] and skills["ok"] and cc_version["ok"]
     return {"armed": armed, "checks": checks, "reasons": reasons}
 
