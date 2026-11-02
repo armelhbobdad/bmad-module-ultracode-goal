@@ -42,7 +42,11 @@ pass 255 bytes.
 The hook reads and writes only a regular file at the counter's and the
 marker's names. It opens the counter without following a symlink at its name
 or waiting on a FIFO there, and writes each through a new file in the state
-dir renamed onto the name, so neither write goes through a link put there. A
+dir renamed onto the name, so neither write goes through a link put there.
+Where it cannot make or rename that file (a state dir it may change files in
+but not add names to, or a path the new file's longer name takes past the
+system's longest), it writes into the file at the name instead, opened the
+same way, and only into a regular file that no other name links to. A
 name that holds a symlink, a FIFO, a folder or any other file that is not a
 regular one is left as it is and said on stderr: at the counter's, the turn
 counts against "unknown" (and goes uncounted when unknown's counter holds one
@@ -105,6 +109,16 @@ _READ_FLAGS = (
 # Create the new file a write goes through, refusing any file already there.
 _CREATE_FLAGS = (
     os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+)
+# Open the file at a name to write into it where no new file can be made
+# beside it: create it if absent, but follow no symlink at the name and do
+# not wait on a FIFO there, as the read does.
+_IN_PLACE_FLAGS = (
+    os.O_WRONLY
+    | os.O_CREAT
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_NONBLOCK", 0)
+    | getattr(os, "O_BINARY", 0)
 )
 
 
@@ -234,9 +248,42 @@ def _write_text(path: Path, text: str) -> None:
     """Write text to path through a new file in its folder, renamed onto the
     name: whatever sits at the name is replaced, never written through. The
     new file's name starts with `.budget-` and ends in `.tmp`, so preflight's
-    purge of `.budget-*` takes one a crash left behind."""
+    purge of `.budget-*` takes one a crash left behind.
+
+    Where that fails (a folder the hook may change files in but not add names
+    to, or a path the new file's longer name takes past the longest the
+    system takes), it writes into the file at the name instead, through
+    _write_in_place, and raises the first error when that fails too."""
     data = text.encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _write_through_new_file(path, data)
+    except OSError as exc:
+        try:
+            _write_in_place(path, data)
+        except (OSError, _NotRegular):
+            raise exc from None
+
+
+def _write_in_place(path: Path, data: bytes) -> None:
+    """Write data into the file at path, or into a new one there, opened
+    without following a symlink at its name or waiting on a FIFO there. It
+    writes only into a regular file no other name links to (a hard link to a
+    file outside the state dir, say), raising _NotRegular for any other, and
+    truncates it only once fstat has shown that."""
+    fd = os.open(path, _IN_PLACE_FLAGS, 0o666)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise _NotRegular(path.name)
+        os.ftruncate(fd, 0)
+        while data:
+            data = data[os.write(fd, data) :]
+    finally:
+        os.close(fd)
+
+
+def _write_through_new_file(path: Path, data: bytes) -> None:
     temp = path.parent / f".budget-{os.getpid()}-{os.urandom(4).hex()}.tmp"
     fd = os.open(temp, _CREATE_FLAGS, 0o666)
     try:

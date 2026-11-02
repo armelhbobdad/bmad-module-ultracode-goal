@@ -13,6 +13,7 @@ inert at runtime, the stage references no longer interpolate a token ceiling,
 and the config key that named it is deprecated in place rather than removed."""
 
 import ast
+import contextlib
 import json
 import os
 import re
@@ -377,6 +378,57 @@ def test_the_longest_story_id_a_marker_name_holds_counts_as_itself(tmp_path: Pat
     assert not (impl / ".budget-unknown.json").exists()
 
 
+# The whole path has a limit too: PATH_MAX bytes on Linux and macOS, NUL
+# included, so the longest path the system takes is one byte shorter. The
+# marker's path is the longer of the two the hook names after the story.
+
+
+def _longest_path(base: Path) -> int:
+    """The longest path, in bytes, the system takes under base, or a skip."""
+    if sys.platform == "win32" or not hasattr(os, "pathconf"):
+        pytest.skip("builds a path at PATH_MAX, which this check reads on Linux and macOS")
+    try:
+        path_max = os.pathconf(base, "PC_PATH_MAX")
+    except (OSError, ValueError) as exc:
+        pytest.skip(f"this system does not say its PATH_MAX: {exc}")
+    if not 512 <= path_max <= 65536 or len(os.fsencode(str(base))) > path_max // 2:
+        pytest.skip(f"PATH_MAX {path_max} leaves no room to build a path at it under {base}")
+    return path_max - 1
+
+
+def _folder_of_length(base: Path, length: int) -> Path:
+    """A new folder under base whose path is `length` bytes long, made of
+    ASCII names of at most 200 bytes each."""
+    folder, need = base, length - len(os.fsencode(str(base)))
+    assert need >= 2
+    while need:
+        size = min(200, need - 1)
+        if need - (size + 1) == 1:  # leave no single byte that no name can fill
+            size -= 1
+        folder, need = folder / ("d" * size), need - size - 1
+    folder.mkdir(parents=True)
+    assert len(os.fsencode(str(folder))) == length
+    return folder
+
+
+def test_a_short_story_near_the_longest_path_is_still_counted(tmp_path: Path) -> None:
+    """A short story id leaves its counter's and its marker's names shorter
+    than the new file a write goes through (`.budget-<pid>-<hex>.tmp`), so
+    near the longest path that new file cannot be made while the names fit.
+    The hook then writes the counter and the marker in place, and the turn
+    and the marker still land."""
+    longest = _longest_path(tmp_path)
+    impl = _folder_of_length(tmp_path, longest - len("/.escalation-S1.md"))
+    env = {**_no_story_env(impl, "1"), "ULTRACODE_STORY_ID": "S1"}
+    proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env)
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(path.name for path in impl.iterdir()) == [".budget-S1.json", ".escalation-S1.md"]
+    assert _turns(impl, "S1") == 1
+    assert (impl / ".escalation-S1.md").read_text(encoding="utf-8").startswith("# Turn ceiling reached: story S1")
+    assert "Marker written" in json.loads(proc.stdout)["systemMessage"]
+    assert proc.stderr == b""
+
+
 # --- A link or a special file at the counter's or the marker's name ----------
 # The hook read and wrote its counter and its marker by name, following a
 # symlink there, so one to a file outside the state dir had that file's
@@ -541,6 +593,103 @@ def test_a_counter_is_replaced_whole_and_leaves_no_temporary_file(tmp_path: Path
     assert _turns(impl, "S1") == 5
     assert (impl / ".escalation-S1.md").is_file()
     assert sorted(path.name for path in impl.iterdir()) == [".budget-S1.json", ".escalation-S1.md"]
+
+
+# A state dir the hook may change files in but not add names to (mode 555)
+# leaves no room for the new file a write goes through. Root and Windows
+# ignore that mode, so these run elsewhere.
+_NO_NEW_NAMES = pytest.mark.skipif(
+    sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs a folder whose mode refuses new names, which root and Windows do not honour",
+)
+
+
+@contextlib.contextmanager
+def _refusing_new_names(folder: Path):
+    folder.chmod(0o555)
+    try:
+        yield
+    finally:
+        folder.chmod(0o755)
+
+
+@_NO_NEW_NAMES
+def test_a_counter_in_a_folder_that_refuses_new_names_is_written_in_place(tmp_path: Path) -> None:
+    """No new file can be made in the state dir to rename onto the counter's
+    name, so the hook writes into the regular counter already there, as
+    v4.0.0 did, and refreshes the marker already there the same way. The
+    turn is counted and the marker is current."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    (impl / ".budget-S1.json").write_text(json.dumps({"turns": 3}), encoding="utf-8")
+    (impl / ".escalation-S1.md").write_text("an older marker\n", encoding="utf-8")
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "4"}
+    with _refusing_new_names(impl):
+        proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == b""
+    assert _turns(impl, "S1") == 4
+    assert (impl / ".escalation-S1.md").read_text(encoding="utf-8").startswith("# Turn ceiling reached: story S1")
+    assert "Marker written" in json.loads(proc.stdout)["systemMessage"]
+    assert sorted(path.name for path in impl.iterdir()) == [".budget-S1.json", ".escalation-S1.md"]
+
+
+@_NO_NEW_NAMES
+def test_a_hard_link_at_the_counter_in_such_a_folder_is_not_written_through(tmp_path: Path, victim: Path) -> None:
+    """The safety twin: written in place, a counter that another name links
+    to (a hard link to a file outside the state dir) is refused, so the file
+    outside keeps its contents and the turn goes uncounted, said on stderr."""
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    os.link(victim, impl / ".budget-S1.json")
+    env = {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "ULTRACODE_STORY_ID": "S1", "ULTRACODE_MAX_TURNS": "25"}
+    with _refusing_new_names(impl):
+        proc = _run_raw(json.dumps({"hook_event_name": "Stop", "cwd": str(tmp_path)}), tmp_path, env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert "could not write .budget-S1.json" in proc.stderr.decode("utf-8", "replace")
+
+
+def _load_hook():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("ucg_budget_stop_in_place", HOOK)
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    return hook
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "mkfifo"), reason="needs O_NOFOLLOW and FIFOs (POSIX)"
+)
+def test_a_write_in_place_follows_no_link_and_waits_on_no_fifo(tmp_path: Path, victim: Path) -> None:
+    """The in-place write opens the name as the counter's read does: it
+    follows no symlink there and does not wait on a FIFO, and it writes only
+    into a regular file no other name links to, truncating it first. A name
+    with nothing at it gets a new file."""
+    hook = _load_hook()
+    link = tmp_path / "link.json"
+    os.symlink(victim, link)
+    with pytest.raises(OSError):
+        hook._write_in_place(link, b'{"turns": 1}')
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    with pytest.raises((OSError, hook._NotRegular)):
+        hook._write_in_place(fifo, b'{"turns": 1}')
+    hard = tmp_path / "hard.json"
+    os.link(victim, hard)
+    with pytest.raises(hook._NotRegular):
+        hook._write_in_place(hard, b'{"turns": 1}')
+    assert victim.read_text(encoding="utf-8") == "keep me\nline 2\n"
+    assert link.is_symlink() and fifo.is_fifo()
+
+    regular = tmp_path / "regular.json"
+    regular.write_text('{"turns": 12}', encoding="utf-8")
+    hook._write_in_place(regular, b'{"turns": 3}')
+    assert regular.read_text(encoding="utf-8") == '{"turns": 3}'
+    new = tmp_path / "new.json"
+    hook._write_in_place(new, b'{"turns": 1}')
+    assert new.read_text(encoding="utf-8") == '{"turns": 1}'
 
 
 @pytest.mark.parametrize(
