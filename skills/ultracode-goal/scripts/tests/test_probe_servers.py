@@ -381,6 +381,84 @@ def test_the_sockets_counted_are_the_ones_linux_gives_the_connection_to(listener
         assert counted == {str(os.fstat(socks[expected].fileno()).st_ino)}
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not socket.has_ipv6,
+    reason="Linux's lookup order, with sockets read from its /proc",
+)
+def test_a_v6only_socket_beside_the_v4_mapped_wildcard_still_counts_as_the_docstring_says():
+    """A layout the docstring names, measured: a `::` socket set IPV6_V6ONLY
+    shares a port with one at `::ffff:0.0.0.0` (with or without SO_REUSEPORT),
+    which takes every IPv4 connection, and both sit at the last address in
+    Linux's order. /proc shows no IPV6_V6ONLY, so the probe counts both."""
+    port = _free_port()
+    with contextlib.ExitStack() as stack:
+        socks = {
+            folder: stack.enter_context(_bound(host, port, v6only=folder == "/v6only"))
+            for host, folder in [("::", "/v6only"), ("::ffff:0.0.0.0", "/mapped")]
+        }
+        landed = probe_servers._reached("127.0.0.1", port)
+        assert landed == _V4
+        ready, _, _ = select.select(list(socks.values()), [], [], 2)
+        assert [folder for folder, sock in socks.items() if sock in ready] == ["/mapped"]
+        counted = probe_servers._listening_inodes(port, Path("/proc"), landed)
+        assert counted == {str(os.fstat(sock.fileno()).st_ino) for sock in socks.values()}
+
+
+# What the docstring says of the cases its reads cannot tell apart. It named one layout in which a socket that took
+# no part in the connection still counts (a `::` socket set IPV6_V6ONLY, with no socket at the address, its mapped
+# form or `0.0.0.0`), though a review measured three on real sockets: that one, the same socket beside the one at `::`
+# or `::ffff:0.0.0.0` that took the connection, and a socket bound to a device the connection did not arrive on. And
+# it said a watcher that starts its server through a command that then exits is no longer the server's parent, though
+# a subreaper adopts it back: from another session, once that command gave the server one, which counts for nothing.
+_DOC_LIMITS = (
+    "a socket that took no part in the connection still counts in three layouts:",
+    "a `::` socket set IPV6_V6ONLY counts for IPv4 when no socket listens at those addresses",
+    "and when the socket that took it listens at `::` too (without the flag, under SO_REUSEPORT) or at "
+    "`::ffff:0.0.0.0`;",
+    "a socket bound to a device with SO_BINDTODEVICE, which takes only a connection that arrives on that device, "
+    "counts at its address in place of, or beside, the one that took it.",
+    "the probe can stop a server that took no part, though only one that reads as the run's itself,",
+    "starts the server through a command that then exits and is not its parent afterwards (a subreaper adopts it "
+    "back), or, whenever the watcher started, when that command gave the server a session of its own, since a parent "
+    "in another session, a subreaper included, counts for nothing.",
+)
+_DOC_NEVER_SAYS = ("so that it is no longer the server's parent",)
+
+
+def _doc_limit_gaps(doc: str) -> list[str]:
+    flat = " ".join(doc.split())
+    return [phrase for phrase in _DOC_LIMITS if phrase not in flat] + [
+        phrase for phrase in _DOC_NEVER_SAYS if phrase in flat
+    ]
+
+
+def test_the_docstring_names_what_its_reads_cannot_tell_apart():
+    assert _doc_limit_gaps(probe_servers.__doc__) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The first wording: the one layout of a connection no listed socket took.
+        ("still counts in three layouts:", "still counts in one layout:"),
+        (" and when the socket that took it listens at `::` too (without the flag, under SO_REUSEPORT) or at "
+         "`::ffff:0.0.0.0`;", ";"),
+        ("; and a socket bound to a device with SO_BINDTODEVICE, which takes only a connection that arrives on that "
+         "device, counts at its address in place of, or beside, the one that took it.", "."),
+        (", though only one that reads as the run's itself,", ","),
+        # The first watcher wording, which a subreaper that adopts its server back from another session breaks.
+        ("exits and is not its parent afterwards (a subreaper adopts it back), or,",
+         "exits, so that it is no longer the server's parent, or,"),
+        (", since a parent in another session, a subreaper included, counts for nothing.", "."),
+    ],
+)
+def test_doc_limit_predicate_rejects_a_case_left_unsaid(old, new):
+    doc = " ".join(probe_servers.__doc__.split())
+    mutant = doc.replace(old, new)
+    assert mutant != doc, "the mutant must actually change the text"
+    assert _doc_limit_gaps(mutant)
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the folder is read from Linux's /proc")
 @pytest.mark.skipif(not socket.has_ipv6, reason="no IPv6")
 def test_two_real_servers_on_one_port_are_told_apart(tmp_path, capsys):

@@ -38,9 +38,19 @@ which takes IPv4 connections unless it sets IPV6_V6ONLY. /proc does not show
 that flag, but a `::` socket that takes IPv4 connections shares a port with an
 IPv4 socket only under SO_REUSEPORT, and then the IPv4 one at the address or
 at `0.0.0.0` takes the connection, so `::` counts for IPv4 only when no
-socket listens at the address, its IPv4-mapped form or `0.0.0.0`. A `::`
-socket set IPV6_V6ONLY still counts then, though the connection reached no
-socket /proc lists (a NAT rule sent it elsewhere, say). A connection to the
+socket listens at the address, its IPv4-mapped form or `0.0.0.0`. Since /proc
+shows neither that flag nor the network device a socket is bound to, a socket
+that took no part in the connection still counts in three layouts: a `::`
+socket set IPV6_V6ONLY counts for IPv4 when no socket listens at those
+addresses (the connection then reached no socket /proc lists: a NAT rule sent
+it elsewhere, say), and when the socket that took it listens at `::` too
+(without the flag, under SO_REUSEPORT) or at `::ffff:0.0.0.0`; and a socket
+bound to a device with SO_BINDTODEVICE, which takes only a connection that
+arrives on that device, counts at its address in place of, or beside, the one
+that took it. In those layouts the folder can be another server's or `null`,
+and with the stop flags below the probe can stop a server that took no part,
+though only one that reads as the run's itself, or give the reason it leaves
+such a server up as the URL's. A connection to the
 unspecified address (`0.0.0.0`, `::`) reaches the family's loopback address,
 and one to an IPv4-mapped address (`::ffff:127.0.0.1`) the IPv4 address it
 maps, as Linux routes them, so the probe reads it there. The folder is `null`
@@ -93,11 +103,12 @@ background by a command that has since exited, with no terminal, reads as the
 run's too when it started after the marker, as did everything else that still
 runs in its session, and runs from inside a root. So does one that a watcher
 started that way restarts after the marker, when the watcher started after
-the marker too and runs in the server's process group, or when it starts the
-server through a command that then exits, so that it is no longer the
-server's parent, and either started after the marker or had that command give
-the server a session of its own. The marker can be days old, since a resume
-keeps it. The probe never stops its own process group, or one that holds a
+the marker too and either runs in the server's process group or starts the
+server through a command that then exits and is not its parent afterwards (a
+subreaper adopts it back), or, whenever the watcher started, when that
+command gave the server a session of its own, since a parent in another
+session, a subreaper included, counts for nothing. The marker can be days
+old, since a resume keeps it. The probe never stops its own process group, or one that holds a
 process that started it, and it stops nothing for a URL whose
 connection no process here took: /proc lists no socket here that could have
 taken it, or it reached an address that is not one of this host's own (a
@@ -298,8 +309,13 @@ def _listening_inodes(port: int, proc: Path, reached: _Address | None = None) ->
     under SO_REUSEPORT, and then an IPv4 socket at the address or `0.0.0.0`
     comes first either way: so a `::` socket counts for IPv4 only when no
     socket listens at the address, its IPv4-mapped form or `0.0.0.0`. One set
-    IPV6_V6ONLY still counts then, though it took no part: the connection
-    reached no socket /proc lists (a NAT rule sent it elsewhere, say)."""
+    IPV6_V6ONLY still counts then, though it took no part: when nothing else
+    listens there (the connection reached no socket /proc lists: a NAT rule
+    sent it elsewhere, say), or beside the socket that took it at `::`
+    (without the flag, under SO_REUSEPORT) or at `::ffff:0.0.0.0`. /proc does
+    not show SO_BINDTODEVICE either, so a socket bound to a device the
+    connection did not arrive on counts at its address, in place of, or
+    beside, the one that took it."""
     listening: list[tuple[bytes, str]] = []
     for table in ("tcp", "tcp6"):
         try:

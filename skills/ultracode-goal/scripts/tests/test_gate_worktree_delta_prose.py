@@ -174,6 +174,15 @@ change a file, and the probe stopped that server, though the caveat said only
 servers started after the marker read as the run's. The probe now reads the
 server's session and parents too, and the caveat names both conditions and
 the watcher's case that still reads as the run's, each pinned with a twin.
+
+Its review found two sentences of troubleshooting wrong. One said a watcher
+keeps its server up while it runs as the server's parent, though only a
+parent in the server's session counts: a subreaper watcher that adopts back a
+server it gave a session of its own had that server stopped. The other named
+only a killed runner's server as one the run leaves up, though the parent
+rule now leaves up the run's own server too when a watcher its start command
+runs (a launcher task that runs watchexec) runs it in a group of its own.
+Both are pinned with twins.
 """
 
 from __future__ import annotations
@@ -1126,6 +1135,63 @@ def test_tip_predicate_rejects_a_tip_that_contradicts_the_gate(old, new):
     mutant = tips.replace(old, new)
     assert mutant != tips, "the mutant must actually change the text"
     assert _tip_gaps(mutant)
+
+
+_STOPPED_SERVER_SAYS = (
+    # A watcher keeps its server up only from inside the server's session: a subreaper that adopts back a server it
+    # gave a session of its own is its parent from another session, which the probe does not count.
+    "keeps it up only while it runs in the server's session and either began before the marker or is the parent of "
+    "one of the server's processes from a process group of its own;",
+    "the server reads as the run's when the watcher began after the marker and either runs in the server's process "
+    "group or starts it through a command that then exits and is not its parent afterwards (a subreaper adopts it "
+    "back), or, whenever the watcher began, when that command gave the server a session of its own.",
+    # The run's own server that the probe leaves up: a killed runner's, and one a watcher the run started keeps up.
+    "When the run left that server up, stop it yourself once the drive is done:",
+    "and a watcher the run's own start command runs (a launcher task that runs watchexec, cargo-watch or air, say) "
+    "keeps up the server it runs in a process group of its own, as a watcher of yours does, so stop that watcher too.",
+)
+# The first wording, which a subreaper watcher's server, adopted back from another session, contradicts.
+_STOPPED_SERVER_NEVER_SAYS = ("keeps it up while it runs as the server's parent in a process group of its own",)
+
+
+def _stopped_server_gaps(text: str) -> list[str]:
+    flat = re.sub(r"\s+", " ", text)
+    return [phrase for phrase in _STOPPED_SERVER_SAYS if phrase not in flat] + [
+        phrase for phrase in _STOPPED_SERVER_NEVER_SAYS if phrase in flat
+    ]
+
+
+def _troubleshooting() -> str:
+    return (_REPO_ROOT / "docs" / "troubleshooting.md").read_text(encoding="utf-8")
+
+
+def test_troubleshooting_says_which_watcher_keeps_a_server_up_and_which_servers_the_run_leaves():
+    assert _stopped_server_gaps(_troubleshooting()) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The first wording: any parent in a group of its own, though one in another session counts for nothing.
+        ("keeps it up only while it runs in the server's session and either began before the marker or is the parent "
+         "of one of the server's processes from a process group of its own;",
+         "keeps it up while it runs as the server's parent in a process group of its own, or began before the marker "
+         "in the server's session;"),
+        ("in the server's session and either began", "and either began"),
+        (" and is not its parent afterwards (a subreaper adopts it back),", ""),
+        (", or, whenever the watcher began, when that command gave the server a session of its own.", "."),
+        # The run's own server a watcher keeps up, left unsaid, or its watcher left running.
+        (", and a watcher the run's own start command runs (a launcher task that runs watchexec, cargo-watch or air, "
+         "say) keeps up the server it runs in a process group of its own, as a watcher of yours does, so stop that "
+         "watcher too.", "."),
+        (", so stop that watcher too.", "."),
+    ],
+)
+def test_stopped_server_predicate_rejects_a_wrong_watcher_case(old, new):
+    text = re.sub(r"\s+", " ", _troubleshooting())
+    mutant = text.replace(old, new)
+    assert mutant != text, "the mutant must actually change the text"
+    assert _stopped_server_gaps(mutant)
 
 
 _REUSED_FRAGMENT_SAYS = (
