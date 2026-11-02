@@ -1180,6 +1180,8 @@ def test_without_the_stop_flags_the_output_keeps_its_two_keys(capsys):
 _BOOT = 1_000_000
 _TICKS = 100.0
 _SINCE = float(_BOOT + 100)
+# The marker as the probe names it in a reason: `Path` writes it with backslashes on Windows.
+_MARKER_NAMED = str(Path("/p/.baseline-1-1"))
 _CALLER = probe_servers._Caller(uid=1000, pgrp=500, session=500, lineage=frozenset({500, 400, 1}))
 # The server the run left up: `bun run dev` (40) leading its process group, the server under it (41) holding the
 # socket, both in the session the runner's start command (30, gone) led, started 200 seconds after boot.
@@ -1256,9 +1258,9 @@ def test_a_server_whose_every_process_passes_is_the_runs(tmp_path):
         # Another user's process in the group.
         (_changed(0, uid=1001), ("/p",), "process 40 in its process group is not this user's"),
         # One process of the group started before the marker, within the clock's slack, or long before.
-        (_changed(0, start=10_000), ("/p",), "process 40 in its process group started before /p/.baseline-1-1 was "
+        (_changed(0, start=10_000), ("/p",), f"process 40 in its process group started before {_MARKER_NAMED} was "
          "written"),
-        (_changed(1, start=10_150), ("/p",), "process 41 in its process group started before /p/.baseline-1-1 was "
+        (_changed(1, start=10_150), ("/p",), f"process 41 in its process group started before {_MARKER_NAMED} was "
          "written"),
         # The process that led its session still runs.
         (_RUN_LEFT_UP + ({"pid": 30, "ppid": 1, "pgrp": 30, "session": 30, "tty": 0, "start": 19_000, "uid": 1000,
@@ -1335,7 +1337,7 @@ def test_a_server_reparented_to_a_reaper_in_another_session_is_the_runs(tmp_path
     [
         (9_000, True, _WATCHER_REASON.format(watcher=35, server=40)),
         (19_500, True, _WATCHER_REASON.format(watcher=35, server=40)),
-        (9_000, False, "process 35 in its session started before /p/.baseline-1-1 was written"),
+        (9_000, False, f"process 35 in its session started before {_MARKER_NAMED} was written"),
         # The case the docs name: a watcher that started after the marker and starts the server through a process
         # that has since exited, so it is no longer its parent, reads like turbo's other task.
         (19_500, False, None),
