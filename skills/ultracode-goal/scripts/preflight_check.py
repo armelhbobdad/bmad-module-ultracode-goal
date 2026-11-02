@@ -1004,95 +1004,264 @@ def _last_path_part(word: str) -> str:
     return re.split(r"[/\\]", word)[-1]
 
 
-# The options of uv, and of `uv run`, that take their value in the next word
-# when it is not glued on (`--python 3.12`; `--python=3.12` and `-p3.12` are
-# one word), as `uv run --help` lists them (uv 0.12), and the six it hides
-# there (`--python-preference` to `--trusted-host`, found by trying each word
-# the uv 0.12.15 binary holds). Read as flags, the value took the script's
-# place, and a command that starts the script failed. A value option a later
-# uv adds still reads that way, which fails safe: the re-merge rewrites it.
-_UV_VALUE_SHORT = frozenset("pwifPC")
-_UV_VALUE_LONG = frozenset(
+# How uv reads the options of a hook command, as uv 0.12.15 defines them (the
+# global ones, and those of `uv run` and of each argument group it reads, the
+# ones `--help` hides too), each tried against that binary. Before `run` uv
+# takes its global options alone (`uv --python 3.12 run` exits 2), after it
+# those and `uv run`'s own. A flag takes no value (`--offline=true` exits 2);
+# an option that takes one takes it glued (`--python=3.12`, `-p3.12`) or in
+# the next word, which must not start with "-" (`--python -q` exits 2). Read
+# as flags, values took the script's place, and read as uv's, an option uv
+# refuses there passed. An option a later uv adds reads as one uv does not
+# take, which fails safe: the re-merge rewrites the command as preflight does.
+_UV_GLOBAL_FLAGS = frozenset(
     {
-        "--allow-insecure-host", "--cache-dir", "--color", "--config-file", "--config-setting",
-        "--config-settings-package", "--default-index", "--directory", "--env-file", "--exclude-newer",
-        "--exclude-newer-package", "--extra", "--extra-index-url", "--find-links", "--fork-strategy",
-        "--group", "--index", "--index-strategy", "--index-url", "--keyring-provider", "--link-mode",
-        "--no-binary-package", "--no-build-isolation-package", "--no-build-package", "--no-editable-package",
-        "--no-extra", "--no-group", "--no-sources-package", "--only-group", "--package", "--prerelease",
-        "--prerelease-package", "--project", "--python", "--python-platform", "--refresh-package",
-        "--reinstall-package", "--resolution", "--upgrade-group", "--upgrade-package", "--with",
-        "--with-editable", "--with-requirements",
-        "--python-preference", "--python-fetch", "--preview-features", "--preview-feature",
-        "--max-recursion-depth", "--trusted-host",
+        "--allow-python-downloads", "--isolated", "--managed-python", "-n", "--native-tls", "--no-cache",
+        "--no-cache-dir", "--no-color", "--no-config", "--no-installer-metadata", "--no-managed-python",
+        "--no-native-tls", "--no-offline", "--no-preview", "--no-progress", "--no-python-downloads",
+        "--no-system-certs", "--offline", "--preview", "-q", "--quiet", "--system-certs", "-v", "--verbose",
     }
+)
+_UV_GLOBAL_VALUES = frozenset(
+    {
+        "--allow-insecure-host", "--cache-dir", "--color", "--config-file", "--directory", "--preview-feature",
+        "--preview-features", "--project", "--python-fetch", "--python-preference", "--trusted-host",
+    }
+)
+_UV_RUN_FLAGS = frozenset(
+    {
+        "--active", "--all-extras", "--all-groups", "--all-packages", "--binary", "--build", "--build-isolation",
+        "--compile", "--compile-bytecode", "--dev", "--editable", "--exact", "--force-reinstall", "--frozen",
+        "--gui-script", "--inexact", "--locked", "--no-active", "--no-all-extras", "--no-binary", "--no-build",
+        "--no-build-isolation", "--no-compile", "--no-compile-bytecode", "--no-default-groups", "--no-dev",
+        "--no-editable", "--no-env-file", "--no-exact", "--no-frozen", "--no-index", "--no-locked", "--no-project",
+        "--no-refresh", "--no-reinstall", "--no-sources", "--no-sync", "--no-upgrade", "--no_workspace",
+        "--only-dev", "--pre", "--refresh", "--reinstall", "-s", "--script", "--show-resolution", "-U", "--upgrade",
+    }
+)
+_UV_RUN_VALUES = frozenset(
+    {
+        "-C", "--config-setting", "--config-settings", "--config-settings-package", "--default-index", "--env-file",
+        "--exclude-newer", "--exclude-newer-package", "--extra", "--extra-index-url", "-f", "--find-links",
+        "--fork-strategy", "--group", "-i", "--index", "--index-strategy", "--index-url", "--keyring-provider",
+        "--link-mode", "--max-recursion-depth", "--no-binary-package", "--no-build-isolation-package",
+        "--no-build-package", "--no-editable-package", "--no-extra", "--no-group", "--no-sources-package",
+        "--only-group", "-P", "-p", "--package", "--prerelease", "--prerelease-package", "--python",
+        "--python-platform", "--refresh-package", "--reinstall-package", "--resolution", "--upgrade-group",
+        "--upgrade-package", "-w", "--with", "--with-editable", "--with-requirements",
+    }
+)
+# The spellings of an option uv names another way in its errors.
+_UV_ALIASES = {
+    "--trusted-host": "--allow-insecure-host", "--compile": "--compile-bytecode",
+    "--config-settings": "--config-setting", "-C": "--config-setting", "-f": "--find-links", "-i": "--index-url",
+    "--no-exact": "--inexact", "--no-cache-dir": "--no-cache", "-n": "--no-cache",
+    "--no-compile": "--no-compile-bytecode", "--no_workspace": "--no-project",
+    "--preview-feature": "--preview-features", "-p": "--python", "-q": "--quiet",
+    "--force-reinstall": "--reinstall", "-s": "--script", "-U": "--upgrade", "-P": "--upgrade-package",
+    "-v": "--verbose", "-w": "--with",
+}
+# The options uv takes twice in one place. It refuses any other given twice
+# there (`--offline --offline` exits 2), though once before `run` and once
+# after it is fine; so is each pair below, which it refuses in one place.
+_UV_REPEATABLE = frozenset(
+    {
+        "--allow-insecure-host", "--config-setting", "--config-settings-package", "--env-file",
+        "--exclude-newer-package", "--extra", "--extra-index-url", "--find-links", "--group", "--index",
+        "--no-binary-package", "--no-build-isolation-package", "--no-build-package", "--no-editable-package",
+        "--no-extra", "--no-group", "--no-sources-package", "--only-group", "--prerelease-package",
+        "--preview-features", "--quiet", "--refresh-package", "--reinstall-package", "--upgrade-group",
+        "--upgrade-package", "--verbose", "--with", "--with-editable", "--with-requirements",
+    }
+)
+_UV_CONFLICTS = frozenset(
+    frozenset(pair)
+    for pair in (
+        ("--all-extras", "--extra"),
+        ("--all-extras", "--only-group"),
+        ("--all-groups", "--only-dev"),
+        ("--all-groups", "--only-group"),
+        ("--all-packages", "--package"),
+        ("--color", "--no-color"),
+        ("--dev", "--only-group"),
+        ("--extra", "--only-group"),
+        ("--frozen", "--locked"),
+        ("--frozen", "--no-sources"),
+        ("--frozen", "--upgrade"),
+        ("--group", "--only-dev"),
+        ("--group", "--only-group"),
+        ("--gui-script", "--script"),
+        ("--locked", "--upgrade"),
+        ("--no-dev", "--only-dev"),
+        ("--no-project", "--package"),
+        ("--quiet", "--verbose"),
+    )
 )
 # The options that end a command line without running the script, as the
 # predicate the problem names. Each prints and exits 0, so a guard handed to
 # one never runs and Claude Code reads its exit as no objection: uv's version
-# and help before `run`, its help after it, where `-V` is an option `uv run`
-# refuses with exit 2, and `--show-settings` in either place. `uv run -m
-# <name>` runs a module, not a script file.
+# and help before `run`, its help after it, and `--show-settings` in either
+# place. `uv run -m <name>` runs a module, not a script file.
 _PRINTS_VERSION = "print its version and exit, not run a script"
 _PRINTS_HELP = "print its help and exit, not run a script"
 _PRINTS_SETTINGS = "print its settings and exit, not run a script"
 _UV_STOPS = {
-    "V": _PRINTS_VERSION, "--version": _PRINTS_VERSION, "h": _PRINTS_HELP, "--help": _PRINTS_HELP,
+    "-V": _PRINTS_VERSION, "--version": _PRINTS_VERSION, "-h": _PRINTS_HELP, "--help": _PRINTS_HELP,
     "--show-settings": _PRINTS_SETTINGS,
 }
 _UV_RUN_STOPS = {
-    "m": "run a module, not a script", "--module": "run a module, not a script",
-    "h": _PRINTS_HELP, "--help": _PRINTS_HELP, "--show-settings": _PRINTS_SETTINGS,
-    "V": 'refuse "-V", an option it does not take, and run no script',
-    "--version": 'refuse "--version", an option it does not take, and run no script',
+    "-m": "run a module, not a script", "--module": "run a module, not a script",
+    "-h": _PRINTS_HELP, "--help": _PRINTS_HELP, "--show-settings": _PRINTS_SETTINGS,
 }
-# A Python interpreter `uv run` may be given the script through
-# (`uv run python <script>`), by name or by path.
+# The values uv 0.12.15 takes for each option whose value is one of a set:
+# clap's names and aliases, hidden ones included, read from uv's sources, and
+# each run against the binary in both spellings (`--color never`,
+# `--color=never`) and, for a global one, on both sides of `run`. Case
+# counts. Any other value is a usage error, exit 2, before uv runs anything.
+_MANYLINUX = ["manylinux2014"] + ["manylinux_2_%d" % minor for minor in (17, 28, *range(31, 41))]
+_UV_CHOICES = {
+    "--color": frozenset({"auto", "always", "never"}),
+    "--fork-strategy": frozenset({"fewest", "requires-python"}),
+    "--index-strategy": frozenset(
+        {"first-index", "first-match", "unsafe-first-match", "unsafe-any-match", "unsafe-best-match"}
+    ),
+    "--keyring-provider": frozenset({"disabled", "subprocess"}),
+    "--link-mode": frozenset({"clone", "reflink", "copy", "hardlink", "symlink"}),
+    "--prerelease": frozenset({"disallow", "allow", "if-necessary", "explicit", "if-necessary-or-explicit"}),
+    "--python-fetch": frozenset({"automatic", "manual", "never"}),
+    "--python-preference": frozenset({"only-managed", "managed", "system", "only-system"}),
+    "--resolution": frozenset({"highest", "lowest", "lowest-direct"}),
+    "--python-platform": frozenset(
+        [
+            "windows", "linux", "macos", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "i686-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl", "s390x-unknown-linux-gnu", "powerpc64le-unknown-linux-gnu",
+            "loongarch64-unknown-linux-gnu", "riscv64-unknown-linux", "x86_64-apple-darwin", "aarch64-apple-darwin",
+            "x86_64-linux-android", "aarch64-linux-android", "wasm32-pyodide2024", "wasm32-pyodide2025",
+            "arm64-apple-ios", "arm64-apple-ios-simulator", "x86_64-apple-ios-simulator",
+        ]
+        + ["%s-%s" % (arch, tag) for arch in ("x86_64", "aarch64", "ppc64le", "s390x") for tag in _MANYLINUX]
+        + ["%s_%s" % (tag, arch) for arch in ("x86_64", "aarch64", "ppc64le", "s390x") for tag in _MANYLINUX]
+        + ["loongarch64-manylinux_2_%d" % minor for minor in range(36, 41)]
+        + ["manylinux_2_%d_loongarch64" % minor for minor in range(36, 41)]
+    ),
+}
+# The options whose value is a whole number, with the largest uv takes. clap
+# reads it as a signed number before it checks the range, so `+5`, `007` and a
+# glued `=-0` pass, while `5.0`, `1_000` and ` 5` exit 2.
+_UV_NUMBERS = {"--max-recursion-depth": 4294967295}
+_WHOLE_NUMBER = re.compile(r"[+-]?[0-9]+")
+# A word that names a Python, by name or by path. `uv run` reads the script's
+# inline metadata (its `# /// script` header) only when it runs the script
+# itself. Handed to `python`, or to any other program, the script runs as that
+# program's argument, so the header's Python minimum does not hold, and the
+# script is no longer isolated from the project it runs in. uv 0.12.15, given
+# `uv run python <script>`, ran Python 3.10 where a `.python-version` named it,
+# created a project's `.venv` and `uv.lock`, and exited 1 without running the
+# script when that project failed to build; and it found no `python3.12` to
+# spawn, with a 3.12 it manages installed, whenever it selected another Python.
 _PYTHON = re.compile(r"^python(?:\d+(?:\.\d+)?)?w?(?:\.exe)?$", re.IGNORECASE)
-# Python's options that take a value (`-X utf8`), and those that end its
-# options with something other than a script file to run, or with a version
-# or help text it prints before it exits (Python 3.11 to 3.14).
-_PYTHON_VALUE_SHORT = frozenset("XW")
-_PYTHON_VALUE_LONG = frozenset({"--check-hash-based-pycs"})
-_PYTHON_STOPS = {
-    "m": "run a module, not a script", "c": "run a command string, not a script",
-    "V": _PRINTS_VERSION, "--version": _PRINTS_VERSION,
-    "h": _PRINTS_HELP, "?": _PRINTS_HELP, "--help": _PRINTS_HELP, "--help-env": _PRINTS_HELP,
-    "--help-xoptions": _PRINTS_HELP, "--help-all": _PRINTS_HELP,
-}
 
 
-def _past_options(
-    words: list[str], index: int, value_short: frozenset[str], value_long: frozenset[str], stops: dict[str, str]
-) -> tuple[int, str | None]:
-    """(index of the first word that is no option, what a stop option does).
+def _uv_options(words: list[str], index: int, after_run: bool) -> tuple[int, str | None, list[str]]:
+    """(index of the first word past uv's options, why uv would run no script
+    or None, each option read by the name uv gives it).
 
-    A short cluster (`-qp`) reads letter by letter: a letter that takes a
-    value takes the rest of the word, or the next word when it is the last.
-    `--` ends the options. An option in `stops` (`-m`, `-V`) ends the command
-    line without running a script, and the second item says what it does.
+    Before `run` the options are uv's global ones, and `--` there leaves uv no
+    command; after it `uv run`'s own join them, and `--` ends them. A short
+    cluster (`-qp`) reads letter by letter: a letter that takes a value takes
+    the rest of the word, or the next word when it is the last. A value is
+    judged only where uv's parser judges it against a fixed set or as a number
+    (`_UV_CHOICES`, `_UV_NUMBERS`).
     """
+    who = "uv run" if after_run else "uv"
+    flags = _UV_GLOBAL_FLAGS | _UV_RUN_FLAGS if after_run else _UV_GLOBAL_FLAGS
+    values = _UV_GLOBAL_VALUES | _UV_RUN_VALUES if after_run else _UV_GLOBAL_VALUES
+    stops = _UV_RUN_STOPS if after_run else _UV_STOPS
+    read: list[str] = []
+
+    def refuse(what: str) -> str:
+        return "%s would %s, and run no script" % (who, what)
+
+    def unknown(name: str) -> str:
+        if not after_run and (name in _UV_RUN_FLAGS or name in _UV_RUN_VALUES or name in _UV_RUN_STOPS):
+            return refuse('refuse "%s", an option it takes only after run' % name)
+        return refuse('refuse "%s", an option it does not take' % name)
+
+    def note(name: str) -> str | None:
+        option = _UV_ALIASES.get(name, name)
+        if option in read and option not in _UV_REPEATABLE:
+            return refuse('refuse "%s" twice' % option)
+        for earlier in read:
+            if frozenset((earlier, option)) in _UV_CONFLICTS:
+                return refuse('refuse "%s" beside "%s"' % (earlier, option))
+        read.append(option)
+        return None
+
+    def value_problem(name: str, value: str | None, separate: bool) -> str | None:
+        """Why uv would not take `value`, glued on or the next word (None when
+        the command ends first, which leaves no script to find)."""
+        if value is None:
+            return None
+        bad = refuse('not take "%s" as the value of "%s"' % (value, name))
+        if separate and value.startswith("-") and value != "-":
+            return bad  # uv reads the word as an option
+        if name in _UV_CHOICES:
+            return None if value in _UV_CHOICES[name] else bad
+        if name in _UV_NUMBERS:
+            # Its digits past the sign and leading zeros, so no word is too
+            # long for int() to read.
+            digits = value.lstrip("+-").lstrip("0") or "0"
+            whole = _WHOLE_NUMBER.fullmatch(value) is not None and (digits == "0" or not value.startswith("-"))
+            return None if whole and len(digits) <= 10 and int(digits) <= _UV_NUMBERS[name] else bad
+        return None
+
     while index < len(words):
         word = words[index]
         if word == "--":
-            return index + 1, None
+            if after_run:
+                return index + 1, None, read
+            return index, 'uv would take no command after "--", and run no script', read
         if not word.startswith("-") or word == "-":
-            return index, None
+            return index, None, read
+        index += 1
         if word.startswith("--"):
-            name = word.split("=", 1)[0]
+            name, glued, value = word.partition("=")
             if name in stops:
-                return index, stops[name]
-            index += 2 if name in value_long and "=" not in word else 1
+                return index - 1, "%s would %s" % (who, stops[name]), read
+            if name in values:
+                if glued:
+                    problem = value_problem(name, value, separate=False)
+                else:
+                    problem = value_problem(name, words[index] if index < len(words) else None, separate=True)
+                    index += 1  # its value is the next word
+            elif name in flags:
+                problem = refuse('refuse "%s", a value for an option that takes none' % word) if glued else None
+            else:
+                problem = unknown(name)
+            problem = problem or note(name)
+            if problem is not None:
+                return index - 1, problem, read
             continue
         for position, letter in enumerate(word[1:], start=1):
-            if letter in stops:
-                return index, stops[letter]
-            if letter in value_short:
-                if position == len(word) - 1:
+            name = "-" + letter
+            if name in stops:
+                return index - 1, "%s would %s" % (who, stops[name]), read
+            if name not in values and name not in flags:
+                return index - 1, unknown(name), read
+            problem = None
+            if name in values:
+                if position < len(word) - 1:
+                    problem = value_problem(name, word[position + 1 :], separate=False)
+                else:
+                    problem = value_problem(name, words[index] if index < len(words) else None, separate=True)
                     index += 1  # its value is the next word
+            problem = problem or note(name)
+            if problem is not None:
+                return index - 1, problem, read
+            if name in values:
                 break
-        index += 1
-    return index, None
+    return index, None, read
 
 
 def _command_problem(command: str, script: str) -> str | None:
@@ -1109,11 +1278,25 @@ def _command_problem(command: str, script: str) -> str | None:
     The command is split with POSIX shell rules (shlex) and never run, so the
     script path is not opened: a moved skill is not this check's to find.
 
-    uv's options are read with their values (`uv run --python 3.12 <script>`),
-    and a Python interpreter `uv run` is given the script through (`uv run
-    python <script>`) starts it too. An option that prints a version, help
-    or settings and exits (`uv --version`, `uv run --help`, `python -V`)
-    starts nothing: the guard never runs, and its exit 0 reads as no objection.
+    uv's options are read as uv reads them (`uv run --python 3.12 <script>`
+    starts the script; `_uv_options`). A command uv would refuse, or one where
+    it prints a version, help or settings and exits (`uv --version`, `uv run
+    --help`), starts nothing: under the guard's key the first refuses every
+    call, and the second's exit 0 reads as no objection. A command that hands
+    the script to a Python (`uv run python <script>`) fails too, since the
+    script then runs without its inline metadata (`_PYTHON`).
+
+    A value is judged only where uv's parser judges it before it runs
+    anything: against a fixed set (`--color`, `--link-mode`, the others in
+    `_UV_CHOICES`) or as a whole number (`--max-recursion-depth`). The values
+    of the other options take forms this check does not enumerate (a Python
+    request, a path, a URL, a host, a requirement, a package, extra or group
+    name, a date or a span of time, a `KEY=VALUE` setting), so one uv's parser
+    refuses (an empty `--directory ''`, an `--extra` name with a space in it,
+    `-w-x`) passes here, as does one uv refuses only when it runs (a
+    `--python 3.99` it cannot find, `-p-3`). The leading NAME=value words are not read either: what a variable
+    does to uv or Python (`PATH`, `UV_PYTHON`, `PYTHONINSPECT`) is theirs to
+    find when the hook runs.
     """
     try:
         words = shlex.split(command)
@@ -1125,23 +1308,29 @@ def _command_problem(command: str, script: str) -> str | None:
     words = words[index:]
     if not words or _last_path_part(words[0]) not in ("uv", "uv.exe"):
         return "the shell would run %s as the command, not uv" % (json.dumps(words[0]) if words else "nothing")
-    index, stop = _past_options(words, 1, _UV_VALUE_SHORT, _UV_VALUE_LONG, _UV_STOPS)
-    if stop is not None:
-        return "uv would %s" % stop
+    index, problem, _ = _uv_options(words, 1, after_run=False)
+    if problem is not None:
+        return problem
     if index >= len(words) or words[index] != "run":
         return "uv is given %s, not run" % (json.dumps(words[index]) if index < len(words) else "nothing")
-    index, stop = _past_options(words, index + 1, _UV_VALUE_SHORT, _UV_VALUE_LONG, _UV_RUN_STOPS)
-    if stop is not None:
-        return "uv run would %s" % stop
-    runner = "uv run"
-    if index < len(words) and _PYTHON.match(_last_path_part(words[index])):
-        runner = "python"
-        index, stop = _past_options(words, index + 1, _PYTHON_VALUE_SHORT, _PYTHON_VALUE_LONG, _PYTHON_STOPS)
-        if stop is not None:
-            return "python would %s" % stop
+    index, problem, read = _uv_options(words, index + 1, after_run=True)
+    if problem is not None:
+        return problem
+    # `uv run --script` (or `-s`, or `--gui-script`) runs the word after its
+    # options as the script, even when that word is `python`.
+    if (
+        index < len(words)
+        and "--script" not in read
+        and "--gui-script" not in read
+        and _PYTHON.match(_last_path_part(words[index]))
+    ):
+        return (
+            "uv run would hand the script to %s without reading its inline metadata, so the Python minimum "
+            "its header sets would not hold, and the script would run in the project's environment, where "
+            "there is one, not an isolated one" % json.dumps(words[index])
+        )
     if index >= len(words) or _last_path_part(words[index]) != script:
-        return "%s would be given %s as the script, not a path ending in %s" % (
-            runner,
+        return "uv run would be given %s as the script, not a path ending in %s" % (
             json.dumps(words[index]) if index < len(words) else "nothing",
             script,
         )

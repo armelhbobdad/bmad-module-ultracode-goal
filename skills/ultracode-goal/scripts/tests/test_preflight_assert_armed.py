@@ -538,9 +538,9 @@ def test_an_unquoted_budget_hook_is_not_armed_either(tmp_path: Path) -> None:
         pytest.param(
             "uv run 'scripts/hooks/guard_pretooluse.py.bak'", "uv run would be given", id="another-file"
         ),
-        # Twins of the option and interpreter forms below: the same words
-        # with the script missing, or put where an option's value goes, or
-        # run as a module or a command string, start nothing.
+        # Twins of the option forms below: the same words with the script
+        # missing, or put where an option's value goes, or run as a module,
+        # start nothing.
         pytest.param(
             "uv run --python 3.12 --with 'scripts/hooks/guard_pretooluse.py'",
             "uv run would be given nothing",
@@ -558,33 +558,66 @@ def test_an_unquoted_budget_hook_is_not_armed_either(tmp_path: Path) -> None:
         ),
         pytest.param("uv --directory run 'scripts/hooks/guard_pretooluse.py'", "uv is given", id="run-as-a-value"),
         pytest.param(
-            "ULTRACODE_HOOK=guard_pretooluse.py uv run python", "python would be given nothing", id="python-alone"
-        ),
-        pytest.param(
-            "uv run python -m 'scripts/hooks/guard_pretooluse.py'", "python would run a module", id="python-module"
-        ),
-        pytest.param(
-            "uv run python -c 'scripts/hooks/guard_pretooluse.py'",
-            "python would run a command string",
-            id="python-command-string",
-        ),
-        pytest.param(
-            "uv run python -X 'scripts/hooks/guard_pretooluse.py'",
-            "python would be given nothing",
-            id="script-as-a-python-option-value",
-        ),
-        pytest.param(
             "uv run -m 'scripts/hooks/guard_pretooluse.py'", "uv run would run a module", id="uv-run-module"
         ),
         # A guard command that prints and exits 0 never starts the guard, and
         # Claude Code reads its exit 0 as no objection to every call.
         pytest.param(
-            "uv run python -V 'scripts/hooks/guard_pretooluse.py'",
-            "python would print its version and exit",
-            id="python-version",
+            "uv run --help 'scripts/hooks/guard_pretooluse.py'", "uv run would print its help and exit", id="uv-run-help"
+        ),
+        # Review of #186's fix: uv takes only its global options before `run`,
+        # and `--` there leaves it no command, so uv 0.12.15 exits 2 on each.
+        pytest.param(
+            "uv -- run 'scripts/hooks/guard_pretooluse.py'",
+            'uv would take no command after "--"',
+            id="end-of-options-before-run",
         ),
         pytest.param(
-            "uv run --help 'scripts/hooks/guard_pretooluse.py'", "uv run would print its help and exit", id="uv-run-help"
+            "uv --python 3.12 run 'scripts/hooks/guard_pretooluse.py'",
+            'uv would refuse "--python", an option it takes only after run',
+            id="run-option-before-run",
+        ),
+        # `uv run --script` runs the word after it as the script.
+        pytest.param(
+            "uv run --script python 'scripts/hooks/guard_pretooluse.py'",
+            'uv run would be given "python" as the script',
+            id="script-flag-then-python",
+        ),
+        # A value outside the set uv's parser takes (uv 0.12.15 exits 2).
+        pytest.param(
+            "uv --color bogus run 'scripts/hooks/guard_pretooluse.py'",
+            'uv would not take "bogus" as the value of "--color"',
+            id="enum-value-uv-refuses",
+        ),
+        pytest.param(
+            "uv run --max-recursion-depth x 'scripts/hooks/guard_pretooluse.py'",
+            'uv run would not take "x" as the value of "--max-recursion-depth"',
+            id="number-value-uv-refuses",
+        ),
+        # A script handed to a Python runs without its inline metadata: no
+        # Python minimum, and the project's environment, not an isolated one.
+        # `python3.12` also starts only where uv finds that program: uv
+        # 0.12.15 fails to spawn it, with a 3.12 it manages installed, when it
+        # selects another Python.
+        pytest.param(
+            "uv run python 'scripts/hooks/guard_pretooluse.py'",
+            'uv run would hand the script to "python" without reading its inline metadata',
+            id="uv-run-python",
+        ),
+        pytest.param(
+            "ULTRACODE_HOOK=guard_pretooluse.py uv run python",
+            'uv run would hand the script to "python" without reading its inline metadata',
+            id="python-alone",
+        ),
+        pytest.param(
+            "uv run python3.12 'scripts/hooks/guard_pretooluse.py'",
+            'uv run would hand the script to "python3.12" without reading its inline metadata',
+            id="uv-run-python3-12",
+        ),
+        pytest.param(
+            "uv run /usr/bin/python3 'scripts/hooks/guard_pretooluse.py'",
+            'uv run would hand the script to "/usr/bin/python3" without reading its inline metadata',
+            id="python-by-path",
         ),
     ],
 )
@@ -611,8 +644,8 @@ def test_a_guard_command_that_would_not_start_the_guard_is_not_armed(
             id="a-quote-inside-a-value",
         ),
         # Issue #186: an option of uv's that takes a value, in its own word or
-        # glued, and the script handed to a Python interpreter, each start the
-        # script. They read as commands that would not, so a resume rewrote them.
+        # glued, starts the script. It read as a command that would not, so a
+        # resume rewrote it.
         pytest.param("uv run --python 3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="python-option-value"),
         pytest.param("uv run -p 3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="short-python-option"),
         pytest.param("uv run --python=3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="glued-long-value"),
@@ -624,13 +657,7 @@ def test_a_guard_command_that_would_not_start_the_guard_is_not_armed(
         ),
         pytest.param("uv --directory /srv/p run '/srv/p/scripts/hooks/guard_pretooluse.py'", id="option-before-run"),
         pytest.param("uv run -- '/srv/p/scripts/hooks/guard_pretooluse.py'", id="end-of-options"),
-        pytest.param("uv run python '/srv/p/scripts/hooks/guard_pretooluse.py'", id="uv-run-python"),
-        pytest.param("uv run python3.12 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="uv-run-python3-12"),
-        pytest.param(
-            "uv run --python 3.12 python -X utf8 -u '/srv/p/scripts/hooks/guard_pretooluse.py'",
-            id="python-with-its-own-options",
-        ),
-        pytest.param("uv run /usr/bin/python3 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="python-by-path"),
+        pytest.param("uv --color=never run '/srv/p/scripts/hooks/guard_pretooluse.py'", id="enum-value-uv-takes"),
         # An option `uv run --help` does not list still takes its value.
         pytest.param(
             "uv run --python-preference only-system '/srv/p/scripts/hooks/guard_pretooluse.py'",
@@ -647,12 +674,12 @@ def test_a_guard_command_the_shell_splits_as_written_is_armed(tmp_path: Path, co
     assert out["reasons"] == [] and code == 0, out["reasons"]
 
 
-# Review of #186's fix: once uv's and Python's options were read, a command
-# that hands the script to an option which prints and exits read as one that
-# starts it, though 12e0a9d refused `uv --version run` and `uv run python -V`.
-# Each form below was run against uv 0.12.15 and Pythons 3.11 to 3.14: it
-# exits without running the script (0, or 2 for `uv run -V`, which uv run does
-# not take). The read is in-process, so the many forms cost no subprocess.
+# Review of #186's fix: once uv's options were read, a command that hands the
+# script to an option which prints and exits read as one that starts it,
+# though 12e0a9d refused `uv --version run`. Each form below was run against
+# uv 0.12.15: it exits without running the script (0, or 2 for `uv run -V`,
+# which uv run does not take). The read is in-process, so the many forms cost
+# no subprocess.
 _GUARD = "'/srv/p/scripts/hooks/guard_pretooluse.py'"
 
 
@@ -664,17 +691,6 @@ def _preflight_module():
 @pytest.mark.parametrize(
     "words,shown",
     [
-        ("uv run python -V", "python would print its version and exit"),
-        ("uv run python --version", "python would print its version and exit"),
-        ("uv run python -VV", "python would print its version and exit"),
-        ("uv run python -uV", "python would print its version and exit"),
-        ("uv run python -h", "python would print its help and exit"),
-        ("uv run python -?", "python would print its help and exit"),
-        ("uv run python -uh", "python would print its help and exit"),
-        ("uv run python --help", "python would print its help and exit"),
-        ("uv run python --help-env", "python would print its help and exit"),
-        ("uv run python --help-xoptions", "python would print its help and exit"),
-        ("uv run python --help-all", "python would print its help and exit"),
         ("uv --version run", "uv would print its version and exit"),
         ("uv -V run", "uv would print its version and exit"),
         ("uv -qV run", "uv would print its version and exit"),
@@ -699,11 +715,11 @@ def test_a_command_that_prints_and_exits_starts_no_guard(words: str, shown: str)
     [
         # Twins: the same letters as a value, or flags that run on. Each was
         # run, and ran the script.
-        "uv run python -Xh",  # -X takes "h" as its option
-        "uv run python -XV",
+        "uv run -qCh=1",  # -C takes the rest, its "h" too
+        "uv run -qCV=1",
+        "uv run -qCm=1",
         "uv -q run",
         "uv run -q",
-        "uv run python -u",
         # The value options `uv run --help` hides (uv 0.12.15).
         "uv run --python-preference only-system",
         "uv run --python-fetch automatic",
@@ -715,6 +731,176 @@ def test_a_command_that_prints_and_exits_starts_no_guard(words: str, shown: str)
     ],
 )
 def test_a_command_whose_options_run_on_starts_the_guard(words: str) -> None:
+    assert _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py") is None
+
+
+# Review of #186's fix (4.1.0): the options were read with one table on both
+# sides of `run`, `--` ended them before it, any option was read as one uv
+# takes with any value, and any word that looked like a Python as the
+# interpreter the script is handed to. Each form below was run as Claude Code
+# runs a hook (`sh -c`) against uv 0.12.15. All but the interpreter forms
+# started no script: uv refused the command and exited 2, found no
+# `python3.12` to spawn, or (`uv run --script`) handed Python the word
+# "python" as the script. A form that hands the script to a Python is refused
+# even where it starts (`uv run python`, `python3` where it is on PATH): uv
+# then runs the script without its inline metadata, so the Python minimum
+# does not hold (uv ran 3.10 where a `.python-version` named it) and the
+# script runs in the project's environment, which uv syncs first (a project
+# that fails to build stops it, exit 1). The re-merge rewrites it to
+# `uv run '<script>'`.
+@pytest.mark.parametrize(
+    "words,shown",
+    [
+        # Before `run`, uv takes its global options alone.
+        ("uv -- run", 'uv would take no command after "--"'),
+        ("uv -q -- run", 'uv would take no command after "--"'),
+        ("uv --python 3.12 run", 'uv would refuse "--python", an option it takes only after run'),
+        ("uv -p 3.12 run", 'uv would refuse "-p", an option it takes only after run'),
+        ("uv -qp 3.12 run", 'uv would refuse "-p", an option it takes only after run'),
+        ("uv --with x run", 'uv would refuse "--with", an option it takes only after run'),
+        ("uv -w x run", 'uv would refuse "-w", an option it takes only after run'),
+        ("uv --bogus run", 'uv would refuse "--bogus", an option it does not take'),
+        ("uv --offline=true run", 'uv would refuse "--offline=true", a value for an option that takes none'),
+        ("uv --directory -x run", 'uv would not take "-x" as the value of "--directory"'),
+        ("uv --offline --offline run", 'uv would refuse "--offline" twice'),
+        ("uv -n --no-cache-dir run", 'uv would refuse "--no-cache" twice'),
+        ("uv -q -v run", 'uv would refuse "--quiet" beside "--verbose"'),
+        ("uv --color never --no-color run", 'uv would refuse "--color" beside "--no-color"'),
+        # After it, `uv run`'s own options join them, and no other.
+        ("uv run --bogus", 'uv run would refuse "--bogus", an option it does not take'),
+        ("uv run -Z", 'uv run would refuse "-Z", an option it does not take'),
+        ("uv run --no-project=1", 'uv run would refuse "--no-project=1", a value for an option that takes none'),
+        ("uv run --python -q", 'uv run would not take "-q" as the value of "--python"'),
+        ("uv run -p --", 'uv run would not take "--" as the value of "-p"'),
+        ("uv run --with --", 'uv run would not take "--" as the value of "--with"'),
+        ("uv run --python 3.12 -p 3.13", 'uv run would refuse "--python" twice'),
+        ("uv run --script --script", 'uv run would refuse "--script" twice'),
+        ("uv run -ss", 'uv run would refuse "--script" twice'),
+        ("uv run --locked --frozen", 'uv run would refuse "--locked" beside "--frozen"'),
+        ("uv run -s --gui-script", 'uv run would refuse "--script" beside "--gui-script"'),
+        ("uv run -q -v", 'uv run would refuse "--quiet" beside "--verbose"'),
+        ("uv run --no-project --package x", 'uv run would refuse "--no-project" beside "--package"'),
+        # A value outside the set uv's parser takes, or no whole number in
+        # range: a usage error, exit 2. Case counts, and a name uv's config
+        # files take (`auto` for `--python-fetch`) is not one its parser does.
+        ("uv --color bogus run", 'uv would not take "bogus" as the value of "--color"'),
+        ("uv run --color bogus", 'uv run would not take "bogus" as the value of "--color"'),
+        ("uv run --color=AUTO", 'uv run would not take "AUTO" as the value of "--color"'),
+        ("uv --python-fetch auto run", 'uv would not take "auto" as the value of "--python-fetch"'),
+        ("uv run --python-preference bogus", 'uv run would not take "bogus" as the value of "--python-preference"'),
+        ("uv run --link-mode bogus", 'uv run would not take "bogus" as the value of "--link-mode"'),
+        ("uv run --resolution bogus", 'uv run would not take "bogus" as the value of "--resolution"'),
+        ("uv run --prerelease bogus", 'uv run would not take "bogus" as the value of "--prerelease"'),
+        ("uv run --index-strategy bogus", 'uv run would not take "bogus" as the value of "--index-strategy"'),
+        ("uv run --keyring-provider auto", 'uv run would not take "auto" as the value of "--keyring-provider"'),
+        ("uv run --fork-strategy fewer-forks", 'uv run would not take "fewer-forks" as the value of "--fork-strategy"'),
+        ("uv run --python-platform bogus", 'uv run would not take "bogus" as the value of "--python-platform"'),
+        (
+            "uv run --python-platform x8664-manylinux2014",
+            'uv run would not take "x8664-manylinux2014" as the value of "--python-platform"',
+        ),
+        ("uv run --max-recursion-depth x", 'uv run would not take "x" as the value of "--max-recursion-depth"'),
+        ("uv run --max-recursion-depth 5.0", 'uv run would not take "5.0" as the value of "--max-recursion-depth"'),
+        ("uv run --max-recursion-depth=-1", 'uv run would not take "-1" as the value of "--max-recursion-depth"'),
+        (
+            "uv run --max-recursion-depth 4294967296",
+            'uv run would not take "4294967296" as the value of "--max-recursion-depth"',
+        ),
+        ("uv run --max-recursion-depth=", 'uv run would not take "" as the value of "--max-recursion-depth"'),
+        # `--script`, `-s` or `--gui-script` makes the next word the script.
+        ("uv run --script python", 'uv run would be given "python" as the script'),
+        ("uv run -s python", 'uv run would be given "python" as the script'),
+        ("uv run -qs python", 'uv run would be given "python" as the script'),
+        ("uv run --gui-script python", 'uv run would be given "python" as the script'),
+        # A Python handed the script, by any name, in any case, or by path,
+        # with or without its own options: those that start it included.
+        ("uv run python", 'uv run would hand the script to "python" without reading its inline metadata'),
+        ("uv run PYTHON", 'uv run would hand the script to "PYTHON" without reading its inline metadata'),
+        ("uv run -- python", 'uv run would hand the script to "python" without reading its inline metadata'),
+        ("uv run --python 3.12 python", 'uv run would hand the script to "python" without reading'),
+        ("uv run python -u", 'uv run would hand the script to "python" without reading its inline metadata'),
+        ("uv run python -V", 'uv run would hand the script to "python" without reading its inline metadata'),
+        ("uv run python -m", 'uv run would hand the script to "python" without reading its inline metadata'),
+        ("uv run python3", 'uv run would hand the script to "python3" without reading its inline metadata'),
+        ("uv run python3.12", 'uv run would hand the script to "python3.12" without reading its inline metadata'),
+        ("uv run pythonw", 'uv run would hand the script to "pythonw" without reading its inline metadata'),
+        ("uv run python.exe", 'uv run would hand the script to "python.exe" without reading its inline metadata'),
+        ("uv run /usr/bin/python", 'uv run would hand the script to "/usr/bin/python" without reading'),
+        (r"uv run 'C:\Python311\python.exe'", r'uv run would hand the script to "C:\\Python311\\python.exe"'),
+    ],
+)
+def test_a_command_uv_would_refuse_or_run_without_the_scripts_metadata_starts_no_guard(
+    words: str, shown: str
+) -> None:
+    problem = _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py")
+    assert problem is not None and problem.startswith(shown), problem
+
+
+def test_a_python_handed_the_script_is_refused_for_the_metadata_it_skips() -> None:
+    """The problem names both losses, so the operator reading the reason knows
+    why a command that starts the guard is rewritten."""
+    problem = _preflight_module()._command_problem(f"uv run python {_GUARD}", "guard_pretooluse.py")
+    assert problem is not None
+    assert "the Python minimum its header sets would not hold" in problem
+    assert "the project's environment, where there is one, not an isolated one" in problem
+
+
+def test_the_value_sets_are_the_ones_uv_0_12_15_takes() -> None:
+    """Pinned as measured: clap's names and aliases, hidden ones included,
+    each of which started the script, while every other value tried exited 2.
+    A change here is a change of uv's, to measure again."""
+    choices = _preflight_module()._UV_CHOICES
+    assert {name: len(values) for name, values in choices.items()} == {
+        "--color": 3, "--fork-strategy": 2, "--index-strategy": 5, "--keyring-provider": 2, "--link-mode": 5,
+        "--prerelease": 5, "--python-fetch": 3, "--python-preference": 4, "--resolution": 3, "--python-platform": 137,
+    }
+    assert choices["--index-strategy"] >= {"first-match", "unsafe-any-match"}  # hidden aliases
+    assert choices["--link-mode"] >= {"reflink"}
+    platforms = choices["--python-platform"]
+    assert {"linux", "manylinux_2_28_x86_64", "s390x-manylinux_2_17", "manylinux_2_40_loongarch64"} <= platforms
+    assert not {"x8664-manylinux2014", "Linux", "loongarch64-manylinux_2_35"} & platforms
+    assert _preflight_module()._UV_NUMBERS == {"--max-recursion-depth": 4294967295}
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        # Twins of the refusals above, each run against uv 0.12.15, each
+        # starting the script.
+        "uv -qq run",
+        "uv run -qq",
+        "uv --offline run --offline",  # twice, but once in each place
+        "uv -q run -v",  # together, but in two places
+        "uv --color never run",
+        "uv --color=never run",
+        "uv --no-cache run -n",
+        "uv --isolated run --isolated",
+        "uv --directory /srv/p --project /srv/p run",
+        "uv run --with a --with b",
+        "uv run -w a -w b",
+        "uv run --script",
+        "uv run -s",
+        "uv run --gui-script",
+        "uv run --color=always",
+        "uv --python-fetch manual run",
+        "uv --python-preference=only-managed run --python-preference system",
+        "uv run --link-mode reflink",  # a hidden alias
+        "uv run --index-strategy unsafe-any-match",  # another
+        "uv run --keyring-provider subprocess",
+        "uv run --fork-strategy fewest",
+        "uv run --resolution lowest-direct",
+        "uv run --prerelease if-necessary-or-explicit",
+        "uv run --python-platform manylinux_2_28_x86_64",
+        "uv run --python-platform s390x-manylinux_2_17",  # hidden from help
+        "uv run --max-recursion-depth 4294967295",
+        "uv run --max-recursion-depth=+5",
+        "uv run --max-recursion-depth=-0",
+        "uv run --max-recursion-depth 007",
+        # Past the digits Python's int() reads from one string by default.
+        pytest.param("uv run --max-recursion-depth=" + "0" * 5000 + "7", id="number-with-5000-leading-zeros"),
+    ],
+)
+def test_a_command_uv_takes_as_written_starts_the_guard(words: str) -> None:
     assert _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py") is None
 
 
