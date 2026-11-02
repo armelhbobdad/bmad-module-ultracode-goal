@@ -2439,8 +2439,10 @@ _HOOK_REJECTION_SENTENCES = {
         # a Stop hook reads as a block on stopping, and whose exit 1, where the
         # project uv syncs first fails to build or resolve, it reads as a
         # non-blocking error; neither says anything of a hook's rejection of
-        # the evidence commit.
-        ("`uv` exits 2 when it cannot find the script, which on a `Stop` hook Clau", "4033c8b3b425"),
+        # the evidence commit. Reviewed again when the first gained the eight
+        # blocks in a row after which Claude Code lets the stop through: still
+        # a Stop hook's exit on stopping, and nothing of the evidence commit.
+        ("`uv` exits 2 when it cannot find the script, which on a `Stop` hook Clau", "4341789b0ad0"),
         ("When that project fails to build, or its dependencies cannot be resolved", "b48ad9ab6c20"),
         ("Most read like `PreToolUse:Bash hook error: [<command>]: failed; blockin", "03a6eaa3f853"),
         ("It names each primitive the version lacks. 2.1.295 is the floor, the rel", "d3fb84ee20ae"),

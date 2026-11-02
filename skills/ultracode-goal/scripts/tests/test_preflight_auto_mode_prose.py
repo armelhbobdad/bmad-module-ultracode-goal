@@ -208,6 +208,19 @@ def test_troubleshooting_says_a_missing_budget_script_blocks_each_stop():
     assert "and `uv` exits 2 when it cannot find a script" not in text
 
 
+def test_troubleshooting_names_the_blocks_after_which_a_stop_goes_through():
+    """Review of #186's fix (4.1.0): Claude Code overrides a Stop hook's block
+    after eight consecutive continuations, and the count resets when Claude
+    calls a tool (cc-primitives hooks reference, from the hooks docs), so the
+    session is not sent back every time it tries to stop."""
+    text = " ".join((_DOCS / "troubleshooting.md").read_text(encoding="utf-8").split())
+    assert (
+        "each time the session tries to stop, it is sent back with uv's error instead, up to eight times in a row, "
+        "after which Claude Code lets the stop through (the count starts again whenever Claude calls a tool)."
+        in text
+    )
+
+
 def test_troubleshooting_says_a_project_that_fails_to_build_lets_each_stop_through():
     """Review of #186's fix (4.1.0): the sentence said every missing budget
     script blocks each stop. Where the ancestor project fails to build, or to
