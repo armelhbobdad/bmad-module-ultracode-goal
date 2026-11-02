@@ -81,6 +81,17 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      call itself: the exemption checks the script's path, not its arguments,
      so a model that ignores the deny note can still run `latch` or
      `unlatch` on its own.
+  Accepted residual for 6 and 7, on time: while a latch is present they
+  resolve the symlinks of every path a call names, and nothing bounds that
+  short of Claude Code's hook timeout. _MAX_LONG_LOOKUPS caps the names
+  realpath is handed for one path longer than _MAX_RESOLVED, not the names
+  inside the targets of the links it follows (some 2,000 in a target on
+  Linux, looked up again by each stretch), nor a call that names many paths
+  (many words, or the variants of a brace group). With such links behind a
+  folder some 2,000 levels deep, where each lookup is slow, a crafted call
+  can keep the guard past the timeout. Preflight arms the guard with
+  "onFailure": "block", so Claude Code then refuses the call: a stall, not a
+  way past the guard.
   Invariants 6 and 7 count a present latch as a live run: the guard reads no
   clock and detects no dead run, so a latch a dead run left behind keeps
   denying until the next Stage 1 replaces it or the user deletes it by hand.
@@ -2232,22 +2243,26 @@ def _fold(path: str) -> str:
 # it, in stretches no longer than this.
 _MAX_RESOLVED = 32_768
 
-# The most lookups _real_long makes for one path: twice as many as realpath
-# makes for the names of a path within _MAX_RESOLVED, which holds at most half
-# as many names as it has characters, since a name and its separator take
-# two. Each realpath call on a stretch looks up every name of the path it is
-# handed, the path resolved so far again and then the stretch, and each
-# lookup hands the system the whole path up to that name. A link to `.` keeps
-# the resolved path short however often it repeats, and as deep as the system
-# looks up (on Linux some 2,000 folders, each walked again by every lookup),
-# so the time a run of them took grew with its length at about 70 s a MB, and
-# a word of a few MB could outlast the hook's timeout. A path that would take
-# more lookups than this is refused, unresolved (_TooManyLookups).
+# The most names _real_long hands realpath for one path: twice as many as
+# realpath looks up for the names of a path within _MAX_RESOLVED, which holds
+# at most half as many names as it has characters, since a name and its
+# separator take two. Each realpath call on a stretch looks up every name of
+# the path it is handed, the path resolved so far again and then the stretch,
+# and each lookup hands the system the whole path up to that name. A link to
+# `.` keeps the resolved path short however often it repeats, and as deep as
+# the system looks up (on Linux some 2,000 folders, each walked again by every
+# lookup), so the time a run of them took grew with its length at about 70 s
+# a MB, and a word of a few MB could outlast the hook's timeout. A path whose
+# names would come to more than this is refused, unresolved (_TooManyLookups).
+# The count leaves out the names inside the targets of the links realpath
+# follows (some 2,000 in a target on Linux, looked up again by each stretch)
+# and covers one path, not a call: the module docstring states that residual.
 _MAX_LONG_LOOKUPS = _MAX_RESOLVED
 
 
 class _TooManyLookups(Exception):
-    """A path longer than _MAX_RESOLVED whose links keep it short past
+    """A path longer than _MAX_RESOLVED whose links keep it short, so that
+    its names, counted again for each stretch, come to more than
     _MAX_LONG_LOOKUPS lookups. Nothing catches it short of _mem_gate, which
     runs the checks that resolve paths only while a run latch is present, and
     refuses the call (failing closed)."""
@@ -2278,9 +2293,11 @@ def _real_long(path: str) -> str:
     it or of any longer path succeeds, and the rest is kept as written. It is
     the path resolved so far that is measured, not the path as written: a
     link to `.` keeps the resolved path short however often it repeats, and
-    realpath follows a link after it. Rather than make more than
-    _MAX_LONG_LOOKUPS lookups, counting the names of the path resolved so far
-    that each stretch looks up again, it raises _TooManyLookups.
+    realpath follows a link after it. Rather than hand realpath more than
+    _MAX_LONG_LOOKUPS names in all, counting the names of the path resolved
+    so far that each stretch looks up again, it raises _TooManyLookups. The
+    names inside the targets of the links realpath follows are not counted
+    (the module docstring states that residual).
 
     Before Python 3.13, realpath stops at a symlink loop and keeps the rest of
     the path as written, and abspath then applies any `..` the targets met on

@@ -7781,11 +7781,84 @@ def test_a_long_path_past_the_lookup_cap_is_denied(store_world: _StoreWorld) -> 
     assert "refused (failing closed)" in reason
     store_world.latch.unlink()
     _assert_allowed(*_bash(store_world, command))
-    for text in (
-        (_REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8"),
-        (_REPO_ROOT / "changes" / "guard-long-word-linear.yaml").read_text(encoding="utf-8"),
-    ):
-        assert "so that resolving it takes more than 32,768 lookups" in " ".join(text.split())
+    for text in _lookup_cap_texts():
+        assert (
+            "so that resolving it takes more than 32,768 lookups of the names it spells and of the "
+            "folders it has resolved so far"
+        ) in text
+
+
+def _lookup_cap_texts() -> tuple[str, str]:
+    """SECURITY.md and the change fragment, each on one line."""
+    return tuple(
+        " ".join(path.read_text(encoding="utf-8").split())
+        for path in (_REPO_ROOT / "SECURITY.md", _REPO_ROOT / "changes" / "guard-long-word-linear.yaml")
+    )
+
+
+@_POSIX_WALK
+def test_the_lookup_cap_counts_the_names_a_path_spells_not_those_its_links_hold(
+    guard_module, monkeypatch, tmp_path: Path
+) -> None:
+    """Accepted residual (review finding, 4.1.0): the cap counts the names of
+    the path as written and of the path resolved so far, which each stretch
+    looks up again, not the names inside the targets of the links realpath
+    follows (some 2,000 in a target on Linux, looked up again by each
+    stretch), and it counts each path on its own, not a call. So a path past
+    the bound through links with long targets makes more lookups than the cap
+    and is resolved, not refused, and a call naming many paths has no cap at
+    all. With links behind a folder some 2,000 levels deep, where each lookup
+    is slow, either can keep the guard past the hook's 600 s; preflight arms
+    the guard with `"onFailure": "block"`, so Claude Code then refuses the
+    call: a stall, not a way past the guard. The guard's docstring, the
+    comment on the cap, SECURITY.md and the change fragment say so, and claim
+    the cap for no more than it counts."""
+    try:
+        limit = os.pathconf(str(tmp_path), "PC_PATH_MAX")
+    except (OSError, ValueError):
+        limit = -1
+    limit = 4096 if limit <= 0 else min(limit, 4096)
+    # Each target stays short of the longest path the system looks up (and
+    # of the longest link macOS makes): about 2,000 names on Linux.
+    per_target = (limit - 100) // 2
+    cap = guard_module._MAX_LONG_LOOKUPS
+    _symlink_or_skip(tmp_path / "s", Path("."))
+    links = [f"T{i}" for i in range(cap // per_target + 1)]
+    for link in links:
+        _symlink_or_skip(tmp_path / link, Path("/".join(["s"] * per_target)))
+    names: list[str] = []
+    while len(str(tmp_path)) + sum(len(name) + 1 for name in names) <= guard_module._MAX_RESOLVED:
+        names.extend(links)
+    path = os.path.join(str(tmp_path), *names, "x")
+    lookups = 0
+    lstat = os.lstat
+
+    def counting(*args, **kwargs):
+        nonlocal lookups
+        lookups += 1
+        return lstat(*args, **kwargs)
+
+    monkeypatch.setattr(guard_module.os, "lstat", counting)
+    resolved = guard_module._real(path)
+    monkeypatch.undo()
+    assert lookups > cap, lookups
+    assert resolved == os.path.realpath(path) == os.path.join(os.path.realpath(str(tmp_path)), "x")
+
+    doc = " ".join(guard_module.__doc__.split())
+    assert (
+        "_MAX_LONG_LOOKUPS caps the names realpath is handed for one path longer than _MAX_RESOLVED, not the "
+        "names inside the targets of the links it follows"
+    ) in doc
+    assert "nor a call that names many paths" in doc
+    assert "a stall, not a way past the guard" in doc
+    source = HOOK.read_text(encoding="utf-8")
+    assert "The most lookups _real_long makes for one path" not in source
+    for text in _lookup_cap_texts():
+        assert (
+            "That count leaves out the names inside the targets of the links the path goes through, and "
+            "counts each path on its own"
+        ) in text
+        assert "can still keep the guard past the timeout, and Claude Code then refuses the call" in text
 
 
 def _v4_0_0_real(path: str) -> str:
