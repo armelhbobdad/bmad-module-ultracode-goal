@@ -183,6 +183,17 @@ only a killed runner's server as one the run leaves up, though the parent
 rule now leaves up the run's own server too when a watcher its start command
 runs (a launcher task that runs watchexec) runs it in a group of its own.
 Both are pinned with twins.
+
+The final review of the branch that holds #186's fixes found runs of Node's
+test runner in which no test went red read as a kill, each pinned below with a
+mutant twin. Two files that each failed because a timer their test started
+threw after it ended, a file that cannot load under `--test-isolation=none`
+and a global setup that throws now read 0 failed, and the bullet names the
+last two and the first whatever test it names. Two files whose processes exit
+non-zero after all their tests pass still read as a kill, since Node prints
+them as it prints a process that dies during a test: the bullet states that
+limit and tells automate to write each Node row to run only the row's test
+file.
 """
 
 from __future__ import annotations
@@ -4008,12 +4019,19 @@ def test_a_mutant_that_breaks_a_module_is_a_row_that_cannot_run(tmp_path):
 _ZERO_FAILED_CASES = (
     "(a collection or harness error, not a test: a mutant reads this way when pytest then cannot collect a test "
     "module or class or load a conftest.py, or jest, vitest or Node's test runner cannot load a test file, since no "
-    "test in that file or class runs, or when a Node test file's process exits non-zero after the row's test passes "
-    "or is skipped, and no other test fails; a Node test file's process that exits or crashes during a test, before "
-    "Node reports the row's test, still reads as a kill, since the row's `expect_red` then never appears beside a "
-    "failure token, though it can read 0 failed when a test whose name holds the row's `expect_red` passes or is "
-    "skipped in that file before the process dies or in a file Node lists before it, or when the last thing Node "
-    "prints for that file is an uncaught error that a child process printed; a module that calls `process.exit` "
+    "test in that file or class runs, or Node's test runner cannot run its global setup, since no test runs at all, "
+    "or when a Node test file's process exits non-zero after the row's test passes or is skipped, or reports that a "
+    "test generated asynchronous activity after it ended, whatever test that names, and no other test fails; a Node "
+    "test file's process that exits or crashes during a test, before Node reports the row's test, still reads as a "
+    "kill, since the row's `expect_red` then never appears beside a failure token, though it can read 0 failed when a "
+    "test whose name holds the row's `expect_red` passes or is skipped in that file before the process dies or in a "
+    "file Node lists before it, when that file reports such asynchronous activity before the process dies, or when "
+    "the last thing Node prints for that file is an uncaught error that a child process printed; Node prints a test "
+    "file whose process exits non-zero after all its tests pass as it prints one whose process dies during a test, so "
+    "such a file whose lines report no pass of a test whose name holds the row's `expect_red` reads as that death, "
+    "and the row as a kill though no test went red, and when you delegate automate, tell it to write each Node row's "
+    "`command` to run only the test file that holds the row's test, though a row's second run, through the full "
+    "sweep, can still read so; a module that calls `process.exit` "
     "while a Node test file loads, or that kills its process then by filling the heap or by a signal, stops the file "
     "loading, yet Node reports it as it reports a process that exits or crashes during the file's first test, so it "
     "reads as that kill does, and when you delegate automate, tell it to write no replacement that makes a module "
@@ -4050,6 +4068,11 @@ _NODE_CAPTURES = Path(__file__).resolve().parent / "fixtures" / "mutate_check_lo
         ("node-tap-load-failure-in-a-file-named-with-an-apostrophe", "clamp at the bound"),
         ("node-tap-exits-after-an-escaped-pass", "strip drops a \\# comment"),
         ("node-tap-async-activity-after-a-test-named-with-a-hash", "remember returns \\#1"),
+        ("node-spec-async-activity-after-tests-in-two-files", "remember returns the value"),
+        ("node-tap-async-activity-after-tests-in-two-files", "remember keeps a second key"),
+        ("node-spec-isolation-none-load-failure", "mode is strict"),
+        ("node-tap-isolation-none-syntax-error", "clamp at the bound"),
+        ("node-global-setup-throws", "rows are seeded"),
     ],
 )
 def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_red):
@@ -4070,10 +4093,15 @@ def test_a_test_file_node_cannot_run_is_a_row_that_cannot_run(capture, expect_re
     fix (the two captures after those) found it read as a kill behind a pnpm
     prefix with no `/` (`guard test: `), and when TAP located a file whose
     name holds an apostrophe in double quotes; each reads 0 failed now. The
-    review of the branch that holds both fixes (the last two captures) found
-    a row that names its test as TAP writes it, `\\#` and all, read as a kill
-    when the file exited after that test passed, or failed because a timer the
-    test started threw after it ended; it reads 0 failed too."""
+    review of the branch that holds both fixes (the two captures after those)
+    found a row that names its test as TAP writes it, `\\#` and all, read as a
+    kill when the file exited after that test passed, or failed because a timer
+    the test started threw after it ended; it reads 0 failed too. Its final
+    review (the last five captures) found three runs in which no test went red
+    read as a kill: two files that each failed because a timer their test
+    started threw after it ended, a file that cannot load under
+    `--test-isolation=none`, which imports every file in the runner's own
+    process, and a global setup that throws; each reads 0 failed now."""
     mutate_check = _load_script("mutate_check")
     output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
     status, detail, _ = mutate_check._classify_red(output, expect_red)
@@ -4093,17 +4121,29 @@ _ZERO_FAILED_ALL = frozenset(
         "a test file Node's test runner cannot load",
         "a Node test file's process that exits non-zero after the row's test passes",
         "a Node test file's process that exits non-zero after the row's test is skipped",
+        "a global setup Node's test runner cannot run",
+        "a Node test file that reports asynchronous activity after a test ended",
     }
 )
 _DIES_DURING_A_TEST = (
     "a Node test file's process that exits or crashes during a test, before Node reports the row's test, still "
     "reads as a kill"
 )
-# The two such kills `mutate_check.py` cannot always tell from a harness error (no
+# The kills `mutate_check.py` cannot always tell from a harness error (no
 # line says which file a passing test or an error is from), which can read 0 failed.
 # Since #186 the pass is of any test whose name holds the row's `expect_red`, in
-# the dying file too, where it was only a test of that exact name.
+# the dying file too, where it was only a test of that exact name. Since the
+# final review of the branch that holds #186's fixes, a file whose lines report a
+# test's asynchronous activity after it ended comes off the count, whatever test
+# it names, so a process that dies after such a report reads 0 failed as well.
 _DIES_BUT_READS_0_FAILED = (
+    "though it can read 0 failed when a test whose name holds the row's `expect_red` passes or is skipped in that file "
+    "before the process dies or in a file Node lists before it, when that file reports such asynchronous activity "
+    "before the process dies, or when the last thing Node prints for that file is an uncaught error that a child "
+    "process printed"
+)
+# The branch's wording, before that review, which left that third kill out.
+_DIES_BUT_READS_0_FAILED_BEFORE_ASYNC = (
     "though it can read 0 failed when a test whose name holds the row's `expect_red` passes or is skipped in that file "
     "before the process dies or in a file Node lists before it, or when the last thing Node prints for that file is "
     "an uncaught error that a child process printed"
@@ -4145,13 +4185,18 @@ def _reads_zero_failed(para: str) -> set[str]:
         cases.add("a Node test file's process that exits non-zero after the row's test passes")
     if "when a Node test file's process exits non-zero after the row's test passes or is skipped" in text:
         cases.add("a Node test file's process that exits non-zero after the row's test is skipped")
+    if "or Node's test runner cannot run its global setup" in text:
+        cases.add("a global setup Node's test runner cannot run")
+    # Whatever test the report names: it reports a pass, the row's test or another's.
+    if "or reports that a test generated asynchronous activity after it ended, whatever test that names," in text:
+        cases.add("a Node test file that reports asynchronous activity after a test ended")
     return cases
 
 
 def _keeps_a_dying_process_a_kill(para: str) -> bool:
     """Whether that parenthesis says a Node test file's process that exits or
     crashes during a test, before Node reports the row's test, still reads as
-    a kill, as `mutate_check.py` reads it, and names the two such kills that
+    a kill, as `mutate_check.py` reads it, and names the three such kills that
     can read 0 failed."""
     text = _zero_failed_parenthesis(para)
     return text is not None and _DIES_DURING_A_TEST in text and _DIES_BUT_READS_0_FAILED in text
@@ -4160,24 +4205,28 @@ def _keeps_a_dying_process_a_kill(para: str) -> bool:
 def test_the_cannot_run_bullet_names_each_case_that_reads_0_failed():
     """Each harness error `mutate_check.py` reads 0 failed (pinned in
     test_mutate_check.py, the measured ones here too): pytest's module, class
-    and conftest.py, a test file jest, vitest or Node cannot load, and a Node
-    test file whose process exits non-zero after the row's test passes or is
-    skipped. A Node test file whose process dies during a test still reads as
-    a kill, though two such kills it cannot always tell from a harness
-    error can read 0 failed."""
+    and conftest.py, a test file jest, vitest or Node cannot load, a global
+    setup Node cannot run, a Node test file whose process exits non-zero after
+    the row's test passes or is skipped, and one that reports a test's
+    asynchronous activity after it ended, whatever test that names. A Node test
+    file whose process dies during a test still reads as a kill, though three
+    such kills it cannot always tell from a harness error can read 0 failed."""
     assert _reads_zero_failed(_bound()) == _ZERO_FAILED_ALL
     assert _keeps_a_dying_process_a_kill(_bound())
 
 
 _EXIT_CASE = "a Node test file's process that exits non-zero after the row's test passes"
 _SKIP_CASE = "a Node test file's process that exits non-zero after the row's test is skipped"
+_SETUP_CASE = "a global setup Node's test runner cannot run"
+_ASYNC_CASE = "a Node test file that reports asynchronous activity after a test ended"
 
 
 @pytest.mark.parametrize(
     ("old", "new", "dropped", "dying_kill"),
     [
         (_ZERO_FAILED_CASES, _ZERO_FAILED_CASES_BEFORE,
-         {"a test class pytest cannot collect", "a test file Node's test runner cannot load", _EXIT_CASE, _SKIP_CASE},
+         {"a test class pytest cannot collect", "a test file Node's test runner cannot load", _EXIT_CASE, _SKIP_CASE,
+          _SETUP_CASE, _ASYNC_CASE},
          False),
         ("cannot collect a test module or class or load", "cannot collect a test module or load",
          {"a test class pytest cannot collect"}, True),
@@ -4197,7 +4246,7 @@ _SKIP_CASE = "a Node test file's process that exits non-zero after the row's tes
         # A second review of #179's fix: the bullet claimed every such kill, the two that can read 0 failed included.
         (", " + _DIES_BUT_READS_0_FAILED + ";", ";", set(), False),
         ("when a test whose name holds the row's `expect_red` passes or is skipped in that file before the process "
-         "dies or in a file Node lists before it, or when", "when", set(), False),
+         "dies or in a file Node lists before it, when", "when", set(), False),
         (", or when the last thing Node prints for that file is an uncaught error that a child process printed;", ";",
          set(), False),
         # #186: a pass names the row's test by any name that holds its `expect_red`, and can
@@ -4206,9 +4255,20 @@ _SKIP_CASE = "a Node test file's process that exits non-zero after the row's tes
         (_DIES_BUT_READS_0_FAILED, _DIES_BUT_READS_0_FAILED_BY_ITS_NAME, set(), False),
         ("passes or is skipped in that file before the process dies or in a file Node lists",
          "passes or is skipped in a file Node lists", set(), False),
+        # The final review of the branch that holds #186's fixes: a global setup that throws, and a file
+        # that reports a test's asynchronous activity after it ended, whatever test that names, read as a
+        # kill, and a process that dies after such a report reads 0 failed.
+        (", or Node's test runner cannot run its global setup, since no test runs at all", "", {_SETUP_CASE}, True),
+        (", or reports that a test generated asynchronous activity after it ended, whatever test that names", "",
+         {_ASYNC_CASE}, True),
+        ("whatever test that names,", "when it names the row's test,", {_ASYNC_CASE}, True),
+        (_DIES_BUT_READS_0_FAILED, _DIES_BUT_READS_0_FAILED_BEFORE_ASYNC, set(), False),
+        (", when that file reports such asynchronous activity before the process dies, or when", ", or when", set(),
+         False),
     ],
     ids=["3.2.0", "no-class", "no-node", "no-exit", "any-test-passing", "no-skip", "beside-a-kill", "no-crash",
-         "every-crash", "no-same-name", "no-child-error", "by-its-name", "no-same-file"],
+         "every-crash", "no-same-name", "no-child-error", "by-its-name", "no-same-file", "no-global-setup",
+         "no-async", "async-by-the-row-s-name", "no-async-kill", "no-async-kill-clause"],
 )
 def test_zero_failed_predicate_rejects_a_bullet_that_drops_a_case(old, new, dropped, dying_kill):
     """The twin: the cannot-run bullet as 3.2.0 wrote it, or with one of
@@ -4217,7 +4277,9 @@ def test_zero_failed_predicate_rejects_a_bullet_that_drops_a_case(old, new, drop
     process a kill or without one of the two such kills that can read 0
     failed, with #179's wording of the first of them (a test of the same name,
     in another file), or one that no longer keeps a kill beside a harness
-    error, reads every other case as before and not the one it dropped."""
+    error, or without the global setup, the report of asynchronous activity
+    whatever test it names, or the kill that reads 0 failed after such a
+    report, reads every other case as before and not the one it dropped."""
     para = _bound()
     mutant = para.replace(old, new)
     assert mutant != para, "the mutant must actually change the text"
@@ -4400,6 +4462,99 @@ def test_node_load_kill_predicate_rejects_a_bullet_that_drops_one(old, new, drop
     mutant = para.replace(old, new)
     assert mutant != para, "the mutant must actually change the text"
     assert _node_load_kills(mutant) == _NODE_LOAD_KILLS - dropped
+    assert _reads_zero_failed(mutant) == _ZERO_FAILED_ALL
+    assert _keeps_a_dying_process_a_kill(mutant)
+
+
+# A Node test file whose process exits non-zero after all its tests pass (a
+# `process.exitCode` the mutant sets in a module several test files import), the
+# final review of the branch that holds #186's fixes. Node prints it as it prints
+# a process that dies during a test, so a file whose lines report no pass of the
+# row's test reads as that death, and the row as a kill though no test went red.
+# No reading can tell the two apart, so the bullet states the limit, tells automate
+# to write each Node row's command to run only the row's test file, and says that
+# a row's second run, through the full sweep, can still read so.
+_EXITS_AFTER_ALL_PASS = (
+    "Node prints a test file whose process exits non-zero after all its tests pass as it prints one whose process "
+    "dies during a test, so such a file whose lines report no pass of a test whose name holds the row's `expect_red` "
+    "reads as that death, and the row as a kill though no test went red"
+)
+_ONE_FILE_PER_ROW = (
+    "and when you delegate automate, tell it to write each Node row's `command` to run only the test file that holds "
+    "the row's test"
+)
+_SECOND_RUN_CAN_STILL = "though a row's second run, through the full sweep, can still read so"
+_EXIT_LIMIT = frozenset({"exits after its tests pass", "one file per row", "second run"})
+
+
+def _exit_limit(para: str) -> set[str]:
+    """What the cannot-run bullet's parenthesis says of a Node test file whose
+    process exits non-zero after all its tests pass: that it reads as a death
+    during a test, that automate writes each Node row to run only the row's
+    test file, and that a row's second run can still read so."""
+    text = _zero_failed_parenthesis(para)
+    if text is None:
+        return set()
+    named = set()
+    if _EXITS_AFTER_ALL_PASS in text:
+        named.add("exits after its tests pass")
+    if _ONE_FILE_PER_ROW in text:
+        named.add("one file per row")
+    if _SECOND_RUN_CAN_STILL in text:
+        named.add("second run")
+    return named
+
+
+@pytest.mark.parametrize(
+    ("capture", "expect_red"),
+    [
+        ("node-spec-exits-after-tests-pass-in-two-files", "flush keeps its value"),
+        ("node-tap-exits-after-tests-pass-in-two-files", "flush keeps its value"),
+        ("node-spec-exits-after-tests-pass-in-two-files", "flush keeps another value"),
+        ("node-tap-exits-after-tests-pass-in-two-files", "flush keeps another value"),
+    ],
+)
+def test_a_node_test_file_that_exits_after_all_its_tests_pass_beside_the_row_s_is_named(capture, expect_red):
+    """Measured on `mutate_check.py`, over real `node --test` output: a
+    mutant makes two test files' processes exit 1 after each file's one test
+    passes. Only the file whose lines report a pass of the row's test comes
+    off the count, so the row reads as a kill, though no test went red. The
+    cannot-run bullet said such an exit reads 0 failed, with no limit; it now
+    states the limit and how automate keeps a row's first run clear of it."""
+    mutate_check = _load_script("mutate_check")
+    output = (_NODE_CAPTURES / f"{capture}.txt").read_text(encoding="utf-8")
+    status, detail, _ = mutate_check._classify_red(output, expect_red)
+    assert status == "MISATTRIBUTED"
+    assert _reading(_bound(), status, detail) == "killed"
+    assert _exit_limit(_bound()) == _EXIT_LIMIT
+    assert _ZERO_FAILED_CASES in re.sub(r"\s+", " ", _bound())
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "dropped"),
+    [
+        # The branch's wording: no limit, no brief.
+        ("; " + _EXITS_AFTER_ALL_PASS + ", " + _ONE_FILE_PER_ROW + ", " + _SECOND_RUN_CAN_STILL + ";", ";", _EXIT_LIMIT),
+        (", " + _ONE_FILE_PER_ROW + ", " + _SECOND_RUN_CAN_STILL, "", {"one file per row", "second run"}),
+        (", " + _SECOND_RUN_CAN_STILL, "", {"second run"}),
+        ("reads as that death, and the row as a kill though no test went red", "reads 0 failed",
+         {"exits after its tests pass"}),
+        ("such a file whose lines report no pass of a test whose name holds the row's `expect_red`",
+         "every such file but one", {"exits after its tests pass"}),
+        ("to run only the test file that holds the row's test", "to run the full sweep", {"one file per row"}),
+    ],
+    ids=["the-branch", "no-brief", "no-second-run", "reads-0-failed", "all-but-one", "full-sweep-brief"],
+)
+def test_exit_limit_predicate_rejects_a_bullet_that_drops_one(old, new, dropped):
+    """The twin: the bullet as the branch wrote it, with no limit and no
+    brief, or with the brief or the second run left out, the limit misread
+    as 0 failed or narrowed to more than one such file, or a brief that runs
+    the full sweep, reads every other part as before and not the one it
+    dropped."""
+    para = _bound()
+    mutant = para.replace(old, new)
+    assert mutant != para, "the mutant must actually change the text"
+    assert _exit_limit(mutant) == _EXIT_LIMIT - dropped
     assert _reads_zero_failed(mutant) == _ZERO_FAILED_ALL
     assert _keeps_a_dying_process_a_kill(mutant)
 
