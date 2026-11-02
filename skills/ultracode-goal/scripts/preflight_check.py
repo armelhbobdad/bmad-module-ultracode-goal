@@ -1005,8 +1005,11 @@ def _last_path_part(word: str) -> str:
 
 # The options of uv, and of `uv run`, that take their value in the next word
 # when it is not glued on (`--python 3.12`; `--python=3.12` and `-p3.12` are
-# one word), as `uv run --help` lists them (uv 0.12). Read as flags, the value
-# took the script's place, and a command that starts the script failed.
+# one word), as `uv run --help` lists them (uv 0.12), and the six it hides
+# there (`--python-preference` to `--trusted-host`, found by trying each word
+# the uv 0.12.15 binary holds). Read as flags, the value took the script's
+# place, and a command that starts the script failed. A value option a later
+# uv adds still reads that way, which fails safe: the re-merge rewrites it.
 _UV_VALUE_SHORT = frozenset("pwifPC")
 _UV_VALUE_LONG = frozenset(
     {
@@ -1019,30 +1022,54 @@ _UV_VALUE_LONG = frozenset(
         "--prerelease-package", "--project", "--python", "--python-platform", "--refresh-package",
         "--reinstall-package", "--resolution", "--upgrade-group", "--upgrade-package", "--with",
         "--with-editable", "--with-requirements",
+        "--python-preference", "--python-fetch", "--preview-features", "--preview-feature",
+        "--max-recursion-depth", "--trusted-host",
     }
 )
-# `uv run -m <name>` runs a module, not a script file.
-_UV_RUNS_OTHER = {"m": "a module", "--module": "a module"}
+# The options that end a command line without running the script, as the
+# predicate the problem names. Each prints and exits 0, so a guard handed to
+# one never runs and Claude Code reads its exit as no objection: uv's version
+# and help before `run`, its help after it, where `-V` is an option `uv run`
+# refuses with exit 2, and `--show-settings` in either place. `uv run -m
+# <name>` runs a module, not a script file.
+_PRINTS_VERSION = "print its version and exit, not run a script"
+_PRINTS_HELP = "print its help and exit, not run a script"
+_PRINTS_SETTINGS = "print its settings and exit, not run a script"
+_UV_STOPS = {
+    "V": _PRINTS_VERSION, "--version": _PRINTS_VERSION, "h": _PRINTS_HELP, "--help": _PRINTS_HELP,
+    "--show-settings": _PRINTS_SETTINGS,
+}
+_UV_RUN_STOPS = {
+    "m": "run a module, not a script", "--module": "run a module, not a script",
+    "h": _PRINTS_HELP, "--help": _PRINTS_HELP, "--show-settings": _PRINTS_SETTINGS,
+    "V": 'refuse "-V", an option it does not take, and run no script',
+    "--version": 'refuse "--version", an option it does not take, and run no script',
+}
 # A Python interpreter `uv run` may be given the script through
 # (`uv run python <script>`), by name or by path.
 _PYTHON = re.compile(r"^python(?:\d+(?:\.\d+)?)?w?(?:\.exe)?$", re.IGNORECASE)
-# Python's options that take a value (`-X utf8`), and the two that end its
-# options with something to run other than a script file.
+# Python's options that take a value (`-X utf8`), and those that end its
+# options with something other than a script file to run, or with a version
+# or help text it prints before it exits (Python 3.11 to 3.14).
 _PYTHON_VALUE_SHORT = frozenset("XW")
 _PYTHON_VALUE_LONG = frozenset({"--check-hash-based-pycs"})
-_PYTHON_RUNS_OTHER = {"m": "a module", "c": "a command string"}
-_NO_STOPS: dict[str, str] = {}
+_PYTHON_STOPS = {
+    "m": "run a module, not a script", "c": "run a command string, not a script",
+    "V": _PRINTS_VERSION, "--version": _PRINTS_VERSION,
+    "h": _PRINTS_HELP, "?": _PRINTS_HELP, "--help": _PRINTS_HELP, "--help-env": _PRINTS_HELP,
+    "--help-xoptions": _PRINTS_HELP, "--help-all": _PRINTS_HELP,
+}
 
 
 def _past_options(
     words: list[str], index: int, value_short: frozenset[str], value_long: frozenset[str], stops: dict[str, str]
 ) -> tuple[int, str | None]:
-    """(index of the first word that is no option, what a stop option runs).
+    """(index of the first word that is no option, what a stop option does).
 
     A short cluster (`-qp`) reads letter by letter: a letter that takes a
     value takes the rest of the word, or the next word when it is the last.
-    `--` ends the options. A letter in `stops` (`-m`) runs something other
-    than a script, and the second item names it.
+    `--` ends the options. An option in `stops` (`-m`, `-V`) ends the command
+    line without running a script, and the second item says what it does.
     """
     while index < len(words):
         word = words[index]
@@ -1083,7 +1110,9 @@ def _command_problem(command: str, script: str) -> str | None:
 
     uv's options are read with their values (`uv run --python 3.12 <script>`),
     and a Python interpreter `uv run` is given the script through (`uv run
-    python <script>`) starts it too.
+    python <script>`) starts it too. An option that prints a version, help
+    or settings and exits (`uv --version`, `uv run --help`, `python -V`)
+    starts nothing: the guard never runs, and its exit 0 reads as no objection.
     """
     try:
         words = shlex.split(command)
@@ -1095,18 +1124,20 @@ def _command_problem(command: str, script: str) -> str | None:
     words = words[index:]
     if not words or _last_path_part(words[0]) not in ("uv", "uv.exe"):
         return "the shell would run %s as the command, not uv" % (json.dumps(words[0]) if words else "nothing")
-    index, _ = _past_options(words, 1, _UV_VALUE_SHORT, _UV_VALUE_LONG, _NO_STOPS)
+    index, stop = _past_options(words, 1, _UV_VALUE_SHORT, _UV_VALUE_LONG, _UV_STOPS)
+    if stop is not None:
+        return "uv would %s" % stop
     if index >= len(words) or words[index] != "run":
         return "uv is given %s, not run" % (json.dumps(words[index]) if index < len(words) else "nothing")
-    index, other = _past_options(words, index + 1, _UV_VALUE_SHORT, _UV_VALUE_LONG, _UV_RUNS_OTHER)
-    if other is not None:
-        return "uv run would run %s, not a script" % other
+    index, stop = _past_options(words, index + 1, _UV_VALUE_SHORT, _UV_VALUE_LONG, _UV_RUN_STOPS)
+    if stop is not None:
+        return "uv run would %s" % stop
     runner = "uv run"
     if index < len(words) and _PYTHON.match(_last_path_part(words[index])):
         runner = "python"
-        index, other = _past_options(words, index + 1, _PYTHON_VALUE_SHORT, _PYTHON_VALUE_LONG, _PYTHON_RUNS_OTHER)
-        if other is not None:
-            return "python would run %s, not a script" % other
+        index, stop = _past_options(words, index + 1, _PYTHON_VALUE_SHORT, _PYTHON_VALUE_LONG, _PYTHON_STOPS)
+        if stop is not None:
+            return "python would %s" % stop
     if index >= len(words) or _last_path_part(words[index]) != script:
         return "%s would be given %s as the script, not a path ending in %s" % (
             runner,

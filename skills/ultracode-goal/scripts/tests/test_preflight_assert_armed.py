@@ -47,6 +47,7 @@ Run: uv run --with pytest pytest scripts/tests/test_preflight_assert_armed.py
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import os
@@ -575,6 +576,16 @@ def test_an_unquoted_budget_hook_is_not_armed_either(tmp_path: Path) -> None:
         pytest.param(
             "uv run -m 'scripts/hooks/guard_pretooluse.py'", "uv run would run a module", id="uv-run-module"
         ),
+        # A guard command that prints and exits 0 never starts the guard, and
+        # Claude Code reads its exit 0 as no objection to every call.
+        pytest.param(
+            "uv run python -V 'scripts/hooks/guard_pretooluse.py'",
+            "python would print its version and exit",
+            id="python-version",
+        ),
+        pytest.param(
+            "uv run --help 'scripts/hooks/guard_pretooluse.py'", "uv run would print its help and exit", id="uv-run-help"
+        ),
     ],
 )
 def test_a_guard_command_that_would_not_start_the_guard_is_not_armed(
@@ -620,6 +631,11 @@ def test_a_guard_command_that_would_not_start_the_guard_is_not_armed(
             id="python-with-its-own-options",
         ),
         pytest.param("uv run /usr/bin/python3 '/srv/p/scripts/hooks/guard_pretooluse.py'", id="python-by-path"),
+        # An option `uv run --help` does not list still takes its value.
+        pytest.param(
+            "uv run --python-preference only-system '/srv/p/scripts/hooks/guard_pretooluse.py'",
+            id="hidden-option-value",
+        ),
     ],
 )
 def test_a_guard_command_the_shell_splits_as_written_is_armed(tmp_path: Path, command: str) -> None:
@@ -629,6 +645,77 @@ def test_a_guard_command_the_shell_splits_as_written_is_armed(tmp_path: Path, co
     _arm(root, guard_command=command)
     code, out = _run(root, env=_process_env(root))
     assert out["reasons"] == [] and code == 0, out["reasons"]
+
+
+# Review of #186's fix: once uv's and Python's options were read, a command
+# that hands the script to an option which prints and exits read as one that
+# starts it, though 12e0a9d refused `uv --version run` and `uv run python -V`.
+# Each form below was run against uv 0.12.15 and Pythons 3.11 to 3.14: it
+# exits without running the script (0, or 2 for `uv run -V`, which uv run does
+# not take). The read is in-process, so the many forms cost no subprocess.
+_GUARD = "'/srv/p/scripts/hooks/guard_pretooluse.py'"
+
+
+@functools.cache
+def _preflight_module():
+    return _load("preflight_check")
+
+
+@pytest.mark.parametrize(
+    "words,shown",
+    [
+        ("uv run python -V", "python would print its version and exit"),
+        ("uv run python --version", "python would print its version and exit"),
+        ("uv run python -VV", "python would print its version and exit"),
+        ("uv run python -uV", "python would print its version and exit"),
+        ("uv run python -h", "python would print its help and exit"),
+        ("uv run python -?", "python would print its help and exit"),
+        ("uv run python -uh", "python would print its help and exit"),
+        ("uv run python --help", "python would print its help and exit"),
+        ("uv run python --help-env", "python would print its help and exit"),
+        ("uv run python --help-xoptions", "python would print its help and exit"),
+        ("uv run python --help-all", "python would print its help and exit"),
+        ("uv --version run", "uv would print its version and exit"),
+        ("uv -V run", "uv would print its version and exit"),
+        ("uv -qV run", "uv would print its version and exit"),
+        ("uv --help run", "uv would print its help and exit"),
+        ("uv -h run", "uv would print its help and exit"),
+        ("uv --show-settings run", "uv would print its settings and exit"),
+        ("uv run --help", "uv run would print its help and exit"),
+        ("uv run -h", "uv run would print its help and exit"),
+        ("uv run -qh", "uv run would print its help and exit"),
+        ("uv run --show-settings", "uv run would print its settings and exit"),
+        ("uv run -V", 'uv run would refuse "-V", an option it does not take'),
+        ("uv run --version", 'uv run would refuse "--version", an option it does not take'),
+    ],
+)
+def test_a_command_that_prints_and_exits_starts_no_guard(words: str, shown: str) -> None:
+    problem = _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py")
+    assert problem is not None and problem.startswith(shown), problem
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        # Twins: the same letters as a value, or flags that run on. Each was
+        # run, and ran the script.
+        "uv run python -Xh",  # -X takes "h" as its option
+        "uv run python -XV",
+        "uv -q run",
+        "uv run -q",
+        "uv run python -u",
+        # The value options `uv run --help` hides (uv 0.12.15).
+        "uv run --python-preference only-system",
+        "uv run --python-fetch automatic",
+        "uv run --preview-features python-upgrade",
+        "uv run --preview-feature python-upgrade",
+        "uv run --trusted-host example.org",
+        "uv run --max-recursion-depth 10",
+        "uv --python-preference only-system run",
+    ],
+)
+def test_a_command_whose_options_run_on_starts_the_guard(words: str) -> None:
+    assert _preflight_module()._command_problem(f"{words} {_GUARD}", "guard_pretooluse.py") is None
 
 
 # --- arming: the Claude Code version -----------------------------------------
