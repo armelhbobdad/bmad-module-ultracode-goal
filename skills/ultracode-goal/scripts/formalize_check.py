@@ -89,9 +89,9 @@ STORY_STATUSES = ("done", "in-progress", "ready-for-dev", "review", "backlog")
 PRD_MARKERS = ("prd",)
 ADR_MARKERS = ("architecture", "adr")
 
-# TEA artifact filename markers — a test-design / trace / test-review /
+# TEA artifact filename markers: a test-design / trace / test-review /
 # nfr-assessment file. Used to detect a leaked artifact sitting under the
-# impl/source tree instead of the trace_output root.
+# impl/source tree, outside TEA's test-artifacts root and a set trace_output.
 TEA_ARTIFACT_MARKERS = (
     "test-design",
     "trace",
@@ -737,24 +737,33 @@ def _cited_index_tokens(block: str) -> list[str]:
 # --- TEA artifact location ---------------------------------------------------
 
 
-# The TEA config scalars that name the trace_output root, the first one set wins.
-_TEA_ROOT_KEYS = ("trace_output", "test_artifacts")
+# The TEA config scalars read: `test_artifacts`, the root TEA writes under and
+# the TEA-reader reads, and `trace_output`, a key TEA 1.27.2 does not wire,
+# under which a TEA file is not a leak either.
+_TEA_ROOT_KEYS = ("test_artifacts", "trace_output")
 
 
-def _tea_trace_output_root(tea_config: Path, project_root: Path) -> Path | None:
-    """Resolve the trace_output root from the TEA config (the leak-check anchor).
+class _TeaRoots(NamedTuple):
+    artifacts: Path
+    exempt: tuple[Path, ...]
 
-    Reads the flat `trace_output:` scalar, else `test_artifacts:`, with
-    preflight_check.py's own reader, imported lazily so this script stays
-    stdlib-only: a .toml config is parsed as TOML, an inline comment is
-    dropped, a `#` inside a quoted value survives, and a key with no value on
-    its own line is unset rather than read from the next line. A copy of that
-    reader here once kept the comment, so the root named a folder that does
-    not exist, the TEA-reader below found no test-design under it, and an
-    artifact under the real root read as leaked. Fail-closed: a config that is
-    missing or cannot be read, or that sets neither key, yields None and the
-    leak check treats every TEA-shaped artifact under impl/source as a
-    candidate signal.
+
+def _tea_roots(tea_config: Path, project_root: Path) -> _TeaRoots | None:
+    """TEA's test-artifacts root, and the folders the leak check exempts.
+
+    The root is the one preflight resolves and injects as
+    ULTRACODE_TEST_ARTIFACTS: preflight_check.py's own functions do the
+    reading, imported lazily so this script stays stdlib-only.
+    `_read_toml_or_yaml_flags` reads the config (a .toml config parsed as
+    TOML, an inline comment dropped, a `#` inside a quoted value kept, a key
+    with no value on its own line unset, a path that holds no file read as no
+    config), and `_tea_artifacts_root` resolves `test_artifacts`, else
+    `_bmad-output/test-artifacts` under the project root. That root is where
+    TEA 1.27.2 writes its test-designs and `nfr-assessment.md`. The leak check
+    exempts it and a non-empty `trace_output` the config sets, which TEA
+    1.27.2 does not wire but the installer writes. None when the config is a
+    file that cannot be read (a permission error, say): the TEA-reader then
+    reads nothing and the leak check exempts no folder.
     """
     scripts = str(Path(__file__).resolve().parent)
     if scripts not in sys.path:
@@ -765,11 +774,14 @@ def _tea_trace_output_root(tea_config: Path, project_root: Path) -> Path | None:
         flags = preflight_check._read_toml_or_yaml_flags(tea_config, _TEA_ROOT_KEYS)
     except OSError:
         return None
-    for key in _TEA_ROOT_KEYS:
-        value = flags.get(key)
-        if isinstance(value, str) and value:
-            return _resolve(value, project_root)
-    return None
+    artifacts = preflight_check._tea_artifacts_root(project_root, flags)
+    exempt = [artifacts]
+    trace = flags.get("trace_output")
+    if isinstance(trace, str) and trace:
+        resolved = preflight_check._resolve(trace, project_root)
+        if resolved != artifacts:
+            exempt.append(resolved)
+    return _TeaRoots(artifacts, tuple(exempt))
 
 
 # UCG's own impl-artifact bookkeeping is NOT a TEA artifact, even when its filename
@@ -802,12 +814,12 @@ def _is_ucg_impl_artifact(path: Path, name: str) -> bool:
 
 
 def _leaked_tea_artifacts(
-    impl_artifacts: Path, trace_root: Path | None
+    impl_artifacts: Path, exempt: tuple[Path, ...] | None
 ) -> list[Path]:
     """TEA-shaped artifacts found under the impl/source tree (the wrong root).
 
-    A TEA artifact correctly placed under trace_root is NOT a leak; one under
-    impl-artifacts (and outside trace_root) is (the check keys on the
+    A TEA artifact under one of `exempt` (TEA's test-artifacts root, a set
+    trace_output) is NOT a leak; one under impl-artifacts outside them is (the check keys on the
     WRONG LOCATION, not on mere presence of a TEA file). UCG's own story notes /
     run sentinels are excluded even when their filename carries a marker token
     (see _is_ucg_impl_artifact), and so is every file inside a story's run
@@ -827,15 +839,16 @@ def _leaked_tea_artifacts(
             continue
         if _is_ucg_impl_artifact(path, name):
             continue
-        if trace_root is not None and trace_root in path.parents:
+        if exempt and any(root in path.parents for root in exempt):
             continue
         leaked.append(path)
     return leaked
 
 
 # --- TEA-reader: read TEA's emitted fields, NEVER originate them ---------------
-# formalize stays a READER of the TEA test-design risk matrix + nfr-assessment.md
-# located under the trace_output root; it verifies presence/parseability and
+# formalize stays a READER of the checked Epic's TEA test-design risk matrix
+# (test-design-epic-<epic>.md) and of an nfr-assessment.md naming one of its
+# in-scope stories, both under TEA's test-artifacts root; it verifies parseability and
 # value->source-or-UNKNOWN provenance, recomputes ONLY a blank P×I score cell when
 # both P and I are stated (provenance arithmetic), and never originates an NFR
 # threshold, a P0-P3 percentage, a Quality Score, or an overallStatus.
@@ -846,17 +859,40 @@ _OVERALL_STATUS_RE = re.compile(
 )
 
 
-def _find_under(root: Path | None, marker: str) -> Path | None:
-    """First readable file under ``root`` whose name carries ``marker`` (lowercased)."""
-    if root is None or not root.is_dir():
-        return None
+def _tea_files_named(root: Path, name: str) -> list[Path]:
+    """Every file under ``root``, in any folder below it, whose name is ``name``
+    (compared case-insensitively), in sorted path order."""
+    if not root.is_dir():
+        return []
+    wanted = name.casefold()
     try:
-        for path in sorted(root.rglob("*")):
-            if path.is_file() and marker in path.name.lower():
-                return path
+        return [path for path in sorted(root.rglob("*")) if path.name.casefold() == wanted and path.is_file()]
     except OSError:
-        return None
-    return None
+        return []
+
+
+# The story an nfr-assessment.md assesses: TEA's `**Story:** <id>` header line
+# (nfr-report-template.md) or its gate snippet's `story_id: '<id>'`. An id must
+# start with a digit, so the template's `{STORY_ID}` placeholder names none.
+_ASSESSED_STORY_RE = re.compile(
+    r"^\s*(?:\*\*Story:\*\*|story_id:)\s*['\"]?([0-9][\w.-]*)", re.IGNORECASE | re.MULTILINE
+)
+
+
+def _assesses_a_story_in_scope(text: str, scope_keys: list[str]) -> bool:
+    """True when the first story line of an nfr-assessment names an in-scope story.
+
+    The named id and each key are split on `-`, `.` and `_`; the id matches a key
+    when its parts, two at least, begin the key's parts: `1.1`, `1-1` and
+    `1-1-login` all name `1-1-login`, while `1`, `1-10` and `9-1` do not.
+    """
+    match = _ASSESSED_STORY_RE.search(text)
+    if match is None:
+        return False
+    named = re.split(r"[-._]", match.group(1).rstrip("-._").casefold())
+    if len(named) < 2:
+        return False
+    return any(re.split(r"[-._]", key.casefold())[: len(named)] == named for key in scope_keys)
 
 
 def _table_rows(text: str):
@@ -867,53 +903,71 @@ def _table_rows(text: str):
             yield line_no, [cell.strip() for cell in stripped.strip("|").split("|")]
 
 
+# The risk-matrix columns, as TEA's templates head them (`Probability`, `Impact`,
+# `Score`) or abbreviated (`P`, `I`).
+_P_HEADERS = frozenset({"p", "probability"})
+_I_HEADERS = frozenset({"i", "impact"})
+
+
+def _cell(value: str) -> str:
+    """A table cell without its padding, bold markers or code backticks."""
+    return value.strip().strip("*`").strip()
+
+
+def _risk_columns(header: list[str]) -> dict[str, int] | None:
+    """The P, I and Score column of a table whose header row names all three."""
+    lower = [_cell(c).lower() for c in header]
+    p = next((idx for idx, c in enumerate(lower) if c in _P_HEADERS), None)
+    i = next((idx for idx, c in enumerate(lower) if c in _I_HEADERS), None)
+    score = next((idx for idx, c in enumerate(lower) if "score" in c), None)
+    if p is None or i is None or score is None:
+        return None
+    return {"P": p, "I": i, "Score": score}
+
+
 def _scan_test_design(text: str, rel: str) -> tuple[list[dict], list[dict]]:
     """Risk-matrix P×I provenance: blank-cell recompute (mechanical) vs disagreement
-    (judgment), plus an unsourced NFR threshold (judgment). Reader-only, blank-cell-only."""
+    (judgment), plus an unsourced NFR threshold (judgment). Reader-only, blank-cell-only.
+
+    Each table is read under its own header row (the first row of a run of
+    consecutive table lines), and only a table whose header names a P, an I and
+    a Score column is read at all.
+    """
     gaps: list[dict] = []
     candidates: list[dict] = []
     cols: dict[str, int] | None = None
-    for _, cells in _table_rows(text):
-        lower = [c.lower() for c in cells]
-        if "p" in lower and "i" in lower and any("score" in c for c in lower):
-            cols = {
-                "P": lower.index("p"),
-                "I": lower.index("i"),
-                "Score": next(idx for idx, c in enumerate(lower) if "score" in c),
-            }
-            break
-    if cols is not None:
-        header_seen = False
-        for line_no, cells in _table_rows(text):
-            lower = [c.lower() for c in cells]
-            if not header_seen:
-                header_seen = "p" in lower and "i" in lower and any("score" in c for c in lower)
-                continue
-            if all(set(c) <= set("-: ") for c in cells):  # separator row
-                continue
-            if max(cols.values()) >= len(cells):
-                continue
-            p, i, score = cells[cols["P"]], cells[cols["I"]], cells[cols["Score"]]
-            if not (p.isdigit() and i.isdigit()):
-                continue
-            product = int(p) * int(i)
-            if score == "":
-                gaps.append({
-                    "id": "blank_pxi_score:%s:%d" % (rel, line_no),
-                    "kind": "blank_pxi_score",
-                    "severity": "low",
-                    "detail": "Blank P×I score with stated P=%s, I=%s -> recompute %d" % (p, i, product),
-                    "remediable": True,
-                    "source": "%s:%d" % (rel, line_no),
-                    "recomputed": product,
-                })
-            elif score.isdigit() and int(score) != product:
-                candidates.append({
-                    "source": "%s:%d" % (rel, line_no),
-                    "kind": "risk_score_conflict",
-                    "why_machine_cannot_decide": "stated risk score %s conflicts with stated P,I "
-                    "(%s×%s=%d); requires TEA reconciliation" % (score, p, i, product),
-                })
+    previous = None
+    for line_no, cells in _table_rows(text):
+        if previous != line_no - 1:  # the first row of a table is its header
+            previous = line_no
+            cols = _risk_columns(cells)
+            continue
+        previous = line_no
+        if cols is None or all(set(c) <= set("-: ") for c in cells):  # separator row
+            continue
+        if max(cols.values()) >= len(cells):
+            continue
+        p, i, score = (_cell(cells[cols[key]]) for key in ("P", "I", "Score"))
+        if not (p.isdigit() and i.isdigit()):
+            continue
+        product = int(p) * int(i)
+        if score == "":
+            gaps.append({
+                "id": "blank_pxi_score:%s:%d" % (rel, line_no),
+                "kind": "blank_pxi_score",
+                "severity": "low",
+                "detail": "Blank P×I score with stated P=%s, I=%s -> recompute %d" % (p, i, product),
+                "remediable": True,
+                "source": "%s:%d" % (rel, line_no),
+                "recomputed": product,
+            })
+        elif score.isdigit() and int(score) != product:
+            candidates.append({
+                "source": "%s:%d" % (rel, line_no),
+                "kind": "risk_score_conflict",
+                "why_machine_cannot_decide": "stated risk score %s conflicts with stated P,I "
+                "(%s×%s=%d); requires TEA reconciliation" % (score, p, i, product),
+            })
     for line_no, line in enumerate(text.splitlines(), start=1):
         if _NFR_NUMBER_RE.search(line) and not _SOURCE_CITATION_RE.search(line):
             candidates.append({
@@ -1110,7 +1164,6 @@ def build_verdict(
     _entry_ns = time.monotonic_ns()
     _mech_start_ns = time.monotonic_ns()
     _mechanical_hook()
-    nfr_path: Path | None = None
 
     # --- PRD / ADR presence (planning-artifacts root, fail-closed) ---
     prd_path = _find_marked_file(planning_artifacts, PRD_MARKERS)
@@ -1533,8 +1586,8 @@ def build_verdict(
                     )
 
     # --- TEA leak check (location classification, reader-only) ---
-    trace_root = _tea_trace_output_root(tea_config, project_root)
-    leaked = _leaked_tea_artifacts(impl_artifacts, trace_root)
+    tea_roots = _tea_roots(tea_config, project_root)
+    leaked = _leaked_tea_artifacts(impl_artifacts, tea_roots.exempt if tea_roots is not None else None)
     tea_artifacts_in_source = len(leaked)
     for path in leaked:
         rel = _rel(path, project_root)
@@ -1544,20 +1597,28 @@ def build_verdict(
                 "kind": "leaked_tea_artifact",
                 "severity": "medium",
                 "detail": "TEA artifact under the source/impl tree instead of "
-                "the trace_output root: %s" % rel,
+                "TEA's test-artifacts root: %s" % rel,
                 # A path MOVE is machine-derivable + meaning-preserving.
                 "remediable": True,
                 "source": rel,
             }
         )
 
-    # --- TEA-reader: read TEA's emitted fields under the trace_output root ---
-    # Fires ONLY when a test-design artifact is located under trace_root (a TEA run is
-    # in progress); otherwise no TEA artifact is read and nothing is added. With a
-    # test-design present, an nfr-assessment is EXPECTED — a missing/unreadable one is
-    # a FAILING signal (fail-closed), never neutral.
-    test_design_path = _find_under(trace_root, "test-design")
-    if test_design_path is not None and trace_root is not None:
+    # --- TEA-reader: the checked Epic's own TEA files, where TEA writes them ---
+    # Fires ONLY when the Epic's own plan, test-design-epic-<epic>.md, is under TEA's
+    # test-artifacts root or a folder below it; every copy is read, each under its own
+    # path. TEA's system-level test-design-architecture.md and test-design-qa.md, a
+    # progress checkpoint, a validation report and another Epic's plan are never read
+    # for it. An unreadable plan is a FAILING gap (fail-closed), never neutral. Beside
+    # the plan, an nfr-assessment.md is read only when its story line names an in-scope
+    # story, so another Epic's assessment raises nothing. A missing one is no gap: TEA
+    # assesses NFRs from implementation evidence, after this check, and gate_eval.py
+    # fails a production story gate without one.
+    test_designs = (
+        _tea_files_named(tea_roots.artifacts, "test-design-epic-%s.md" % epic) if tea_roots is not None else []
+    )
+    tea_artifacts_read = 0
+    for test_design_path in test_designs:
         td_rel = _rel(test_design_path, project_root)
         td_text = _safe_read_text(test_design_path)
         if td_text is None:
@@ -1569,32 +1630,21 @@ def build_verdict(
                 "remediable": False,
                 "source": td_rel,
             })
-        else:
-            texts_by_rel[td_rel] = td_text
-            td_gaps, td_candidates = _scan_test_design(td_text, td_rel)
-            mechanical_gaps.extend(td_gaps)
-            judgment_candidates.extend(td_candidates)
-
-        nfr_path = _find_under(trace_root, "nfr-assessment")
-        nfr_text = _safe_read_text(nfr_path) if nfr_path is not None else None
-        if nfr_text is None:
-            nfr_rel = (
-                _rel(nfr_path, project_root) if nfr_path is not None
-                else _rel(trace_root / "nfr-assessment.md", project_root)
-            )
-            mechanical_gaps.append({
-                "id": "nfr_assessment_absent",
-                "kind": "missing_nfr_assessment",
-                "severity": "high",
-                "detail": "nfr-assessment.md absent or unreadable under trace_output: %s" % nfr_rel,
-                # Fail-closed (mirroring gate_eval.py nfr_status is None -> failing):
-                # an absent/unreadable nfr assessment is a FAILING gap, never neutral.
-                "remediable": False,
-                "source": nfr_rel,
-            })
-        else:
-            texts_by_rel[_rel(nfr_path, project_root)] = nfr_text
-            judgment_candidates.extend(_scan_nfr_assessment(nfr_text, _rel(nfr_path, project_root)))
+            continue
+        tea_artifacts_read += 1
+        texts_by_rel[td_rel] = td_text
+        td_gaps, td_candidates = _scan_test_design(td_text, td_rel)
+        mechanical_gaps.extend(td_gaps)
+        judgment_candidates.extend(td_candidates)
+    if test_designs:
+        for nfr_path in _tea_files_named(tea_roots.artifacts, "nfr-assessment.md"):
+            nfr_text = _safe_read_text(nfr_path)
+            if nfr_text is None or not _assesses_a_story_in_scope(nfr_text, scope_keys):
+                continue
+            tea_artifacts_read += 1
+            nfr_rel = _rel(nfr_path, project_root)
+            texts_by_rel[nfr_rel] = nfr_text
+            judgment_candidates.extend(_scan_nfr_assessment(nfr_text, nfr_rel))
 
     # --- reporting ratios (NEVER compared to a cutoff) ---
     ac_machine_checkable_ratio = (
@@ -1671,8 +1721,7 @@ def build_verdict(
         + (1 if _present_and_readable(adr_path) else 0)
         + (1 if (sprint_status is not None and sprint_text is not None) else 0)
         + sum(1 for body in story_reads.values() if body is not None)
-        + (1 if test_design_path is not None else 0)
-        + (1 if nfr_path is not None else 0)
+        + tea_artifacts_read
     )
     _exit_ns = time.monotonic_ns()
     timing = {

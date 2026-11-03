@@ -271,7 +271,7 @@ def _tea_files(root: Path, design_line: str, nfr_category: str) -> None:
     trace = root / "tea" / "traceability"
     (trace / "test-design-epic-4.md").write_text("# Test design\n\n%s\n" % design_line, encoding="utf-8")
     (trace / "nfr-assessment.md").write_text(
-        "overallStatus: PASS\n\n| Category | Threshold | Status |\n|---|---|---|\n| %s | UNKNOWN | PASS |\n" % nfr_category,
+        "**Story:** 4-1\noverallStatus: PASS\n\n| Category | Threshold | Status |\n|---|---|---|\n| %s | UNKNOWN | PASS |\n" % nfr_category,
         encoding="utf-8",
     )
 
@@ -282,7 +282,7 @@ def test_a_tea_candidate_carries_an_id_and_can_be_answered(tmp_path):
     candidates = {c["kind"]: c for c in _run(root)["judgment_candidates"]}
     nfr, design = candidates["nfr_pass_on_unknown"], candidates["invented_nfr_threshold"]
     nfr_rel = str(Path("tea") / "traceability" / "nfr-assessment.md")
-    assert nfr["source"] == nfr_rel + ":5"
+    assert nfr["source"] == nfr_rel + ":6"
     assert design["source"] == str(Path("tea") / "traceability" / "test-design-epic-4.md") + ":3"
     assert re.fullmatch(r"nfr_pass_on_unknown:%s:[0-9a-f]{12}" % re.escape(nfr_rel), nfr["id"])
     scan = {"reds": [], "concerns": [_concern(c["id"], source=c["source"]) for c in candidates.values()]}

@@ -344,8 +344,9 @@ def _read_toml_or_yaml_flags(tea_config: Path, keys: tuple[str, ...] = TEA_FLAG_
     The TEA config is YAML in practice. To stay stdlib-only we parse the flat
     `key: value` scalar lines we care about ourselves (no nesting is needed for
     these flags). If `tomllib` ever applies (a .toml config) we try that first.
-    `keys` names the scalars read: TEA's flags by default, and the two that
-    name the trace_output root when formalize_check.py reads it here.
+    `keys` names the scalars read: TEA's flags by default, and `test_artifacts`
+    and `trace_output` when formalize_check.py reads TEA's test-artifacts root
+    and the folders its leak check exempts.
     """
     if not tea_config.is_file():
         return {}

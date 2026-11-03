@@ -393,7 +393,7 @@ def _formalize_reads(impl: Path, tmp_path: Path) -> list[Path]:
     formalize = _load("formalize_check")
     stories = [path for epic, key in (("2", "2-3-cli"), ("4", "4-3-notes"), ("5", "5-2-notes"))
                for path in formalize._story_files(impl, epic, [key])]
-    return stories + formalize._leaked_tea_artifacts(impl, tmp_path / "test-artifacts")
+    return stories + formalize._leaked_tea_artifacts(impl, (tmp_path / "test-artifacts",))
 
 
 def _files(impl: Path, rels: tuple[str, ...]) -> Path:
@@ -435,7 +435,7 @@ def test_a_file_or_folder_only_named_like_a_run_folder_is_read(tmp_path):
     formalize = _load("formalize_check")
     stories = {p.relative_to(impl).as_posix() for p in formalize._story_files(impl, "7", ["evidence-export"])}
     leaked = {
-        p.relative_to(impl).as_posix() for p in formalize._leaked_tea_artifacts(impl, tmp_path / "test-artifacts")
+        p.relative_to(impl).as_posix() for p in formalize._leaked_tea_artifacts(impl, (tmp_path / "test-artifacts",))
     }
     assert stories == {"evidence-export.md", "evidence/7-3-notes.md"}
     assert leaked == {"evidence-trace-matrix.md", "evidence/traceability.md", ".scratch/traceability.md"}
