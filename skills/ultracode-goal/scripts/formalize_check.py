@@ -914,6 +914,26 @@ def _cell(value: str) -> str:
     return value.strip().strip("*`").strip()
 
 
+def _pipe_table_lines(text: str):
+    """Yield (line_no, cells, first) for each line of a pipe table, `first` on its header.
+
+    GFM makes a row's outer pipes optional, so a table runs over consecutive
+    lines that hold a `|`, and a line without one ends it. A row that drops its
+    trailing pipe therefore stays in its table instead of starting a new one
+    whose header names no risk column, which left every later row unread.
+    """
+    in_table = False
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        row = line.strip()
+        if "|" not in row:
+            in_table = False
+            continue
+        row = row[1:] if row.startswith("|") else row
+        row = row[:-1] if row.endswith("|") else row
+        yield line_no, [cell.strip() for cell in row.split("|")], not in_table
+        in_table = True
+
+
 def _risk_columns(header: list[str]) -> dict[str, int] | None:
     """The P, I and Score column of a table whose header row names all three."""
     lower = [_cell(c).lower() for c in header]
@@ -929,20 +949,17 @@ def _scan_test_design(text: str, rel: str) -> tuple[list[dict], list[dict]]:
     """Risk-matrix P×I provenance: blank-cell recompute (mechanical) vs disagreement
     (judgment), plus an unsourced NFR threshold (judgment). Reader-only, blank-cell-only.
 
-    Each table is read under its own header row (the first row of a run of
-    consecutive table lines), and only a table whose header names a P, an I and
-    a Score column is read at all.
+    Each table is read under its own header row (the first of a run of
+    consecutive lines holding a `|`, outer pipes optional), and only a table
+    whose header names a P, an I and a Score column is read at all.
     """
     gaps: list[dict] = []
     candidates: list[dict] = []
     cols: dict[str, int] | None = None
-    previous = None
-    for line_no, cells in _table_rows(text):
-        if previous != line_no - 1:  # the first row of a table is its header
-            previous = line_no
+    for line_no, cells, first in _pipe_table_lines(text):
+        if first:  # the first row of a table is its header
             cols = _risk_columns(cells)
             continue
-        previous = line_no
         if cols is None or all(set(c) <= set("-: ") for c in cells):  # separator row
             continue
         if max(cols.values()) >= len(cells):
@@ -1611,9 +1628,10 @@ def build_verdict(
     # progress checkpoint, a validation report and another Epic's plan are never read
     # for it. An unreadable plan is a FAILING gap (fail-closed), never neutral. Beside
     # the plan, an nfr-assessment.md is read only when its story line names an in-scope
-    # story, so another Epic's assessment raises nothing. A missing one is no gap: TEA
-    # assesses NFRs from implementation evidence, after this check, and gate_eval.py
-    # fails a production story gate without one.
+    # story, so another Epic's assessment raises nothing; one that cannot be read is a
+    # FAILING gap too, since its story line cannot be checked. A missing one is no gap:
+    # TEA assesses NFRs from implementation evidence, after this check, and
+    # gate_eval.py fails a production story gate without one.
     test_designs = (
         _tea_files_named(tea_roots.artifacts, "test-design-epic-%s.md" % epic) if tea_roots is not None else []
     )
@@ -1638,11 +1656,21 @@ def build_verdict(
         judgment_candidates.extend(td_candidates)
     if test_designs:
         for nfr_path in _tea_files_named(tea_roots.artifacts, "nfr-assessment.md"):
+            nfr_rel = _rel(nfr_path, project_root)
             nfr_text = _safe_read_text(nfr_path)
-            if nfr_text is None or not _assesses_a_story_in_scope(nfr_text, scope_keys):
+            if nfr_text is None:
+                mechanical_gaps.append({
+                    "id": "nfr_assessment_unreadable:%s" % nfr_rel,
+                    "kind": "unreadable_tea_artifact",
+                    "severity": "high",
+                    "detail": "nfr-assessment unreadable: %s" % nfr_rel,
+                    "remediable": False,
+                    "source": nfr_rel,
+                })
+                continue
+            if not _assesses_a_story_in_scope(nfr_text, scope_keys):
                 continue
             tea_artifacts_read += 1
-            nfr_rel = _rel(nfr_path, project_root)
             texts_by_rel[nfr_rel] = nfr_text
             judgment_candidates.extend(_scan_nfr_assessment(nfr_text, nfr_rel))
 

@@ -60,11 +60,11 @@ def _project(root: Path, files: dict[str, str | bytes], config: str | None = TA,
     return root
 
 
-def _run(root: Path, epic: str = "1", impl: str = "impl-artifacts") -> dict:
+def _run(root: Path, epic: str = "1", impl: str = "impl-artifacts", stories: tuple[str, ...] = ()) -> dict:
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--epic", epic, "--project-root", str(root),
          "--planning-artifacts", str(root / "planning-artifacts"), "--impl-artifacts", str(root / impl),
-         "--tea-config", str(root / "tea" / "config.yaml")],
+         "--tea-config", str(root / "tea" / "config.yaml"), *(a for s in stories for a in ("--story", s))],
         capture_output=True, text=True,
     )
     assert proc.returncode == 0, proc.stderr
@@ -178,6 +178,30 @@ def test_an_nfr_assessment_is_read_only_when_it_names_an_in_scope_story(tmp_path
     assert found == ([("nfr_pass_on_unknown", "ta/nfr-assessment.md:%d" % row)] if read else [])
 
 
+def test_an_nfr_assessment_is_read_against_the_story_scope(tmp_path):
+    # Two open stories; `--story 1-1-login` drives only the first, so an
+    # assessment of the second raises nothing, and one of the first still does.
+    root = _project(tmp_path, {"ta/test-design-epic-1.md": SCORED, "ta/nfr-assessment.md": "**Story:** 1-2\n" + NFR_UNKNOWN})
+    status = root / "impl-artifacts" / "sprint-status.yaml"
+    status.write_text(status.read_text(encoding="utf-8").replace(
+        "  1-1-login: backlog\n", "  1-1-login: backlog\n  1-2-signup: backlog\n"), encoding="utf-8")
+    (root / "impl-artifacts" / "1-2-signup.md").write_text(STORY, encoding="utf-8")
+    assert _tea(_run(root)) == [("nfr_pass_on_unknown", "ta/nfr-assessment.md:6")]
+    assert _tea(_run(root, stories=("1-1-login",))) == []
+    (root / "ta" / "nfr-assessment.md").write_text("**Story:** 1-1\n" + NFR_UNKNOWN, encoding="utf-8")
+    assert _tea(_run(root, stories=("1-1-login",))) == [("nfr_pass_on_unknown", "ta/nfr-assessment.md:6")]
+
+
+def test_an_unreadable_nfr_assessment_beside_the_plan_is_a_failing_gap(tmp_path):
+    files = {"ta/test-design-epic-1.md": SCORED, "ta/nfr-assessment.md": b"**Story:** 1-1\n| note | caf\xe9 |\n"}
+    out = _run(_project(tmp_path, files))
+    assert _tea(out) == [("unreadable_tea_artifact", "ta/nfr-assessment.md")]
+    assert out["verdict"] == "blocked"
+    # Without the Epic's plan no assessment is read, so it raises nothing.
+    other = _run(_project(tmp_path / "other", {"ta/test-design-epic-9.md": SCORED, "ta/nfr-assessment.md": files["ta/nfr-assessment.md"]}))
+    assert _tea(other) == []
+
+
 def test_no_nfr_assessment_is_read_without_the_epics_plan(tmp_path):
     files = {"ta/test-design-epic-9.md": SCORED, "ta/nfr-assessment.md": "**Story:** 1-1\n" + NFR_UNKNOWN}
     assert _tea(_run(_project(tmp_path, files))) == []
@@ -197,6 +221,39 @@ def test_teas_own_risk_table_headers_are_read(tmp_path):
     assert _tea(out) == [("blank_pxi_score", "ta/test-design-epic-1.md:5"),
                          ("risk_score_conflict", "ta/test-design-epic-1.md:6")]
     assert [g["recomputed"] for g in out["mechanical_gaps"] if g["kind"] == "blank_pxi_score"] == [6]
+
+
+def test_backticks_and_bold_are_stripped_from_cells_and_headers(tmp_path):
+    plan = (
+        "| Risk ID | Category | Description | **Probability** | `Impact` | **Score** | Mitigation |\n"
+        "| --- | --- | --- | ---: | ---: | ---: | --- |\n"
+        "| R-01 | SEC | a | `3` | `2` | `5` | m |\n"
+        "| R-02 | TECH | b | **2** | **3** |  | m |\n"
+    )
+    out = _run(_project(tmp_path, {"ta/test-design-epic-1.md": plan}))
+    assert _tea(out) == [("blank_pxi_score", "ta/test-design-epic-1.md:4"),
+                         ("risk_score_conflict", "ta/test-design-epic-1.md:3")]
+
+
+# GFM makes a row's outer pipes optional: a row that drops one stays in its table.
+_PIPELESS = [
+    ("no-trailing-pipe-p-i",
+     "| Risk ID | Category | P | I | Score | Mitigation |\n|---|---|---|---|---|---|\n"
+     "| R-1 | TECH | 2 | 2 | 4 | x\n| R-2 | SEC | 3 | 2 |  | y |\n| R-3 | OPS | 3 | 3 | 6 | z |\n"),
+    ("no-trailing-pipe-tea",
+     "| Risk ID | Category | Description | Probability | Impact | Score | Mitigation |\n| --- | --- | --- | --- | --- | --- | --- |\n"
+     "| R-1 | TECH | a | 2 | 2 | 4 | x\n| R-2 | SEC | b | 3 | 2 |  | y |\n| R-3 | OPS | c | 3 | 3 | 6 | z |\n"),
+    ("no-outer-pipes",
+     "Risk ID | Category | P | I | Score | Mitigation\n---|---|---|---|---|---\n"
+     "R-1 | TECH | 2 | 2 | 4 | x\nR-2 | SEC | 3 | 2 |  | y\nR-3 | OPS | 3 | 3 | 6 | z\n"),
+]
+
+
+@pytest.mark.parametrize("plan", [p[1] for p in _PIPELESS], ids=[p[0] for p in _PIPELESS])
+def test_a_row_without_outer_pipes_stays_in_its_table(tmp_path, plan):
+    out = _run(_project(tmp_path, {"ta/test-design-epic-1.md": plan}))
+    assert _tea(out) == [("blank_pxi_score", "ta/test-design-epic-1.md:4"),
+                         ("risk_score_conflict", "ta/test-design-epic-1.md:5")]
 
 
 def test_each_table_is_read_under_its_own_header(tmp_path):
