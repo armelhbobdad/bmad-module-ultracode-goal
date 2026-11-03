@@ -1,0 +1,8 @@
+---
+created: "2026-11-03 15:33"
+session: "18a0e403-10ce-436e-a0f4-b2362871b122"
+---
+
+# Workflow subagent scratch copies filling the /tmp tmpfs
+
+`/tmp` here is a 16G RAM-backed tmpfs (half of the 31G of RAM, with swap already in use), and Claude Code writes each command's output-capture file under `/tmp/claude-1000`, so when it fills every Bash call is refused before it starts: "The command was not started: this computer's disk is full (ENOSPC) on the volume holding /tmp/claude-1000". On 2026-11-03 a 47-agent adversarial review Workflow did it: its prompts let each agent build throwaway git repos and copy the skill tree under the session scratchpad (`skills/ultracode-goal/scripts` alone is 37M), and about 15G of `review-*` and `refute-*` folders accumulated; deleting them brought `/tmp` back to 752M used. Since then every Workflow prompt that lets agents write files states hard rules: work only in the agent's own folder under the scratchpad, keep it under 50M with tiny fixture repos, never copy the repository, copy only the single `.py` file a mutation needs, delete the folder before returning, and never touch anything outside it. The last rule exists because one implementation agent's cleanup ran `rm -rf /tmp/pytest-of-armel` and hit a `pytest-36` folder another run was writing at that moment, which the cleanup advice in [[tmp-tmpfs-pressure-from-claude-session-sandboxes-breaking-the-pytest-suite]] invites. Growing the tmpfs (`mount -o remount,size=50G /tmp`) was advised against because overflow goes to swap; the proposed fix is `CLAUDE_CODE_TMPDIR` on the 1.3T disk, for example `$HOME/.cache/claude-tmp`, which takes effect on restart.
