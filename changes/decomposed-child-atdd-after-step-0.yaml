@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  Execute now runs a decomposed child's ATDD (a row created after Define-Done ran) right after the child's step 0 and before step 1, so `.current-story` names the child and the Stop hook books those turns to the child's count. Before, the run came before the child's step 0, while the pointer still named the story before it, which the rule that keeps another story's work off a story's count forbids, so a conductor either booked the turns to the wrong story or split step 0 and logged a deviation. Those turns now count against the child's own `max_turns_per_story`, so a child whose budget was already tight reaches its turn ceiling, and stops for review, sooner than before. Step 0 is never split: the run commits nothing and leaves `HEAD` where it was. A child that sizing splits again gets no run. In production, on a stack ATDD can run on, a resume that finds the child's baseline marker still owes the run before step 1 when `atdd-checklist-<child key>.md` is absent or a `generatedTestFiles` path it lists does not exist, so an interrupted run is never read as complete.
+issues: [193]

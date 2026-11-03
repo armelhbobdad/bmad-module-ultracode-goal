@@ -8,6 +8,10 @@ in-condition "…or stop after N turns" clause "the real bound". The turn count 
 Stop hook records is the only one every session keeps, and it advances once per
 response, so it cannot see re-loops spent inside a single response.
 
+The hook books each response to the story `.current-story` names, so the order
+of a decomposed child's ATDD run against its step 0 decides whose count it
+spends (#193): it runs right after that step 0, never before it.
+
 Each predicate is checked against the live text and, as its anti-vacuous twin,
 against a single-clause mutant or the pre-edit wording it must reject.
 Stdlib + pytest only.
@@ -371,3 +375,109 @@ def test_troubleshooting_predicate_rejects_the_section_without_it():
     start = section.index(" It counts responses, not work:")
     end = section.index("while a story is current.", start) + len("while a story is current.")
     assert not _TROUBLE_WAITS.search(section[:start] + section[end:])
+
+
+# A decomposed child's ATDD run (#193). The precondition once ran it "before its
+# step 0", while `.current-story` still named the story before it, so the Stop
+# hook booked those turns to that story, which "Keep another story's work off
+# this story's count" forbids. It now runs right after the child's step 0, which
+# is never split, and before step 1.
+_CHILD_ATDD_PRE_EDIT = (
+    "run `bmad-testarch-atdd` scoped to that story before its step 0, or hand-establish the red phase where ATDD "
+    "cannot run)"
+)
+_CHILD_ATDD_PRECONDITION = (
+    "run `bmad-testarch-atdd` scoped to that story right after its step 0 (next paragraph), or hand-establish its red "
+    "phase at step 1 where ATDD cannot run)"
+)
+_CHILD_ATDD_ORDER = (
+    "The run is the child's own work: it comes after the child's step 0 (story loop, below) has written both the "
+    "`.current-story` pointer and the child's baseline marker, and before step 1, so the Stop hook books its turns to "
+    "the child."
+)
+_CHILD_ATDD_NO_SPLIT = (
+    "Step 0 is never split around it, pointer first and baseline after: the run commits nothing and leaves `HEAD` "
+    "where it was, so the baseline step 0 records is the one the child starts from either way."
+)
+_CHILD_ATDD_SIZING = (
+    "Sizing still comes first (\"Sizing: a story too large to drive\" sizes the row ahead of step 0), so a child "
+    "that is split again gets no run."
+)
+_CHILD_ATDD_RESUME = (
+    "In production, on a stack ATDD can run on, a resume that finds the child's `.baseline-<story_id>` still owes the "
+    "run, before step 1, when `atdd-checklist-<child key>.md` is absent or a `generatedTestFiles` path it lists does "
+    "not exist: an interrupted run can leave either."
+)
+_CHILD_ATDD_WAITS = (
+    "A decomposed child's ATDD run is such work: it runs after the child's own step 0, never while the story before "
+    "it is current (\"A decomposed child's ATDD run\", above)."
+)
+
+
+def _child_atdd_follows_step_0(text: str) -> bool:
+    flat = re.sub(r"\s+", " ", text)
+    paragraphs = text.split("\n\n")
+    try:
+        at = next(i for i, p in enumerate(paragraphs) if p.startswith("Preconditions (asserted, not assumed)"))
+        preconditions = paragraphs[at]
+        # The precondition points at the "next paragraph", so the rule is that one.
+        child = paragraphs[at + 1]
+        loop = _story_loop(text)
+    except (StopIteration, IndexError, ValueError):
+        return False
+    if not child.startswith("**A decomposed child's ATDD run**"):
+        return False
+    rule = " ".join((_CHILD_ATDD_ORDER, _CHILD_ATDD_NO_SPLIT, _CHILD_ATDD_SIZING, _CHILD_ATDD_RESUME))
+    return bool(
+        _CHILD_ATDD_PRECONDITION in preconditions
+        and rule in re.sub(r"\s+", " ", child)
+        and "Start such work in that story's own loop, once its step 0 has made it current. " + _CHILD_ATDD_WAITS
+        in re.sub(r"\s+", " ", loop)
+        # No sentence anywhere orders the run before the child's step 0.
+        and not re.search(r"atdd[^.]*before (?:its|the child's) step 0", flat, re.I)
+    )
+
+
+def test_a_decomposed_childs_atdd_run_is_booked_to_the_child():
+    assert _child_atdd_follows_step_0(_execute())
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The pre-edit wording, which ran it while the previous story was current.
+        (_CHILD_ATDD_PRECONDITION, _CHILD_ATDD_PRE_EDIT),
+        (" " + _CHILD_ATDD_ORDER, ""),
+        ("has written both the `.current-story` pointer and the child's baseline marker, and before step 1",
+         "has written the `.current-story` pointer"),
+        # The workaround the report logged: the pointer before the run, the baseline after it.
+        (_CHILD_ATDD_NO_SPLIT,
+         "Step 0 may be split around it: write the pointer first, and the baseline after the red phase."),
+        (" " + _CHILD_ATDD_SIZING, ""),
+        (" " + _CHILD_ATDD_RESUME, ""),
+        ("still owes the run, before step 1, when", "owes nothing more, before step 1, when"),
+        # Under `--light` no checklist exists by design, so the run is owed in production only.
+        ("In production, on a stack ATDD can run on, a resume", "A resume"),
+        # Presence alone passes an interrupted run as complete.
+        (" or a `generatedTestFiles` path it lists does not exist", ""),
+        (" " + _CHILD_ATDD_WAITS, ""),
+        ("it runs after the child's own step 0, never while", "it runs before the child's own step 0, while"),
+    ],
+)
+def test_child_atdd_predicate_rejects_a_run_booked_to_another_story(old, new):
+    live = re.sub(r"[ \t]+", " ", _execute())
+    mutant = live.replace(old, new)
+    assert mutant != live, "the mutant must actually change the text"
+    assert not _child_atdd_follows_step_0(mutant)
+
+
+def test_child_atdd_predicate_rejects_the_rule_away_from_its_pointer():
+    """Twin: the rule moved after the resume paragraph is no longer the
+    "next paragraph" the precondition points at."""
+    paragraphs = _execute().split("\n\n")
+    at = next(i for i, p in enumerate(paragraphs) if p.startswith("**A decomposed child's ATDD run**"))
+    rule = paragraphs.pop(at)
+    paragraphs.insert(at + 1, rule)
+    moved = "\n\n".join(paragraphs)
+    assert moved != _execute()
+    assert not _child_atdd_follows_step_0(moved)
