@@ -22,6 +22,11 @@ why `--message` repeats. This pins:
   nowhere matches by trailing segments or as a directory anywhere; both sides
   of a rename; a staged deletion; a non-ASCII name; a project root below the
   git top level, named from either;
+- `--artifacts-root` (repeatable): a name absent from the project root that
+  exists under a given folder is read there, `ignored` only when every folder
+  that holds it ignores it or lies outside the work tree; a name that exists
+  from the project root, or under no folder, keeps its reading, and with no
+  folder given the output is the one before the flag;
 - the exit codes, `-` for stdin, and several `--message` texts read as one;
   stdin and the JSON are UTF-8 whatever the console's code page, and a staged
   name that is not UTF-8 still prints;
@@ -36,6 +41,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -469,6 +475,782 @@ def test_a_bare_name_that_exists_nowhere_is_not_asked_about(repo):
     assert out["not_in_diff"] == ["readme.txt"]
 
 
+# --- --artifacts-root: names a record writes from its own folders (#195) ------
+#
+# A record cites its scratch, evidence and run-folder files by the folder's own
+# path (`sweep.sh`, `red-phase/INDEX.md`), which git was asked about from the
+# project root, so every one landed in `not_in_diff` (71 entries on one record).
+# Each test below is one row of the spec's matrix, and each holds 4.1.0's
+# reading, with no root given, beside it.
+
+_IMPL = "_bmad-output/implementation-artifacts"
+
+
+def _ignore(repo: Path, *patterns: str) -> None:
+    (repo / ".gitignore").write_text("".join(p + "\n" for p in patterns), encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+
+
+def _artifact(root: Path, rel: str) -> Path:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("captured\n", encoding="utf-8")
+    return path
+
+
+def test_a_bare_name_under_an_ignored_root_is_ignored(repo):
+    _ignore(repo, "_bmad-output/")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "sweep.sh")
+    _stage(repo, "src/guard.py")
+    message = "ran sweep.sh against src/guard.py"
+    # 4.1.0: a bare name absent at the root was never asked about.
+    assert cc.check(message, repo)["not_in_diff"] == ["sweep.sh"]
+    out = cc.check(message, repo, [repo / _IMPL, scratch])
+    assert out["ignored"] == ["sweep.sh"]
+    assert out["not_in_diff"] == [] and out["clean"] is True
+
+
+def test_a_slash_name_under_an_ignored_root_is_ignored(repo):
+    _ignore(repo, "_bmad-output/")
+    evidence = repo / _IMPL / "evidence-4-1"
+    _artifact(evidence, "red-phase/INDEX.md")
+    message = "the red phase is captured in red-phase/INDEX.md"
+    # 4.1.0: git was asked about `red-phase/INDEX.md` at the root, which no rule covers.
+    assert cc.check(message, repo)["not_in_diff"] == ["red-phase/INDEX.md"]
+    out = cc.check(message, repo, [repo / _IMPL, evidence])
+    assert out["ignored"] == ["red-phase/INDEX.md"]
+    assert out["not_in_diff"] == []
+
+
+def test_a_name_under_a_root_no_rule_covers_stays_a_claim(repo):
+    # A tracked artifact tree: the file could be committed, so naming it is a claim.
+    evidence = repo / _IMPL / "evidence-4-1"
+    _artifact(evidence, "red-phase.txt")
+    out = cc.check("captured in red-phase.txt", repo, [repo / _IMPL, evidence])
+    assert out["not_in_diff"] == ["red-phase.txt"]
+    assert out["ignored"] == []
+
+
+def test_a_tracked_file_under_an_ignored_root_stays_a_claim(repo):
+    impl = repo / _IMPL
+    _artifact(impl, "4-1-login.md")
+    _git(repo, "add", _IMPL + "/4-1-login.md")
+    _git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "story")
+    _ignore(repo, "_bmad-output/")
+    out = cc.check("updated 4-1-login.md", repo, [impl])
+    assert out["not_in_diff"] == ["4-1-login.md"]
+    assert out["ignored"] == []
+
+
+@pytest.mark.parametrize("other", ["not-ignored", "tracked"])
+def test_a_name_under_two_roots_is_ignored_only_when_every_holder_is(repo, other):
+    scratch = repo / _IMPL / ".scratch-4-1"
+    notes = repo / "notes"
+    _artifact(scratch, "sweep.sh")
+    _ignore(repo, "_bmad-output/")
+    # Twin: the ignored copy alone reads ignored.
+    assert cc.check("ran sweep.sh", repo, [scratch, notes])["ignored"] == ["sweep.sh"]
+    _artifact(notes, "sweep.sh")
+    if other == "tracked":
+        _git(repo, "add", "notes/sweep.sh")
+        _git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "notes")
+        _ignore(repo, "_bmad-output/", "notes/")
+    # Either copy is a file the text may mean, and one of them a commit can carry.
+    out = cc.check("ran sweep.sh", repo, [scratch, notes])
+    assert out["not_in_diff"] == ["sweep.sh"]
+    assert out["ignored"] == []
+
+
+def test_a_name_that_exists_from_the_project_root_keeps_its_root_reading(repo):
+    _ignore(repo, "_bmad-output/")
+    (repo / "README.md").write_text("readme\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "readme")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "README.md")
+    _artifact(scratch, "src/fixture.ts")
+    message = "see README.md and src/fixture.ts"
+    out = cc.check(message, repo, [scratch])
+    assert out["not_in_diff"] == ["README.md", "src/fixture.ts"]
+    assert out["ignored"] == []
+    assert out == cc.check(message, repo)
+
+
+def test_a_name_that_exists_under_no_root_keeps_its_root_reading(repo):
+    # Each root's ignore rule would cover the name, were it read there; it
+    # exists nowhere, so it could be any file of that name.
+    _ignore(repo, "_bmad-output/")
+    impl = repo / _IMPL
+    scratch = impl / ".scratch-4-1"
+    scratch.mkdir(parents=True)
+    message = "ran missing.sh and wrote red-phase/missing.md"
+    out = cc.check(message, repo, [impl, scratch])
+    assert out["not_in_diff"] == ["missing.sh", "red-phase/missing.md"]
+    assert out["ignored"] == []
+    assert out == cc.check(message, repo)
+
+
+def test_a_name_under_a_root_outside_the_work_tree_is_ignored(repo, tmp_path):
+    outside = tmp_path / "elsewhere" / "implementation-artifacts"
+    _artifact(outside, "red-phase.txt")
+    message = "captured in red-phase.txt"
+    assert cc.check(message, repo)["not_in_diff"] == ["red-phase.txt"]
+    out = cc.check(message, repo, [outside])
+    assert out["ignored"] == ["red-phase.txt"]
+    assert out["not_in_diff"] == []
+
+
+def test_outside_is_read_from_the_top_level_not_the_project_root(subdir_project):
+    # `other/` is outside the project root `app/` but inside the work tree, so
+    # git is asked about it, and no rule covers it.
+    top = subdir_project.parent
+    _artifact(top / "other", "sweep.sh")
+    out = cc.check("ran sweep.sh", subdir_project, [top / "other"])
+    assert out["not_in_diff"] == ["sweep.sh"]
+    (top / ".gitignore").write_text("other/\n", encoding="utf-8")
+    _git(top, "add", ".gitignore")
+    out = cc.check("ran sweep.sh", subdir_project, [top / "other"])
+    assert out["ignored"] == ["sweep.sh"]
+
+
+# A folder's copy never hides a name that can mean a file of the tree itself.
+
+
+@pytest.mark.parametrize("state", ["tracked", "untracked"])
+@pytest.mark.parametrize("name", ["guard.py", "hooks/guard.py"])
+def test_a_name_a_deeper_tree_file_could_be_keeps_its_root_reading(repo, state, name):
+    # The record means `src/hooks/guard.py`, unstaged; a scratch copy of the
+    # same name must not turn the claim into `ignored` with `clean: true`.
+    _ignore(repo, "_bmad-output/")
+    _artifact(repo, "src/hooks/guard.py")
+    if state == "tracked":
+        _git(repo, "add", "src/hooks/guard.py")
+        _git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "hooks")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, name)
+    message = f"edited {name}"
+    out = cc.check(message, repo, [repo / _IMPL, scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == [name] and out["clean"] is False
+
+
+def test_a_tracked_file_deleted_in_the_work_tree_keeps_its_root_reading(repo):
+    # The deletion is unstaged: the index still holds `old.py`, though the work
+    # tree does not.
+    _ignore(repo, "_bmad-output/")
+    (repo / "old.py").unlink()
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "old.py")
+    message = "removed old.py"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == ["old.py"]
+
+
+def test_a_tree_file_the_commit_never_wrote_keeps_its_root_reading(repo):
+    # The commit claims `src/new_helper.ts` and never wrote it; its only copy
+    # is the prototype in scratch, and `src/` exists from the project root.
+    _ignore(repo, "_bmad-output/")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "src/new_helper.ts")
+    message = "adds src/new_helper.ts"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == ["src/new_helper.ts"]
+
+
+# The copy's own folder holds no tree file: a capture beside the copy, the
+# files of a held folder, or a tracked sibling must not send the name back to
+# the project root's reading (an ignore rule anchored there).
+_BESIDE = {
+    "alone": ("coverage/summary.json", "/coverage/", ("coverage/summary.json",), False),
+    "sibling": ("coverage/summary.json", "/coverage/", ("coverage/summary.json", "coverage/lcov.info"), False),
+    "folder": ("coverage/html/", "/coverage/", ("coverage/html/index.html", "coverage/html/app.js"), False),
+    "tracked sibling": ("reports/summary.md", "/reports/", ("reports/summary.md", "reports/other.md"), True),
+}
+
+
+def _held_beside(project: Path, git_root: Path, case: str) -> None:
+    name, rule, rels, tracked = _BESIDE[case]
+    evidence = project / _IMPL / "evidence-4-1"
+    for rel in rels:
+        _artifact(evidence, rel)
+    if tracked:
+        _commit(git_root, *((evidence / rel).relative_to(git_root).as_posix() for rel in rels))
+    (project / ".gitignore").write_text(rule + "\n", encoding="utf-8")
+    _git(project, "add", ".gitignore")
+    message = f"see {name}"
+    assert cc.check(message, project)["ignored"] == [name]
+    out = cc.check(message, project, [project / _IMPL, evidence])
+    assert out["not_in_diff"] == [name]
+    assert out["ignored"] == []
+
+
+@pytest.mark.parametrize("case", list(_BESIDE))
+def test_a_held_name_is_not_read_from_the_project_root(repo, case):
+    # `/coverage/` ignores `coverage/summary.json` from the project root, but
+    # the copy the record means sits in a tracked artifacts tree, where no rule
+    # covers it: the root reading must not stand in for the copy's.
+    _held_beside(repo, repo, case)
+
+
+def test_a_name_that_climbs_out_of_its_root_keeps_its_root_reading(repo, tmp_path):
+    # Read under the scratch root, the name leaves it, and the work tree, for a
+    # file that exists there; a `..` name is never read under a root.
+    _ignore(repo, "_bmad-output/")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    (scratch / "red-phase").mkdir(parents=True)
+    (tmp_path / "x.md").write_text("outside\n", encoding="utf-8")
+    name = "red-phase/../../../../../x.md"
+    assert (scratch / name).resolve() == (tmp_path / "x.md").resolve()
+    message = f"see {name}"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == [name]
+
+
+def test_a_held_folder_name_under_an_ignored_root_is_ignored(repo):
+    _ignore(repo, "_bmad-output/")
+    evidence = repo / _IMPL / "evidence-4-1"
+    _artifact(evidence, "red-phase/INDEX.md")
+    message = "the captures are in red-phase/"
+    assert cc.check(message, repo)["not_in_diff"] == ["red-phase/"]
+    out = cc.check(message, repo, [evidence])
+    assert out["ignored"] == ["red-phase/"]
+    assert out["not_in_diff"] == []
+
+
+def test_a_link_in_an_ignored_root_is_read_where_it_points(repo):
+    # The link sits in ignored scratch, but the file it names is tracked: the
+    # commit can carry an edit to it.
+    _ignore(repo, "_bmad-output/")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    scratch.mkdir(parents=True)
+    try:
+        (scratch / "notes.md").symlink_to(repo / "src" / "guard.py")
+    except OSError:
+        pytest.skip("this platform cannot create a symlink here")
+    out = cc.check("edited notes.md", repo, [scratch])
+    assert out["not_in_diff"] == ["notes.md"]
+    assert out["ignored"] == []
+
+
+def test_a_link_to_a_tracked_file_of_its_name_is_read_where_it_points(repo):
+    # The link's target is the copy the name reads, not a tree file beside it:
+    # read as one, the name would fall back to `/hooks/`, which ignores it from
+    # the project root, though the commit can carry an edit to the target.
+    _ignore(repo, "_bmad-output/", "/hooks/")
+    _artifact(repo, "src/hooks/guard.py")
+    _commit(repo, "src/hooks/guard.py")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    (scratch / "hooks").mkdir(parents=True)
+    try:
+        (scratch / "hooks" / "guard.py").symlink_to(repo / "src" / "hooks" / "guard.py")
+    except OSError:
+        pytest.skip("this platform cannot create a symlink here")
+    message = "edited hooks/guard.py"
+    assert cc.check(message, repo)["ignored"] == ["hooks/guard.py"]
+    out = cc.check(message, repo, [scratch])
+    assert out["not_in_diff"] == ["hooks/guard.py"]
+    assert out["ignored"] == []
+
+
+def test_a_root_spelled_through_a_link_is_inside_the_work_tree(repo, tmp_path):
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(repo, target_is_directory=True)
+    except OSError:
+        pytest.skip("this platform cannot create a directory symlink here")
+    top = repo.resolve()
+    assert cc._in_tree(alias / "a" / "x.md", top) == top / "a" / "x.md"
+    assert cc._in_tree(tmp_path / "elsewhere" / "x.md", top) is None
+
+
+def _commit(repo: Path, *rels: str) -> None:
+    _git(repo, "add", *rels)
+    _git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "add")
+
+
+def test_a_slash_name_whose_folder_the_tree_holds_keeps_its_root_reading(repo):
+    # Never written, and named by its trailing folder: `src/hooks/` holds a
+    # tracked file, so the scratch prototype must not hide the claim.
+    _ignore(repo, "_bmad-output/")
+    _artifact(repo, "src/hooks/guard.py")
+    _commit(repo, "src/hooks/guard.py")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "hooks/new_guard.py")
+    message = "adds hooks/new_guard.py"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == ["hooks/new_guard.py"]
+
+
+@pytest.mark.parametrize("case", ["hooks", "legacy"])
+def test_a_folder_name_the_tree_holds_keeps_its_root_reading(repo, case):
+    # `hooks/` is a folder of a tracked file; `legacy/` is a tracked folder
+    # deleted in the work tree, its deletion unstaged.
+    _ignore(repo, "_bmad-output/")
+    if case == "hooks":
+        _artifact(repo, "src/hooks/guard.py")
+        _commit(repo, "src/hooks/guard.py")
+    else:
+        _artifact(repo, "legacy/a.py")
+        _commit(repo, "legacy/a.py")
+        (repo / "legacy" / "a.py").unlink()
+        (repo / "legacy").rmdir()
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, f"{case}/notes.md")
+    message = f"see {case}/"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == [f"{case}/"]
+
+
+@pytest.mark.parametrize("project", ["repo", "subdir_project"])
+def test_a_slash_name_under_a_project_root_folder_keeps_its_root_reading(request, project):
+    # `src/` exists from the project root, `src/new/` does not; below the top
+    # level, `src/` exists under `app/` only.
+    root = request.getfixturevalue(project)
+    _ignore(root, "_bmad-output/")
+    scratch = root / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "src/new/helper.ts")
+    message = "adds src/new/helper.ts"
+    out = cc.check(message, root, [scratch])
+    assert out == cc.check(message, root)
+    assert out["not_in_diff"] == ["src/new/helper.ts"]
+
+
+@pytest.mark.parametrize("name", ["hooks/sub/new.py", "hooks/sub/"])
+def test_a_name_whose_folder_part_spans_two_folders_keeps_its_root_reading(repo, name):
+    # `pkg/hooks/sub/` holds a tracked file, so `hooks/sub` names its folders.
+    _ignore(repo, "_bmad-output/")
+    _artifact(repo, "pkg/hooks/sub/x.py")
+    _commit(repo, "pkg/hooks/sub/x.py")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "hooks/sub/new.py")
+    message = f"see {name}"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == [name]
+
+
+@pytest.mark.parametrize("name", ["hooks//guard.py", "hooks/./guard.py"])
+def test_a_name_with_an_empty_or_dot_segment_keeps_its_root_reading(repo, name):
+    # pathlib would read either as `hooks/guard.py` under the root, and the
+    # tree lookup as written, so the scratch copy would hide the tracked file.
+    _ignore(repo, "_bmad-output/")
+    _artifact(repo, "src/hooks/guard.py")
+    _commit(repo, "src/hooks/guard.py")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "hooks/guard.py")
+    message = f"edited {name}"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == [name]
+
+
+@pytest.mark.parametrize("contents", ["empty", "ignored-only"])
+def test_a_folder_at_the_project_root_keeps_its_root_reading(repo, contents):
+    # git lists neither folder, so only the folder's own existence says the
+    # name can mean it.
+    _ignore(repo, "_bmad-output/", "*.bin")
+    (repo / "cache").mkdir()
+    if contents == "ignored-only":
+        (repo / "cache" / "blob.bin").write_bytes(b"\0")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "cache/notes.md")
+    message = "cleared cache/"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == ["cache/"]
+
+
+def test_an_ignored_file_at_the_project_root_keeps_its_root_reading(repo):
+    # The root file is ignored and its copy sits under a folder no rule covers.
+    _ignore(repo, "/notes.txt")
+    (repo / "notes.txt").write_text("root\n", encoding="utf-8")
+    evidence = repo / _IMPL / "evidence-4-1"
+    _artifact(evidence, "notes.txt")
+    message = "see notes.txt"
+    out = cc.check(message, repo, [evidence])
+    assert out == cc.check(message, repo)
+    assert out["ignored"] == ["notes.txt"]
+
+
+@pytest.mark.parametrize("fails", ["_listed", "_toplevel"])
+def test_a_tree_git_cannot_read_keeps_every_root_reading(repo, monkeypatch, fails):
+    _ignore(repo, "_bmad-output/", "notes/")
+    _artifact(repo, "src/hooks/guard.py")
+    _commit(repo, "src/hooks/guard.py")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    for rel in ("sweep.sh", "guard.py", "notes/x.md"):
+        _artifact(scratch, rel)
+    message = "ran sweep.sh on guard.py, notes in notes/x.md"
+    expected = cc.check(message, repo)
+    monkeypatch.setattr(cc, fails, lambda project_root: None)
+    out = cc.check(message, repo, [scratch])
+    assert out == expected
+    assert out["not_in_diff"] == ["sweep.sh", "guard.py"]
+    assert out["ignored"] == ["notes/x.md"]
+
+
+# BMAD below the top level (a monorepo's `app/`): the tree outside the project
+# root is the tree too.
+
+
+def _app_scratch(app: Path) -> Path:
+    (app / ".gitignore").write_text("_bmad-output/\n", encoding="utf-8")
+    _git(app, "add", ".gitignore")
+    return app / _IMPL / ".scratch-4-1"
+
+
+@pytest.mark.parametrize(("rel", "tracked"), [("tools/lint.py", True), ("tools/new_check.py", False)])
+def test_a_name_a_top_level_file_could_be_keeps_its_root_reading(subdir_project, rel, tracked):
+    app, top = subdir_project, subdir_project.parent
+    _artifact(top, rel)
+    if tracked:
+        _commit(top, rel)
+    scratch = _app_scratch(app)
+    name = rel.rsplit("/", 1)[1]
+    _artifact(scratch, name)
+    message = f"ran {name}"
+    out = cc.check(message, app, [app / _IMPL, scratch])
+    assert out == cc.check(message, app)
+    assert out["not_in_diff"] == [name]
+
+
+def test_a_slash_name_under_a_top_level_folder_keeps_its_root_reading(subdir_project):
+    # `.github/` exists from the top level only, and holds no file of that path.
+    app, top = subdir_project, subdir_project.parent
+    _artifact(top, ".github/CODEOWNERS")
+    _commit(top, ".github/CODEOWNERS")
+    scratch = _app_scratch(app)
+    _artifact(scratch, ".github/workflows/ci.yml")
+    message = "adds .github/workflows/ci.yml"
+    out = cc.check(message, app, [scratch])
+    assert out == cc.check(message, app)
+    assert out["not_in_diff"] == [".github/workflows/ci.yml"]
+
+
+@pytest.mark.parametrize("case", list(_BESIDE))
+def test_a_held_name_below_the_top_level_is_read_from_its_own_copy(subdir_project, case):
+    # `app/.gitignore`'s anchored rule ignores the name from the project root;
+    # the copy the record means sits in app's tracked artifacts tree.
+    _held_beside(subdir_project, subdir_project.parent, case)
+
+
+@pytest.mark.parametrize("case", ["tracked", "untracked", "outside"])
+def test_a_link_in_an_artifacts_root_is_read_where_it_sits_too(repo, tmp_path, case):
+    # A run folder tracked in part, whose own `.gitignore` ignores the run
+    # folders: git keeps and commits a link at its own path, so a claim about
+    # the link is one whatever its target is (an ignored scratch file, or a
+    # file outside the work tree).
+    impl = repo / _IMPL
+    scratch, evidence = impl / ".scratch-1-2", impl / "evidence-1-2"
+    _artifact(scratch, "draft.md")
+    _artifact(scratch, "draft2.md")
+    evidence.mkdir()
+    (impl / ".gitignore").write_text(".scratch-*/\nevidence-*/\n", encoding="utf-8")
+    name = {"tracked": "current.md", "untracked": "latest.md", "outside": "team-notes.md"}[case]
+    target = {"outside": str(_artifact(tmp_path / "outside", "notes.md"))}.get(case, ".scratch-1-2/draft.md")
+    try:
+        (impl / name).symlink_to(target)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink here")
+    if case == "tracked":
+        _commit(repo, f"{_IMPL}/.gitignore", f"{_IMPL}/{name}")
+        # Retargeted, and the change left unstaged.
+        (impl / name).unlink()
+        (impl / name).symlink_to(".scratch-1-2/draft2.md")
+    message = f"updated {name}"
+    out = cc.check(message, repo, [impl, scratch, evidence])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == [name]
+
+
+@pytest.mark.parametrize("change", ["rename", "delete"])
+def test_a_folder_a_staged_change_took_out_of_the_listing_keeps_its_root_reading(repo, change):
+    # The commit moves or empties `lib/old/`, so the listing no longer holds
+    # it; a new file the text claims there must not hide behind a scratch copy.
+    _ignore(repo, "_bmad-output/")
+    _artifact(repo, "lib/old/a.py")
+    _commit(repo, "lib/old/a.py")
+    if change == "rename":
+        _git(repo, "mv", "lib/old", "lib/new")
+    else:
+        _git(repo, "rm", "-q", "lib/old/a.py")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "old/b.py")
+    message = "adds old/b.py"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == ["old/b.py"]
+
+
+def _add_submodule(repo: Path, tmp_path: Path) -> None:
+    """A local submodule at `vendor/lib` tracking `vendored_helper.py`, with an
+    untracked `draft_helper.py` in its checkout; skips where git cannot add one."""
+    lib = tmp_path / "lib-src"
+    _artifact(lib, "vendored_helper.py")
+    _git(lib, "init", "-q")
+    _git(lib, "config", "user.email", "t@example.com")
+    _git(lib, "config", "user.name", "t")
+    _commit(lib, "vendored_helper.py")
+    proc = subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(lib), "vendor/lib"],
+        cwd=repo, capture_output=True, timeout=60,
+    )
+    if proc.returncode != 0:
+        pytest.skip("this git cannot add a local submodule here")
+    _artifact(repo / "vendor" / "lib", "draft_helper.py")
+
+
+@pytest.mark.parametrize("name", ["vendored_helper.py", "draft_helper.py"])
+def test_a_submodule_file_keeps_its_root_reading(repo, tmp_path, name):
+    # `vendored_helper.py` is tracked in the submodule; `draft_helper.py` is
+    # an untracked, unignored file in its checkout.
+    _add_submodule(repo, tmp_path)
+    _ignore(repo, "_bmad-output/")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, name)
+    message = f"patched {name}"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == [name]
+
+
+def test_a_folder_holding_no_listed_file_in_a_submodule_keeps_its_root_reading(repo, tmp_path):
+    # An empty `core/plugins/` in the submodule's checkout: its `--directory`
+    # listing names the folder, as the superproject's does outside it.
+    _add_submodule(repo, tmp_path)
+    (repo / "vendor" / "lib" / "core" / "plugins").mkdir(parents=True)
+    _ignore(repo, "_bmad-output/")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "core/plugins/new.py")
+    message = "adds core/plugins/new.py"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == ["core/plugins/new.py"]
+
+
+@pytest.mark.parametrize("contents", ["empty", "ignored-only"])
+@pytest.mark.parametrize("project", ["repo", "subdir_project"])
+def test_a_folder_holding_no_listed_file_keeps_its_root_reading(request, project, contents):
+    # git lists a file in no folder that holds no listed file; `--directory`
+    # lists the folder itself, here beside the tracked files of `src/`.
+    root = request.getfixturevalue(project)
+    _ignore(root, "_bmad-output/", "*.pyc")
+    (root / "src" / "cache").mkdir(parents=True)
+    if contents == "ignored-only":
+        (root / "src" / "cache" / "mod.pyc").write_bytes(b"\0")
+    scratch = root / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "cache/new.py")
+    message = "adds cache/new.py"
+    out = cc.check(message, root, [scratch])
+    assert out == cc.check(message, root)
+    assert out["not_in_diff"] == ["cache/new.py"]
+
+
+def test_a_folder_inside_an_untracked_folder_is_the_stated_limit(repo):
+    # Pinned so a change to it is deliberate: git lists only the topmost
+    # untracked folder (`lib/`), so an empty `lib/plugins/` protects nothing,
+    # and a claimed, never-written `plugins/new.py` reads as its scratch copy.
+    # The hunk pass in execute.md is what catches it.
+    _ignore(repo, "_bmad-output/")
+    (repo / "lib" / "plugins").mkdir(parents=True)
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "plugins/new.py")
+    message = "adds plugins/new.py"
+    assert cc.check(message, repo)["not_in_diff"] == ["plugins/new.py"]
+    out = cc.check(message, repo, [scratch])
+    assert out["ignored"] == ["plugins/new.py"]
+    assert out["not_in_diff"] == []
+
+
+def test_a_listed_folder_in_the_copys_folder_that_ends_with_the_name_keeps_its_root_reading(repo):
+    # The copy `cache/` is ignored where it sits; git lists the empty
+    # `sub/cache/` beside it as `.../sub/cache/`, and the name can mean it, as
+    # it could a listed file of that name.
+    impl = repo / _IMPL
+    _artifact(impl, "cache/x.md")
+    _artifact(impl, "sub/real.md")
+    _commit(repo, f"{_IMPL}/sub/real.md")
+    (impl / "sub" / "cache").mkdir()
+    (impl / ".gitignore").write_text("/cache/\n", encoding="utf-8")
+    message = "cleared cache/"
+    out = cc.check(message, repo, [impl])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == ["cache/"]
+
+
+def test_a_committable_file_in_the_copys_folder_that_ends_with_the_name_keeps_its_root_reading(repo):
+    # The copy `notes.md` is ignored where it sits, but `sub/notes.md` beside
+    # it is a written, unstaged file a commit can carry, and the name can mean
+    # it: a path that ends with the name protects it wherever it lies.
+    impl = repo / _IMPL
+    _artifact(impl, "notes.md")
+    _artifact(impl, "sub/notes.md")
+    (impl / ".gitignore").write_text("/notes.md\n", encoding="utf-8")
+    message = "see notes.md"
+    out = cc.check(message, repo, [impl])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == ["notes.md"]
+
+
+def test_a_slash_name_whose_first_folder_the_tree_holds_keeps_its_root_reading(repo):
+    # The tree holds `hooks/` but no `hooks/sub/`: from the project root only
+    # the first folder is needed, so the tree needs no more either.
+    _ignore(repo, "_bmad-output/")
+    _artifact(repo, "src/hooks/x.py")
+    _commit(repo, "src/hooks/x.py")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "hooks/sub/new.py")
+    message = "adds hooks/sub/new.py"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == ["hooks/sub/new.py"]
+
+
+@pytest.mark.parametrize("gone", ["moved", "deleted", "deleted on disk"])
+@pytest.mark.parametrize("project", ["repo", "subdir_project"])
+def test_a_top_level_folder_the_disk_lacks_keeps_its_root_reading(request, project, gone):
+    # `tools/` is gone from the disk, moved or deleted by the commit or on
+    # disk alone, but the index or the staged names still hold it.
+    root = request.getfixturevalue(project)
+    top = root if project == "repo" else root.parent
+    _ignore(root, "_bmad-output/")
+    _artifact(top, "tools/x.py")
+    _commit(top, "tools/x.py")
+    if gone == "moved":
+        _git(top, "mv", "tools", "kit")
+    elif gone == "deleted":
+        _git(top, "rm", "-q", "-r", "tools")
+    else:
+        shutil.rmtree(top / "tools")
+    scratch = root / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "tools/sub/new.py")
+    message = "adds tools/sub/new.py"
+    out = cc.check(message, root, [scratch])
+    assert out == cc.check(message, root)
+    assert out["not_in_diff"] == ["tools/sub/new.py"]
+
+
+def test_a_case_only_rename_git_does_not_see_keeps_its_root_reading(repo):
+    # With `core.ignorecase=true`, a rename made without `git mv` leaves only
+    # the index's spelling listed.
+    _ignore(repo, "_bmad-output/")
+    _artifact(repo, "Docs/Guide.md")
+    _commit(repo, "Docs/Guide.md")
+    (repo / "Docs").rename(repo / "docs-tmp")
+    (repo / "docs-tmp").rename(repo / "docs")
+    (repo / "docs" / "Guide.md").rename(repo / "docs" / "guide.md")
+    _git(repo, "config", "core.ignorecase", "true")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "guide.md")
+    message = "edited guide.md"
+    out = cc.check(message, repo, [scratch])
+    assert out == cc.check(message, repo)
+    assert out["not_in_diff"] == ["guide.md"]
+
+
+def test_the_reporters_names_in_an_ignored_tree_are_ignored(repo):
+    # #195's own names, each relative to the folder that holds it, in a
+    # gitignored artifacts tree: none is a claim a commit can carry.
+    _ignore(repo, "_bmad-output/")
+    impl = repo / _IMPL
+    scratch, evidence = impl / ".scratch-4-1", impl / "evidence-4-1"
+    _artifact(scratch, "sweep.sh")
+    _artifact(scratch, "mutation/table.json")
+    _artifact(evidence, "red-phase/INDEX.md")
+    message = "ran sweep.sh; rows in mutation/table.json; red phase in red-phase/INDEX.md and red-phase/"
+    out = cc.check(message, repo, [impl, scratch, evidence])
+    assert out["ignored"] == ["sweep.sh", "mutation/table.json", "red-phase/INDEX.md", "red-phase/"]
+    assert out["not_in_diff"] == [] and out["clean"] is True
+
+
+# Each listing `_listed` runs, by a flag only its command carries: the
+# submodules' files, the folders, the index's entries, and the untracked files
+# of a submodule's checkout.
+_LISTINGS = {
+    "submodules": lambda argv: "--recurse-submodules" in argv,
+    "folders": lambda argv: "--directory" in argv,
+    "entries": lambda argv: "-s" in argv,
+    "submodule checkout": lambda argv: argv == ["git", "ls-files", "-z", "--others", "--exclude-standard"],
+}
+
+
+@pytest.mark.parametrize("listing", list(_LISTINGS))
+def test_a_submodule_listing_that_fails_keeps_every_root_reading(repo, tmp_path, monkeypatch, listing):
+    # The first listing alone would read `sweep.sh` under its root; with any
+    # other listing failed, what the tree holds is unknown.
+    if listing == "submodule checkout":
+        _add_submodule(repo, tmp_path)
+    _ignore(repo, "_bmad-output/")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "sweep.sh")
+    message = "ran sweep.sh"
+    expected = cc.check(message, repo)
+    run = subprocess.run
+
+    def fails_on_submodules(argv, *args, **kwargs):
+        if _LISTINGS[listing](argv):
+            return subprocess.CompletedProcess(argv, 128, b"", b"fatal: cannot list")
+        return run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(cc.subprocess, "run", fails_on_submodules)
+    out = cc.check(message, repo, [scratch])
+    assert out == expected
+    assert out["not_in_diff"] == ["sweep.sh"]
+
+
+def test_with_no_root_the_reading_is_unchanged(repo):
+    _ignore(repo, "_bmad-output/")
+    scratch = repo / _IMPL / ".scratch-4-1"
+    _artifact(scratch, "sweep.sh")
+    _artifact(scratch, "red-phase/INDEX.md")
+    message = "ran sweep.sh, see red-phase/INDEX.md and _bmad-output/implementation-artifacts/ledger.md"
+    out = cc.check(message, repo)
+    assert out == cc.check(message, repo, ())
+    assert out["not_in_diff"] == ["sweep.sh", "red-phase/INDEX.md"]
+    assert out["ignored"] == ["_bmad-output/implementation-artifacts/ledger.md"]
+
+
+def test_the_cli_reads_each_artifacts_root_it_is_given(repo, tmp_path):
+    # The reporter's shape: a record citing its run-folder, scratch and
+    # evidence files by their own folders' paths, beside a real claim.
+    _ignore(repo, "_bmad-output/")
+    impl = repo / _IMPL
+    scratch = impl / ".scratch-4-1"
+    evidence = impl / "evidence-4-1"
+    _artifact(impl, "mutation-ledger-4-1.md")
+    _artifact(scratch, "sweep.sh")
+    _artifact(evidence, "red-phase/INDEX.md")
+    message = tmp_path / "message.txt"
+    message.write_text(
+        "ran sweep.sh; rows in mutation-ledger-4-1.md; red phase in red-phase/INDEX.md; edited src/fixture.ts\n",
+        encoding="utf-8",
+    )
+
+    def run(*roots: str, cwd: Path | None = None) -> dict:
+        argv = [sys.executable, str(SCRIPT), "--message", str(message), "--project-root", str(repo)]
+        for root in roots:
+            argv += ["--artifacts-root", root]
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60, cwd=cwd)
+        assert proc.returncode == 0, proc.stderr
+        return json.loads(proc.stdout)
+
+    out = run(str(impl), str(scratch), str(evidence))
+    assert out["ignored"] == ["sweep.sh", "mutation-ledger-4-1.md", "red-phase/INDEX.md"]
+    assert out["not_in_diff"] == ["src/fixture.ts"]
+    # One root reads only the names it holds.
+    assert run(str(scratch))["ignored"] == ["sweep.sh"]
+    # A relative root is read from the working directory, as `--project-root` is.
+    assert run(_IMPL + "/.scratch-4-1", cwd=repo)["ignored"] == ["sweep.sh"]
+    # No root: 4.1.0's output.
+    assert run()["not_in_diff"] == ["sweep.sh", "mutation-ledger-4-1.md", "red-phase/INDEX.md", "src/fixture.ts"]
+
+
 def test_an_unreadable_second_message_names_the_file(repo, tmp_path):
     message = tmp_path / "message.txt"
     message.write_text("edit src/guard.py", encoding="utf-8")
@@ -528,6 +1310,30 @@ def test_step4_runs_the_check_between_staging_and_the_commit():
     assert (
         "uv run {skill-root}/scripts/claim_check.py --message {workflow.implementation_artifacts}/.scratch-<story_id>/message.txt"
         " --message {workflow.implementation_artifacts}/.scratch-<story_id>/record-notes.md --project-root {project-root}"
+        " --artifacts-root {workflow.implementation_artifacts}"
+        " --artifacts-root {workflow.implementation_artifacts}/.scratch-<story_id>"
+        " --artifacts-root {workflow.implementation_artifacts}/evidence-<story_id>\n"
+    ) in paragraph
+    # The record's own names are read in its folders, and no folder hides a claim.
+    assert (
+        "so the command names three folders with `--artifacts-root` (the run folder, this story's scratch folder and "
+        "its evidence folder), and such a name is read there: one that does not exist from `{project-root}` but exists "
+        "in one of them lands in `ignored` when each copy that holds it is either ignored by git or outside the work "
+        "tree, and in `not_in_diff` otherwise; one that exists from `{project-root}`, that a file the tree holds could "
+        "be, or that is in none of them, is read from `{project-root}` as before."
+    ) in paragraph
+    # The boundary: a claimed, never-written file reads as a same-named copy,
+    # and the hunk pass is what catches it.
+    assert (
+        "A file this commit claims and never wrote, named bare, under a folder the tree does not hold, or under an "
+        "empty or ignored-only folder inside an untracked one (git lists only the topmost untracked folder), cannot be "
+        "told from an artifact of that name, so a copy in one of the folders reads it as the copy: the hunk pass below, "
+        "which finds the hunk for each edit the message or the notes say this commit makes, is what catches it."
+    ) in paragraph
+    # On a tracked artifact tree such a name stays listed, and is still never staged.
+    assert (
+        "A path under this story's `.scratch-<story_id>/` or `evidence-<story_id>/` is never staged, since both folders "
+        "stay untracked: the record names it on purpose, as its own evidence, and it may stay listed."
     ) in paragraph
     assert "and the story-record notes this cycle added" in paragraph
     assert "an empty file when the cycle added none" in paragraph

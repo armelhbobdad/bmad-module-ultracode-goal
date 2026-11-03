@@ -20,6 +20,30 @@ is no claim the commit can make good. Only a relative path inside the tree
 that holds a `/` or exists there is asked about: a bare name that exists
 nowhere could be any file of that name, and stays in `not_in_diff`.
 
+A record names its own artifacts from the folder it keeps them in
+(`sweep.sh`, `red-phase/INDEX.md`), not from the project root, so
+`--artifacts-root` (repeatable) names such a folder: the run folder, the
+story's scratch folder, its evidence folder. A named path that does not exist
+from the project root but exists under one or more of those folders is read
+there instead: it is `ignored` when each copy that holds it is either ignored
+by git or outside the work tree (no commit can carry either), a link being a
+copy both where it sits and at its target, and stays in `not_in_diff`
+otherwise, a tracked copy included. A named path keeps its reading from the
+project root when it exists there; when a path the index or the work tree
+holds unignored, a folder git lists holding no such path (one directly under
+a folder that holds listed files), a submodule's file or a staged name ends
+with it, its own copies aside, or, outside the folder that holds a copy of
+it, holds its first folder as a folder, in any case; when it holds a `/` and
+its first segment exists from the project root or the top level; when it
+holds an empty or `.` segment; when no folder holds it; or when git cannot
+say where the work tree ends or what it holds. A file the commit claims and
+never wrote, named bare, under a folder the tree does not hold, or under an
+empty or ignored-only folder inside an untracked one (git lists only the
+topmost untracked folder, `lib/` for `lib/plugins/`), cannot be told from an
+artifact of that name, so a copy under one of the folders reads it as the
+copy: execute.md's hunk pass, which looks for the hunk of each edit the texts
+say the commit makes, is what catches it.
+
 This reads the texts, collects the paths they name, and compares them with
 `git diff --cached --name-only --no-renames -z` (a rename lists both names,
 so a message naming either one matches; `-z` keeps a non-ASCII name
@@ -59,6 +83,7 @@ string, an issue reference or a token holding a glob or a `$` is not a path.
 
 Usage:
     uv run claim_check.py --message <file, or - for stdin> [--message <file> ...] [--project-root <dir>]
+        [--artifacts-root <dir> ...]
 
 Output: JSON on stdout, `{"named": [...], "staged": [...], "not_in_diff":
 [...], "ignored": [...], "clean": bool}`, where `clean` means `not_in_diff`
@@ -292,36 +317,280 @@ def _check_ignore(paths: list[str], project_root: Path) -> tuple[int, set[str]]:
     return proc.returncode, {p for p in paths if p.rstrip("/") in out}
 
 
-def ignored_paths(paths: list[str], project_root: Path) -> set[str]:
-    """The paths an ignore rule covers. A tracked file is never reported as
-    ignored, since git commits its edits whatever the rules say.
-
-    git stops at the first path it cannot evaluate (beyond a symlink, say)
-    with exit 128, so on that exit each path is asked about on its own, and
-    one it cannot evaluate counts as not ignored.
-    """
-    askable = [p for p in paths if _askable(p, project_root)]
-    if not askable:
+def _ask(paths: list[str], project_root: Path) -> set[str]:
+    """The paths `git check-ignore` reports, each asked about on its own when
+    the batch ends at exit 128."""
+    if not paths:
         return set()
-    code, ignored = _check_ignore(askable, project_root)
+    code, ignored = _check_ignore(paths, project_root)
     if code in (0, 1):
         return ignored
     found: set[str] = set()
-    for path in askable:
+    for path in paths:
         code, one = _check_ignore([path], project_root)
         if code == 0:
             found |= one
     return found
 
 
-def check(message: str, project_root: Path) -> dict | None:
+def _toplevel(project_root: Path) -> Path | None:
+    """The work tree's top level, resolved, or None when git cannot name it."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], cwd=project_root, capture_output=True, timeout=60
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    out = proc.stdout.decode("utf-8", errors="surrogateescape").rstrip("\r\n")
+    if proc.returncode != 0 or not out:
+        return None
+    try:
+        return Path(out).resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
+def _in_tree(path: Path, top: Path) -> Path | None:
+    """`path`, which is resolved, spelled from the top level when it lies inside
+    the work tree; None when it lies outside.
+
+    A folder above it that is the top level under another spelling (another
+    case, on a filesystem that ignores case) counts as the top level.
+    """
+    if path.is_relative_to(top):
+        return path
+    for parent in path.parents:
+        try:
+            if os.path.samefile(parent, top):
+                return top / path.relative_to(parent)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _holders(path: str, project_root: Path, roots: list[Path]) -> list[Path]:
+    """Each artifacts root's copy of a named path that does not exist from the
+    project root, resolved; empty when the project root has it, or no root does.
+
+    Only a relative path that stays inside a root is resolved against one.
+    """
+    bare = path.rstrip("/")
+    if not bare or bare.startswith("/") or re.match(r"^[A-Za-z]:/", bare):
+        return []
+    if bare == ".." or bare.startswith("../") or "/../" in bare or bare.endswith("/.."):
+        return []
+    if any(segment in ("", ".") for segment in bare.split("/")):
+        # `hooks//guard.py` and `hooks/./guard.py` would be read as
+        # `hooks/guard.py` here and as written against the tree.
+        return []
+    if (project_root / bare).exists():
+        return []
+    found: dict[str, Path] = {}
+    for root in roots:
+        candidate = root / bare
+        try:
+            if not candidate.exists():
+                continue
+            copies = [candidate.resolve()]
+            if candidate.is_symlink():
+                # git keeps and commits a link at its own path, so the link
+                # where it sits is a copy as much as its target is.
+                copies.append(candidate.parent.resolve() / candidate.name)
+        except (OSError, RuntimeError):
+            continue
+        for copy in copies:
+            found.setdefault(copy.as_posix(), copy)
+    return list(found.values())
+
+
+def _git_names(argv: list[str], cwd: Path) -> list[str] | None:
+    """The NUL-separated names a git command prints, or None when it fails."""
+    try:
+        proc = subprocess.run(argv, cwd=cwd, capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return [name for name in proc.stdout.decode("utf-8", errors="surrogateescape").split("\0") if name]
+
+
+def _submodule_others(repo: Path, prefix: str = "") -> list[str] | None:
+    """The untracked, unignored files of each checked-out submodule of `repo`
+    (its mode 160000 entries), and the folders git lists there holding no
+    listed file as `dir/`, recursively, named from the top level `prefix`
+    stands for; None when git cannot list one."""
+    entries = _git_names(["git", "ls-files", "-z", "-s"], repo)
+    if entries is None:
+        return None
+    names: list[str] = []
+    for entry in entries:
+        meta, _, path = entry.partition("\t")
+        if not meta.startswith("160000 ") or not (repo / path / ".git").exists():
+            continue
+        others = _git_names(["git", "ls-files", "-z", "--others", "--exclude-standard"], repo / path)
+        folders = _git_names(["git", "ls-files", "-z", "--others", "--exclude-standard", "--directory"], repo / path)
+        nested = _submodule_others(repo / path, prefix + path + "/")
+        if others is None or folders is None or nested is None:
+            return None
+        names += [prefix + path + "/" + name for name in others]
+        names += [prefix + path + "/" + name for name in folders if name.endswith("/")] + nested
+    return names
+
+
+def _listed(project_root: Path) -> list[str] | None:
+    """Every path the index holds or the work tree holds unignored, across the
+    whole work tree and its submodules' checkouts, and every folder git lists
+    holding no such path (empty, or holding ignored files only) as `dir/`,
+    named from the top level; None when git cannot list them. git lists only
+    the topmost untracked folder, so an empty `lib/plugins/` inside an
+    untracked `lib/` is listed as `lib/` alone."""
+    top = _toplevel(project_root)
+    if top is None:
+        return None
+    names: list[str] = []
+    for argv in (
+        ["git", "ls-files", "-z", "--full-name", "--cached", "--others", "--exclude-standard", "--", ":/"],
+        # `--others` does not combine with `--recurse-submodules`.
+        ["git", "ls-files", "-z", "--full-name", "--cached", "--recurse-submodules", "--", ":/"],
+        ["git", "ls-files", "-z", "--full-name", "--others", "--exclude-standard", "--directory", "--", ":/"],
+    ):
+        listed = _git_names(argv, project_root)
+        if listed is None:
+            return None
+        names += listed
+    others = _submodule_others(top)
+    return None if others is None else names + others
+
+
+def _tree_names(held: dict[str, list[Path]], project_root: Path, top: Path, listed: list[str], roots: list[Path]) -> set[str]:
+    """The held names that can mean a file of the tree itself, so a folder's
+    copy must not hide the claim.
+
+    A name can when it holds a `/` and its first segment exists from the
+    project root or the top level (`src/new_helper.ts`, a file the commit
+    claims and never wrote, beside a prototype in scratch), when a listed or
+    staged path ends with it (`guard.py` for a tracked `src/hooks/guard.py`, a
+    tracked file deleted in the work tree, an unignored new file), or when its
+    first folder is a folder of one, anywhere in that path (`hooks/` or
+    `hooks/sub/new.py` beside `src/hooks/x.py`, a top-level folder the index
+    holds and the disk does not). A folder's own copy counts for nothing, and
+    for the first-folder match neither does any listed path in the folder that
+    holds it (the root plus the name's first folder, so a sibling
+    `coverage/lcov.info` beside a held `coverage/summary.json`); a path that
+    ends with the name protects it wherever it lies.
+
+    The listing is read once: each path's trailing segments and folders are
+    looked up among the held names, both sides casefolded, since a case-only
+    rename made without `git mv` leaves the index's spelling listed alone
+    where git ignores case.
+    """
+    found: set[str] = set()
+    wanted: dict[str, tuple[set[str], tuple[str, ...]]] = {}
+    by_suffix: dict[str, list[str]] = {}
+    by_folder: dict[str, list[str]] = {}
+    for path, holders in held.items():
+        if not holders:
+            continue
+        bare = path.rstrip("/")
+        first = bare.split("/", 1)[0]
+        if "/" in bare and ((project_root / first).exists() or (top / first).exists()):
+            found.add(path)
+            continue
+        spelled = (_in_tree(holder, top) for holder in holders)
+        own = {copy.relative_to(top).as_posix() for copy in spelled if copy is not None}
+        folders: set[str] = set()
+        for root in roots:
+            try:
+                if not (root / bare).exists():
+                    continue
+                folder = _in_tree((root / first if "/" in bare else root).resolve(), top)
+            except (OSError, RuntimeError):
+                continue
+            if folder is not None and folder != top:
+                folders.add(folder.relative_to(top).as_posix() + "/")
+        wanted[path] = (own, tuple(sorted(folders)))
+        by_suffix.setdefault(bare.casefold(), []).append(path)
+        by_folder.setdefault(first.casefold(), []).append(path)
+    if not wanted:
+        return found
+    longest_suffix = max(key.count("/") for key in by_suffix) + 1
+    for name in listed:
+        folded = name.casefold()
+        # A `dir/` entry ends with its last folder, and every segment of it
+        # is a folder.
+        segments = folded.rstrip("/").split("/")
+        # A path that ends with the name protects it wherever it lies, its
+        # own copies aside; one that only holds its first folder protects it
+        # only outside the folder that holds a copy.
+        ending: list[str] = []
+        for i in range(max(0, len(segments) - longest_suffix), len(segments)):
+            ending += by_suffix.get("/".join(segments[i:]), ())
+        holding: list[str] = []
+        for folder in segments if folded.endswith("/") else segments[:-1]:
+            holding += by_folder.get(folder, ())
+        entry = name.rstrip("/")
+        for path in ending:
+            if path not in found and entry not in wanted[path][0]:
+                found.add(path)
+        for path in holding:
+            if path in found:
+                continue
+            own, inside = wanted[path]
+            if entry not in own and not name.startswith(inside):
+                found.add(path)
+    return found
+
+
+def ignored_paths(
+    paths: list[str], project_root: Path, artifacts_roots: list[Path] | tuple = (), staged: list[str] | tuple = ()
+) -> set[str]:
+    """The paths an ignore rule covers. A tracked file is never reported as
+    ignored, since git commits its edits whatever the rules say.
+
+    git stops at the first path it cannot evaluate (beyond a symlink, say)
+    with exit 128, so on that exit each path is asked about on its own, and
+    one it cannot evaluate counts as not ignored.
+
+    A path that exists under an artifacts root and not from the project root
+    is asked about there, as an absolute path in `/` form, unless it can mean
+    a file of the tree itself (`_tree_names`, which reads the listing and
+    the `staged` names, from the top level, since a staged rename or deletion
+    takes a folder out of the listing): it is ignored when each root's copy
+    of it, a link both where it sits and at its target, is either ignored by
+    git or outside the work tree.
+    """
+    roots = [Path(root) for root in artifacts_roots]
+    held = {path: _holders(path, project_root, roots) for path in paths} if roots else {}
+    top = None
+    if any(held.values()):
+        top = _toplevel(project_root)
+        listed = _listed(project_root) if top is not None else None
+        if top is None or listed is None:
+            # Nothing says where the work tree ends or what it holds: read
+            # every name from the project root.
+            held = {}
+        else:
+            for path in _tree_names(held, project_root, top, [*listed, *staged], roots):
+                held[path] = []
+    found = _ask([p for p in paths if not held.get(p) and _askable(p, project_root)], project_root)
+    if top is None or not any(held.values()):
+        return found
+    spelled = {holder: _in_tree(holder, top) for holders in held.values() for holder in holders}
+    asked = _ask(sorted({p.as_posix() for p in spelled.values() if p is not None}), project_root)
+    for path, holders in held.items():
+        if holders and all(spelled[h] is None or spelled[h].as_posix() in asked for h in holders):
+            found.add(path)
+    return found
+
+
+def check(message: str, project_root: Path, artifacts_roots: list[Path] | tuple = ()) -> dict | None:
     staged = staged_paths(project_root)
     if staged is None:
         return None
     prefix = project_prefix(project_root)
     named = named_paths(message, project_root, [*staged, *_project_relative(staged, prefix)])
     unmatched = [path for path in named if not _matches(path, staged, project_root, prefix)]
-    ignored = ignored_paths(unmatched, project_root)
+    ignored = ignored_paths(unmatched, project_root, artifacts_roots, staged)
     missing = [path for path in unmatched if path not in ignored]
     return {
         "named": named,
@@ -344,6 +613,14 @@ def main(argv: list[str] | None = None) -> int:
         "cycle added); repeat for several, - for stdin once",
     )
     parser.add_argument("--project-root", default=".", help="the git work tree (default: the cwd)")
+    parser.add_argument(
+        "--artifacts-root",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="a folder the texts name artifacts from (the run folder, the story's scratch or evidence folder): "
+        "a named path that exists there and not from the project root is read there; repeat for several",
+    )
     args = parser.parse_args(argv)
     if args.message.count("-") > 1:
         parser.error("stdin (-) can be read only once")
@@ -362,7 +639,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": "cannot read the message %s: %s" % (source, exc)}), file=sys.stderr)
         return 2
     message = "\n\n".join(texts)
-    result = check(message, Path(args.project_root))
+    result = check(message, Path(args.project_root), [Path(root) for root in args.artifacts_root])
     if result is None:
         print(json.dumps({"error": "not a git work tree: %s" % args.project_root}), file=sys.stderr)
         return 2
