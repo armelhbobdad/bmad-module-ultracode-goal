@@ -23,7 +23,17 @@ nowhere could be any file of that name, and stays in `not_in_diff`.
 A record names its own artifacts from the folder it keeps them in
 (`sweep.sh`, `red-phase/INDEX.md`), not from the project root, so
 `--artifacts-root` (repeatable) names such a folder: the run folder, the
-story's scratch folder, its evidence folder. A named path that does not exist
+story's scratch folder, its evidence folder. `--tea-config FILE` adds one
+more, TEA's test-artifacts root, which holds the `atdd-checklist-<story_id>.md`
+a record names bare. It is resolved from that TEA config as preflight
+resolves it, with preflight_check.py's own reader, imported rather than
+copied: `{project-root}` in FILE is substituted and a relative FILE is read
+under the project root, then the root is the config's `test_artifacts` value,
+an inline comment dropped, `{project-root}` substituted and a relative value
+read under the project root, or `_bmad-output/test-artifacts` there when the
+config names none or does not exist. A config file that cannot be read (a
+permission error, say) adds no folder; a path that holds no file (a
+directory, a dangling link) is read as no config. A named path that does not exist
 from the project root but exists under one or more of those folders is read
 there instead: it is `ignored` when each copy that holds it is either ignored
 by git or outside the work tree (no commit can carry either), a link being a
@@ -83,7 +93,7 @@ string, an issue reference or a token holding a glob or a `$` is not a path.
 
 Usage:
     uv run claim_check.py --message <file, or - for stdin> [--message <file> ...] [--project-root <dir>]
-        [--artifacts-root <dir> ...]
+        [--artifacts-root <dir> ...] [--tea-config <file>]
 
 Output: JSON on stdout, `{"named": [...], "staged": [...], "not_in_diff":
 [...], "ignored": [...], "clean": bool}`, where `clean` means `not_in_diff`
@@ -601,6 +611,33 @@ def check(message: str, project_root: Path, artifacts_roots: list[Path] | tuple 
     }
 
 
+def _tea_root(tea_config: str, project_root: Path) -> Path | None:
+    """TEA's test-artifacts root, which holds `atdd-checklist-<story_id>.md`,
+    resolved from the TEA config `tea_config` names as preflight resolves it.
+
+    preflight_check.py's own functions do the reading, imported here rather
+    than copied, so the two never read one config apart: `_resolve` for the
+    config path (`{project-root}` substituted, a relative path read under the
+    project root), `_read_toml_or_yaml_flags` for its `test_artifacts` value
+    (an inline comment dropped, a missing file read as no value), and
+    `_tea_artifacts_root` for the root. None when the config is a file that
+    cannot be read (a permission error, say), so no folder is added and each
+    name keeps its reading; a path that holds no file (a directory, a dangling
+    link) is read as no config, as preflight reads it.
+    """
+    scripts = str(Path(__file__).resolve().parent)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import preflight_check  # noqa: PLC0415  (sibling script, path set above)
+
+    root = project_root.resolve()
+    try:
+        flags = preflight_check._read_toml_or_yaml_flags(preflight_check._resolve(tea_config, root))
+    except OSError:
+        return None
+    return preflight_check._tea_artifacts_root(root, flags)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="List the paths a commit message names that the staged diff does not touch."
@@ -621,6 +658,12 @@ def main(argv: list[str] | None = None) -> int:
         help="a folder the texts name artifacts from (the run folder, the story's scratch or evidence folder): "
         "a named path that exists there and not from the project root is read there; repeat for several",
     )
+    parser.add_argument(
+        "--tea-config",
+        metavar="FILE",
+        help="the TEA config ({project-root} is substituted): its test-artifacts root, resolved as preflight "
+        "resolves it, is read as one more --artifacts-root, the folder that holds atdd-checklist-<story_id>.md",
+    )
     args = parser.parse_args(argv)
     if args.message.count("-") > 1:
         parser.error("stdin (-) can be read only once")
@@ -639,7 +682,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": "cannot read the message %s: %s" % (source, exc)}), file=sys.stderr)
         return 2
     message = "\n\n".join(texts)
-    result = check(message, Path(args.project_root), [Path(root) for root in args.artifacts_root])
+    roots = [Path(root) for root in args.artifacts_root]
+    if args.tea_config is not None:
+        tea_root = _tea_root(args.tea_config, Path(args.project_root))
+        if tea_root is not None:
+            roots.append(tea_root)
+    result = check(message, Path(args.project_root), roots)
     if result is None:
         print(json.dumps({"error": "not a git work tree: %s" % args.project_root}), file=sys.stderr)
         return 2

@@ -27,6 +27,11 @@ why `--message` repeats. This pins:
   that holds it ignores it or lies outside the work tree; a name that exists
   from the project root, or under no folder, keeps its reading, and with no
   folder given the output is the one before the flag;
+- `--tea-config` (#199): TEA's test-artifacts root, resolved from the config
+  by preflight_check.py's own functions (a `{project-root}` in the path or the
+  value, a relative or commented value, a missing file), is read as one more
+  folder, so a bare `atdd-checklist-<story_id>.md` under an ignored root is
+  `ignored` and under a tracked one stays in `not_in_diff`;
 - the exit codes, `-` for stdin, and several `--message` texts read as one;
   stdin and the JSON are UTF-8 whatever the console's code page, and a staged
   name that is not UTF-8 still prints;
@@ -1292,6 +1297,180 @@ def test_the_cli_exits_2_when_it_cannot_run(repo, tmp_path):
     assert "not a git work tree" in no_repo.stderr
 
 
+# --- --tea-config: TEA's test-artifacts root (#199) ----------------------------
+#
+# A record names the story's ATDD checklist bare, `atdd-checklist-<story_id>.md`,
+# and it lives in TEA's test-artifacts root, which none of the three folders
+# step 4 names is. On a gitignored root the name sat in `not_in_diff`. The root
+# is read as preflight reads it, by preflight_check.py's own functions.
+
+pc = _load("preflight_check", SCRIPTS / "preflight_check.py")
+
+_TEA = "_bmad-output/test-artifacts"
+_CHECKLIST = "atdd-checklist-1-2.md"
+
+
+def _tea_config(repo: Path, body: str | None, rel: str = "_bmad/tea/config.yaml") -> Path:
+    path = repo / rel
+    if body is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return path
+
+
+def _preflight_root(config: str, repo: Path) -> Path:
+    root = repo.resolve()
+    return pc._tea_artifacts_root(root, pc._read_toml_or_yaml_flags(pc._resolve(config, root)))
+
+
+def test_a_checklist_under_a_gitignored_tea_root_is_ignored(repo):
+    _ignore(repo, "_bmad-output/")
+    config = _tea_config(repo, 'test_artifacts: "{project-root}/_bmad-output/test-artifacts"\n')
+    _artifact(repo / _TEA, _CHECKLIST)
+    scratch = repo / _IMPL / ".scratch-1-2"
+    _artifact(scratch, "sweep.sh")
+    _stage(repo, "src/guard.py")
+    message = f"ran sweep.sh; un-skipped every case {_CHECKLIST} lists; edited src/guard.py and src/fixture.ts"
+    roots = [repo / _IMPL, scratch]
+    before = cc.check(message, repo, roots)
+    assert before["not_in_diff"] == [_CHECKLIST, "src/fixture.ts"]
+    tea_root = cc._tea_root(str(config), repo)
+    assert tea_root == (repo / _TEA).resolve()
+    out = cc.check(message, repo, [*roots, tea_root])
+    assert out["ignored"] == ["sweep.sh", _CHECKLIST]
+    assert out["not_in_diff"] == ["src/fixture.ts"]
+    # No other name's reading moves: only the checklist leaves `not_in_diff`.
+    assert out["named"] == before["named"] and out["staged"] == before["staged"]
+    assert before["ignored"] == ["sweep.sh"]
+    # The checklist alone, with nothing else left: clean.
+    assert cc.check(f"un-skipped every case {_CHECKLIST} lists", repo, [tea_root])["clean"] is True
+
+
+def test_a_checklist_under_a_tracked_tea_root_stays_a_claim(repo):
+    config = _tea_config(repo, "test_artifacts: _bmad-output/test-artifacts\n")
+    _artifact(repo / _TEA, _CHECKLIST)
+    _commit(repo, _TEA + "/" + _CHECKLIST)
+    out = cc.check(f"updated {_CHECKLIST}", repo, [cc._tea_root(str(config), repo)])
+    assert out["not_in_diff"] == [_CHECKLIST]
+    assert out["ignored"] == []
+
+
+# Each row: the config's text (None: no file), and the root preflight resolves.
+_TEA_VALUES = {
+    "relative, with an inline comment": ("test_artifacts: qa/art  # where TEA writes\n", "qa/art"),
+    "a {project-root} value": ('test_artifacts: "{project-root}/qa/art"\n', "qa/art"),
+    "a quoted relative value": ("test_artifacts: 'qa/art'\n", "qa/art"),
+    "no test_artifacts key": ("tea_use_playwright_utils: true\n", _TEA),
+    "an empty value": ("test_artifacts:\n", _TEA),
+    "no config file": (None, _TEA),
+}
+
+
+@pytest.mark.parametrize("case", list(_TEA_VALUES))
+def test_the_tea_root_resolves_as_preflight_resolves_it(repo, case):
+    body, expected = _TEA_VALUES[case]
+    config = _tea_config(repo, body)
+    for spelled in (str(config), "{project-root}/_bmad/tea/config.yaml", "_bmad/tea/config.yaml"):
+        root = cc._tea_root(spelled, repo)
+        assert root == (repo / expected).resolve(), spelled
+        assert root == _preflight_root(spelled, repo), spelled
+    # The name a record cites is read there, the comment never part of the folder.
+    _ignore(repo, "qa/", "_bmad-output/")
+    _artifact(repo / expected, _CHECKLIST)
+    assert cc.check(f"see {_CHECKLIST}", repo, [cc._tea_root(str(config), repo)])["ignored"] == [_CHECKLIST]
+
+
+def test_an_absolute_tea_root_is_read_where_it_is(repo, tmp_path):
+    elsewhere = tmp_path / "tea-out"
+    config = _tea_config(repo, f"test_artifacts: {elsewhere.as_posix()}\n")
+    assert cc._tea_root(str(config), repo) == elsewhere == _preflight_root(str(config), repo)
+    # Outside the work tree: no commit can carry it.
+    _artifact(elsewhere, _CHECKLIST)
+    assert cc.check(f"see {_CHECKLIST}", repo, [elsewhere])["ignored"] == [_CHECKLIST]
+
+
+def test_the_tea_root_is_preflights_own_reading_not_a_copy():
+    source = SCRIPT.read_text(encoding="utf-8")
+    # One reader: a copy drifts (formalize_check.py's lost the inline-comment strip).
+    for name in ("def _read_toml_or_yaml_flags", "def _strip_inline_comment", "def _tea_artifacts_root", "tomllib"):
+        assert name not in source, name
+    for call in ("_read_toml_or_yaml_flags(", "_tea_artifacts_root(", "_resolve("):
+        assert "preflight_check." + call in source, call
+    # Still stdlib-only, so `uv run` needs no environment for it.
+    assert "# dependencies = []\n" in source
+    # Imported lazily: a run without --tea-config never loads preflight_check.
+    assert "\nimport preflight_check" not in source
+
+
+def test_an_unreadable_tea_config_adds_no_root(repo, monkeypatch):
+    config = _tea_config(repo, "test_artifacts: qa/art\n")
+    assert cc._tea_root(str(config), repo) == (repo / "qa/art").resolve()
+    loaded = sys.modules["preflight_check"]
+
+    def unreadable(path):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(loaded, "_read_toml_or_yaml_flags", unreadable)
+    assert cc._tea_root(str(config), repo) is None
+
+
+def test_the_cli_runs_on_when_the_tea_config_cannot_be_read(repo, tmp_path, monkeypatch, capsys):
+    # A root the reader would find, so a folder added would change the output.
+    _ignore(repo, "qa/")
+    config = _tea_config(repo, "test_artifacts: qa/art\n")
+    _artifact(repo / "qa/art", _CHECKLIST)
+    message = tmp_path / "message.txt"
+    message.write_text(f"see {_CHECKLIST}; edited src/fixture.ts\n", encoding="utf-8")
+    argv = ["--message", str(message), "--project-root", str(repo)]
+    assert cc._tea_root(str(config), repo) is not None  # loads preflight_check
+    assert cc.main(argv) == 0
+    without = json.loads(capsys.readouterr().out)
+
+    def unreadable(path):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(sys.modules["preflight_check"], "_read_toml_or_yaml_flags", unreadable)
+    assert cc.main([*argv, "--tea-config", str(config)]) == 0
+    assert json.loads(capsys.readouterr().out) == without
+    assert without["not_in_diff"] == [_CHECKLIST, "src/fixture.ts"]
+
+
+def test_the_cli_reads_the_tea_root_from_a_literal_project_root_path(repo, tmp_path):
+    # execute.md's command as the conductor may run it: the default
+    # `{workflow.tea_config_path}` still holds `{project-root}` unexpanded. The
+    # root is not the default one, so only a config read through that path
+    # finds it.
+    _ignore(repo, "qa/", "_bmad-output/")
+    _tea_config(repo, 'test_artifacts: "{project-root}/qa/tea-out"  # TEA output\n')
+    _artifact(repo / "qa/tea-out", _CHECKLIST)
+    message = tmp_path / "message.txt"
+    message.write_text(f"un-skipped every case {_CHECKLIST} lists; edited src/fixture.ts\n", encoding="utf-8")
+
+    def run(*extra: str, project_root: str | None = str(repo), cwd: Path | None = None) -> dict:
+        argv = [sys.executable, str(SCRIPT), "--message", str(message)]
+        if project_root is not None:
+            argv += ["--project-root", project_root]
+        proc = subprocess.run([*argv, *extra], capture_output=True, text=True, timeout=60, cwd=cwd)
+        assert proc.returncode == 0, proc.stderr
+        return json.loads(proc.stdout)
+
+    literal = "{project-root}/_bmad/tea/config.yaml"
+    out = run("--tea-config", literal)
+    assert out["ignored"] == [_CHECKLIST]
+    assert out["not_in_diff"] == ["src/fixture.ts"]
+    # The default `--project-root`, the working directory, reads the same root,
+    # and so does a relative one, `{project-root}` read as its absolute path.
+    assert run("--tea-config", literal, project_root=None, cwd=repo)["ignored"] == [_CHECKLIST]
+    assert run("--tea-config", literal, project_root=repo.name, cwd=repo.parent)["ignored"] == [_CHECKLIST]
+    # With no flag: the reading before it.
+    assert run()["not_in_diff"] == [_CHECKLIST, "src/fixture.ts"]
+    # A missing config never errors: the default root is read instead.
+    missing = "{project-root}/_bmad/tea/missing.yaml"
+    assert run("--tea-config", missing)["not_in_diff"] == [_CHECKLIST, "src/fixture.ts"]
+    _artifact(repo / _TEA, _CHECKLIST)
+    assert run("--tea-config", missing)["ignored"] == [_CHECKLIST]
+
+
 # --- execute.md step 4 --------------------------------------------------------
 
 
@@ -1312,12 +1491,17 @@ def test_step4_runs_the_check_between_staging_and_the_commit():
         " --message {workflow.implementation_artifacts}/.scratch-<story_id>/record-notes.md --project-root {project-root}"
         " --artifacts-root {workflow.implementation_artifacts}"
         " --artifacts-root {workflow.implementation_artifacts}/.scratch-<story_id>"
-        " --artifacts-root {workflow.implementation_artifacts}/evidence-<story_id>\n"
+        " --artifacts-root {workflow.implementation_artifacts}/evidence-<story_id>"
+        " --tea-config {workflow.tea_config_path}\n"
     ) in paragraph
-    # The record's own names are read in its folders, and no folder hides a claim.
+    # The record's own names are read in its folders, and no folder hides a
+    # claim. The fourth is TEA's, where `atdd-checklist-<story_id>.md` lives (#199).
     assert (
         "so the command names three folders with `--artifacts-root` (the run folder, this story's scratch folder and "
-        "its evidence folder), and such a name is read there: one that does not exist from `{project-root}` but exists "
+        "its evidence folder) and a fourth with `--tea-config`, the TEA test-artifacts root that holds "
+        "`atdd-checklist-<story_id>.md`, resolved from the TEA config as preflight resolves it "
+        "(`scripts/preflight_check.py`, `_tea_artifacts_root`), and such a name is read there: one that does not "
+        "exist from `{project-root}` but exists "
         "in one of them lands in `ignored` when each copy that holds it is either ignored by git or outside the work "
         "tree, and in `not_in_diff` otherwise; one that exists from `{project-root}`, that a file the tree holds could "
         "be, or that is in none of them, is read from `{project-root}` as before."
@@ -1388,6 +1572,7 @@ def test_the_documented_command_is_not_a_git_write():
         commands[0]
         .replace("{skill-root}", "/home/u/git/proj/.claude/skills/ultracode-goal")
         .replace("{workflow.implementation_artifacts}", "/home/u/git/proj/_bmad-output/implementation-artifacts")
+        .replace("{workflow.tea_config_path}", "/home/u/git/proj/_bmad/tea/config.yaml")
         .replace("<story_id>", "4-1")
         .replace("{project-root}", "/home/u/git/proj")
     )

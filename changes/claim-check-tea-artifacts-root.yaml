@@ -1,0 +1,5 @@
+type: added
+scope: ultracode-goal
+summary: |
+  New `--tea-config FILE` for `claim_check.py`: TEA's test-artifacts root, resolved from that TEA config as preflight resolves it, is read as one more `--artifacts-root`. The root is the config's `test_artifacts` value with `{project-root}` substituted and a relative value read under the project root, or `_bmad-output/test-artifacts` under the project root when the config names none or does not exist; a `{project-root}` in the config path is substituted too. A config file that cannot be read (a permission error, say) adds no folder, and a path that holds no file (a directory, a dangling link) is read as no config. Execute's pre-commit claim check now passes `--tea-config {workflow.tea_config_path}`, so a story record that names its `atdd-checklist-<story_id>.md` bare lists it in `ignored` rather than `not_in_diff` when TEA's test-artifacts tree is gitignored or outside the work tree, and still in `not_in_diff` when that tree is tracked. Without the flag the output is unchanged.
+issues: [199]
