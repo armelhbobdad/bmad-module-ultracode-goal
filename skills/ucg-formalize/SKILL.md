@@ -91,7 +91,13 @@ them here. There is one kernel — a second readiness evaluator would let the tw
 drift.
 
 The kernel is fail-closed: a missing / unreadable / ambiguous artifact is recorded
-as a failing gap, never a neutral pass.
+as a failing gap, never a neutral pass. Of TEA's output it reads only the Epic's own,
+under TEA's test-artifacts root (the TEA config's `test_artifacts`, else
+`_bmad-output/test-artifacts`): every `test-design-epic-<id>.md`, and an
+`nfr-assessment.md` whose `**Story:**` line names a story it reads (one beside the
+Epic's test-design that cannot be read is a failing gap). A test-design or NFR
+assessment the Epic does not have yet is no gap, and another Epic's test-design or
+TEA's system-level files never raise one.
 
 ## 2. Mechanical auto-remediation pass
 

@@ -1193,3 +1193,21 @@ def test_tea_scalar_keeps_a_hash_inside_a_quoted_value(tmp_path):
     flags = pf._read_toml_or_yaml_flags(cfg)
 
     assert flags["test_artifacts"] == "out/sharp#1"
+
+
+def test_tea_scalar_that_is_only_a_comment_is_unset(tmp_path):
+    """A key whose value is only a comment has no value, so the root defaults.
+
+    The strip takes the whitespace before the `#`, so a whitespace-anchored
+    pattern alone kept `# set by TEA` as the value and the root became a
+    folder named after the comment.
+    """
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("test_artifacts:  # set by TEA\ntea_execution_mode:   # unset\n", encoding="utf-8")
+
+    flags = pf._read_toml_or_yaml_flags(cfg)
+
+    assert flags == {"test_artifacts": "", "tea_execution_mode": ""}
+    assert pf._tea_artifacts_root(tmp_path, flags) == tmp_path / "_bmad-output" / "test-artifacts"
+    # Control: a `#` inside a plain value still survives.
+    assert pf._strip_inline_comment("out/a#b") == "out/a#b"

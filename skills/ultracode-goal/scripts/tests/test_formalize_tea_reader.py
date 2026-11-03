@@ -3,10 +3,11 @@
 Case 3: blank-cell-ONLY P×I recompute (mechanical) vs a stated-score disagreement (judgment)
 vs an unsourced threshold (judgment), never originating a number. Case 4: read TEA's NFR
 overallStatus (never re-derive), flag PASS-on-UNKNOWN and PASS-without-evidence as judgment
-candidates, and treat a missing/unreadable nfr-assessment as a FAILING gap (fail-closed).
+candidates in an nfr-assessment that names an in-scope story, and never owe one: TEA
+assesses NFRs from implementation evidence, after the readiness check.
 
 Fixtures are built programmatically in tmp_path (hermetic; not linted). The TEA-reader fires
-only when a test-design artifact is located under the trace_output root.
+only when the checked Epic's own test-design-epic-<epic>.md is under TEA's test_artifacts root.
 """
 
 import json
@@ -24,11 +25,11 @@ def _build(root: Path, *, epic: str, test_design: str | None, nfr: str | None) -
     (root / "tea").mkdir()
     trace = root / "trace_out"
     trace.mkdir()
-    (root / "tea" / "config.yaml").write_text("trace_output: {project-root}/trace_out\n", encoding="utf-8")
+    (root / "tea" / "config.yaml").write_text("test_artifacts: {project-root}/trace_out\n", encoding="utf-8")
     if test_design is not None:
         (trace / f"test-design-epic-{epic}.md").write_text(test_design, encoding="utf-8")
     if nfr is not None:
-        (trace / "nfr-assessment.md").write_text(nfr, encoding="utf-8")
+        (trace / "nfr-assessment.md").write_text(f"**Story:** {epic}-1\n" + nfr, encoding="utf-8")
     (root / "planning-artifacts" / "prd-fixture.md").write_text("# PRD\n", encoding="utf-8")
     (root / "planning-artifacts" / "architecture-fixture.md").write_text("# Architecture\n", encoding="utf-8")
     (root / "impl-artifacts" / "sprint-status.yaml").write_text(
@@ -99,10 +100,10 @@ def test_nfr_reader_unknown_to_concerns_and_failclosed(tmp_path):
     out = _verdict(_build(tmp_path / "n", epic="51", test_design=_CLEAN_TD, nfr=nfr_noevd), "51")
     assert "nfr_pass_without_evidence" in _kinds(out["judgment_candidates"])
 
-    # missing nfr-assessment (test-design present) -> FAILING gap, fail-closed
+    # missing nfr-assessment (test-design present) -> no gap: none is owed before implementation
     out = _verdict(_build(tmp_path / "m", epic="52", test_design=_CLEAN_TD, nfr=None), "52")
-    miss = [g for g in out["mechanical_gaps"] if g["kind"] == "missing_nfr_assessment"]
-    assert len(miss) == 1 and miss[0]["remediable"] is False, "missing nfr is a failing (non-neutral) gap"
+    assert "missing_nfr_assessment" not in _kinds(out["mechanical_gaps"])
+    assert out["verdict"] != "blocked", out
 
     # anti-vacuous: a well-formed nfr (PASS cites evidence; UNKNOWN marked CONCERNS) -> zero nfr candidates
     nfr_ok = (

@@ -338,12 +338,15 @@ def _impl_artifacts_tracked(project_root: Path, impl_artifacts: Path) -> bool | 
     return False if inside == 0 and out == "true" else None
 
 
-def _read_toml_or_yaml_flags(tea_config: Path) -> dict:
+def _read_toml_or_yaml_flags(tea_config: Path, keys: tuple[str, ...] = TEA_FLAG_KEYS) -> dict:
     """Read flat key: value scalars from the TEA config.
 
     The TEA config is YAML in practice. To stay stdlib-only we parse the flat
     `key: value` scalar lines we care about ourselves (no nesting is needed for
     these flags). If `tomllib` ever applies (a .toml config) we try that first.
+    `keys` names the scalars read: TEA's flags by default, and `test_artifacts`
+    and `trace_output` when formalize_check.py reads TEA's test-artifacts root
+    and the folders its leak check exempts.
     """
     if not tea_config.is_file():
         return {}
@@ -354,7 +357,7 @@ def _read_toml_or_yaml_flags(tea_config: Path) -> dict:
             import tomllib
 
             data = tomllib.loads(text)
-            return {k: data[k] for k in TEA_FLAG_KEYS if k in data}
+            return {k: data[k] for k in keys if k in data}
         except Exception:
             pass
 
@@ -365,7 +368,7 @@ def _read_toml_or_yaml_flags(tea_config: Path) -> dict:
             continue
         key, _, value = line.partition(":")
         key = key.strip()
-        if key not in TEA_FLAG_KEYS:
+        if key not in keys:
             continue
         value = _strip_inline_comment(value).strip().strip('"').strip("'")
         if value.lower() in ("true", "false"):
@@ -389,7 +392,10 @@ def _strip_inline_comment(value: str) -> str:
     comment into the value reported in `tea_flags` the same way.
 
     Whitespace-preceded rather than a bare `split("#")`, which is what YAML
-    actually specifies, so a `#` inside a value survives.
+    actually specifies, so a `#` inside a value survives. A `#` that opens the
+    stripped value is a comment too: the strip took the whitespace before it,
+    so `test_artifacts:  # set by TEA` once read `# set by TEA` as its value
+    rather than none, and the root became a folder named after the comment.
     """
     value = value.strip()
     if value[:1] in ('"', "'"):
@@ -398,7 +404,7 @@ def _strip_inline_comment(value: str) -> str:
         if end != -1:
             return value[: end + 1]
         return value
-    return re.sub(r"\s+#.*$", "", value)
+    return re.sub(r"(?:^|\s+)#.*$", "", value)
 
 
 def _tea_artifacts_root(project_root: Path, tea_flags: dict) -> Path:

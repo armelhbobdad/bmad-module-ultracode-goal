@@ -32,12 +32,22 @@ The story loop now names the case and pins:
     the dev agent; an AC that also holds a clause no run measured, a child
     beside a story that has a file, or children of two parents, have no move,
     so no note authorizes one and the run escalates for a re-plan; the
-    scaffolded cases move with their clause, and the log names both stories.
+    scaffolded cases move with their clause, and the log names both stories;
+  - a later child split off after Stage 3 has no checklist until its own ATDD
+    run after its step 0 (issue #197), so the move writes it none: the earlier
+    child's checklist alone is rewritten, the moved cases are removed from its
+    listed files with no copy parked, a file left with no case comes off
+    `generatedTestFiles` and is then deleted, its path taken out of the
+    checklist's text too when no listed test file is left, the later child's
+    ATDD run (or, where ATDD cannot run, its step 1) works from its rewritten
+    row, the earlier child's evidence stays as captured, and the log names each
+    case taken out.
 
 execute.md's sidecar section names the kind as a live one, `/ucg-resolve`
 closes it by logging the proposal beside the answer before it deletes the
-sidecar, and the scripts read a `coupled-stories` sidecar as a decision a
-resume stops on, never a handoff.
+sidecar, naming the earlier child's checklist, and the later child's only when
+it has one, among the records a children's move rewrites, and the scripts read
+a `coupled-stories` sidecar as a decision a resume stops on, never a handoff.
 
 Stdlib + pytest only.
 """
@@ -187,6 +197,42 @@ _CHECKS = {
     ),
     "moves the scaffolded cases between generatedTestFiles lists": lambda p: (
         "Move each clause's scaffolded cases with it" in p and "`generatedTestFiles`" in p
+    ),
+    # A later child split off after Stage 3 has no checklist until its own
+    # ATDD run after its step 0 (#197), so neither rewrite above has a later
+    # checklist to write to. A moved case left in the earlier child's
+    # listed files is unfinished work to the guard, and a parked copy is a
+    # second scaffold beside the one the later child's ATDD run writes.
+    "a later child with no checklist: cases removed, none parked, its ATDD scaffolds the AC": lambda p: (
+        "A later child split off after Stage 3 has no checklist yet, since its own ATDD run comes after its step 0"
+        in p
+        and "For such a child the move writes no checklist: it rewrites the AC numbers in the earlier child's "
+        "checklist alone" in p
+        and "it removes each moved clause's cases from every file the earlier child's checklist lists, instead of "
+        "moving them" in p
+        and "parking no copy for the later child to take up" in p
+        and "The later child's ATDD run after its step 0 then scaffolds the moved AC from its rewritten row" in p
+        # Where ATDD cannot run, the child's red phase is hand-established at step 1.
+        and "on a stack ATDD cannot run on, the later child's step 1 establishes the moved AC's red phase from its "
+        "rewritten row instead, as for every AC the row cites" in p
+    ),
+    # A test file with no case fails Jest and Vitest, so it is deleted; delisted
+    # first, since a listed path that does not exist reads to a resume as an
+    # interrupted ATDD run and to the guard as a file it cannot read. With no
+    # listed test file left, the guard reads the checklist's text instead.
+    "a file the removal empties comes off generatedTestFiles": lambda p: (
+        "A listed file the removal leaves with no case comes off `generatedTestFiles` first and is then deleted, in "
+        "the same pass" in p
+        and "When that leaves `generatedTestFiles` naming no test file, the guard reads every test path the "
+        "checklist's text names in its place, so each deleted file's path is also taken out of the checklist's text"
+        in p
+    ),
+    # No later checklist records what left the earlier child, so the log is
+    # the one place the removed cases are named; the evidence stays as captured.
+    "keeps the earlier child's evidence and logs each removed case": lambda p: (
+        "The earlier child's evidence folder keeps what it captured (the measurement, any red-phase capture), "
+        "never edited or made again" in p
+        and "the move's log entry names each case it took out" in p
     ),
     "logs it under both stories": lambda p: (
         "Log the move under both stories in `.decision-log.md`, with the changed claim map for two children" in p
@@ -347,10 +393,86 @@ def test_it_sits_after_the_narrowing_rule_which_still_escalates():
             "",
             "logs it under both stories",
         ),
+        # A later child with no checklist: the earlier child's cases moved
+        # into a file no checklist lists yet, instead of removed.
+        (
+            "it removes each moved clause's cases from every file the earlier child's checklist lists, instead of "
+            "moving them",
+            "it moves each moved clause's cases out of every file the earlier child's checklist lists",
+            "a later child with no checklist: cases removed, none parked, its ATDD scaffolds the AC",
+        ),
+        # A copy kept somewhere for the later child to take up.
+        (
+            ", parking no copy for the later child to take up",
+            "",
+            "a later child with no checklist: cases removed, none parked, its ATDD scaffolds the AC",
+        ),
+        # A checklist written for the later child ahead of its own ATDD run.
+        (
+            "For such a child the move writes no checklist:",
+            "For such a child the move writes it a checklist:",
+            "a later child with no checklist: cases removed, none parked, its ATDD scaffolds the AC",
+        ),
+        # Nothing scaffolds the moved AC for the later child.
+        (
+            " The later child's ATDD run after its step 0 then scaffolds the moved AC from its rewritten row, as it "
+            "does every AC the row cites; on a stack ATDD cannot run on, the later child's step 1 establishes the "
+            "moved AC's red phase from its rewritten row instead, as for every AC the row cites.",
+            "",
+            "a later child with no checklist: cases removed, none parked, its ATDD scaffolds the AC",
+        ),
+        # The no-ATDD stack left with a scaffold no run can write.
+        (
+            "; on a stack ATDD cannot run on, the later child's step 1 establishes the moved AC's red phase from its "
+            "rewritten row instead, as for every AC the row cites.",
+            ".",
+            "a later child with no checklist: cases removed, none parked, its ATDD scaffolds the AC",
+        ),
+        # An emptied file left listed and never deleted: it fails its runner.
+        (
+            "comes off `generatedTestFiles` first and is then deleted, in the same pass:",
+            "comes off `generatedTestFiles` in the same pass:",
+            "a file the removal empties comes off generatedTestFiles",
+        ),
+        # Deleted before it is delisted: a listed path that does not exist.
+        (
+            "comes off `generatedTestFiles` first and is then deleted, in the same pass:",
+            "is deleted first and then comes off `generatedTestFiles`, in the same pass:",
+            "a file the removal empties comes off generatedTestFiles",
+        ),
+        # The deleted file's path left in a checklist the guard then reads.
+        (
+            " When that leaves `generatedTestFiles` naming no test file, the guard reads every test path the "
+            "checklist's text names in its place, so each deleted file's path is also taken out of the checklist's "
+            "text.",
+            "",
+            "a file the removal empties comes off generatedTestFiles",
+        ),
+        # The removed cases named nowhere.
+        (
+            ", and the move's log entry names each case it took out",
+            "",
+            "keeps the earlier child's evidence and logs each removed case",
+        ),
+        # The earlier child's captures redone after the move.
+        (
+            "never edited or made again",
+            "captured again once the cases are removed",
+            "keeps the earlier child's evidence and logs each removed case",
+        ),
     ],
 )
 def test_a_weakened_route_is_caught(old, new, caught_by):
     assert caught_by in _holds(_mutate(EXECUTE, old, new))
+
+
+def test_the_no_checklist_case_follows_the_move_of_cases_and_precedes_the_log():
+    # It reads as the exception to the move of cases just before it.
+    p = _paragraph(EXECUTE)
+    move = p.index("Move each clause's scaffolded cases with it")
+    case = p.index("A later child split off after Stage 3 has no checklist yet")
+    log = p.index("Log the move under both stories in `.decision-log.md`")
+    assert move < case < log
 
 
 def test_a_story_loop_without_the_route_is_caught():
@@ -394,7 +516,7 @@ _RESOLVE_CHECKS = {
     "has a close rule for the kind": lambda c: _CLOSE_LEAD in c,
     "names every record a children's move rewrites": lambda c: (
         "or for two decomposed children into every record of their split (the split record, both child rows in "
-        "`sprint-status.yaml` and both ATDD checklists)" in c
+        "`sprint-status.yaml`, the earlier child's ATDD checklist and the later child's when it has one)" in c
     ),
     "logs decision_needed verbatim under both stories before deleting the sidecar": lambda c: (
         "write the sidecar's `decision_needed` verbatim into this answer's `.decision-log.md` entry" in c
@@ -487,8 +609,16 @@ def test_ucg_resolve_closes_a_coupled_stories_escalation():
         # A children's move said to be written into story files neither child has.
         (
             "into both story files, or for two decomposed children into every record of their split (the split "
-            "record, both child rows in `sprint-status.yaml` and both ATDD checklists).",
+            "record, both child rows in `sprint-status.yaml`, the earlier child's ATDD checklist and the later "
+            "child's when it has one).",
             "into both story files.",
+            "names every record a children's move rewrites",
+        ),
+        # The wording #197 replaced: a later child split off after Stage 3 has
+        # no checklist for the resumed run to rewrite.
+        (
+            "the earlier child's ATDD checklist and the later child's when it has one",
+            "both ATDD checklists",
             "names every record a children's move rewrites",
         ),
     ],

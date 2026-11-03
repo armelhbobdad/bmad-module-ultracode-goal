@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal, ucg-formalize
+summary: |
+  `formalize_check.py`, the readiness check that preflight and `/ucg-formalize` run, now reads the TEA config with preflight's own reader. Before, its own copy of that reader kept an inline comment in the value, so `test_artifacts: <path>  # where TEA writes` named a folder whose name ended in `# where TEA writes`. It also broke a quoted value followed by a comment, and read the next line as the value when the key had none on its own line. A key given twice now reads its last value, as preflight reads it. The folder it found did not exist, so a TEA artifact under the real root, when that root sits inside the implementation artifacts, was reported as a leaked artifact to move, and no longer is.

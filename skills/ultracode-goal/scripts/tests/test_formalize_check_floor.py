@@ -168,12 +168,14 @@ def test_leaked_tea_artifact_is_mechanical_move():
 
 
 def test_correctly_placed_tea_artifact_is_not_flagged():
-    # Anti-vacuous twin: the identical TEA artifact placed correctly under the
-    # trace_output root yields a falsy tea_artifacts_in_source and zero leaked
+    # Anti-vacuous twin: the identical TEA artifact placed correctly under TEA's
+    # test-artifacts root yields a falsy tea_artifacts_in_source and zero leaked
     # gaps — proving the check keys on the WRONG LOCATION (path classification),
     # not on the mere presence of a TEA file.
     out = _verdict("leaked_tea_clean")
     assert not out["checks"]["tea_artifacts_in_source"]
+    # Its story-named test-design-9-1.md is not the Epic's plan, so nothing is read or owed.
+    assert out["verdict"] == "ready", out
     assert [
         g for g in out["mechanical_gaps"] if g["kind"] == "leaked_tea_artifact"
     ] == []
