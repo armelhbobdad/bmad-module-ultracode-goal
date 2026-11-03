@@ -303,6 +303,20 @@ _STDLIB_ALLOW = frozenset(
     }
 )
 
+# Sibling scripts of the same folder, imported lazily: shipped with it, and
+# stdlib-only themselves. The TEA config is read with preflight_check's reader,
+# never a copy (test_formalize_tea_root.py).
+_SIBLING_SCRIPTS = frozenset({"preflight_check"})
+
+
+def _mutant_path(tmp_path: Path) -> Path:
+    """Where a mutated copy of the script runs, beside the siblings it imports."""
+    mutant_dir = tmp_path / "src"
+    mutant_dir.mkdir()
+    for name in _SIBLING_SCRIPTS:
+        shutil.copy(SCRIPT.parent / f"{name}.py", mutant_dir)
+    return mutant_dir / "mutant_formalize_check.py"
+
 
 def test_resolution_and_stdlib_only():
     out = _verdict("ready_epic")
@@ -336,8 +350,14 @@ def test_resolution_and_stdlib_only():
         elif isinstance(node, ast.ImportFrom):
             if node.level == 0 and node.module:
                 imported_top.add(node.module.split(".")[0])
-    offenders = imported_top - _STDLIB_ALLOW
+    offenders = imported_top - _STDLIB_ALLOW - _SIBLING_SCRIPTS
     assert not offenders, f"non-stdlib imports found: {sorted(offenders)}"
+    for name in _SIBLING_SCRIPTS & imported_top:
+        sibling = SCRIPT.parent / f"{name}.py"
+        assert sibling.is_file(), f"{name} must ship beside formalize_check.py"
+        assert re.search(
+            r"^#\s*dependencies\s*=\s*\[\s*\]\s*$", sibling.read_text(encoding="utf-8"), re.MULTILINE
+        ), f"{name}.py PEP-723 header must declare dependencies = []"
 
 
 # --- self-explaining + deterministic ----------------------------------------
@@ -561,9 +581,7 @@ def test_mutant_without_empty_story_set_gap_reads_ready(tmp_path):
     """
     src = SCRIPT.read_text(encoding="utf-8")
     assert _EMPTY_STORY_SET_GUARD in src, "mutation anchor drifted out of formalize_check.py"
-    mutant_dir = tmp_path / "src"
-    mutant_dir.mkdir()
-    mutant = mutant_dir / "mutant_formalize_check.py"
+    mutant = _mutant_path(tmp_path)
     mutant.write_text(src.replace(_EMPTY_STORY_SET_GUARD, "    if False:\n", 1), encoding="utf-8")
 
     root = _mini_project(tmp_path, with_story=False)
@@ -664,9 +682,7 @@ def test_mutant_without_ac_less_gap_reads_ready(tmp_path):
     src = SCRIPT.read_text(encoding="utf-8")
     anchor = "            stories_with_ac += 1\n        else:\n"
     assert anchor in src, "mutation anchor drifted out of formalize_check.py"
-    mutant_dir = tmp_path / "src"
-    mutant_dir.mkdir()
-    mutant = mutant_dir / "mutant_formalize_check.py"
+    mutant = _mutant_path(tmp_path)
     mutant.write_text(
         src.replace(anchor, "            stories_with_ac += 1\n        elif False:\n", 1),
         encoding="utf-8",
@@ -910,9 +926,7 @@ def test_mutant_without_coverage_gap_reads_ready(tmp_path):
     """
     src = SCRIPT.read_text(encoding="utf-8")
     assert _COVERAGE_GUARD in src, "mutation anchor drifted out of formalize_check.py"
-    mutant_dir = tmp_path / "src"
-    mutant_dir.mkdir()
-    mutant = mutant_dir / "mutant_formalize_check.py"
+    mutant = _mutant_path(tmp_path)
     mutant.write_text(src.replace(_COVERAGE_GUARD, "    if False:\n", 1), encoding="utf-8")
 
     root = _seeded_project(tmp_path, _KEYS[:2], "partial_mutant")

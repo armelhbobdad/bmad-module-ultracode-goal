@@ -737,39 +737,39 @@ def _cited_index_tokens(block: str) -> list[str]:
 # --- TEA artifact location ---------------------------------------------------
 
 
+# The TEA config scalars that name the trace_output root, the first one set wins.
+_TEA_ROOT_KEYS = ("trace_output", "test_artifacts")
+
+
 def _tea_trace_output_root(tea_config: Path, project_root: Path) -> Path | None:
     """Resolve the trace_output root from the TEA config (the leak-check anchor).
 
-    Reads the flat `trace_output:` (or `test_artifacts:`) scalar. TOML configs
-    go through stdlib tomllib (read-only). Fail-closed: an unreadable config
-    yields None and the leak check treats every TEA-shaped artifact under
-    impl/source as a candidate signal.
+    Reads the flat `trace_output:` scalar, else `test_artifacts:`, with
+    preflight_check.py's own reader, imported lazily so this script stays
+    stdlib-only: a .toml config is parsed as TOML, an inline comment is
+    dropped, a `#` inside a quoted value survives, and a key with no value on
+    its own line is unset rather than read from the next line. A copy of that
+    reader here once kept the comment, so the root named a folder that does
+    not exist, the TEA-reader below found no test-design under it, and an
+    artifact under the real root read as leaked. Fail-closed: a config that is
+    missing or cannot be read, or that sets neither key, yields None and the
+    leak check treats every TEA-shaped artifact under impl/source as a
+    candidate signal.
     """
-    text = _safe_read_text(tea_config)
-    if text is None:
-        return None
+    scripts = str(Path(__file__).resolve().parent)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import preflight_check  # noqa: PLC0415  (sibling script, path set above)
 
-    value: str | None = None
-    if tea_config.suffix.lower() == ".toml":
-        try:
-            import tomllib
-
-            data = tomllib.loads(text)
-            raw = data.get("trace_output") or data.get("test_artifacts")
-            value = raw if isinstance(raw, str) else None
-        except Exception:
-            value = None
-    if value is None:
-        for key in ("trace_output", "test_artifacts"):
-            match = re.search(rf"^\s*{key}\s*:\s*(.+)$", text, re.MULTILINE)
-            if match:
-                value = match.group(1).strip().strip('"').strip("'")
-                break
-    if not value:
+    try:
+        flags = preflight_check._read_toml_or_yaml_flags(tea_config, _TEA_ROOT_KEYS)
+    except OSError:
         return None
-    resolved = value.replace("{project-root}", str(project_root))
-    path = Path(resolved)
-    return path if path.is_absolute() else (project_root / path)
+    for key in _TEA_ROOT_KEYS:
+        value = flags.get(key)
+        if isinstance(value, str) and value:
+            return _resolve(value, project_root)
+    return None
 
 
 # UCG's own impl-artifact bookkeeping is NOT a TEA artifact, even when its filename

@@ -338,12 +338,14 @@ def _impl_artifacts_tracked(project_root: Path, impl_artifacts: Path) -> bool | 
     return False if inside == 0 and out == "true" else None
 
 
-def _read_toml_or_yaml_flags(tea_config: Path) -> dict:
+def _read_toml_or_yaml_flags(tea_config: Path, keys: tuple[str, ...] = TEA_FLAG_KEYS) -> dict:
     """Read flat key: value scalars from the TEA config.
 
     The TEA config is YAML in practice. To stay stdlib-only we parse the flat
     `key: value` scalar lines we care about ourselves (no nesting is needed for
     these flags). If `tomllib` ever applies (a .toml config) we try that first.
+    `keys` names the scalars read: TEA's flags by default, and the two that
+    name the trace_output root when formalize_check.py reads it here.
     """
     if not tea_config.is_file():
         return {}
@@ -354,7 +356,7 @@ def _read_toml_or_yaml_flags(tea_config: Path) -> dict:
             import tomllib
 
             data = tomllib.loads(text)
-            return {k: data[k] for k in TEA_FLAG_KEYS if k in data}
+            return {k: data[k] for k in keys if k in data}
         except Exception:
             pass
 
@@ -365,7 +367,7 @@ def _read_toml_or_yaml_flags(tea_config: Path) -> dict:
             continue
         key, _, value = line.partition(":")
         key = key.strip()
-        if key not in TEA_FLAG_KEYS:
+        if key not in keys:
             continue
         value = _strip_inline_comment(value).strip().strip('"').strip("'")
         if value.lower() in ("true", "false"):

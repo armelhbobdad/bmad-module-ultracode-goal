@@ -1391,7 +1391,7 @@ def test_an_absolute_tea_root_is_read_where_it_is(repo, tmp_path):
 
 def test_the_tea_root_is_preflights_own_reading_not_a_copy():
     source = SCRIPT.read_text(encoding="utf-8")
-    # One reader: a copy drifts (formalize_check.py's lost the inline-comment strip).
+    # One reader: a copy drifts (formalize_check.py's once lost the inline-comment strip).
     for name in ("def _read_toml_or_yaml_flags", "def _strip_inline_comment", "def _tea_artifacts_root", "tomllib"):
         assert name not in source, name
     for call in ("_read_toml_or_yaml_flags(", "_tea_artifacts_root(", "_resolve("):
