@@ -115,7 +115,7 @@ _CHECKS = {
     ),
     "measures each clause before the earlier story's next commit": lambda p: (
         "before the earlier story's next commit, capture for each clause a run on the earlier story's tree" in p
-        and "to a file under `{workflow.implementation_artifacts}`" in p
+        and "to a file in the earlier story's `{workflow.implementation_artifacts}/evidence-<story_id>/`" in p
         and "exists only in the later story's build" in p
         and "Only a clause so measured moves." in p
     ),

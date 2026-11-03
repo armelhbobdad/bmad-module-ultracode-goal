@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The Stage-2 formalize check no longer reads files inside a story's `.scratch-<story_id>/` or `evidence-<story_id>/` folder, directly under the implementation artifacts, as story files or misplaced TEA artifacts. A stale scratch build (a Rust `libbacktrace-*.rlib`, say) or a capture a tool named `trace.zip` no longer blocks the launch gate as a leaked TEA artifact, and a note in one of those folders named like a story no longer reads as that story's file, so a story with no file of its own is still reported uncovered. A folder of either name deeper in the tree is read as before.
+issues: [196]

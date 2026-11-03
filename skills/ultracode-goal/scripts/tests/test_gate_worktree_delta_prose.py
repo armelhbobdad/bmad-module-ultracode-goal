@@ -198,6 +198,13 @@ bullet as it stands, which names each already: a file that cannot load in
 the runner's own process under Node 22, a file that throws `undefined` as it
 loads there, and a module that ends that process after the row's test
 passes. Each now reads 0 failed.
+
+#194 found step 4's hook rule sending a `commit-msg` hook's rejection of the
+message alone through a full sweep and a fresh marker, though Git runs that
+hook only once every `pre-commit` job has passed, so the staged tree is the
+one the marker certifies. The story's commits and the gate's two now answer it
+in the message with the marker as it stands, the gate's inside each commit's
+two fixes, and each rule is pinned below with a mutant twin.
 """
 
 from __future__ import annotations
@@ -2457,6 +2464,138 @@ def test_evidence_hook_predicate_rejects_an_unbounded_or_unguarded_rule(where, o
         assert not _evidence_hook_is_bounded(gate, mutant)
 
 
+# --- a commit-msg hook that rejects the message alone (#194) --------------------
+
+
+# Git runs a `commit-msg` hook only once every `pre-commit` job has passed, so a
+# rejection of the message alone leaves the staged tree the one the marker
+# certifies. Step 4's rule still sent it through a full sweep and a fresh marker,
+# and the gate's two commits through a fix in a file. Each commit now answers it
+# in the message, with the marker as it stands; any rejection that needs a file
+# changed, or that no output shows to be a message hook's, keeps its own rule.
+_EXECUTE_COMMIT_MSG = (
+    "**A `commit-msg` hook that rejects the message alone takes a shorter route, on the story's own commits.** Git "
+    "runs that hook only once every `pre-commit` job has passed, so such a rejection asks for no file change: reword "
+    "`message.txt` (\"Check the record's claims before the commit\", below), run the claim check again, and retry the "
+    "commit from the message file (`-F`) with the marker as it stands, re-running no sweep and writing no fresh marker. "
+    "A change a `pre-commit` job staged on its way there (a formatter that rewrote and re-staged a file) rides the "
+    "retry as it would ride an accepted commit, and step 5's re-verify measures it. A path the re-run claim check has "
+    "you stage or edit is a file change, which takes the rule above. Reword at most twice for one commit: when the "
+    "hook rejects the second rewording too, the message it wants may hold what the run does not have (a ticket id, "
+    "say), so commit nothing and escalate for the story as the sub-skill halt catch-all below does, with a "
+    "`decision_needed` that names the hook and the rule it applies. A rejection whose fix needs a file changed, or "
+    "whose output does not show that a `commit-msg` hook made it, keeps the rule above."
+)
+_BACKFILL_COMMIT_MSG = (
+    "A `commit-msg` hook that rejects the message alone asks for no file change: Git runs it only once every "
+    "`pre-commit` job has passed, so reword the message file, run the claim check again and retry the commit with the "
+    "marker as it stands, re-running no sweep. That retry counts as one of step 2's two fixes, and a rejection after "
+    "the second still takes \"A red backfill sweep ends the cycle at a re-loop\" below. A change a `pre-commit` job "
+    "staged on its way there rides the retry as it would ride an accepted commit. A path the re-run claim check has "
+    "you stage or edit is a file change, which takes the rule above. A rejection whose output does not show that a "
+    "`commit-msg` hook made it is read as step 2's red, as above."
+)
+_EVIDENCE_COMMIT_MSG = (
+    "A `commit-msg` hook that rejects only this commit's message asks for no file change: the message is the gate's "
+    "own, as the `done` sync and the decision log are, so reword `message.txt` and retry from it (`-F`), with the "
+    "marker as it stands, and count that retry as one of this commit's two fixes, after which a rejection still "
+    "takes the escalation above. Git runs that hook only once every `pre-commit` job has passed, so a change a "
+    "`pre-commit` job staged on its way there rides the retry as it would ride an accepted commit. A rejection whose "
+    "output does not show that a `commit-msg` hook made it keeps the rule above."
+)
+
+
+def _message_rejection_is_answered_in_the_message(gate: str, execute: str) -> bool:
+    """Each of the three commits answers a `commit-msg` rejection in its
+    message, after the rule it narrows and inside that rule's bound."""
+    flat_gate, flat_execute = re.sub(r"\s+", " ", gate), re.sub(r"\s+", " ", execute)
+    backfill = re.sub(
+        r"\s+", " ", _between(gate, "**When automate backfills, commit the backfill before trace runs.**", _BOUND)
+    )
+    evidence = _between(
+        flat_gate, "**Commit the gate's evidence before the next story starts.**", "When **every story of the Epic"
+    )
+    return bool(
+        # Each rule is pinned up to what follows it, so a sentence appended to
+        # one (a lifted cap) breaks the pin, as the backfill's does.
+        _EXECUTE_HOOK_EXCEPTION + " " + _EXECUTE_COMMIT_MSG + " **Append `.decision-log.md`" in flat_execute
+        and _HOOK_AS_RED + " " + _BACKFILL_COMMIT_MSG + " 5. Refresh `.commit-<story_id>`" in backfill
+        and _EVIDENCE_STAYS_STAGED + " " + _EVIDENCE_COMMIT_MSG + " Automate's backfill is not among its paths" in evidence
+        # The story's own route never reaches the gate's commits.
+        and "is the one exception" not in flat_execute
+    )
+
+
+def test_a_commit_msg_rejection_is_answered_in_the_message():
+    assert _message_rejection_is_answered_in_the_message(GATE, EXECUTE)
+
+
+@pytest.mark.parametrize(
+    ("where", "old", "new"),
+    [
+        # The pre-edit text: a message-only rejection cost a full sweep and a fresh marker.
+        ("execute", " " + _EXECUTE_COMMIT_MSG, ""),
+        ("execute", "re-running no sweep and writing no fresh marker",
+         "re-running the sweep and writing a fresh marker"),
+        # Any hook, a `pre-commit` linter's included, read as a message rejection.
+        ("execute", "**A `commit-msg` hook that rejects the message alone", "**A hook that rejects the commit"),
+        ("execute", ", or whose output does not show that a `commit-msg` hook made it,", ","),
+        ("execute", ", and step 5's re-verify measures it", ""),
+        # The first wording, which said the staged tree is the one the marker certifies.
+        ("execute", "so such a rejection asks for no file change: reword",
+         "so a rejection of the message leaves the staged tree the one the marker certifies: reword"),
+        # A path the re-run claim check stages or edits retried under the marker as it stands.
+        ("execute", " A path the re-run claim check has you stage or edit is a file change, which takes the rule above. "
+         "Reword", " Reword"),
+        # No cap: a hook that wants what the run does not hold loops inside one response.
+        ("execute", " Reword at most twice for one commit: when the hook rejects the second rewording too, the message it "
+         "wants may hold what the run does not have (a ticket id, say), so commit nothing and escalate for the story as "
+         "the sub-skill halt catch-all below does, with a `decision_needed` that names the hook and the rule it "
+         "applies.", ""),
+        ("execute", "Reword at most twice for one commit", "Reword until the hook accepts the message"),
+        ("execute", "with a `decision_needed` that names the hook and the rule it applies", "with a `decision_needed`"),
+        ("gate", " A path the re-run claim check has you stage or edit is a file change, which takes the rule above. A "
+         "rejection whose output", " A rejection whose output"),
+        ("gate", " " + _BACKFILL_COMMIT_MSG, ""),
+        # No bound: a hook that never accepts a message loops the gate.
+        ("gate", " That retry counts as one of step 2's two fixes, and a rejection after the second still takes \"A "
+         "red backfill sweep ends the cycle at a re-loop\" below.", ""),
+        ("gate", "re-running no sweep. That retry", "re-running the sweep and writing a fresh marker. That retry"),
+        ("gate", " A rejection whose output does not show that a `commit-msg` hook made it is read as step 2's red, "
+         "as above.", ""),
+        ("gate", " " + _EVIDENCE_COMMIT_MSG, ""),
+        ("gate", ", and count that retry as one of this commit's two fixes, after which a rejection still takes the "
+         "escalation above", ""),
+        ("gate", "so reword `message.txt` and retry from it (`-F`), with the marker as it stands,",
+         "so reword `message.txt`, write a fresh marker and retry from it (`-F`),"),
+        ("gate", " A rejection whose output does not show that a `commit-msg` hook made it keeps the rule above.", ""),
+        # A sentence appended to a rule that lifts its cap.
+        ("execute", "made it, keeps the rule above. **Append `.decision-log.md`",
+         "made it, keeps the rule above. A hook that names the ticket it wants may be reworded for as often as it "
+         "asks. **Append `.decision-log.md`"),
+        ("gate", "hook made it keeps the rule above. Automate's backfill is not among its paths",
+         "hook made it keeps the rule above. A hook that names what it wants is answered until it accepts the "
+         "message, past the two fixes. Automate's backfill is not among its paths"),
+        ("gate", "as above. 5. Refresh `.commit-<story_id>`",
+         "as above. Reword the message as often as the hook asks. 5. Refresh `.commit-<story_id>`"),
+        # The first wording of execute.md's gate sentence, which put the gate's commits under step 4's rule.
+        ("execute", "and only then retry the commit. This rule binds",
+         "and only then retry the commit. The gate's commit of a backfilled test is the one exception. This rule "
+         "binds"),
+    ],
+)
+def test_message_rejection_predicate_rejects_a_wider_or_unbounded_route(where, old, new):
+    gate, execute = re.sub(r"\s+", " ", GATE), re.sub(r"\s+", " ", EXECUTE)
+    if where == "gate":
+        mutant = gate.replace(old, new)
+        assert mutant != gate, "the mutant must actually change the text"
+        assert not _message_rejection_is_answered_in_the_message(mutant, execute)
+    else:
+        mutant = execute.replace(old, new)
+        assert mutant != execute, "the mutant must actually change the text"
+        assert not _message_rejection_is_answered_in_the_message(gate, mutant)
+
+
 # Every sentence on a gate surface that names a hook's rejection, or the evidence
 # commit, its `evidence-commit-rejected` kind or its `.evidence-owed-` marker. The bound above is read in its own paragraph,
 # so a sentence elsewhere (in the ledger schema, the decision-pending paragraph or
@@ -2467,6 +2606,18 @@ _REJECT = re.compile(r"reject|refus|\bfail(?:s|ed)?\b|\bblocks?\b|\bden(?:y|ies)
 _EVIDENCE_COMMIT = re.compile(r"evidence commit|evidence-commit|\.evidence-owed", re.I)
 _HOOK_REJECTION_SENTENCES = {
     "execute.md": (
+        # Reviewed (#194): a `commit-msg` hook's rejection of the message alone,
+        # on the story's own commits, answered in the message with the marker as
+        # it stands; any rejection that needs a file changed, or that no output
+        # shows to be a message hook's, keeps step 4's rule. It names neither of
+        # the gate's two commits, which keep their own rules. Reviewed again (its
+        # review): such a rejection asks for no file change, rather than leaving
+        # the tree the marker certifies, and the reword stops at two, after which
+        # the story escalates naming the hook and its rule.
+        ("**A `commit-msg` hook that rejects the message alone takes a shorter rou", "c0bf7ab92ddd"),
+        # Reviewed (#194 review): the story's reword route stops at two; the third
+        # rejection escalates and commits nothing, and it names no gate commit.
+        ("Reword at most twice for one commit: when the hook rejects the second re", "6f914295c54d"),
         ("**A commit can also be rejected by something that is NOT the guard, and ", "0f2c634952fd"),
         # Reviewed (#186 review, 4.1.0): the hooks re-merge a resume makes now
         # waits behind an operator's reason, which escalates first; a settings
@@ -2474,10 +2625,15 @@ _HOOK_REJECTION_SENTENCES = {
         ("**A hooks reason is fixed in place, not by a return to Stage 2.** When t", "a178c4791343"),
         ("**Commit at green** (one implementation commit per green story; the gate", "50b2448580e8"),
         ("A fix that writes `.claude/settings.local.json` (a hook, its env, the al", "9df5f7b5d3f4"),
+        ("A rejection whose fix needs a file changed, or whose output does not sho", "8232f495e53c"),
         ("Before the next story's step 0, also check whether the last advanced sto", "88ce12f730cc"),
         ("Check every `.evidence-owed-<story_id>` of this Epic's stories this way,", "ca850de04101"),
         ("Evaluate it only after the story's Stage-5 verdict has landed, and after", "502e14ca0ed3"),
         ("Exit 0 asserts the branch, both hooks with the all-tools matcher and the", "78e63e004d78"),
+        # Reviewed (#196): the story's evidence folder stays untracked on a
+        # tracked artifact tree, so the evidence commit's list of paths is
+        # unchanged; it answers no hook and widens nothing.
+        ("On a tracked artifact tree the folder stays untracked, as the mutation l", "6f1d9223954d"),
         ("Said that way rather than \"the guard never sees Write/Edit\", because pre", "4dd6e00dabed"),
         ("Skip the write and both hooks keep reading whatever the file last named:", "381bdfbe5299"),
         ("So is `evidence-commit-rejected`: the story advanced, and a repo commit ", "96b74b528b7e"),
@@ -2505,7 +2661,22 @@ _HOOK_REJECTION_SENTENCES = {
     "gate.md": (
         ("**A red backfill sweep ends the cycle at a re-loop.** A red in step 2's ", "2413be2b7f02"),
         ("A repo commit hook that rejects this commit is not `references/execute.m", "83390652ac30"),
-        ("A repo commit hook that rejects this commit is read as step 2's red, and", "dcf8f8ed71b6"),
+        # Reviewed (#194): the message is the gate's own on both of its commits,
+        # so a `commit-msg` hook's rejection of the message alone is answered
+        # there, with the marker as it stands, inside each commit's two fixes;
+        # after them the backfill still ends the cycle at a re-loop, and the
+        # evidence commit still escalates. A rejection no output shows to be a
+        # message hook's keeps each commit's rule. The backfill's hook sentence
+        # changed only in where it ends: step 5's number no longer runs into it.
+        # Reviewed again (its review): both now say such a rejection asks for no
+        # file change, and nothing else in them moved. Reviewed (#198): the
+        # evidence commit's reword now edits its `message.txt` and retries from
+        # it (`-F`); its bound, its marker and its escalation are unchanged.
+        ("A `commit-msg` hook that rejects only this commit's message asks for no ", "6a6ffd2933ee"),
+        ("A `commit-msg` hook that rejects the message alone asks for no file chan", "fa0fbe7c40ca"),
+        ("A rejection whose output does not show that a `commit-msg` hook made it ", "602c642c0c1b"),
+        ("A rejection whose output does not show that a `commit-msg` hook made it ", "7f6eaa46605a"),
+        ("A repo commit hook that rejects this commit is read as step 2's red, and", "acd555e8c07f"),
         ("A resume that finds the marker with the sidecar gone and none of the pat", "7dd5fdbf2466"),
         ("Once the commit is made, remove `.evidence-owed-<story_id>`: `/ucg-resol", "9836fd83431a"),
         ("The guard allows this commit as it allows the evidence commit in \"Route ", "8d2321fc1967"),
@@ -5707,3 +5878,107 @@ def test_fragment_predicate_rejects_a_sentence_that_contradicts_the_prose(which,
         mutant = backfill.replace(old, new)
         assert mutant != backfill, "the mutant must actually change the text"
         assert _fragment_gaps(alone, mutant)
+
+
+# --- the evidence commit takes its message from a file (#198) ---------------------
+#
+# The gate named no message file for its evidence commit, so the message went
+# inside the Bash command, where bash ran a backticked name or a `$(...)` in it
+# and the commit still exited 0 with what was left. It now writes `message.txt`
+# in the story's scratch folder, commits from it, rewords it after a
+# `commit-msg` rejection, and removes the folder again before the next story.
+
+_EVIDENCE_MESSAGE_FILE = (
+    "Before the commit call, write its message with Write to "
+    "`{workflow.implementation_artifacts}/.scratch-<story_id>/message.txt`, recreating the folder Execute removed "
+    "before the story advanced, or Reading the file first if an earlier session left it there, and commit from that "
+    "file (`git commit -F`), as the story's own commits do. Never put the message in the Bash command. After a "
+    "double-quoted `-m`, or in a heredoc whose delimiter is unquoted, bash runs a backticked name or a `$(...)` in it "
+    "as a command while it builds the arguments, and the commit still exits 0 with the text that is left. A quoted "
+    "heredoc keeps the text, but the guard reads its lines as commands (a line that opens with `Git runs` is read as "
+    "a git command it does not know, which it counts as a commit and a push), and the `$(cat <<'EOF' ...)` form is "
+    "a command substitution, which a harness that statically analyses Bash strings refuses (`references/execute.md` "
+    "step 2). "
+    "Once the commit is made, or the escalation below is written, remove `.scratch-<story_id>/` again, since the next "
+    "story's step 0 must not find it (`references/execute.md` step 0). A resume that finds the folder left by a run "
+    "that stopped after this commit removes it before the next story's step 0."
+)
+_EVIDENCE_RESUME_MESSAGE = (
+    "(its tests-ran marker still passes the guard), write the message file and commit from it as above, and refresh "
+    "its `.commit-<story_id>`."
+)
+# Each spelling an inline message takes. The pinned sentences name some of
+# them only to bar them, so the scan reads the paragraph without those.
+_INLINE_MESSAGE = re.compile(r"-m\b|--message\b|<<|heredoc|\binline\b|\$\(cat", re.I)
+_EVIDENCE_LAST = "without running that gate again. Then move to the next story."
+
+
+def _evidence_commit_takes_its_message_from_a_file(gate: str) -> bool:
+    evidence = _between(
+        re.sub(r"\s+", " ", gate), "**Commit the gate's evidence before the next story starts.**",
+        "When **every story of the Epic",
+    )
+    return bool(
+        # Pinned between the staging sentence and the next one, so a sentence
+        # slipped in after it (an inline route for a short message) breaks it.
+        "in one call, and commit them in a second, before the next story's step 0. " + _EVIDENCE_MESSAGE_FILE
+        + " For the story whose advance" in evidence
+        and _EVIDENCE_RESUME_MESSAGE in evidence
+        and "so reword `message.txt` and retry from it (`-F`), with the marker as it stands," in evidence
+        and not _INLINE_MESSAGE.search(evidence.replace(_EVIDENCE_MESSAGE_FILE, ""))
+    )
+
+
+def test_the_evidence_commit_takes_its_message_from_a_file():
+    assert _evidence_commit_takes_its_message_from_a_file(GATE)
+    assert re.sub(r"\s+", " ", GATE).count(_EVIDENCE_LAST) == 1
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The pre-edit text: no message file named at all.
+        (" " + _EVIDENCE_MESSAGE_FILE, ""),
+        ("(its tests-ran marker still passes the guard), write the message file and commit from it as above,",
+         "(its tests-ran marker still passes the guard), commit,"),
+        ("so reword `message.txt` and retry from it (`-F`), with", "so reword it and retry, with"),
+        # A Write onto a file an earlier session left, refused because this one never Read it.
+        (", or Reading the file first if an earlier session left it there,", ","),
+        # The message inline after all, where a pin breaks.
+        ("commit from that file (`git commit -F`)", "commit with `git commit -m`"),
+        ("story's step 0. For the story whose advance",
+         "story's step 0. A short message may go inline, with `git commit -m`. For the story whose advance"),
+        ("commit from it as above,", "commit from it as above, with the message in a `<<'EOF'` heredoc,"),
+        # The message inline after all, where only the scan catches it.
+        (_EVIDENCE_LAST, "without running that gate again. A one-line message may go after `-m` instead. Then move "
+         "to the next story."),
+        (_EVIDENCE_LAST, "without running that gate again. A short message may go inline. Then move to the next "
+         "story."),
+        (_EVIDENCE_LAST, "without running that gate again. A resume may pass the message in a heredoc. Then move to "
+         "the next story."),
+        (_EVIDENCE_LAST, "without running that gate again. Or pass it with `--message`. Then move to the next story."),
+        (_EVIDENCE_LAST, "without running that gate again. Or pass it as `\"$(cat message.txt)\"`. Then move to the "
+         "next story."),
+        ("and refresh its `.commit-<story_id>`.",
+         "and refresh its `.commit-<story_id>`. A resume may pass the message after `-m`."),
+        # The folder left for the next story's step 0 to find.
+        (" Once the commit is made, or the escalation below is written, remove `.scratch-<story_id>/` again, since "
+         "the next story's step 0 must not find it (`references/execute.md` step 0).", ""),
+        ("Once the commit is made, or the escalation below is written,", "Once the commit is made,"),
+        (" A resume that finds the folder left by a run that stopped after this commit removes it before the next "
+         "story's step 0.", ""),
+        # The why dropped, which is what keeps a later edit from putting the message back inline.
+        (" After a double-quoted `-m`, or in a heredoc whose delimiter is unquoted, bash runs a backticked name or a "
+         "`$(...)` in it as a command while it builds the arguments, and the commit still exits 0 with the text that "
+         "is left.", ""),
+        (" A quoted heredoc keeps the text, but the guard reads its lines as commands (a line that opens with `Git "
+         "runs` is read as a git command it does not know, which it counts as a commit and a push), and the "
+         "`$(cat <<'EOF' ...)` form is a command substitution, which a harness that statically analyses Bash "
+         "strings refuses (`references/execute.md` step 2).", ""),
+    ],
+)
+def test_evidence_message_predicate_rejects_an_inline_or_lingering_form(old, new):
+    gate = re.sub(r"\s+", " ", GATE)
+    mutant = gate.replace(old, new)
+    assert mutant != gate, "the mutant must actually change the text"
+    assert not _evidence_commit_takes_its_message_from_a_file(mutant)

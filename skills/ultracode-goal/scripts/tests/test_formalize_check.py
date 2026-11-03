@@ -769,6 +769,30 @@ def test_partially_seeded_story_set_is_remediable_not_ready(tmp_path):
     assert out["mechanical_budget"] == len(out["mechanical_gaps"])
 
 
+@pytest.mark.parametrize(
+    ("folder", "skipped"), [("evidence-7-3", True), (".scratch-7-3", True), ("", False), ("notes/evidence-x", False)]
+)
+def test_a_story_named_file_in_a_run_folder_covers_no_key(tmp_path, folder, skipped):
+    # A story's evidence and scratch folders stay under impl-artifacts, and a
+    # note there named like the uncovered story must not read as its story
+    # file (a fail-open). The twins: the same note at the artifacts root, or in
+    # a folder of that name below another folder, is read as it always was.
+    root = _seeded_project(tmp_path, _KEYS[:2], f"run-folder-{folder.replace('/', '-') or 'root'}")
+    note = root / "impl-artifacts" / folder / "7-3-notes.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(_story_body("7-3-renderer"), encoding="utf-8")
+    scratch = root / "impl-artifacts" / ".scratch-7-1" / "target" / "debug" / "deps"
+    scratch.mkdir(parents=True)
+    (scratch / "libbacktrace-x.rlib").write_bytes(b"\0")
+    out = _run_project(root)
+    uncovered = [g for g in out["mechanical_gaps"] if g["kind"] == "story_keys_uncovered"]
+    assert bool(uncovered) is skipped
+    if skipped:
+        assert "7-3-renderer" in uncovered[0]["detail"]
+    # The stale scratch build is never a leaked TEA artifact.
+    assert all(g["kind"] != "leaked_tea_artifact" for g in out["mechanical_gaps"])
+
+
 def test_fully_seeded_story_set_emits_no_coverage_gap(tmp_path):
     # Anti-vacuous twin (data): the SAME project with all three story files
     # present fires ZERO coverage gaps, proving the gap keys on the UNCOVERED

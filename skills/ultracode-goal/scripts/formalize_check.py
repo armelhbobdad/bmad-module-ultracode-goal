@@ -353,6 +353,23 @@ def _present_and_readable(path: Path | None) -> bool:
 # --- story / AC scan ---------------------------------------------------------
 
 
+# A story's run folders directly under impl-artifacts: `.scratch-<story_id>/`
+# (throwaway build space, which a dead run can leave behind) and
+# `evidence-<story_id>/` (captured output, which no step removes). Neither holds
+# a story file or a TEA artifact, so the story-file and leaked-artifact scans
+# skip every file below one of them; a folder so named deeper down is read.
+_RUN_FOLDER_RE = re.compile(r"^(?:evidence-|\.scratch-)")
+
+
+def _in_run_folder(path: Path, impl_artifacts: Path) -> bool:
+    """True when the first path component below impl-artifacts is a run folder."""
+    try:
+        parts = path.relative_to(impl_artifacts).parts
+    except ValueError:
+        return False
+    return len(parts) > 1 and bool(_RUN_FOLDER_RE.match(parts[0]))
+
+
 def _story_files(impl_artifacts: Path, epic: str, story_keys: list[str]) -> list[Path]:
     """Every story file of the Epic under impl-artifacts, `done` ones included.
 
@@ -360,7 +377,8 @@ def _story_files(impl_artifacts: Path, epic: str, story_keys: list[str]) -> list
     file starting with one of `story_keys` counts too. Sorted for determinism.
     The coverage check reads all of them, since a done parent's file covers its
     decomposed children, and so does the declared-id set. Which of them the
-    per-story checks read is `_in_scope_story_files`'s call.
+    per-story checks read is `_in_scope_story_files`'s call. A file inside a
+    story's run folder is none (`_in_run_folder`).
     """
     if not impl_artifacts.is_dir():
         return []
@@ -372,7 +390,7 @@ def _story_files(impl_artifacts: Path, epic: str, story_keys: list[str]) -> list
     files: list[Path] = []
     for path in all_md:
         name = path.name.lower()
-        if name.startswith("sprint-status"):
+        if name.startswith("sprint-status") or _in_run_folder(path, impl_artifacts):
             continue
         if name.startswith(prefix) or any(name.startswith(f"{k.lower()}") for k in story_keys):
             files.append(path)
@@ -792,7 +810,9 @@ def _leaked_tea_artifacts(
     impl-artifacts (and outside trace_root) is (the check keys on the
     WRONG LOCATION, not on mere presence of a TEA file). UCG's own story notes /
     run sentinels are excluded even when their filename carries a marker token
-    (see _is_ucg_impl_artifact).
+    (see _is_ucg_impl_artifact), and so is every file inside a story's run
+    folder (`_in_run_folder`): a scratch build's `libbacktrace-*.rlib` or a
+    capture a tool named `trace.zip` is no TEA artifact.
     """
     if not impl_artifacts.is_dir():
         return []
@@ -803,7 +823,7 @@ def _leaked_tea_artifacts(
     leaked: list[Path] = []
     for path in all_files:
         name = path.name.lower()
-        if not any(marker in name for marker in TEA_ARTIFACT_MARKERS):
+        if not any(marker in name for marker in TEA_ARTIFACT_MARKERS) or _in_run_folder(path, impl_artifacts):
             continue
         if _is_ucg_impl_artifact(path, name):
             continue
