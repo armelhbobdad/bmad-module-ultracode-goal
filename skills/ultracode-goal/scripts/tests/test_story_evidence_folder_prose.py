@@ -227,12 +227,16 @@ def test_pointer_predicate_rejects_the_pre_edit_wording(pointer, pre_edit):
         assert not _points_at_the_folder(execute, mutant)
 
 
+# Keyed by file name: a parameter holding a file's text would put the whole
+# text in the test id, and pytest copies the id into PYTEST_CURRENT_TEST,
+# which Windows caps at 32767 characters.
 @pytest.mark.parametrize(
-    ("text", "start"),
-    [(GATE, "3. **Capture that run's raw output to a file**"), (EXECUTE, "**Capture, then slice")],
+    ("name", "start"),
+    [("gate.md", "3. **Capture that run's raw output to a file**"), ("execute.md", "**Capture, then slice")],
 )
-def test_a_touched_line_has_no_em_dash_left(text, start):
+def test_a_touched_line_has_no_em_dash_left(name, start):
     """Each line these pointers touched held one em dash, rewritten with them."""
+    text = {"gate.md": GATE, "execute.md": EXECUTE}[name]
     line = next(line for line in text.splitlines() if line.startswith(start))
     assert chr(0x2014) not in line
 
