@@ -282,7 +282,8 @@ The two dispositions are genuinely different things, not two names for one:
   and the id you closed, before you delete the sidecar: once the sidecar is gone, that
   entry is the only copy of the move the resumed run writes into both story files, or for
   two decomposed children into every record of their split (the split record, both child
-  rows in `sprint-status.yaml` and both ATDD checklists). This
+  rows in `sprint-status.yaml`, the earlier child's ATDD checklist and the later child's
+  when it has one). This
   surface edits neither story file and moves no test case: the ruling is the operator's,
   and the resumed run applies it before the earlier story's next commit. An answer that
   re-plans the rows instead (one story in place of the two, or another order) is the
