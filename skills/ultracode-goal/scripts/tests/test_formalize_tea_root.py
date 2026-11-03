@@ -50,6 +50,8 @@ _VALUES = [
     ("hash-in-quotes", 'test_artifacts: "out/a #b"  # note\n', "out/a #b"),
     ("project-root", "trace_output: {project-root}/tr  # note\n", "tr"),
     ("no-value-then-nested", "test_artifacts:\n  nested: x\n", None),
+    ("comment-only", "test_artifacts:  # set by TEA\n", None),
+    ("comment-only-trace-falls-back", "trace_output:   # set once TEA traces\ntest_artifacts: out/ta\n", "out/ta"),
     ("commented-out", "# test_artifacts: out/old\n", None),
     ("trace-first", "trace_output: out/tr\ntest_artifacts: out/ta\n", "out/tr"),
     ("trace-first-by-key", "test_artifacts: out/ta\ntrace_output: out/tr\n", "out/tr"),

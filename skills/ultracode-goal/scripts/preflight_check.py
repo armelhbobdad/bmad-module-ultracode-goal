@@ -391,7 +391,10 @@ def _strip_inline_comment(value: str) -> str:
     comment into the value reported in `tea_flags` the same way.
 
     Whitespace-preceded rather than a bare `split("#")`, which is what YAML
-    actually specifies, so a `#` inside a value survives.
+    actually specifies, so a `#` inside a value survives. A `#` that opens the
+    stripped value is a comment too: the strip took the whitespace before it,
+    so `test_artifacts:  # set by TEA` once read `# set by TEA` as its value
+    rather than none, and the root became a folder named after the comment.
     """
     value = value.strip()
     if value[:1] in ('"', "'"):
@@ -400,7 +403,7 @@ def _strip_inline_comment(value: str) -> str:
         if end != -1:
             return value[: end + 1]
         return value
-    return re.sub(r"\s+#.*$", "", value)
+    return re.sub(r"(?:^|\s+)#.*$", "", value)
 
 
 def _tea_artifacts_root(project_root: Path, tea_flags: dict) -> Path:

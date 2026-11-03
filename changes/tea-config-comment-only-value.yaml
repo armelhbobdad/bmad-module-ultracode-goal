@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal, ucg-formalize
+summary: |
+  A TEA config key whose value is only a comment, such as `test_artifacts:  # set by TEA`, now reads as having no value. Before, preflight's reader kept `# set by TEA` as the value, so `tea_flags` reported the comment and preflight resolved TEA's test-artifacts root to a folder named after it instead of `_bmad-output/test-artifacts`. Preflight passes that root to the commit guard in `ULTRACODE_TEST_ARTIFACTS`, and the guard, finding no `atdd-checklist-<story_id>.md` there, never ran its check that a story's generated acceptance tests are no longer skipped. The readiness check (`formalize_check.py`) read a comment-only `trace_output` the same way, instead of falling back to `test_artifacts`. After the upgrade, a run on such a config arms that guard check again, so a story commit whose staged acceptance tests are still skipped is refused, and the readiness check can report the gaps it skipped before.
