@@ -2629,6 +2629,10 @@ _HOOK_REJECTION_SENTENCES = {
         ("Check every `.evidence-owed-<story_id>` of this Epic's stories this way,", "ca850de04101"),
         ("Evaluate it only after the story's Stage-5 verdict has landed, and after", "502e14ca0ed3"),
         ("Exit 0 asserts the branch, both hooks with the all-tools matcher and the", "78e63e004d78"),
+        # Reviewed (#196): the story's evidence folder stays untracked on a
+        # tracked artifact tree, so the evidence commit's list of paths is
+        # unchanged; it answers no hook and widens nothing.
+        ("On a tracked artifact tree the folder stays untracked, as the mutation l", "6f1d9223954d"),
         ("Said that way rather than \"the guard never sees Write/Edit\", because pre", "4dd6e00dabed"),
         ("Skip the write and both hooks keep reading whatever the file last named:", "381bdfbe5299"),
         ("So is `evidence-commit-rejected`: the story advanced, and a repo commit ", "96b74b528b7e"),
