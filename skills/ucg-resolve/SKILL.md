@@ -116,7 +116,8 @@ For a sidecar the three arguments are its own `kind`, `source` and `decision_nee
 fields, each passed verbatim: `<artifact path>` is the sidecar's `source` field, its
 `:line` suffix and all (the id layer strips it), never the path of the sidecar file
 itself. The resume also reads a close keyed by the sidecar file's own path as closed,
-since earlier passes keyed some that way, but never mint a new id from that path.
+since earlier passes keyed some that way, but never key an answer by an id minted from
+that path: section 2 mints those ids only to recognize an entry already recorded.
 
 It prints the id and touches nothing. **A ledger `decision:` row is keyed by the same
 call** — kind `decision`, the ledger path, and the row's reason — because the row's own
@@ -148,23 +149,55 @@ Re-asking a question the operator already **resolved** is the exact failure this
 exists to remove.
 
 An entry recorded with `action` `defer` is the opposite case: it is a parked question, not
-an answered one. Present it again, and replace its entry in place when the operator decides
-it, carrying its answer forward (section 3). Suppressing a deferred item would deadlock
-the run outright: `defer` clears nothing,
-so the next preflight still blocks on that RED (`{ucg-root}/references/preflight.md`,
-step 3, drops only the ids whose `action` is `close`), while this surface, the only one that
-can answer it, would never ask again. The scan blocks forever on a question the operator is
-no longer offered.
+an answered one. Present it again while an item this pass enumerated carries its `id`, and
+replace its entry in place when the operator decides it, carrying its answer forward
+(section 3). Suppressing a deferred item would deadlock the run outright: `defer` clears
+nothing, so the next preflight still blocks on that RED
+(`{ucg-root}/references/preflight.md`, step 3, drops only the ids whose `action` is
+`close`), while this surface, the only one that can answer it, would never ask again. The
+scan blocks forever on a question the operator is no longer offered.
 
 An entry with no `action`, or with an `action` that is neither `close` nor `defer`, is
-pending as well. An earlier version of this surface wrote some entries that way, and
-preflight drops none of their ids, so their questions still block. Present it again, as
-you present a deferred one.
+pending as well while an item this pass enumerated carries its `id`. An earlier version of
+this surface wrote some entries that way, and preflight drops none of their ids, so that
+item's question stays open. Present it again, as you present a deferred one.
+
+**An item carries an entry's `id` only on an exact match, as written.** A RED carries the
+`id` on its `reds` entry, and a ledger `decision:` row the id the id layer printed for it.
+An escalation sidecar carries the id the id layer printed from its own fields, and one
+more for each spelling of the sidecar file's own path the resume reads a close by
+(`_sidecar_ids` in `{ucg-root}/scripts/preflight_check.py`): its path relative to
+`{project-root}`, its absolute path, that absolute path with its folder's symlinks
+resolved, and the resolved path relative to `{project-root}`, each written with forward
+slashes and, on Windows, with backslashes too. Ask the id layer for each of those with the
+sidecar's own `kind` and `decision_needed`. Mint them only to recognize an entry already
+recorded, never to key an answer: an entry keyed by any of them belongs to that sidecar's
+item.
 
 When an item you present already has an entry, show its `answer`, and each earlier answer
 its `history` holds (section 3), beside the decision needed. Such an answer can hold the
 operator's whole ruling: they decide on the record as it stands, and may find it already
 answers the question.
+
+**An entry no enumerated item carries is orphaned, not pending.** That is an entry whose
+`action` is anything but `close` and whose `id` no item of this pass carries: none of the
+three sources holds its question at this pass, so there is no item to present it with.
+List the orphaned entries after the pending items, apart from them, each with its `id`,
+its `answer` and each earlier answer its `history` holds, and ask nothing about them; the
+record keeps each one as it stands. Say beside that list that a later preflight can raise
+an orphaned entry again and block on it. `.preflight-reds.json` is one project-wide file
+that each preflight replaces, so it holds only the REDs of the last preflight, from
+whichever Epic ran it: a RED one Epic's preflight raised can be gone from it after another
+Epic's preflight, while that first Epic's next preflight can raise it again. An orphaned
+entry whose `id` a later RED, sidecar or ledger row carries is pending again at that pass,
+which asks it.
+
+**When a source could not be read in full, call nothing orphaned.** That is an unreadable
+`.preflight-reds.json`, an escalation sidecar that cannot be read or whose fields no id can
+be minted from, or a ledger on disk that cannot be read, or is malformed or a bullet list,
+so it yields no rows here. In that case present every entry that is not a `close` as
+pending, with its `id`, its `answer` and its `history`, since an id that source would carry
+cannot be ruled out.
 
 ## 3. Record the answer, then apply its disposition
 
@@ -319,11 +352,17 @@ included.
 `/ucg-resolve` defines no resume of its own. Close the pass by stating what closed, what is
 still pending, and that anything still pending re-blocks at the next preflight. Name every
 entry this pass replaced, by `id`, with the earlier answer it carried into `history`, so
-the operator sees what the record held before this pass. **Hand back
+the operator sees what the record held before this pass. List the orphaned entries apart
+from both, by `id`, and say that a later preflight can raise any of them again and block
+on it, and that the pass after that preflight asks it. **Hand back
 only when the pass closed at least one item, or when the operator asks for the resume**: a
 pass that deferred everything hands into a run blocked on the identical items, and an empty
 enumeration means the run stopped for a non-decision reason — say so, point at the read-only
-`/ucg-status`, and hand nothing back.
+`/ucg-status`, and hand nothing back. A pass that found only orphaned entries is not an
+empty enumeration, so do not say the run stopped for a non-decision reason: the run can
+have stopped on a RED that another Epic's preflight has since dropped from
+`.preflight-reds.json`, and its next preflight raises that RED again. Such a pass closed
+nothing, so it hands back only when the operator asks for the resume.
 
 Otherwise hand back to the resume the module already has, which **routes by the last stage
 the blocked run reached**, not by story. Which branch applies is not a detail this surface
