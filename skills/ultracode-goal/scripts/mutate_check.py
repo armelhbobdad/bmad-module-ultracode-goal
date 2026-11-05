@@ -20,6 +20,13 @@ Table (JSON array; every key a string, all five required, ``note`` optional):
       "expect_red": "test_depth_guard_fires",
       "note": "AC-3 twin"}]
 
+Every key but ``replacement`` must be non-blank: neither empty nor only
+whitespace, since a blank ``command`` exits 0 and a blank ``expect_red`` names
+no test. An empty ``replacement`` deletes the anchor, the plainest mutation of
+a guard clause. Delete whole statements: a deletion that leaves a block with no
+body breaks the module, and reads as any mutant that breaks a module does (see
+the collection errors below).
+
 Per row, in order: assert the anchor occurs EXACTLY once (0 occurrences is
 reported distinctly as STALE - the formatter-reflow signature - and more than
 one as NOT UNIQUE, because a duplicated anchor mutates a different site than it
@@ -445,8 +452,22 @@ def _load_table(path: Path) -> list[dict]:
         if not isinstance(row, dict):
             raise _refuse(f"row {index} is not an object")
         for key in REQUIRED_KEYS:
-            if not isinstance(row.get(key), str) or not row[key]:
+            if not isinstance(row.get(key), str):
                 raise _refuse(f"row {index} is missing required string key {key!r}")
+            # An empty replacement is a deletion of the anchor, and the anchor
+            # is never blank, so the mutation always changes the file; a blank
+            # replacement is an ordinary mutation. Any other key left empty or
+            # only whitespace would run a row that proves nothing: a blank file
+            # names no source, a blank anchor occurs everywhere or mutates
+            # whitespace rather than code, a blank command exits 0 and reports
+            # a false GREEN survivor, and a blank expect_red names no test (one
+            # space reads KILLED, since attribution is a substring match that
+            # any failure line holding a space satisfies).
+            if not row[key].strip() and key != "replacement":
+                raise _refuse(
+                    f"row {index} has an empty or blank {key!r} - only 'replacement' "
+                    "may be empty, which deletes the anchor"
+                )
         if row["anchor"] == row["replacement"]:
             raise _refuse(
                 f"row {index} anchor and replacement are identical - "

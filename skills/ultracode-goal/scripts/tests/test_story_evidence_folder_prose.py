@@ -5,23 +5,25 @@
 # ///
 """The story's evidence folder, which outlives its scratch directory (#196).
 
-Execute removes `.scratch-<story_id>/` once step 5's re-verify goes green, and
-the gate's backfill removes it again after its claim check recreates it. The
+Execute removed `.scratch-<story_id>/` once step 5's re-verify went green, and
+the gate's backfill removed it again after its claim check recreated it. The
 red-phase capture, the sweep logs, the coupled-stories measurements and the
 planted-defect runs that trace, the gate and the story record cite lived there,
 so following the rule deleted them before trace read them, and every story of
 one Epic logged keeping the folder as a deviation.
 
-The scratch lifetime is unchanged. The evidence goes to
-`{workflow.implementation_artifacts}/evidence-<story_id>/` instead, which no
-step removes, and each place that owes such a file points there. This pins:
+The evidence goes to `{workflow.implementation_artifacts}/evidence-<story_id>/`
+instead, which no step removes, and each place that owes such a file points
+there. Since #206 the scratch folder lasts until the gate's advance route
+(test_scratch_lifetime_prose.py), so the rule's reason names the readers that
+come after that: the story record and the gate trail. This pins:
 
 - the rule, between step 0 and step 1 of the story loop, with what goes there
   (captured output and its notes), the mutation ledger's own path, each capture named
   by the step that wrote it and the commit `HEAD` named then (the next free
   number when that name is taken), an earlier run's files never cited, and
   the folder staying untracked, off the evidence commit's list of paths;
-- the five places that write evidence or remove scratch point at it;
+- the five places that write evidence or say how long scratch lasts point at it;
 - no sentence on any reference removes the folder, by its name with or without
   the slash or as the evidence folder, other than the three that say no step
   removes it, and none names it with the dot of the `.evidence-owed-<story_id>`
@@ -63,9 +65,15 @@ def _flat(text: str) -> str:
 
 
 _RULE = (
-    "**Evidence never goes in scratch.** The scratch directory is removed before the story advances, while trace, the "
-    "gate and the story record cite their evidence after that, so the story's evidence has a folder of its own, "
-    "`{workflow.implementation_artifacts}/evidence-<story_id>/`, which no step removes."
+    "**Evidence never goes in scratch.** The scratch directory is removed when the story advances, while the story "
+    "record and the gate trail (`references/finalize.md`) cite their evidence after that, so the story's evidence has "
+    "a folder of its own, `{workflow.implementation_artifacts}/evidence-<story_id>/`, which no step removes."
+)
+# The first reason, written while Execute removed the scratch folder before the
+# gate: trace and the gate now run while it is still there (#206).
+_RULE_FIRST_REASON = (
+    "The scratch directory is removed before the story advances, while trace, the gate and the story record cite their "
+    "evidence after that,"
 )
 _WHAT_GOES_THERE = (
     "The red-phase capture (step 1's, on a stack where Stage 3 could not generate the ATDD scaffold), a sweep log the "
@@ -133,6 +141,8 @@ def test_execute_gives_the_evidence_a_folder_no_step_removes():
         # The second fix the report offered: keep scratch until the verdict, which
         # still deletes evidence cited after the fact.
         (_RULE, "**Evidence never goes in scratch.** Keep the scratch directory until the story's verdict is logged."),
+        ("The scratch directory is removed when the story advances, while the story record and the gate trail "
+         "(`references/finalize.md`) cite their evidence after that,", _RULE_FIRST_REASON),
         (", which no step removes.", "."),
         ("a sweep log the record or the gate cites, ", ""),
         ("a coupled-stories measurement and a planted-defect run", "a planted-defect run"),
@@ -172,7 +182,7 @@ def test_the_evidence_folder_predicate_rejects_the_rule_outside_the_story_loop()
     assert not _states_the_evidence_folder(moved)
 
 
-# --- every place that writes evidence or removes scratch points there --------------
+# --- every place that writes evidence or says how long scratch lasts points there ----
 
 _POINTERS = (
     ("execute.md",
@@ -185,9 +195,9 @@ _POINTERS = (
      "3. **Capture that run's raw output to a file** in `{workflow.implementation_artifacts}/evidence-<story_id>/`, "
      "which no step removes (`references/execute.md`, \"Evidence never goes in scratch\")."),
     ("gate.md",
-     "and `references/execute.md` step 0 has it removed before the story advances. The story's "
-     "`evidence-<story_id>/` folder stays: no step removes it (`references/execute.md`, \"Evidence never goes in "
-     "scratch\")."),
+     "`references/execute.md` step 0 keeps it until the story advances, since a cap-only re-loop or a re-gate of this "
+     "story may still run its sweep. The story's `evidence-<story_id>/` folder stays: no step removes it "
+     "(`references/execute.md`, \"Evidence never goes in scratch\")."),
     # Step 2's capture-then-slice log, which a record or a gate may cite.
     ("execute.md",
      "Redirect to a file (`cmd > <log> 2>&1`) and read the summary out of it as a second call. A log the record or the "
@@ -199,7 +209,9 @@ _PRE_EDIT_POINTERS = (
      "capture for each clause a run on the earlier story's tree, to a file under `{workflow.implementation_artifacts}`, "
      "showing"),
     ("gate.md", "3. **Capture that run's raw output to a file** under `{workflow.implementation_artifacts}`."),
-    ("gate.md", "and `references/execute.md` step 0 has it removed before the story advances."),
+    ("gate.md",
+     "`references/execute.md` step 0 keeps it until the story advances, since a cap-only re-loop or a re-gate of this "
+     "story may still run its sweep."),
     ("execute.md", "Redirect to a file (`cmd > <log> 2>&1`) and read the summary out of it as a second call."),
 )
 

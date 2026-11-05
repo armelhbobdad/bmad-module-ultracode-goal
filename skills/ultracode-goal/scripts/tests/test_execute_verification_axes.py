@@ -149,10 +149,12 @@ _CHECKS = {
         re.search(r"Not `/tmp`", _step(0, t))
     ),
     # The removal used to sit before the step-4 commit, which forced any sweep
-    # harness built for step 2 to be re-authored verbatim for step 5's re-verify
-    # — a real, measured cost. The lifetime now ends after step 5 goes green.
-    "step0 bounds the scratch dir's lifetime at step 5's green re-verify": lambda t: bool(
-        re.search(r"remove the directory after step 5's re-verify goes green", _step(0, t), re.I)
+    # harness built for step 2 to be re-authored verbatim for step 5's re-verify,
+    # a real, measured cost. It then ended after step 5 went green, before the
+    # gate, so the gate's backfill sweep, a cap-only re-loop and a resume's
+    # re-gate re-authored it by hand (#206). It now ends on the advance route.
+    "step0 keeps the scratch dir until the gate's advance route": lambda t: bool(
+        re.search(r"remove the directory on the gate's advance route", _step(0, t), re.I)
     ),
 }
 

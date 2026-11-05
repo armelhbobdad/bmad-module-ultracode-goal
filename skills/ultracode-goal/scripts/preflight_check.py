@@ -101,7 +101,10 @@ a .regate-<story> marker naming HEAD), or mid-story.
 Exit 0 iff branch+hooks+env+skills are armed and the Claude Code version is
 not below a minimum; the latch, the tracked fact and
 the story block never move the exit code, because they inform model-owned actions rather than certify
-them.
+them. `armed` certifies what `.claude/settings.local.json` holds, not that
+the running Claude Code session loaded those hooks, which no script can see:
+preflight step 5's last bullet proves that with a `git commit --dry-run` the
+guard must refuse (references/preflight.md).
 
   uv run preflight_check.py --assert-armed --project-root <path> \
       --impl-artifacts <path> [--story <id>] [--run-id <rid>] \

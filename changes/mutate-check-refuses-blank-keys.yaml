@@ -1,0 +1,7 @@
+type: breaking
+scope: ultracode-goal
+summary: |
+  `mutate_check.py` now refuses a row whose `file`, `anchor`, `command` or `expect_red` holds only whitespace, with exit 2 before any row runs and a message that names the key. Such a row used to run and report a result it never measured: an `expect_red` of one space matched every failing line, so the row read `KILLED` with exit 0, and a `command` of one space exited 0 and read as a `GREEN` survivor.
+migration: |
+  If `mutate_check.py` refuses a table saying a key is empty or blank, put the value the row was meant to hold in that key: the file to mutate, the text to replace, the test command, or the name of the test case the mutation should turn red.
+issues: [212]

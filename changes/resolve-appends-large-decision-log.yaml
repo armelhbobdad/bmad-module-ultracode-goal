@@ -1,0 +1,5 @@
+type: fixed
+scope: ucg-resolve, ucg-formalize
+summary: |
+  `/ucg-resolve` and `/ucg-formalize` now say how to append to `.decision-log.md`: with Write/Edit, never a Bash heredoc, whose prose the PreToolUse guard's git gates read as commands, so a log entry that quotes a commit verb was denied. Once the log is too large to Read, they write each entry to a new `dlog-slice-resolve-<n>.md` or `dlog-slice-formalize-<n>.md` beside the log in the run folder, numbered one past the highest already there, append it with one `cat` that names both files by their full path, and keep the slice. Before, `/ucg-resolve` said only to record each answer in the log, and both surfaces run cold, without the Execute reference that held the method, so a pass on a mature Epic could not append to its log the way the module documents.
+issues: [208]

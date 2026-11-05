@@ -72,6 +72,8 @@ _CUSTOMIZE = _SKILL_ROOT / "customize.toml"
 _HOOK = _SKILL_ROOT / "scripts" / "hooks" / "guard_pretooluse.py"
 
 _RUN = "epic-7-20260604T172512Z"
+# The record id the prose write names as consumed: a run_id, absent from the store.
+_CONSUMED = "epic-6-20260601T000000Z"
 _NEEDS_GIT = pytest.mark.skipif(not shutil.which("git"), reason="git not on PATH")
 
 
@@ -674,6 +676,90 @@ def test_finalize_names_no_root_cause_for_a_decision_pending_stop():
     assert not _names_no_root_cause_on_decision_pending(pre_fix)
 
 
+# --- The advisory the write passes names a record; the script decides `recurred` -
+
+# The write step as it stood before the fix: `sig=<s>` and a `recurred` the call
+# site never defined, so runs of one Epic stored `recurred` both ways.
+_ADVISORY_OLD_CLAUSE = "and the mechanical `recurred` yes/no for each Stage 1 advisory consumed."
+_ADVISORY_OLD_PLACEHOLDER = "[--advisory sig=<s>,recurred=<yes|no|unknown>]…"
+_ADVISORY_NEW_CLAUSE = (
+    "and one `--advisory` for each record this invocation's own Stage 1 filter call consumed, "
+    "as the paragraph below the command says."
+)
+_ADVISORY_PLACEHOLDER = "[--advisory sig=<record-id>]…"
+
+# Each rule the write step states about an advisory, by what it pins.
+_ADVISORY_RULES = {
+    "one-per-consumed-record": r"one `--advisory` for each record this invocation's own Stage 1 filter call consumed",
+    "sig-is-the-record-id": r"`sig` is that record's `id`, the `run_id` of the run that wrote it, copied as given",
+    "sig-is-never-a-signature": r"never a root-cause signature, a story id or this run's own run id",
+    "no-recurred-passed": r"Pass no `recurred`: the script decides it from the store\.",
+    "yes-on-a-shared-root-cause": r"`yes` when a root cause whose class is not `other` is in both that record and this run",
+    "no-when-none-is-shared": r"`no` when that record names such a root cause and this run shares none of them",
+    "unknown-for-a-stop-with-no-cause": r"this run did not advance and names no root cause",
+    "gate-status-is-not-recurrence": r"A matching gate status or verdict is not a recurrence",
+    "preflight-status-does-not-feed-it": r"preflight's `advisories_checked` status does not feed `recurred`",
+    "none-on-a-resume-into-execute": r"Pass no `--advisory` on a resume routed into Execute, which makes no filter call",
+}
+
+
+def _write_step() -> str:
+    section = _recall_write_section()
+    return section[section.index("**Write this run's record**"):section.index("**Always, on every path above**")]
+
+
+def _pre_fix_write_step(step: str) -> str:
+    """The write step with the fix taken out: the old clause and placeholder
+    back, and the paragraph that defines the advisory gone."""
+    paragraph = next(p for p in step.split("\n\n") if p.lstrip().startswith("Each `--advisory` names one record"))
+    pre_fix = step.replace(_ADVISORY_NEW_CLAUSE, _ADVISORY_OLD_CLAUSE)
+    pre_fix = pre_fix.replace(_ADVISORY_PLACEHOLDER, _ADVISORY_OLD_PLACEHOLDER)
+    return pre_fix.replace("\n\n" + paragraph, "")
+
+
+@pytest.mark.parametrize("rule", sorted(_ADVISORY_RULES))
+def test_finalize_defines_the_advisory_the_write_passes(rule: str):
+    """`sig=<s>` and the bare "mechanical `recurred`" left both values to the
+    conductor, so runs of one Epic stored `recurred` both ways for one recalled
+    outcome. The step now names the record by its id and leaves `recurred` to
+    the script."""
+    step = _write_step()
+    assert re.search(_ADVISORY_RULES[rule], step), rule
+    # Twin: the step as it stood, fed to the same check, fails it.
+    pre_fix = _pre_fix_write_step(step)
+    assert _ADVISORY_OLD_CLAUSE in pre_fix and _ADVISORY_OLD_PLACEHOLDER in pre_fix
+    assert "`sig` is that record's `id`" not in pre_fix
+    assert not re.search(_ADVISORY_RULES[rule], pre_fix), rule
+
+
+_FORMALIZE_SKILL = _SKILL_ROOT.parent / "ucg-formalize" / "SKILL.md"
+_ADVISORY_SIG_OLD = '"sig": "<advisory id>"'
+_ADVISORY_SIG = '"sig": "<the recalled record\'s id, copied as given>"'
+
+
+def _advisories_checked_line(path: Path) -> str:
+    (line,) = [ln for ln in _read(path).splitlines() if '"advisories_checked"' in ln]
+    return line
+
+
+def _keys_an_advisory_by_its_record_id(line: str) -> bool:
+    return _ADVISORY_SIG in line and "<advisory id>" not in line
+
+
+def test_the_scan_contract_keys_an_advisory_by_the_record_id():
+    """The scan's `advisories_checked` named its key `<advisory id>`, a name no
+    surface defined; it is the recalled record's `id`, as in the write. The
+    formalize copy of the contract stays the same line."""
+    lines = {path.name: _advisories_checked_line(path) for path in (_PREFLIGHT, _FORMALIZE_SKILL)}
+    assert len(set(lines.values())) == 1, lines
+    line = lines["preflight.md"]
+    assert _keys_an_advisory_by_its_record_id(line)
+    # Twin: the line as it stood fails the same check.
+    old = line.replace(_ADVISORY_SIG, _ADVISORY_SIG_OLD)
+    assert old != line
+    assert not _keys_an_advisory_by_its_record_id(old)
+
+
 def test_skill_md_names_the_store_not_claude_mem():
     text = _read(_SKILL)
     advisory = next(ln for ln in text.splitlines() if "Cross-Session Recall is advisory-only" in ln)
@@ -724,7 +810,7 @@ class _World:
         values = {
             # The optional repeated groups first: they hold <...> of their own.
             "[--root-cause class=<taxonomy>,path=<artifact>]…": "--root-cause class=test-failure,path=src/app.py",
-            "[--advisory sig=<s>,recurred=<yes|no|unknown>]…": "--advisory sig=0123456789ab,recurred=no",
+            "[--advisory sig=<record-id>]…": f"--advisory sig={_CONSUMED}",
             "{skill-root}": _SKILL_ROOT.as_posix(),
             "{workflow.implementation_artifacts}": self.impl.as_posix(),
             "{workflow.cross_session_recall_store}": self.store.as_posix(),
@@ -907,6 +993,10 @@ def test_the_prose_recall_commands_run_as_written(tmp_path: Path):
 
     written = _run_prose(world, finalize["mem_observation.py write"])
     assert written["status"] == "written", written
+    # The prose passes no `recurred`, so the script decides it: the record
+    # the advisory names is not in the store.
+    record = json.loads(Path(written["path"]).read_text(encoding="utf-8"))
+    assert record["advisories"] == [{"sig": _CONSUMED, "recurred": "unknown"}]
 
     seen = _run_prose(world, ingest["mem_recall.py filter"])
     assert [record["id"] for record in seen["records"]] == [_RUN]

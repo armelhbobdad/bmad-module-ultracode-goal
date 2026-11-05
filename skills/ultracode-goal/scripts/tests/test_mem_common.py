@@ -1207,6 +1207,34 @@ def test_reader_reads_only_this_fingerprints_folder(tmp_path, home):
     assert list(mc.iter_store_records([store], None)) == []
 
 
+def test_read_run_record_returns_only_this_repos_valid_record_of_that_run(tmp_path, home):
+    # mem_observation.py write reads a consumed record by its id to decide
+    # `recurred`: anything but this repo's valid record of that run is None.
+    store = home / "recall"
+    runs = _seed_mixed_store(store)
+    assert mc.read_run_record(store, _FP, _RUN) == _record()
+    assert mc.read_run_record(store, _FP, _RUN_B) == _record(run_id=_RUN_B)
+    for run_id in (
+        "epic-7-20260601T000000Z",  # unparseable
+        "epic-7-20260602T000000Z",  # the wrong shape
+        "epic-7-20260603T000000Z",  # a newer schema
+        "epic-9-20260603T000000Z",  # another repo's record
+        "epic-7-20260609T000000Z",  # absent
+    ):
+        assert mc.read_run_record(store, _FP, run_id) is None, run_id
+    (runs / "epic-7-20260607T000000Z.jsonl").write_text(json.dumps(_record()), encoding="utf-8")
+    assert mc.read_run_record(store, _FP, "epic-7-20260607T000000Z") is None  # another run's record
+    (runs / "epic-7-20260608T000000Z.jsonl").mkdir()
+    assert mc.read_run_record(store, _FP, "epic-7-20260608T000000Z") is None
+    # A bad value never raises and never builds a path.
+    for run_id in ("../x", "abc123def456", "", None, f"{_RUN}\n"):
+        assert mc.read_run_record(store, _FP, run_id) is None, run_id
+    assert mc.read_run_record(store, None, _RUN) is None
+    assert mc.read_run_record(store, "ffffffffffffffff", _RUN) is None
+    assert mc.read_run_record(None, _FP, _RUN) is None
+    assert mc.read_run_record(home / "missing", _FP, _RUN) is None
+
+
 def test_classify_record_foreign_by_fingerprint_only():
     record = _record()
     assert mc.classify_record(record, _FP) == mc.RECORD_OK

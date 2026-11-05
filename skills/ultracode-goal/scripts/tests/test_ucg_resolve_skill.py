@@ -22,6 +22,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _SKILL = _SKILL_ROOT.parent / "ucg-resolve" / "SKILL.md"
 _PARENT_SKILL = _SKILL_ROOT / "SKILL.md"
@@ -288,7 +290,8 @@ def test_handoff_does_not_author_a_second_resume_rule():
 
 
 _NO_ACTION_PENDING = (
-    "An entry with no `action`, or with an `action` that is neither `close` nor `defer`, is pending as well"
+    "An entry with no `action`, or with an `action` that is neither `close` nor `defer`, is pending as well "
+    "while an item this pass enumerated carries its `id`."
 )
 _SHOW_EARLIER = (
     "When an item you present already has an entry, show its `answer`, and each earlier answer its `history` "
@@ -420,3 +423,527 @@ def test_the_readers_read_the_documented_shape_with_history(tmp_path):
     decisions.write_text(json.dumps({"decisions": pending}), encoding="utf-8")
     assert red_ids.closed_ids(decisions) == set()
     assert preflight_check._escalation_of(impl, "7-1", tmp_path)["state"] == "open"
+
+
+# --- an entry no enumerated item carries is listed apart, never asked (#209) --
+#
+# Section 2 called every entry that is not a `close` pending, and said its
+# question still blocks, whether or not any source still carries its id. What
+# blocks is a source: preflight blocks on the reds of `.preflight-reds.json`,
+# the resume on an open `escalation-<story_id>.json`, and both read only the
+# `close` entries of `.decisions.json`. So an entry is pending only while an
+# item the pass enumerated carries its id, under every spelling the resume
+# reads a close of a sidecar by; one no item carries is orphaned, listed apart
+# with its answers and never asked; and when a source could not be read in
+# full, nothing is called orphaned.
+#
+# Review loop 1: `.preflight-reds.json` is one project-wide file each
+# preflight replaces, so after another Epic's preflight a RED this Epic
+# deferred reads orphaned while this Epic's next preflight blocks on it again.
+# The pass never says an orphan blocks nothing: the orphan paragraph and the
+# summary say a later preflight can raise it again and block on it, and a pass
+# that found only orphans is not called a non-decision stop.
+
+_DEFER_SCOPE = (
+    "Present it again while an item this pass enumerated carries its `id`, and replace its entry in place "
+    "when the operator decides it"
+)
+_STAYS_OPEN = "preflight drops none of their ids, so that item's question stays open."
+_OLD_STILL_BLOCK = "so their questions still block"
+_CARRIES_LEAD = "**An item carries an entry's `id` only on an exact match, as written.**"
+_SIDECAR_SPELLINGS = (
+    "one more for each spelling of the sidecar file's own path the resume reads a close by (`_sidecar_ids` in "
+    "`{ucg-root}/scripts/preflight_check.py`): its path relative to `{project-root}`, its absolute path, that "
+    "absolute path with its folder's symlinks resolved, and the resolved path relative to `{project-root}`, "
+    "each written with forward slashes and, on Windows, with backslashes too."
+)
+_RECOGNIZE_ONLY = (
+    "Mint them only to recognize an entry already recorded, never to key an answer: an entry keyed by any of "
+    "them belongs to that sidecar's item."
+)
+_SECTION1_PATH = (
+    "never key an answer by an id minted from that path: section 2 mints those ids only to recognize an entry "
+    "already recorded."
+)
+_ORPHAN_LEAD = "**An entry no enumerated item carries is orphaned, not pending.**"
+_ORPHAN_UNHELD = (
+    "That is an entry whose `action` is anything but `close` and whose `id` no item of this pass carries: none "
+    "of the three sources holds its question at this pass, so there is no item to present it with."
+)
+_ORPHAN_LISTED = (
+    "List the orphaned entries after the pending items, apart from them, each with its `id`, its `answer` and "
+    "each earlier answer its `history` holds, and ask nothing about them; the record keeps each one as it stands."
+)
+_ORPHAN_CAN_RETURN = "Say beside that list that a later preflight can raise an orphaned entry again and block on it."
+_REGISTRY_REPLACED = (
+    "`.preflight-reds.json` is one project-wide file that each preflight replaces, so it holds only the REDs of "
+    "the last preflight, from whichever Epic ran it: a RED one Epic's preflight raised can be gone from it after "
+    "another Epic's preflight, while that first Epic's next preflight can raise it again."
+)
+_ORPHAN_AGAIN = (
+    "An orphaned entry whose `id` a later RED, sidecar or ledger row carries is pending again at that pass, "
+    "which asks it."
+)
+_FAIL_CLOSED_LEAD = "**When a source could not be read in full, call nothing orphaned.**"
+_FAIL_CLOSED_PENDING = (
+    "In that case present every entry that is not a `close` as pending, with its `id`, its `answer` and its "
+    "`history`, since an id that source would carry cannot be ruled out."
+)
+_SUMMARY_ORPHANS = (
+    "List the orphaned entries apart from both, by `id`, and say that a later preflight can raise any of them "
+    "again and block on it, and that the pass after that preflight asks it."
+)
+_ONLY_ORPHANS_NOT_EMPTY = (
+    "A pass that found only orphaned entries is not an empty enumeration, so do not say the run stopped for a "
+    "non-decision reason: the run can have stopped on a RED that another Epic's preflight has since dropped "
+    "from `.preflight-reds.json`, and its next preflight raises that RED again."
+)
+_ONLY_ORPHANS_HAND_BACK = (
+    "Such a pass closed nothing, so point at the read-only `/ucg-status`, as for an empty enumeration, and hand "
+    "back only when the operator asks for the resume."
+)
+
+
+def _orphan_checks() -> dict:
+    def s1(t: str) -> str:
+        return _norm(_section(t, "1."))
+
+    def s2(t: str) -> str:
+        return _norm(_section(t, "2."))
+
+    def s4(t: str) -> str:
+        return _norm(_section(t, "4."))
+
+    return {
+        "a deferred entry is presented again while an item carries its id": lambda t: _DEFER_SCOPE in s2(t),
+        "an action-less entry is pending while an item carries its id": lambda t: _NO_ACTION_PENDING in s2(t),
+        "its question stays open, and no claim that it still blocks": lambda t: (
+            _STAYS_OPEN in s2(t) and _OLD_STILL_BLOCK not in s2(t)
+        ),
+        "an item carries an id on an exact match": lambda t: _CARRIES_LEAD in s2(t),
+        "a sidecar carries every path spelling the resume reads a close by": lambda t: _SIDECAR_SPELLINGS in s2(t),
+        "the path ids are minted only to recognize an entry": lambda t: _RECOGNIZE_ONLY in s2(t),
+        "section 1 keys no answer by a path id": lambda t: _SECTION1_PATH in s1(t),
+        "an entry no item carries is orphaned": lambda t: _ORPHAN_LEAD in s2(t),
+        "no source holds an orphaned entry's question at this pass": lambda t: _ORPHAN_UNHELD in s2(t),
+        "orphaned entries are listed apart and not asked": lambda t: _ORPHAN_LISTED in s2(t),
+        "a later preflight can raise an orphaned entry again and block on it": lambda t: (
+            _ORPHAN_CAN_RETURN in s2(t)
+        ),
+        "the RED list is project-wide and each preflight replaces it": lambda t: _REGISTRY_REPLACED in s2(t),
+        "an orphaned entry an item carries again is pending again and asked": lambda t: _ORPHAN_AGAIN in s2(t),
+        "nothing is orphaned when a source could not be read": lambda t: (
+            _FAIL_CLOSED_LEAD in s2(t) and _FAIL_CLOSED_PENDING in s2(t)
+        ),
+        "the summary lists orphaned entries apart and says they can come back": lambda t: (
+            _SUMMARY_ORPHANS in s4(t)
+        ),
+        "only orphaned entries is not called a non-decision stop": lambda t: _ONLY_ORPHANS_NOT_EMPTY in s4(t),
+        "a pass of only orphaned entries hands back only when asked": lambda t: _ONLY_ORPHANS_HAND_BACK in s4(t),
+    }
+
+
+def _orphan_failures(text: str) -> list[str]:
+    return [name for name, check in _orphan_checks().items() if not check(text)]
+
+
+def test_an_entry_no_item_carries_is_listed_apart_and_never_asked():
+    assert _orphan_failures(_text()) == []
+
+
+# (the check the old wording reds, the new wording, the old wording)
+_RESTORE_OLD = [
+    (
+        "a deferred entry is presented again while an item carries its id",
+        "Present it again while an item this pass enumerated carries its `id`, and",
+        "Present it again, and",
+    ),
+    (
+        "an action-less entry is pending while an item carries its id",
+        "is pending as well while an item this pass enumerated carries its `id`. An earlier",
+        "is pending as well. An earlier",
+    ),
+    (
+        "its question stays open, and no claim that it still blocks",
+        "so that item's question stays open.",
+        "so their questions still block.",
+    ),
+    ("section 1 keys no answer by a path id", _SECTION1_PATH, "never mint a new id from that path."),
+]
+
+
+def _cut_paragraph(text: str, lead: str) -> str:
+    start = text.index(lead)
+    return text[:start] + text[text.index("\n\n", start) + 2 :]
+
+
+def _before_209(text: str) -> str:
+    """`text` rebuilt as sections 1, 2 and 4 read before #209."""
+    for _name, new, old in _RESTORE_OLD:
+        text = _mutate(text, new, old)
+    for lead in (_CARRIES_LEAD, _ORPHAN_LEAD, _FAIL_CLOSED_LEAD):
+        text = _cut_paragraph(text, lead)
+    for sentence in (_SUMMARY_ORPHANS, _ONLY_ORPHANS_NOT_EMPTY, _ONLY_ORPHANS_HAND_BACK):
+        text = _mutate(text, " " + sentence, "")
+    return text
+
+
+def test_the_orphan_pins_red_on_the_text_before_209():
+    """Twin: the pass as it read before, every entry that is not a `close`
+    pending and its question said to still block, reds every check."""
+    old = _before_209(_text())
+    assert (
+        "is pending as well. An earlier version of this surface wrote some entries that way, and preflight drops "
+        "none of their ids, so their questions still block. Present it again, as you present a deferred one."
+    ) in _norm(old)
+    assert (
+        "the operator sees what the record held before this pass. **Hand back only when the pass closed at least "
+        "one item"
+    ) in _norm(old)
+    assert "`/ucg-status`, and hand nothing back.\n\nOtherwise hand back" in old
+    assert "orphan" not in old.lower()
+    assert _orphan_failures(old) == list(_orphan_checks())
+
+
+@pytest.mark.parametrize("name,new,old", _RESTORE_OLD, ids=["defer", "no-action", "stays-open", "section-1"])
+def test_each_old_sentence_restored_reds_its_pin(name, new, old):
+    assert name in _orphan_failures(_mutate(_text(), new, old))
+
+
+# The orphan rules as the attempt dropped in review loop 1 worded them: an
+# orphan said to block nothing, with no word that a later preflight can raise
+# it again, and an only-orphans pass counted as an empty enumeration, which
+# says the run stopped for a non-decision reason.
+_SAID_TO_BLOCK_NOTHING = [
+    (
+        _ORPHAN_UNHELD,
+        "That is an entry whose `action` is anything but `close` and whose `id` no item of this pass carries: "
+        "no scan raises it and no resume stops on it, so it blocks nothing.",
+    ),
+    (" " + _ORPHAN_CAN_RETURN, ""),
+    (" " + _REGISTRY_REPLACED, ""),
+    (_ORPHAN_AGAIN, "An orphaned entry whose `id` a later RED, sidecar or ledger row carries is pending again at that pass."),
+    (_SUMMARY_ORPHANS, "List the orphaned entries apart from both, by `id`, and say that none of them blocks."),
+    (
+        _ONLY_ORPHANS_NOT_EMPTY + " " + _ONLY_ORPHANS_HAND_BACK,
+        "An enumeration that found only orphaned entries is an empty one.",
+    ),
+]
+
+
+def _said_to_block_nothing(text: str) -> str:
+    for new, old in _SAID_TO_BLOCK_NOTHING:
+        text = _mutate(text, new, old)
+    return text
+
+
+def test_the_orphan_pins_red_on_an_orphan_said_to_block_nothing():
+    """Twin: the wording review loop 1 dropped reds each check of the
+    renegotiated decision, and only those."""
+    assert set(_orphan_failures(_said_to_block_nothing(_text()))) == {
+        "no source holds an orphaned entry's question at this pass",
+        "a later preflight can raise an orphaned entry again and block on it",
+        "the RED list is project-wide and each preflight replaces it",
+        "an orphaned entry an item carries again is pending again and asked",
+        "the summary lists orphaned entries apart and says they can come back",
+        "only orphaned entries is not called a non-decision stop",
+        "a pass of only orphaned entries hands back only when asked",
+    }
+
+
+def test_the_orphan_pins_red_without_each_rule():
+    """Twin: each sentence cut on its own reds its check, and only that one."""
+    text = _text()
+    cuts = [
+        ("a deferred entry is presented again while an item carries its id", _DEFER_SCOPE),
+        ("an action-less entry is pending while an item carries its id", _NO_ACTION_PENDING),
+        ("its question stays open, and no claim that it still blocks", _STAYS_OPEN),
+        ("an item carries an id on an exact match", _CARRIES_LEAD),
+        ("a sidecar carries every path spelling the resume reads a close by", _SIDECAR_SPELLINGS),
+        ("the path ids are minted only to recognize an entry", _RECOGNIZE_ONLY),
+        ("section 1 keys no answer by a path id", _SECTION1_PATH),
+        ("an entry no item carries is orphaned", _ORPHAN_LEAD),
+        ("no source holds an orphaned entry's question at this pass", _ORPHAN_UNHELD),
+        ("orphaned entries are listed apart and not asked", _ORPHAN_LISTED),
+        ("a later preflight can raise an orphaned entry again and block on it", _ORPHAN_CAN_RETURN),
+        ("the RED list is project-wide and each preflight replaces it", _REGISTRY_REPLACED),
+        ("an orphaned entry an item carries again is pending again and asked", _ORPHAN_AGAIN),
+        ("nothing is orphaned when a source could not be read", _FAIL_CLOSED_LEAD),
+        ("nothing is orphaned when a source could not be read", _FAIL_CLOSED_PENDING),
+        ("the summary lists orphaned entries apart and says they can come back", _SUMMARY_ORPHANS),
+        ("only orphaned entries is not called a non-decision stop", _ONLY_ORPHANS_NOT_EMPTY),
+        ("a pass of only orphaned entries hands back only when asked", _ONLY_ORPHANS_HAND_BACK),
+    ]
+    assert {name for name, _ in cuts} == set(_orphan_checks())
+    for name, sentence in cuts:
+        assert _orphan_failures(_mutate(text, sentence, "")) == [name], name
+
+
+def _orphan_blocking_claims(text: str) -> list[str]:
+    return [
+        s
+        for s in _sentences(text)
+        if "orphan" in s.lower() and re.search(r"re-blocks?\b|still blocks?\b|blocks the run|is blocking", s, re.I)
+    ]
+
+
+def test_no_sentence_calls_an_orphaned_entry_blocking():
+    assert _orphan_blocking_claims(_text()) == []
+
+
+def test_the_blocking_scan_reds_on_an_orphan_said_to_re_block():
+    """Twin: the summary says the orphaned entries re-block, as it says of the
+    pending ones."""
+    mutant = _mutate(
+        _text(), _SUMMARY_ORPHANS, "List the orphaned entries apart from both, by `id`, and say that they re-block."
+    )
+    assert len(_orphan_blocking_claims(mutant)) == 1
+
+
+def _blocks_nothing_claims(text: str) -> list[str]:
+    """Sentences of sections 2 and 4 that say something blocks nothing."""
+    pattern = r"\bblocks? nothing\b|\bnone of them blocks?\b|\bnever blocks?\b|\bcan(?:not| never) block\b"
+    return [
+        s for s in _sentences(_section(text, "2.") + _section(text, "4.")) if re.search(pattern, s, re.I)
+    ]
+
+
+def _only_orphans_called_empty(text: str) -> list[str]:
+    """Sentences of section 4 that count an only-orphans pass as an empty
+    enumeration, or as a non-decision stop, without negating it."""
+    return [
+        s
+        for s in _sentences(_section(text, "4."))
+        if "only orphaned" in s
+        and re.search(r"\bempty\b|non-decision", s)
+        and not re.search(r"\bnot\b|\bnever\b", s)
+    ]
+
+
+def test_no_sentence_says_an_orphan_blocks_nothing_or_calls_an_only_orphans_pass_empty():
+    text = _text()
+    assert _blocks_nothing_claims(text) == []
+    assert _only_orphans_called_empty(text) == []
+
+
+def test_the_scans_red_on_the_wording_review_loop_1_dropped():
+    """Twin: the orphan said to block nothing, the summary saying none of them
+    blocks, and the only-orphans pass called an empty enumeration."""
+    mutant = _said_to_block_nothing(_text())
+    assert len(_blocks_nothing_claims(mutant)) == 2
+    assert len(_only_orphans_called_empty(mutant)) == 1
+
+
+# Review loop 2: section 1 said the one RED file holds every still-pending
+# preflight RED, while section 2 says, as `red_ids.apply` does, that it holds
+# only the REDs of the last preflight, from whichever Epic ran it. And a pass
+# that found only orphaned entries was told not to call the run a non-decision
+# stop, but unlike the empty case it pointed the operator nowhere: it now
+# points at the read-only `/ucg-status` too, and still hands back only when
+# the operator asks for the resume.
+
+_SECTION1_LAST_PREFLIGHT = (
+    "**One** file holds the REDs the last preflight left pending, from whichever Epic ran it (section 2 says what "
+    "that means for an entry no RED carries). There is no second RED sidecar and no per-story one: a per-story "
+    "or per-run RED file would carry an id that changed between scans, and an id that changes cannot carry an "
+    "answer forward."
+)
+_SECTION1_OLD_ONE_FILE = "**One** file holds every still-pending preflight RED."
+_ONLY_ORPHANS_STATUS = "point at the read-only `/ucg-status`, as for an empty enumeration,"
+_EMPTY_STATUS = "say so, point at the read-only `/ucg-status`, and hand nothing back."
+
+
+def _section1_says_last_preflight(text: str) -> bool:
+    s1 = _norm(_section(text, "1."))
+    return _SECTION1_LAST_PREFLIGHT in s1 and "still-pending preflight RED" not in s1
+
+
+def test_section_1_says_the_red_file_holds_the_last_preflight():
+    assert _section1_says_last_preflight(_text())
+
+
+def test_the_section_1_pin_reds_on_every_still_pending_red():
+    """Twin: section 1 as it read before, the one file holding every
+    still-pending preflight RED."""
+    old = _mutate(
+        _text(),
+        "**One** file holds the REDs the last preflight left pending, from whichever Epic ran it (section 2 says "
+        "what that means for an entry no RED carries).",
+        _SECTION1_OLD_ONE_FILE,
+    )
+    assert _SECTION1_OLD_ONE_FILE in _norm(_section(old, "1."))
+    assert not _section1_says_last_preflight(old)
+
+
+def _only_orphans_points_at_status(text: str) -> bool:
+    """Section 4's hand-back sentence for a pass of only orphaned entries
+    points at `/ucg-status`, not just the empty case's sentence."""
+    return any(
+        s.startswith("Such a pass closed nothing") and _ONLY_ORPHANS_STATUS in s
+        for s in _sentences(_section(text, "4."))
+    )
+
+
+def test_a_pass_of_only_orphans_points_at_ucg_status():
+    assert _only_orphans_points_at_status(_text())
+
+
+def test_the_status_pin_reds_on_the_hand_back_without_the_pointer():
+    """Twin: the hand-back sentence without the pointer, while the empty
+    case still points at `/ucg-status`."""
+    old = _mutate(
+        _text(),
+        _ONLY_ORPHANS_HAND_BACK,
+        "Such a pass closed nothing, so it hands back only when the operator asks for the resume.",
+    )
+    assert _EMPTY_STATUS in _norm(_section(old, "4."))
+    assert not _only_orphans_points_at_status(old)
+
+
+def test_no_reader_reads_an_orphaned_entry(tmp_path):
+    """No reader that blocks reads an orphaned entry. With the orphaned entries
+    in `.decisions.json` or without them, preflight's override keeps the same
+    reds, the same ids read as closed, and the resume reads the same sidecar
+    state. The entries an item carries are the RED's id and the sidecar's ids,
+    so the pass can tell the two apart by an exact compare."""
+    red_ids, preflight_check = _load_script("red_ids"), _load_script("preflight_check")
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    scan = [
+        {
+            "source": "docs/prd.md:14",
+            "kind": "undecided-product",
+            "decision_needed": "Which retention period applies?",
+            "evidence": "The PRD names none.",
+        }
+    ]
+    sidecar = {
+        "source": "impl/coupled-7-1.md",
+        "kind": "coupled-stories",
+        "decision_needed": "Move AC 7 (a) from 7-1 to 7-2 as measured, or re-plan the rows.",
+        "evidence": "AC 7 (a): the handler it needs lands only in 7-2's build.",
+    }
+    sidecar_path = impl / "escalation-7-1.json"
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    red_id = red_ids.mint_id(scan[0]["kind"], scan[0]["source"], scan[0]["decision_needed"])
+    sidecar_id = red_ids.mint_id(sidecar["kind"], sidecar["source"], sidecar["decision_needed"])
+    pending = [
+        _shape(id=red_id, answer="Ask legal first.", action="defer"),
+        {"id": sidecar_id, "answer": "Wait for 7-2's build, as ruled on 2026-10-01."},
+    ]
+    gone_red = red_ids.mint_id("undecided-product", "docs/prd.md", "Which region hosts the data?")
+    gone_sidecar = red_ids.mint_id("budget-overrun", "impl/7-0.md", "Re-scope 7-0 or grant a fresh budget.")
+    orphaned = [
+        {"id": gone_red, "answer": "EU only, as legal ruled."},
+        _shape(id=gone_sidecar, answer="Parked until the audit.", action="defer"),
+        {"id": "undecided-product:docs/prd.md", "answer": "Keyed before ids had a digest.", "action": "later"},
+    ]
+    decisions = impl / ".decisions.json"
+
+    def readers() -> tuple:
+        return (
+            red_ids.apply(scan, impl),
+            red_ids.closed_ids(decisions),
+            preflight_check._escalation_of(impl, "7-1", tmp_path),
+        )
+
+    decisions.write_text(json.dumps({"decisions": pending}), encoding="utf-8")
+    without = readers()
+    decisions.write_text(json.dumps({"decisions": pending + orphaned}), encoding="utf-8")
+    assert readers() == without
+    assert [red["id"] for red in without[0]["reds"]] == [red_id]
+    assert without[1] == set()
+    assert without[2]["state"] == "open"
+
+    carried = {red["id"] for red in without[0]["reds"]} | set(
+        preflight_check._sidecar_ids(dict(sidecar), sidecar_path, tmp_path)
+    )
+    assert {entry["id"] for entry in pending} <= carried
+    assert not {entry["id"] for entry in orphaned} & carried
+
+
+def test_a_later_preflight_raises_an_orphaned_red_again(tmp_path):
+    """`.preflight-reds.json` is one project-wide file each preflight replaces.
+    Epic B's preflight raises a RED and the operator defers it. Epic A's
+    preflight then writes the file from its own scan, so no RED carries B's
+    entry and the next pass reads it orphaned. B's next preflight raises that
+    RED again under the same id, the defer suppresses nothing, and the hard
+    gate blocks on it: the pass after that preflight carries the entry's id
+    and asks it."""
+    red_ids = _load_script("red_ids")
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    red_b = {
+        "source": "docs/epic-b-prd.md:14",
+        "kind": "undecided-product",
+        "decision_needed": "Which retention period applies?",
+        "evidence": "The PRD names none.",
+    }
+    red_a = {
+        "source": "docs/epic-a-prd.md:9",
+        "kind": "undecided-product",
+        "decision_needed": "Which region hosts the data?",
+        "evidence": "The PRD names none.",
+    }
+
+    def preflight(*reds: dict) -> set:
+        """One preflight's step 3, as preflight.md runs it: the scan through
+        the id layer, which writes the registry. The ids of its `reds`."""
+        scan = tmp_path / "scan.json"
+        scan.write_text(json.dumps({"reds": list(reds)}), encoding="utf-8")
+        assert red_ids.main(["--scan", str(scan), "--impl-artifacts", str(impl)]) == 0
+        registry = json.loads((impl / ".preflight-reds.json").read_text(encoding="utf-8"))
+        return {red["id"] for red in registry["reds"]}
+
+    b_id = red_ids.mint_id(red_b["kind"], red_b["source"], red_b["decision_needed"])
+    assert preflight(red_b) == {b_id}
+    (impl / ".decisions.json").write_text(
+        json.dumps({"decisions": [_shape(id=b_id, answer="Ask legal first.", action="defer")]}),
+        encoding="utf-8",
+    )
+    assert b_id not in preflight(red_a), "Epic A's preflight replaced the registry, so B's entry reads orphaned"
+    assert preflight(red_b) == {b_id}, "B's next preflight raises the orphaned RED again and blocks on it"
+
+
+def test_the_path_spellings_are_the_ones_the_resume_reads(tmp_path):
+    """The spellings section 2 lists for a sidecar's own path are the ones
+    `_sidecar_ids` mints from, so an entry keyed by any of them is carried by
+    the live sidecar, never orphaned. The resolved one counts too: a `close`
+    keyed by it closes the sidecar at the resume."""
+    red_ids, preflight_check = _load_script("red_ids"), _load_script("preflight_check")
+    root = tmp_path.resolve()
+    real = root / "_bmad-output" / "implementation-artifacts"
+    real.mkdir(parents=True)
+    link = root / "artifacts-link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform cannot make a directory symlink here")
+    sidecar = {
+        "source": "docs/stories/7-1.md:40",
+        "kind": "coupled-stories",
+        "decision_needed": "Move AC 7 (a) from 7-1 to 7-2 as measured, or re-plan the rows.",
+        "evidence": "AC 7 (a): the handler it needs lands only in 7-2's build.",
+    }
+    (real / "escalation-7-1.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    path = link / "escalation-7-1.json"
+    resolved = path.parent.resolve() / path.name
+    assert resolved == real / path.name
+
+    # As section 2 lists them: relative to the project root, absolute, absolute
+    # with the folder's symlinks resolved, and that resolved path made relative.
+    spellings = [path.relative_to(root), path, resolved, resolved.relative_to(root)]
+    mint = red_ids.mint_id
+    expected = {mint(sidecar["kind"], sidecar["source"], sidecar["decision_needed"])} | {
+        mint(sidecar["kind"], written, sidecar["decision_needed"])
+        for spelling in spellings
+        for written in (spelling.as_posix(), str(spelling))
+    }
+    assert set(preflight_check._sidecar_ids(dict(sidecar), path, root)) == expected
+
+    closed = mint(sidecar["kind"], resolved.relative_to(root).as_posix(), sidecar["decision_needed"])
+    (real / ".decisions.json").write_text(
+        json.dumps({"decisions": [_shape(id=closed, answer="Move AC 7 (a) as proposed.", action="close")]}),
+        encoding="utf-8",
+    )
+    assert preflight_check._escalation_of(link, "7-1", root)["state"] == "closed"

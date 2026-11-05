@@ -12,9 +12,11 @@ counts, so attribution and the exactly-one claim are both exercised for real.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -66,11 +68,11 @@ def _row(**overrides) -> dict:
     return row
 
 
-def _run_table(project: Path, rows: list[dict], env: dict | None = None):
+def _run_table(project: Path, rows: list[dict], env: dict | None = None, script: Path = SCRIPT):
     table = project / "table.json"
     table.write_text(json.dumps(rows), encoding="utf-8")
     proc = subprocess.run(
-        [sys.executable, str(SCRIPT), "--table", str(table), "--project-root", str(project)],
+        [sys.executable, str(script), "--table", str(table), "--project-root", str(project)],
         capture_output=True,
         text=True,
         check=False,
@@ -183,6 +185,183 @@ def test_identical_anchor_and_replacement_refused(tmp_path):
     proc = _run_table(project, [_row(replacement="LIMIT = 5")])
     assert proc.returncode == 2
     assert "mutates nothing" in proc.stderr
+
+
+def test_empty_replacement_deletes_the_anchor(tmp_path):
+    """A deletion row (#212): the plainest mutation of a guard clause runs like
+    any other row, and the file comes back byte for byte."""
+    project = _project(tmp_path)
+    before = (project / "code.py").read_bytes()
+    proc = _run_table(project, [_row(anchor="LIMIT = 5\n", replacement="")])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "| KILLED |" in proc.stdout
+    assert "exactly 'test_limit_pinned' went red" in proc.stdout
+    assert "| verified |" in proc.stdout
+    assert (project / "code.py").read_bytes() == before
+
+
+@pytest.mark.parametrize("replacement", [" ", "\t\n"], ids=["space", "tab-newline"])
+def test_blank_replacement_is_an_ordinary_mutation(tmp_path, replacement):
+    """Only the other four keys must be non-blank: a replacement of whitespace
+    alone mutates the anchor like any other, and the file comes back byte for
+    byte."""
+    project = _project(tmp_path)
+    before = (project / "code.py").read_bytes()
+    proc = _run_table(project, [_row(replacement=replacement)])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "| KILLED |" in proc.stdout
+    assert "exactly 'test_limit_pinned' went red" in proc.stdout
+    assert "| verified |" in proc.stdout
+    assert (project / "code.py").read_bytes() == before
+
+
+_BLANK_KEYS = ["file", "anchor", "command", "expect_red"]
+
+
+@pytest.mark.parametrize("value", ["", " ", "\t\n"], ids=["empty", "space", "tab-newline"])
+@pytest.mark.parametrize("key", _BLANK_KEYS)
+def test_empty_or_blank_key_other_than_replacement_refused(tmp_path, key, value):
+    """Every other key left empty or only whitespace runs a row that proves
+    nothing (a blank command exits 0, a blank expect_red names no test), so
+    the table is refused before any command runs, with a message that names
+    the key as empty or blank rather than missing."""
+    project = _project(tmp_path)
+    before = {name: (project / name).read_bytes() for name in ("code.py", "check.py")}
+    proc = _run_table(project, [_row(**{key: value})])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"row 0 has an empty or blank {key!r}" in proc.stderr
+    assert "missing" not in proc.stderr
+    assert "Mutation ledger" not in proc.stdout
+    assert {name: (project / name).read_bytes() for name in before} == before
+
+
+# The key check, and the check #212 first shipped, which refused only the
+# empty string.
+_BLANK_CHECK = 'if not row[key].strip() and key != "replacement":'
+_PRE_BLANK_CHECK = 'if not row[key] and key != "replacement":'
+
+
+def _pre_blank_script(tmp_path: Path) -> Path:
+    """mutate_check.py with the key check as #212 first shipped it."""
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert source.count(_BLANK_CHECK) == 1
+    mutant = tmp_path / "mutate_check_pre_blank.py"
+    mutant.write_text(source.replace(_BLANK_CHECK, _PRE_BLANK_CHECK), encoding="utf-8", newline="\n")
+    return mutant
+
+
+def _load_table_with(script: Path, table: Path) -> list[dict]:
+    spec = importlib.util.spec_from_file_location(f"mutate_check_load_{script.stem}", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module._load_table(table)
+
+
+@pytest.mark.parametrize("key", _BLANK_KEYS)
+def test_the_pre_blank_check_let_a_key_of_one_space_load(tmp_path, key):
+    """The twin of the blank refusal: `not row[key]` refused only the empty
+    string, so a key of one space loaded and its row went on to run."""
+    table = tmp_path / "table.json"
+    table.write_text(json.dumps([_row(**{key: " "})]), encoding="utf-8")
+    with pytest.raises(SystemExit) as refused:
+        _load_table_with(SCRIPT, table)
+    assert refused.value.code == 2
+    assert [row[key] for row in _load_table_with(_pre_blank_script(tmp_path), table)] == [" "]
+
+
+@pytest.mark.parametrize(
+    ("key", "status", "code"),
+    [
+        ("expect_red", "| KILLED |", 0),
+        pytest.param(
+            "command",
+            "| GREEN |",
+            1,
+            marks=pytest.mark.skipif(sys.platform == "win32", reason="cmd.exe, not sh, reads a blank command line"),
+        ),
+    ],
+)
+def test_the_pre_blank_check_ran_a_blank_row_to_a_false_verdict(tmp_path, key, status, code):
+    """What the twin let through: attribution is a substring match, so an
+    expect_red of one space found itself in the checker's failure line and read
+    KILLED with exit 0, and a command of one space exited 0 and read as a GREEN
+    survivor."""
+    project = _project(tmp_path)
+    proc = _run_table(project, [_row(**{key: " "})], script=_pre_blank_script(tmp_path))
+    assert proc.returncode == code, proc.stdout + proc.stderr
+    assert status in proc.stdout
+
+
+@pytest.mark.parametrize("value", [None, 5], ids=["null", "number"])
+def test_non_string_replacement_is_still_missing(tmp_path, value):
+    """Only the empty string is a deletion: a replacement that is not a string
+    keeps the missing-key refusal rather than reaching `str.replace`."""
+    project = _project(tmp_path)
+    proc = _run_table(project, [_row(replacement=value)])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "row 0 is missing required string key 'replacement'" in proc.stderr
+
+
+# The first sentence of the paragraph #212 added to the docstring, flattened,
+# and that sentence as #212 first wrote it, which named only the empty string.
+_BLANK_KEY_RULE = (
+    "Every key but ``replacement`` must be non-blank: neither empty nor only whitespace, since a blank "
+    "``command`` exits 0 and a blank ``expect_red`` names no test."
+)
+_PRE_BLANK_KEY_RULE = "Every key but ``replacement`` must be non-empty."
+
+# The paragraph #212 added to the docstring, flattened.
+_DELETION_RULE = (
+    _BLANK_KEY_RULE + " An empty ``replacement`` deletes the anchor, the plainest "
+    "mutation of a guard clause. Delete whole statements: a deletion that leaves a block with no body breaks the "
+    "module, and reads as any mutant that breaks a module does (see the collection errors below)."
+)
+
+
+def _flat_docstring() -> str:
+    return " ".join(ast.get_docstring(ast.parse(SCRIPT.read_text(encoding="utf-8"))).split())
+
+
+def _says_an_empty_replacement_deletes_the_anchor(doc: str) -> bool:
+    """Right after the table example, the place a table author reads, and
+    before the per-row steps."""
+    return bool(
+        re.search(
+            r'"note": "AC-3 twin"\}\] Every key but ``replacement`` must be [^.]+\. '
+            r"An empty ``replacement`` deletes the anchor\b.*? Per row, in order:",
+            doc,
+        )
+    )
+
+
+def _says_a_blank_key_is_refused(doc: str) -> bool:
+    """Whitespace alone is as empty as nothing, said where the empty rule is."""
+    return bool(
+        re.search(
+            r'"note": "AC-3 twin"\}\] Every key but ``replacement`` must be non-blank: '
+            r"neither empty nor only whitespace\b",
+            doc,
+        )
+    )
+
+
+def test_the_docstring_says_an_empty_replacement_deletes_the_anchor():
+    doc = _flat_docstring()
+    assert _says_an_empty_replacement_deletes_the_anchor(doc)
+    # Twin: the docstring as it stood before #212.
+    assert _DELETION_RULE + " " in doc
+    assert not _says_an_empty_replacement_deletes_the_anchor(doc.replace(_DELETION_RULE + " ", ""))
+
+
+def test_the_docstring_says_a_blank_key_is_refused():
+    doc = _flat_docstring()
+    assert _says_a_blank_key_is_refused(doc)
+    # Twin: the sentence as #212 first wrote it, which still says an empty
+    # replacement deletes the anchor but lets whitespace through.
+    assert _BLANK_KEY_RULE in doc
+    first = doc.replace(_BLANK_KEY_RULE, _PRE_BLANK_KEY_RULE)
+    assert not _says_a_blank_key_is_refused(first)
+    assert _says_an_empty_replacement_deletes_the_anchor(first)
 
 
 def test_restore_wins_even_when_the_command_edits_the_target(tmp_path):

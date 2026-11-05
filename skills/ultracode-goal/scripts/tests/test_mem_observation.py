@@ -25,6 +25,7 @@ Run: uv run --with pytest pytest test_mem_observation.py -v
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -371,17 +372,256 @@ def test_write_redacts_known_secrets(tmp_path, home):
 
 
 @_needs_git
-def test_write_redacts_an_advisory_sig(tmp_path, home):
-    record = _record_of(tmp_path, _repo(tmp_path), "--advisory", "sig=token=supersecretvalue123,recurred=yes")
+@pytest.mark.parametrize("sig, secret", [
+    ("token=supersecretvalue123", "supersecretvalue123"),
+    # Shaped like a record id but no run_id: redacted like any other sig.
+    ("epic-sk-abcdefghijklmnopqrstuv", "sk-abcdefghijklmnopqrstuv"),
+], ids=["token", "not-a-run-id"])
+def test_write_redacts_an_advisory_sig(tmp_path, home, sig, secret):
+    assert not mc.valid_run_id(sig)
+    record = _record_of(tmp_path, _repo(tmp_path), "--advisory", f"sig={sig},recurred=yes")
     (advisory,) = record["advisories"]
     assert advisory["recurred"] == "yes"
-    assert "supersecretvalue123" not in advisory["sig"]
+    assert secret not in advisory["sig"]
+    assert "[redacted]" in advisory["sig"]
 
 
 @_needs_git
 def test_write_normalizes_an_unknown_advisory_recurred_value(tmp_path, home):
     record = _record_of(tmp_path, _repo(tmp_path), "--advisory", "sig=abc,recurred=maybe")
     assert record["advisories"] == [{"sig": "abc", "recurred": "unknown"}]
+
+
+# --- write: an advisory with no `recurred` has it computed from the store ----
+#
+# Finalize used to pass `--advisory sig=<s>,recurred=<yes|no|unknown>` with
+# neither value defined, so runs of one Epic stored `recurred` both ways. The
+# advisory now names the consumed record by its id (the run_id of the run that
+# wrote it), and write decides `recurred` by comparing root-cause signatures,
+# with class `other` left out as mem_recall's recurrence count leaves it out.
+# Before the fix, every one of these stored `unknown`.
+
+_RACE = "class=race-condition,path=src/x.py"
+_FLAKE = "class=test-flake,path=tests/y.py"
+
+
+def _prior(tmp_path: Path, repo: Path, *root_causes: str, run_id: str = _RUN) -> None:
+    """The consumed record: a blocked run with these root causes, in the store."""
+    extra = [arg for cause in root_causes for arg in ("--root-cause", cause)]
+    out = _out(_write(tmp_path / "impl", tmp_path / "store", repo, run_id, "--verdict", "blocked", *extra))
+    assert out["status"] == "written", out
+
+
+def _recurred_of(tmp_path: Path, repo: Path, *extra: str, run_id: str = _RUN_B) -> list[dict]:
+    """The advisories the record of ``run_id`` stores, written with ``extra``."""
+    out = _out(_write(tmp_path / "impl", tmp_path / "store", repo, run_id, *extra))
+    assert out["status"] == "written", out
+    return json.loads(Path(out["path"]).read_text(encoding="utf-8"))["advisories"]
+
+
+@_needs_git
+@pytest.mark.parametrize("prior, this_run, verdict, expected", [
+    ((_RACE,), (_RACE,), "blocked", "yes"),
+    ((_RACE, _FLAKE), (_FLAKE,), "blocked", "yes"),
+    ((_RACE,), (_FLAKE,), "blocked", "no"),
+    ((_RACE,), (), "advance", "no"),
+    # An `other` signature in both records never makes it recur.
+    ((_RACE, "class=other,path=src/z.py"), ("class=other,path=src/z.py",), "blocked", "no"),
+], ids=["shared", "one-of-two-shared", "different-cause", "advanced", "only-other-shared"])
+def test_write_computes_recurred_from_the_consumed_records_root_causes(
+    tmp_path, home, prior, this_run, verdict, expected
+):
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, *prior)
+    extra = [arg for cause in this_run for arg in ("--root-cause", cause)]
+    advisories = _recurred_of(tmp_path, repo, "--verdict", verdict, *extra, "--advisory", f"sig={_RUN}")
+    assert advisories == [{"sig": _RUN, "recurred": expected}]
+
+
+@_needs_git
+@pytest.mark.parametrize("prior, this_run, verdict, sig", [
+    ((_RACE,), (_RACE,), "blocked", "abc123def456"),  # a root-cause signature, not a record id
+    ((_RACE,), (_RACE,), "blocked", "../x"),
+    ((_RACE,), (_RACE,), "blocked", ""),
+    ((_RACE,), (_RACE,), "blocked", _RUN_C),  # a run the store holds no record of
+    # This run's own id. The payload is built before this run's record exists,
+    # so the store holds no record of it and this row stores `unknown` with or
+    # without the own-id guard. The _computed_recurred tests below pin the guard.
+    ((_RACE,), (_RACE,), "blocked", _RUN_B),
+    ((), (_RACE,), "blocked", _RUN),  # the record names no root cause
+    (("class=other,path=src/z.py",), ("class=other,path=src/z.py",), "blocked", _RUN),
+    ((_RACE,), (), "blocked", _RUN),  # a handoff or a decision-pending stop observed nothing
+], ids=["signature", "path", "empty", "absent", "own-id", "no-cause", "only-other", "blocked-no-cause"])
+def test_write_stores_unknown_when_recurrence_cannot_be_decided(tmp_path, home, prior, this_run, verdict, sig):
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, *prior)
+    extra = [arg for cause in this_run for arg in ("--root-cause", cause)]
+    advisories = _recurred_of(tmp_path, repo, "--verdict", verdict, *extra, "--advisory", f"sig={sig}")
+    assert advisories == [{"sig": sig, "recurred": "unknown"}]
+
+
+# The guard that makes this run's own id `unknown` cannot be seen through
+# `write`: the first write of a run reads no record of it, and a second write
+# of the same run is `skipped-existing`. These two call _computed_recurred
+# directly, against a store that already holds the record of the run the
+# advisory names, which shares this run's race-condition root cause.
+_OWN_ID_GUARD = "if record_id == run_id or not mc.valid_run_id(record_id):"
+
+
+def _own_record_recurred(tmp_path: Path, module: object, run_id: str) -> str:
+    """What ``module``'s _computed_recurred returns for an advisory naming _RUN,
+    whose record the store holds, in the run ``run_id`` with _RUN's root cause."""
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, _RACE, run_id=_RUN)
+    fingerprint = mc.repo_fingerprint(str(repo))["value"]
+    assert mc.read_run_record(tmp_path / "store", fingerprint, _RUN) is not None
+    path = "src/x.py"
+    signatures = [{"class": "race-condition", "path": path, "sig": _signature("race-condition", path, fingerprint)}]
+    return module._computed_recurred(
+        tmp_path / "store", fingerprint, _RUN, run_id=run_id, verdict="blocked", signatures=signatures
+    )
+
+
+@_needs_git
+def test_computed_recurred_is_unknown_for_this_runs_own_record_when_it_shares_a_root_cause(tmp_path, home):
+    import mem_observation  # noqa: PLC0415  (scripts dir is on sys.path)
+
+    assert Path(mem_observation.__file__).resolve() == SCRIPT
+    # The control: another run naming the same record decides `yes`.
+    assert _own_record_recurred(tmp_path / "other", mem_observation, _RUN_B) == "yes"
+    assert _own_record_recurred(tmp_path / "own", mem_observation, _RUN) == "unknown"
+
+
+@_needs_git
+def test_computed_recurred_without_the_own_id_guard_reads_this_runs_own_record_as_yes(tmp_path, home):
+    # The twin of the test above: the same call, through a copy of the script
+    # whose guard no longer compares the record id with this run's id, reads
+    # this run's own record as a recurrence.
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert source.count(_OWN_ID_GUARD) == 1
+    mutant = source.replace(_OWN_ID_GUARD, "if not mc.valid_run_id(record_id):")
+    assert mutant != source, "the mutant must actually change the text"
+    script = tmp_path / "mutant" / SCRIPT.name
+    script.parent.mkdir()
+    script.write_text(mutant, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("mem_observation_without_own_id_guard", script)
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    assert _own_record_recurred(tmp_path, module, _RUN) == "yes"
+
+
+@_needs_git
+@pytest.mark.parametrize("content", ["another-repo", "another-run", "unparseable", "directory"])
+def test_write_stores_unknown_for_a_record_that_is_not_this_repos_record_of_that_run(
+    tmp_path, home, content
+):
+    # The file named after the consumed id holds something else: it is never
+    # read as that record, and the write still lands.
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, _RACE, run_id=_RUN_C)
+    runs = _runs_of(tmp_path / "store", repo)
+    target = runs / f"{_RUN}.jsonl"
+    record = json.loads((runs / f"{_RUN_C}.jsonl").read_text(encoding="utf-8"))
+    if content == "another-repo":
+        target.write_text(json.dumps({**record, "run_id": _RUN, "fingerprint": "ffffffffffffffff"}), encoding="utf-8")
+    elif content == "another-run":
+        target.write_text(json.dumps(record), encoding="utf-8")
+    elif content == "unparseable":
+        target.write_bytes(b"{not json")
+    else:
+        target.mkdir()
+    advisories = _recurred_of(tmp_path, repo, "--verdict", "blocked", "--root-cause", _RACE, "--advisory", f"sig={_RUN}")
+    assert advisories == [{"sig": _RUN, "recurred": "unknown"}]
+
+
+@_needs_git
+def test_write_computes_recurred_for_each_advisory_on_its_own(tmp_path, home):
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, _RACE, run_id=_RUN)
+    _prior(tmp_path, repo, _FLAKE, run_id=_RUN_C)
+    advisories = _recurred_of(
+        tmp_path, repo, "--verdict", "blocked", "--root-cause", _RACE,
+        "--advisory", f"sig={_RUN}", "--advisory", f"sig={_RUN_C}", run_id="epic-7-20260607T090000Z",
+    )
+    assert advisories == [{"sig": _RUN, "recurred": "yes"}, {"sig": _RUN_C, "recurred": "no"}]
+
+
+# An epic slug can hold `sk-`, where redact's key pattern starts: the sig was
+# redacted before it was read as a record id, so epic-desk-booking-<stamp>
+# became epic-de[redacted], which names no record, and the advisory stored
+# `unknown` with a mangled sig whatever the record said. The record's own
+# run_id was stored as given. A sig that passes the run_id check now is too.
+_DESK = "epic-desk-booking-20260601T000000Z"
+_DESK_B = "epic-desk-booking-20260602T000000Z"
+
+
+def _desk_advisories(tmp_path: Path, repo: Path, script: Path = SCRIPT) -> list[dict]:
+    """The advisories ``script`` stores for _DESK_B, a desk-booking run that
+    names _DESK's record and shares its root cause."""
+    prior = _write(
+        tmp_path / "impl", tmp_path / "store", repo, _DESK,
+        "--epic", "desk-booking", "--verdict", "blocked", "--root-cause", _RACE,
+    )
+    assert _out(prior)["status"] == "written"
+    proc = subprocess.run(
+        [
+            sys.executable, str(script), "write", "--impl-artifacts", str(tmp_path / "impl"),
+            "--store", str(tmp_path / "store"), "--epic", "desk-booking", "--run-id", _DESK_B,
+            "--gate-status", "PASS", "--verdict", "blocked", "--cwd", str(repo),
+            "--valid-until-date", _DATE, "--root-cause", _RACE, "--advisory", f"sig={_DESK}",
+        ],
+        capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONPATH": str(SCRIPT.parent)},
+    )
+    out = _out(proc)
+    assert out["status"] == "written", out
+    record = json.loads(Path(out["path"]).read_text(encoding="utf-8"))
+    assert record["run_id"] == _DESK_B
+    return record["advisories"]
+
+
+@_needs_git
+def test_write_keeps_a_record_id_whose_epic_slug_holds_sk_and_computes_recurred_from_it(tmp_path, home):
+    assert mc.valid_run_id(_DESK)
+    assert mc.redact(_DESK) == "epic-de[redacted]"  # the id the old order mangled
+    assert _desk_advisories(tmp_path, _repo(tmp_path)) == [{"sig": _DESK, "recurred": "yes"}]
+
+
+@_needs_git
+def test_redacting_the_sig_before_it_is_read_as_a_record_id_stores_unknown(tmp_path, home):
+    # The twin of the test above: the same write, with the sig redacted first
+    # as it was before the fix, stores the mangled sig and `unknown`.
+    source = SCRIPT.read_text(encoding="utf-8")
+    now, before = 'sig = fields.get("sig", "")', 'sig = mc.redact(fields.get("sig", ""))'
+    assert source.count(now) == 1
+    mutant = source.replace(now, before)
+    assert mutant != source, "the mutant must actually change the text"
+    script = tmp_path / "mutant" / SCRIPT.name
+    script.parent.mkdir()
+    script.write_text(mutant, encoding="utf-8")
+    advisories = _desk_advisories(tmp_path, _repo(tmp_path), script)
+    assert advisories == [{"sig": "epic-de[redacted]", "recurred": "unknown"}]
+
+
+@_needs_git
+@pytest.mark.parametrize("given", ["yes", "no", "unknown"])
+def test_write_stores_an_explicit_recurred_as_given(tmp_path, home, given):
+    # The record would compute `yes`; an explicit value is kept all the same.
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, _RACE)
+    advisories = _recurred_of(
+        tmp_path, repo, "--verdict", "blocked", "--root-cause", _RACE, "--advisory", f"sig={_RUN},recurred={given}"
+    )
+    assert advisories == [{"sig": _RUN, "recurred": given}]
+
+
+@_needs_git
+def test_write_with_a_computed_recurred_still_parks_the_record_when_the_store_is_unwritable(tmp_path, home):
+    # The store cannot be read either: `unknown`, and the record waits in the outbox.
+    repo = _repo(tmp_path)
+    impl = tmp_path / "impl"
+    entry = _spill_via_write(tmp_path, impl, repo, _RUN_B, "--advisory", f"sig={_RUN}")
+    assert entry["payload"]["advisories"] == [{"sig": _RUN, "recurred": "unknown"}]
 
 
 DEFERRED_LEDGER = """# Deferred Work

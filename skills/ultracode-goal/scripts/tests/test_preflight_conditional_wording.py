@@ -129,7 +129,9 @@ def test_the_disarm_binds_a_commit_only():
     step5 = _section("## 5. Arm the environment", "\n### Launch briefing")
     assert "**Replace, never append.** When the merge writes, it first removes every inner item" in step5
     refused = next(p for p in step2.split("\n\n") if p.startswith("**A refused settings write.**"))
-    assert "A refused write of a disarm the pass does not need (the paragraph above) is no stop" in refused
+    # "Any other": a guard that cannot start, which the sentence before it
+    # routes to step 5 whatever it refuses, is no unneeded disarm (#211 review 2).
+    assert "Any other refused write of a disarm the pass does not need (the paragraph above) is no stop" in refused
     # Every other refusal still stops.
     assert "Treat any other refusal of the write" in refused and "as a stop" in refused
 
