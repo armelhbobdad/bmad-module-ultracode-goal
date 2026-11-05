@@ -2638,6 +2638,15 @@ _HOOK_REJECTION_SENTENCES = {
         ("A fix that writes `.claude/settings.local.json` (a hook, its env, the al", "9df5f7b5d3f4"),
         ("A rejection whose fix needs a file changed, or whose output does not sho", "8232f495e53c"),
         ("Before the next story's step 0, also check whether the last advanced sto", "88ce12f730cc"),
+        # Reviewed (#206): the resume rule removes the scratch folder of each
+        # `done` row before the next story's step 0, or before Stage 6 on the
+        # last story's route, which a run that stopped after its evidence
+        # commit, or with nothing staged, left; it names that commit only as
+        # where the run stopped, and nothing of how a hook's rejection of it is
+        # answered. Reviewed again (its review): it moved after the last
+        # story's route, so it no longer splits that route from the owed-commit
+        # checks its "that story" and "the commit" read back to.
+        ("Before the next story's step 0, or before Stage 6 on that route, remove ", "bec9b3e00208"),
         ("Check every `.evidence-owed-<story_id>` of this Epic's stories this way,", "ca850de04101"),
         ("Evaluate it only after the story's Stage-5 verdict has landed, and after", "502e14ca0ed3"),
         ("Exit 0 asserts the branch, both hooks with the all-tools matcher and the", "78e63e004d78"),
@@ -2653,12 +2662,6 @@ _HOOK_REJECTION_SENTENCES = {
         ("The PreToolUse hook blocks a commit on a protected branch, blocks a comm", "16e73dd4d02c"),
         ("The gate's two commits keep their own rules in `references/gate.md`: \"Wh", "ffd0e5f04fb0"),
         ("The hook itself only records and warns (a Stop hook **cannot force `/goa", "e875fa4537ca"),
-        # Reviewed (#206): the resume rule's check before the next story's step
-        # 0 removes the scratch folder of each `done` row, which a run that
-        # stopped after its evidence commit, or with nothing staged, left; it
-        # names that commit only as where the run stopped, and nothing of how
-        # a hook's rejection of it is answered.
-        ("Then remove `.scratch-<story_id>/` of each story of this Epic whose row ", "5d5f4d456141"),
         ("Treat a hook rejection exactly as step 5 treats a post-commit red: remed", "90ca77631228"),
         ("Unlike the baseline, **this marker is refreshed, not preserved**: step 5", "6428639f8eb2"),
         # Reviewed (#186 review): an operator's reason on a resume goes before a

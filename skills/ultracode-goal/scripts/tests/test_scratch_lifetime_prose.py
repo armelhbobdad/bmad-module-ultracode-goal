@@ -26,13 +26,18 @@ A `reloop` or `escalate` verdict leaves it. This pins:
 - step 0's rule, its widened reason and the verdicts that leave the folder;
 - the evidence commit's removal, nothing staged included, and the resume that
   removes a folder a `done` story left;
-- that removal in Execute's resume rule too, at its check before the next
-  story's step 0: the rule loads gate.md only while the last advanced story's
-  evidence is still uncommitted, so a run that stopped after that commit, or
-  with nothing staged, never reaches gate.md's sentence;
+- that removal in Execute's resume rule too, before the next story's step 0
+  or before Stage 6 on the last story's route: the rule loads gate.md only
+  while the last advanced story's evidence is still uncommitted, so a run that
+  stopped after that commit, or with nothing staged, never reaches gate.md's
+  sentence. It sits after that route, so it does not split the route from the
+  owed-commit checks its "that story" and "the commit" read back to;
 - the fourth resume case's runner or harness, when the escalated cycle built
-  one, and its fallback, in its own paragraph;
-- the backfill and its resume, which leave the folder in place.
+  one, and its fallback once the folder is gone, which re-authors what the
+  declared gate set needs, in its own paragraph;
+- the backfill and its resume, which leave the folder in place;
+- the change fragment's account of the fourth case's fallback, keyed on the
+  folder alone.
 
 Each predicate is checked, as its anti-vacuous twin, against one-clause mutants
 it must reject, the old wording among them.
@@ -107,6 +112,14 @@ _GATE_RESUME = (
 # Execute's resume rule loads gate.md only while the last advanced story's
 # evidence is still uncommitted, so it removes a `done` row's folder itself.
 _RESUME_REMOVAL = (
+    "Before the next story's step 0, or before Stage 6 on that route, remove `.scratch-<story_id>/` of each story of "
+    "this Epic whose row is already `done` (`references/gate.md`, \"Commit the gate's evidence before the next story "
+    "starts\"): a run that stopped after that story's evidence commit, or with nothing staged for it, left the folder "
+    "there."
+)
+# Its first wording, which sat between the owed-commit checks and the last
+# story's route, so that route's "that story" and "the commit" read back to it.
+_OLD_RESUME_REMOVAL = (
     "Then remove `.scratch-<story_id>/` of each story of this Epic whose row is already `done` (`references/gate.md`, "
     "\"Commit the gate's evidence before the next story starts\"): a run that stopped after that story's evidence "
     "commit, or with nothing staged for it, left the folder there, and the next story's step 0 must not find it."
@@ -178,6 +191,8 @@ def test_the_folder_is_removed_at_one_point_only():
          "or step 5's re-verify goes green, remove `.scratch-<story_id>/`:"),
         ("execute.md", "of each story of this Epic whose row is already `done` (",
          "of each story of this Epic, `done` or not, ("),
+        # The resume rule's removal in its first wording, a sentence nobody listed.
+        ("execute.md", _RESUME_REMOVAL, _OLD_RESUME_REMOVAL),
     ],
 )
 def test_the_scan_lists_a_removal_at_another_point(name, old, new):
@@ -312,7 +327,10 @@ def test_advance_route_predicate_rejects_the_removal_on_the_reloop_route():
 # The resume rule reads gate.md's evidence-commit paragraph only while the last
 # advanced story's evidence is still uncommitted. A run that stopped after that
 # commit, or with nothing staged, before the removal, never reaches gate.md's
-# resume sentence, so the rule's own check before the next story's step 0 says it.
+# resume sentence, so the rule says it itself, before the next story's step 0 or
+# before Stage 6 on the last story's route. It sits after that route: the
+# route's "that story" and "the commit" read back to the owed-commit checks, so
+# a sentence between them about every `done` row would be what they name.
 
 _RESUME_RULE = "**On resume, re-enter Execute at the first story whose last logged gate verdict is not advance;"
 _OWED_CHECK = (
@@ -320,6 +338,9 @@ _OWED_CHECK = (
 )
 _EVERY_MARKER = "Check every `.evidence-owed-<story_id>` of this Epic's stories this way"
 _LAST_STORY = "When that story is the Epic's last, so every story reads `done`"
+_LAST_ROUTE_END = "Stage 1 resolved no in-scope story for that resume"
+# The sentence after the hooks assertion, which itself follows the removal.
+_PAST_HOOKS_ASSERTION = "A presence-only read passes on a prior run's"
 _EVIDENCE_FOLDER = re.compile(r"`evidence-<story_id>/`")
 
 
@@ -331,12 +352,14 @@ def _resume_rule_removes_a_done_rows_scratch(execute: str) -> bool:
     def at(prefix: str) -> int:
         return next((i for i, s in enumerate(sentences) if s.startswith(prefix)), -1)
 
-    owed, every, last = at(_OWED_CHECK), at(_EVERY_MARKER), at(_LAST_STORY)
+    owed, every, last, route_end = at(_OWED_CHECK), at(_EVERY_MARKER), at(_LAST_STORY), at(_LAST_ROUTE_END)
     removal = sentences.index(_RESUME_REMOVAL) if _RESUME_REMOVAL in sentences else -1
     return bool(
-        -1 not in (owed, every, removal, last)
-        # After the owed evidence commit, which writes its message in the folder.
-        and owed < every and removal == every + 1 and removal < last
+        -1 not in (owed, every, last, route_end, removal)
+        # The owed-commit checks run straight into the last story's route, which
+        # the removal follows: after the owed evidence commit, whose message file
+        # recreates the folder, and before Stage 6 on that route.
+        and owed < every and last == every + 1 and route_end == last + 1 and removal == route_end + 1
         and not any(_EVIDENCE_FOLDER.search(s) and _REMOVE.search(s) for s in sentences)
     )
 
@@ -356,6 +379,13 @@ def test_the_resume_rule_removes_a_done_rows_folder_before_step0():
         (", or with nothing staged for it,", ""),
         # The evidence folder removed beside it, which the story record and the gate trail still cite.
         (_RESUME_REMOVAL, _RESUME_REMOVAL + " Remove `evidence-<story_id>/` too, since no later step reads it."),
+        # The last story's route dropped: Stage 6 would start with that folder still there.
+        ("Before the next story's step 0, or before Stage 6 on that route, remove",
+         "Before the next story's step 0, remove"),
+        # The next story's step 0 dropped, which must not find the folder.
+        ("Before the next story's step 0, or before Stage 6 on that route, remove", "Before Stage 6 on that route, remove"),
+        # A sentence put between the last story's route and the removal, so "that route" names another.
+        (_RESUME_REMOVAL, "Log the route taken. " + _RESUME_REMOVAL),
     ],
 )
 def test_resume_predicate_rejects_a_narrower_or_wider_removal(old, new):
@@ -365,20 +395,28 @@ def test_resume_predicate_rejects_a_narrower_or_wider_removal(old, new):
 
 
 @pytest.mark.parametrize(
-    "anchor",
+    ("anchor", "sentence"),
     [
+        # Back between the owed-commit checks and the last story's route, where
+        # that route's "that story" and "the commit" read back to it, in either wording.
+        (_LAST_STORY, _RESUME_REMOVAL),
+        (_LAST_STORY, _OLD_RESUME_REMOVAL),
+        # Inside the last story's route, between its two sentences.
+        (_LAST_ROUTE_END, _RESUME_REMOVAL),
         # Ahead of the owed evidence commit, whose message file recreates the folder.
-        _OWED_CHECK,
+        (_OWED_CHECK, _RESUME_REMOVAL),
+        # Past the hooks assertion, away from the route its "that route" names.
+        (_PAST_HOOKS_ASSERTION, _RESUME_REMOVAL),
         # Into step 0, beside the advance route's rule, which a resume past that commit never meets.
-        _STEP0_REMOVAL,
+        (_STEP0_REMOVAL, _RESUME_REMOVAL),
         # Into the fourth case, a paragraph of its own.
-        "**A fourth case:",
+        ("**A fourth case:", _RESUME_REMOVAL),
     ],
 )
-def test_resume_predicate_rejects_the_removal_moved_elsewhere(anchor):
+def test_resume_predicate_rejects_the_removal_moved_elsewhere(anchor, sentence):
     cut = EXECUTE.replace(" " + _RESUME_REMOVAL, "")
     assert cut != EXECUTE and cut.count(anchor) == 1, anchor
-    moved = cut.replace(anchor, _RESUME_REMOVAL + " " + anchor, 1)
+    moved = cut.replace(anchor, sentence + " " + anchor, 1)
     assert not _resume_rule_removes_a_done_rows_scratch(moved)
 
 
@@ -399,7 +437,15 @@ _RUNNER = (
     "re-measuring `HEAD` at step 5 with any runner or harness the escalated cycle built in `.scratch-<story_id>/` "
     "(step 0 keeps that directory until the story advances), then re-gating it in Stage 5"
 )
+# Whether the cycle built one cannot be told once the folder is gone, since no
+# step logs it, so the fallback is keyed on the folder alone and re-authors what
+# the declared gate set needs.
 _FALLBACK = (
+    "When that directory is gone (a run under an earlier rule removed it at step 5, or an operator did), re-author any "
+    "runner or harness the story's declared gate set needs before step 5 runs."
+)
+# Its first wording, conditioned on what the cycle built, which nothing records.
+_OLD_FALLBACK = (
     "When the cycle built one there and that directory is gone (a run under an earlier rule removed it at step 5, or "
     "an operator did), re-author it for the story's declared gate set before step 5 runs."
 )
@@ -436,10 +482,19 @@ def test_the_fourth_case_re_measures_with_the_cycles_runner():
         # The first wording, which presumed a runner every story left behind.
         ("with any runner or harness the escalated cycle built in", "with the runner the escalated cycle left in"),
         ("any runner or harness the escalated cycle built", "any runner the escalated cycle built"),
-        ("When the cycle built one there and that directory is gone", "When that directory is gone"),
-        ("re-author it for the story's declared gate set", "re-author the runner for the story's declared gate set"),
+        # The fallback conditioned on what the cycle built, which no step logs, in its first wording or in part.
+        (_FALLBACK, _OLD_FALLBACK),
+        ("When that directory is gone", "When the cycle built one there and that directory is gone"),
+        ("re-author any runner or harness the story's declared gate set needs",
+         "re-author any runner or harness the escalated cycle built"),
+        # The fallback narrowed to a runner alone, or to the one runner a story is presumed to have.
+        ("re-author any runner or harness the story's declared gate set needs",
+         "re-author any runner the story's declared gate set needs"),
+        ("re-author any runner or harness the story's declared gate set needs",
+         "re-author the runner for the story's declared gate set"),
         # A fallback that restores a runner from the evidence folder, which holds nothing runnable.
-        ("re-author it for the story's declared gate set", "restore it from `evidence-<story_id>/`"),
+        ("re-author any runner or harness the story's declared gate set needs",
+         "restore any runner or harness from `evidence-<story_id>/`"),
         ("when that folder holds one, ", ""),
         # The fallback moved into a paragraph of its own, which a reader of the fourth case never reaches.
         (" " + _FALLBACK, "\n\n" + _FALLBACK),
@@ -504,10 +559,42 @@ def test_backfill_predicate_rejects_a_removal_before_trace(old, new):
     assert not _backfill_leaves_scratch(mutant)
 
 
+FRAGMENT = (REPO / "changes" / "scratch-kept-until-advance.yaml").read_text(encoding="utf-8")
+
+
 def test_the_fragment_says_when_the_folder_goes():
-    fragment = (REPO / "changes" / "scratch-kept-until-advance.yaml").read_text(encoding="utf-8")
-    assert re.search(r"^type: changed$", fragment, re.M)
-    assert re.search(r"^issues: \[206\]$", fragment, re.M)
+    assert re.search(r"^type: changed$", FRAGMENT, re.M)
+    assert re.search(r"^issues: \[206\]$", FRAGMENT, re.M)
     for token in ("`.scratch-<story_id>/`", "`operator-evidence-owed`", "`reloop`", "`escalate`",
                   "`evidence-commit-rejected`"):
-        assert token in fragment, token
+        assert token in FRAGMENT, token
+
+
+_FRAGMENT_FALLBACK = (
+    "and when the folder is gone, re-authors any runner or harness the story's declared gate set needs and checks it "
+    "against the gates named by the escalated cycle's step-5 capture in `evidence-<story_id>/`."
+)
+
+
+def _fragment_keys_the_fallback_on_the_folder(fragment: str) -> bool:
+    flat = _flat(fragment)
+    return _FRAGMENT_FALLBACK in flat and "when it built one" not in flat
+
+
+def test_the_fragment_keys_the_fourth_cases_fallback_on_the_folder_alone():
+    assert _fragment_keys_the_fallback_on_the_folder(FRAGMENT)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # Its first wording, conditioned on what the cycle built, which no step logs.
+        ("and when the folder is gone, re-authors any runner or harness the story's declared gate set needs",
+         "and when it built one and the folder is gone, re-authors it for the story's declared gate set"),
+        ("and when the folder is gone,", "and when it built one and the folder is gone,"),
+    ],
+)
+def test_fragment_predicate_rejects_a_fallback_conditioned_on_what_was_built(old, new):
+    mutant = FRAGMENT.replace(old, new)
+    assert mutant != FRAGMENT, "the mutant must actually change the text"
+    assert not _fragment_keys_the_fallback_on_the_folder(mutant)
