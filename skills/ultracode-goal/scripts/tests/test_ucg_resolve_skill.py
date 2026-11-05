@@ -498,7 +498,10 @@ _ONLY_ORPHANS_NOT_EMPTY = (
     "non-decision reason: the run can have stopped on a RED that another Epic's preflight has since dropped "
     "from `.preflight-reds.json`, and its next preflight raises that RED again."
 )
-_ONLY_ORPHANS_HAND_BACK = "Such a pass closed nothing, so it hands back only when the operator asks for the resume."
+_ONLY_ORPHANS_HAND_BACK = (
+    "Such a pass closed nothing, so point at the read-only `/ucg-status`, as for an empty enumeration, and hand "
+    "back only when the operator asks for the resume."
+)
 
 
 def _orphan_checks() -> dict:
@@ -729,6 +732,72 @@ def test_the_scans_red_on_the_wording_review_loop_1_dropped():
     mutant = _said_to_block_nothing(_text())
     assert len(_blocks_nothing_claims(mutant)) == 2
     assert len(_only_orphans_called_empty(mutant)) == 1
+
+
+# Review loop 2: section 1 said the one RED file holds every still-pending
+# preflight RED, while section 2 says, as `red_ids.apply` does, that it holds
+# only the REDs of the last preflight, from whichever Epic ran it. And a pass
+# that found only orphaned entries was told not to call the run a non-decision
+# stop, but unlike the empty case it pointed the operator nowhere: it now
+# points at the read-only `/ucg-status` too, and still hands back only when
+# the operator asks for the resume.
+
+_SECTION1_LAST_PREFLIGHT = (
+    "**One** file holds the REDs the last preflight left pending, from whichever Epic ran it (section 2 says what "
+    "that means for an entry no RED carries). There is no second RED sidecar and no per-story one: a per-story "
+    "or per-run RED file would carry an id that changed between scans, and an id that changes cannot carry an "
+    "answer forward."
+)
+_SECTION1_OLD_ONE_FILE = "**One** file holds every still-pending preflight RED."
+_ONLY_ORPHANS_STATUS = "point at the read-only `/ucg-status`, as for an empty enumeration,"
+_EMPTY_STATUS = "say so, point at the read-only `/ucg-status`, and hand nothing back."
+
+
+def _section1_says_last_preflight(text: str) -> bool:
+    s1 = _norm(_section(text, "1."))
+    return _SECTION1_LAST_PREFLIGHT in s1 and "still-pending preflight RED" not in s1
+
+
+def test_section_1_says_the_red_file_holds_the_last_preflight():
+    assert _section1_says_last_preflight(_text())
+
+
+def test_the_section_1_pin_reds_on_every_still_pending_red():
+    """Twin: section 1 as it read before, the one file holding every
+    still-pending preflight RED."""
+    old = _mutate(
+        _text(),
+        "**One** file holds the REDs the last preflight left pending, from whichever Epic ran it (section 2 says "
+        "what that means for an entry no RED carries).",
+        _SECTION1_OLD_ONE_FILE,
+    )
+    assert _SECTION1_OLD_ONE_FILE in _norm(_section(old, "1."))
+    assert not _section1_says_last_preflight(old)
+
+
+def _only_orphans_points_at_status(text: str) -> bool:
+    """Section 4's hand-back sentence for a pass of only orphaned entries
+    points at `/ucg-status`, not just the empty case's sentence."""
+    return any(
+        s.startswith("Such a pass closed nothing") and _ONLY_ORPHANS_STATUS in s
+        for s in _sentences(_section(text, "4."))
+    )
+
+
+def test_a_pass_of_only_orphans_points_at_ucg_status():
+    assert _only_orphans_points_at_status(_text())
+
+
+def test_the_status_pin_reds_on_the_hand_back_without_the_pointer():
+    """Twin: the hand-back sentence without the pointer, while the empty
+    case still points at `/ucg-status`."""
+    old = _mutate(
+        _text(),
+        _ONLY_ORPHANS_HAND_BACK,
+        "Such a pass closed nothing, so it hands back only when the operator asks for the resume.",
+    )
+    assert _EMPTY_STATUS in _norm(_section(old, "4."))
+    assert not _only_orphans_points_at_status(old)
 
 
 def test_no_reader_reads_an_orphaned_entry(tmp_path):

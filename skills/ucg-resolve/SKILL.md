@@ -80,8 +80,9 @@ and anything not written down is not a pending decision this surface can honor.
    genuinely still pending: the arming step deliberately does not purge `escalation-*.json`,
    so a decision an operator chose to leave open survives to this pass.
 2. **The preflight RED sidecar** — `{workflow.implementation_artifacts}/.preflight-reds.json`,
-   shape `{"reds": [...]}`. **One** file holds every still-pending preflight RED. There is
-   no second RED sidecar and no per-story one: a per-story or per-run RED file would carry
+   shape `{"reds": [...]}`. **One** file holds the REDs the last preflight left pending, from
+   whichever Epic ran it (section 2 says what that means for an entry no RED carries). There
+   is no second RED sidecar and no per-story one: a per-story or per-run RED file would carry
    an id that changed between scans, and an id that changes cannot carry an answer forward.
 3. **The deferred-work ledger** — `{workflow.deferred_work_path}`, restricted to its
    `decision:` rows. Those are the rows whose `source` column reads `decision` (as opposed
@@ -362,7 +363,8 @@ enumeration means the run stopped for a non-decision reason — say so, point at
 empty enumeration, so do not say the run stopped for a non-decision reason: the run can
 have stopped on a RED that another Epic's preflight has since dropped from
 `.preflight-reds.json`, and its next preflight raises that RED again. Such a pass closed
-nothing, so it hands back only when the operator asks for the resume.
+nothing, so point at the read-only `/ucg-status`, as for an empty enumeration, and hand
+back only when the operator asks for the resume.
 
 Otherwise hand back to the resume the module already has, which **routes by the last stage
 the blocked run reached**, not by story. Which branch applies is not a detail this surface
