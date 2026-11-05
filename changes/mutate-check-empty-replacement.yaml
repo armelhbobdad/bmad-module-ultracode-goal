@@ -1,5 +1,5 @@
 type: fixed
 scope: ultracode-goal
 summary: |
-  `mutate_check.py` now accepts a row whose `replacement` is the empty string, a deletion mutation that removes the anchor. It used to refuse the whole table with exit 2 before any row ran, saying the key was missing. A row whose `file`, `anchor`, `command` or `expect_red` is the empty string is still refused, now with a message that names the empty key instead of calling it missing. A `replacement` may also be blank, and one that is not a string still reads as missing.
+  `mutate_check.py` now accepts a row whose `replacement` is the empty string, a deletion mutation that removes the anchor. It used to refuse the whole table with exit 2 before any row ran, saying the key was missing. A row whose `file`, `anchor`, `command` or `expect_red` is the empty string is still refused, now with a message that names the empty key instead of calling it missing. A `replacement` that is not a string still reads as missing.
 issues: [212]

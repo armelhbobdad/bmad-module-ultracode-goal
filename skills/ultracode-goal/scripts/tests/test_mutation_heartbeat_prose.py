@@ -61,8 +61,15 @@ def test_runner_properties_named_as_refusals():
     assert re.search(r"cannot defeat the task-runner cache for you", EXECUTE)
 
 
-# The parenthetical #212 added to the table sentence.
-_DELETION_ROW = " (an empty `replacement` deletes the anchor, the plainest mutation of a guard clause)"
+# The parenthetical #212 added to the table sentence, and the rule its review 2
+# added to it: mutate_check.py refuses a blank file, anchor, command or
+# expect_red with exit 2, and an author learns that here, not from the refusal.
+_NON_BLANK_RULE = "; the other four keys must be non-blank"
+_DELETION_ROW = (
+    " (an empty `replacement` deletes the anchor, the plainest mutation of a guard clause"
+    + _NON_BLANK_RULE
+    + ")"
+)
 
 
 def _table_sentence_allows_a_deletion_row(text: str) -> bool:
@@ -76,11 +83,35 @@ def _table_sentence_allows_a_deletion_row(text: str) -> bool:
     )
 
 
+def _table_sentence_requires_the_other_keys_non_blank(text: str) -> bool:
+    """In the same parenthetical: blank, not only empty, since only whitespace
+    is refused too."""
+    return bool(
+        re.search(
+            r"drives a JSON table of `\{file, anchor, replacement, command, expect_red\}` rows\s+"
+            r"\(an empty `replacement` deletes the anchor\b[^()]*;"
+            r"\s+the other four keys must be\s+non-blank\)",
+            text,
+        )
+    )
+
+
 def test_table_sentence_says_an_empty_replacement_deletes_the_anchor():
     assert _table_sentence_allows_a_deletion_row(EXECUTE)
     # Twin: the sentence as it stood before #212.
     assert _DELETION_ROW in EXECUTE
     assert not _table_sentence_allows_a_deletion_row(EXECUTE.replace(_DELETION_ROW, ""))
+
+
+def test_table_sentence_says_the_other_four_keys_must_be_non_blank():
+    assert _table_sentence_requires_the_other_keys_non_blank(EXECUTE)
+    # Twin: the parenthetical as #212 first wrote it, without the rule.
+    assert _NON_BLANK_RULE in EXECUTE
+    assert not _table_sentence_requires_the_other_keys_non_blank(EXECUTE.replace(_NON_BLANK_RULE, ""))
+    # Twin: the rule before review 2, when only an empty key was refused.
+    assert not _table_sentence_requires_the_other_keys_non_blank(
+        EXECUTE.replace(_NON_BLANK_RULE, "; the other four keys must be non-empty")
+    )
 
 
 # --- the heartbeat sidecar and stall marker ------------------------------------
