@@ -61,6 +61,28 @@ def test_runner_properties_named_as_refusals():
     assert re.search(r"cannot defeat the task-runner cache for you", EXECUTE)
 
 
+# The parenthetical #212 added to the table sentence.
+_DELETION_ROW = " (an empty `replacement` deletes the anchor, the plainest mutation of a guard clause)"
+
+
+def _table_sentence_allows_a_deletion_row(text: str) -> bool:
+    """Said on the table's own sentence, where an author learns the row shape."""
+    return bool(
+        re.search(
+            r"drives a JSON table of `\{file, anchor, replacement, command, expect_red\}` rows\s+"
+            r"\(an empty `replacement` deletes the anchor\b",
+            text,
+        )
+    )
+
+
+def test_table_sentence_says_an_empty_replacement_deletes_the_anchor():
+    assert _table_sentence_allows_a_deletion_row(EXECUTE)
+    # Twin: the sentence as it stood before #212.
+    assert _DELETION_ROW in EXECUTE
+    assert not _table_sentence_allows_a_deletion_row(EXECUTE.replace(_DELETION_ROW, ""))
+
+
 # --- the heartbeat sidecar and stall marker ------------------------------------
 
 

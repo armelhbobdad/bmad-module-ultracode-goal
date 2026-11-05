@@ -12,9 +12,11 @@ counts, so attribution and the exactly-one claim are both exercised for real.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -183,6 +185,72 @@ def test_identical_anchor_and_replacement_refused(tmp_path):
     proc = _run_table(project, [_row(replacement="LIMIT = 5")])
     assert proc.returncode == 2
     assert "mutates nothing" in proc.stderr
+
+
+def test_empty_replacement_deletes_the_anchor(tmp_path):
+    """A deletion row (#212): the plainest mutation of a guard clause runs like
+    any other row, and the file comes back byte for byte."""
+    project = _project(tmp_path)
+    before = (project / "code.py").read_bytes()
+    proc = _run_table(project, [_row(anchor="LIMIT = 5\n", replacement="")])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "| KILLED |" in proc.stdout
+    assert "exactly 'test_limit_pinned' went red" in proc.stdout
+    assert "| verified |" in proc.stdout
+    assert (project / "code.py").read_bytes() == before
+
+
+@pytest.mark.parametrize("key", ["file", "anchor", "command", "expect_red"])
+def test_empty_key_other_than_replacement_refused(tmp_path, key):
+    """Every other key left empty runs a row that proves nothing, so the table
+    is refused before any command runs, with a message that names the key as
+    empty rather than missing."""
+    project = _project(tmp_path)
+    before = {name: (project / name).read_bytes() for name in ("code.py", "check.py")}
+    proc = _run_table(project, [_row(**{key: ""})])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"row 0 has an empty {key!r}" in proc.stderr
+    assert "missing" not in proc.stderr
+    assert "Mutation ledger" not in proc.stdout
+    assert {name: (project / name).read_bytes() for name in before} == before
+
+
+@pytest.mark.parametrize("value", [None, 5], ids=["null", "number"])
+def test_non_string_replacement_is_still_missing(tmp_path, value):
+    """Only the empty string is a deletion: a replacement that is not a string
+    keeps the missing-key refusal rather than reaching `str.replace`."""
+    project = _project(tmp_path)
+    proc = _run_table(project, [_row(replacement=value)])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "row 0 is missing required string key 'replacement'" in proc.stderr
+
+
+# The paragraph #212 added to the docstring, flattened.
+_DELETION_RULE = (
+    "Every key but ``replacement`` must be non-empty. An empty ``replacement`` deletes the anchor, the plainest "
+    "mutation of a guard clause. Delete whole statements: a deletion that leaves a block with no body breaks the "
+    "module, and reads as any mutant that breaks a module does (see the collection errors below)."
+)
+
+
+def _says_an_empty_replacement_deletes_the_anchor(doc: str) -> bool:
+    """Right after the table example, the place a table author reads, and
+    before the per-row steps."""
+    return bool(
+        re.search(
+            r'"note": "AC-3 twin"\}\] Every key but ``replacement`` must be non-empty\. '
+            r"An empty ``replacement`` deletes the anchor\b.*? Per row, in order:",
+            doc,
+        )
+    )
+
+
+def test_the_docstring_says_an_empty_replacement_deletes_the_anchor():
+    doc = " ".join(ast.get_docstring(ast.parse(SCRIPT.read_text(encoding="utf-8"))).split())
+    assert _says_an_empty_replacement_deletes_the_anchor(doc)
+    # Twin: the docstring as it stood before #212.
+    assert _DELETION_RULE + " " in doc
+    assert not _says_an_empty_replacement_deletes_the_anchor(doc.replace(_DELETION_RULE + " ", ""))
 
 
 def test_restore_wins_even_when_the_command_edits_the_target(tmp_path):
