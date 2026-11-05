@@ -2653,6 +2653,12 @@ _HOOK_REJECTION_SENTENCES = {
         ("The PreToolUse hook blocks a commit on a protected branch, blocks a comm", "16e73dd4d02c"),
         ("The gate's two commits keep their own rules in `references/gate.md`: \"Wh", "ffd0e5f04fb0"),
         ("The hook itself only records and warns (a Stop hook **cannot force `/goa", "e875fa4537ca"),
+        # Reviewed (#206): the resume rule's check before the next story's step
+        # 0 removes the scratch folder of each `done` row, which a run that
+        # stopped after its evidence commit, or with nothing staged, left; it
+        # names that commit only as where the run stopped, and nothing of how
+        # a hook's rejection of it is answered.
+        ("Then remove `.scratch-<story_id>/` of each story of this Epic whose row ", "5d5f4d456141"),
         ("Treat a hook rejection exactly as step 5 treats a post-commit red: remed", "90ca77631228"),
         ("Unlike the baseline, **this marker is refreshed, not preserved**: step 5", "6428639f8eb2"),
         # Reviewed (#186 review): an operator's reason on a resume goes before a

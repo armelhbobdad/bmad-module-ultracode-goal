@@ -20,13 +20,18 @@ or nothing is staged (the gitignored artifact tree, where no commit is made).
 A `reloop` or `escalate` verdict leaves it. This pins:
 
 - one removal point: every sentence on the skills' surfaces and the user docs
-  that names the folder beside a remove verb is one of four, step 0's rule,
-  the evidence-folder rule's reason, and the evidence commit's removal and its
-  resume;
+  that names the folder beside a remove verb is one of five, step 0's rule,
+  the evidence-folder rule's reason, the evidence commit's removal and its
+  resume, and the resume rule's own removal for a `done` row;
 - step 0's rule, its widened reason and the verdicts that leave the folder;
 - the evidence commit's removal, nothing staged included, and the resume that
   removes a folder a `done` story left;
-- the fourth resume case's runner and its fallback, in its own paragraph;
+- that removal in Execute's resume rule too, at its check before the next
+  story's step 0: the rule loads gate.md only while the last advanced story's
+  evidence is still uncommitted, so a run that stopped after that commit, or
+  with nothing staged, never reaches gate.md's sentence;
+- the fourth resume case's runner or harness, when the escalated cycle built
+  one, and its fallback, in its own paragraph;
 - the backfill and its resume, which leave the folder in place.
 
 Each predicate is checked, as its anti-vacuous twin, against one-clause mutants
@@ -99,11 +104,19 @@ _GATE_RESUME = (
     "A resume that finds `.scratch-<story_id>/` for a story whose row is already `done` removes it before the next "
     "story's step 0."
 )
-# The four sentences that name the folder beside a remove verb, each exempt by
+# Execute's resume rule loads gate.md only while the last advanced story's
+# evidence is still uncommitted, so it removes a `done` row's folder itself.
+_RESUME_REMOVAL = (
+    "Then remove `.scratch-<story_id>/` of each story of this Epic whose row is already `done` (`references/gate.md`, "
+    "\"Commit the gate's evidence before the next story starts\"): a run that stopped after that story's evidence "
+    "commit, or with nothing staged for it, left the folder there, and the next story's step 0 must not find it."
+)
+# The five sentences that name the folder beside a remove verb, each exempt by
 # its own text, so a removal added inside one makes it a sentence the scan lists.
 _REMOVALS = (
     ("execute.md", _STEP0_REMOVAL),
     ("execute.md", _RULE_LEAD),
+    ("execute.md", _RESUME_REMOVAL),
     ("gate.md", _GATE_REMOVAL),
     ("gate.md", _GATE_RESUME),
 )
@@ -163,6 +176,8 @@ def test_the_folder_is_removed_at_one_point_only():
         # A removal added inside a sentence the scan exempts.
         ("gate.md", "or nothing is staged, remove `.scratch-<story_id>/`:",
          "or step 5's re-verify goes green, remove `.scratch-<story_id>/`:"),
+        ("execute.md", "of each story of this Epic whose row is already `done` (",
+         "of each story of this Epic, `done` or not, ("),
     ],
 )
 def test_the_scan_lists_a_removal_at_another_point(name, old, new):
@@ -292,16 +307,101 @@ def test_advance_route_predicate_rejects_the_removal_on_the_reloop_route():
     assert not _gate_removes_scratch_on_the_advance_route(moved)
 
 
-# --- the fourth resume case re-measures with the runner, or re-authors it ------------
+# --- Execute's resume rule removes a `done` row's folder before step 0 ---------------
+#
+# The resume rule reads gate.md's evidence-commit paragraph only while the last
+# advanced story's evidence is still uncommitted. A run that stopped after that
+# commit, or with nothing staged, before the removal, never reaches gate.md's
+# resume sentence, so the rule's own check before the next story's step 0 says it.
+
+_RESUME_RULE = "**On resume, re-enter Execute at the first story whose last logged gate verdict is not advance;"
+_OWED_CHECK = (
+    "Before the next story's step 0, also check whether the last advanced story's gate evidence is still uncommitted"
+)
+_EVERY_MARKER = "Check every `.evidence-owed-<story_id>` of this Epic's stories this way"
+_LAST_STORY = "When that story is the Epic's last, so every story reads `done`"
+_EVIDENCE_FOLDER = re.compile(r"`evidence-<story_id>/`")
+
+
+def _resume_rule_removes_a_done_rows_scratch(execute: str) -> bool:
+    if execute.count(_RESUME_RULE) != 1:
+        return False
+    sentences = _SENTENCE.split(_flat(execute[execute.index(_RESUME_RULE) :].split("\n\n")[0]))
+
+    def at(prefix: str) -> int:
+        return next((i for i, s in enumerate(sentences) if s.startswith(prefix)), -1)
+
+    owed, every, last = at(_OWED_CHECK), at(_EVERY_MARKER), at(_LAST_STORY)
+    removal = sentences.index(_RESUME_REMOVAL) if _RESUME_REMOVAL in sentences else -1
+    return bool(
+        -1 not in (owed, every, removal, last)
+        # After the owed evidence commit, which writes its message in the folder.
+        and owed < every and removal == every + 1 and removal < last
+        and not any(_EVIDENCE_FOLDER.search(s) and _REMOVE.search(s) for s in sentences)
+    )
+
+
+def test_the_resume_rule_removes_a_done_rows_folder_before_step0():
+    assert _resume_rule_removes_a_done_rows_scratch(EXECUTE)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The pre-fix text: the removal lived only in gate.md, which this resume never loads.
+        (" " + _RESUME_REMOVAL, ""),
+        # Narrowed back to the one story whose owed commit loads gate.md.
+        ("of each story of this Epic whose row is already `done`", "of the last advanced story"),
+        # The nothing-staged case dropped: a gitignored artifact tree makes no commit to stop after.
+        (", or with nothing staged for it,", ""),
+        # The evidence folder removed beside it, which the story record and the gate trail still cite.
+        (_RESUME_REMOVAL, _RESUME_REMOVAL + " Remove `evidence-<story_id>/` too, since no later step reads it."),
+    ],
+)
+def test_resume_predicate_rejects_a_narrower_or_wider_removal(old, new):
+    mutant = EXECUTE.replace(old, new)
+    assert mutant != EXECUTE, "the mutant must actually change the text"
+    assert not _resume_rule_removes_a_done_rows_scratch(mutant)
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [
+        # Ahead of the owed evidence commit, whose message file recreates the folder.
+        _OWED_CHECK,
+        # Into step 0, beside the advance route's rule, which a resume past that commit never meets.
+        _STEP0_REMOVAL,
+        # Into the fourth case, a paragraph of its own.
+        "**A fourth case:",
+    ],
+)
+def test_resume_predicate_rejects_the_removal_moved_elsewhere(anchor):
+    cut = EXECUTE.replace(" " + _RESUME_REMOVAL, "")
+    assert cut != EXECUTE and cut.count(anchor) == 1, anchor
+    moved = cut.replace(anchor, _RESUME_REMOVAL + " " + anchor, 1)
+    assert not _resume_rule_removes_a_done_rows_scratch(moved)
+
+
+def test_the_resume_rule_cites_the_paragraph_that_removes_a_done_rows_folder():
+    cited = re.search(r'\(`references/gate\.md`, "([^"]+)"\)', _RESUME_REMOVAL).group(1)
+    gate = _flat(GATE)
+    heading = f"**{cited}.**"
+    assert gate.count(heading) == 1
+    assert _GATE_RESUME in gate[gate.index(heading) : gate.index("When **every story of the Epic", gate.index(heading))]
+
+
+# --- the fourth resume case re-measures with any runner, or re-authors it ------------
 
 _FOURTH_CASE = "**A fourth case: a closed `operator-evidence-owed` story owes a re-gate, not a re-drive.**"
+# Most stories build no runner, and the folder is always there by then (step
+# 4's claim check writes its message file in it), so the case presumes neither.
 _RUNNER = (
-    "re-measuring `HEAD` at step 5 with the runner the escalated cycle left in `.scratch-<story_id>/` (step 0 keeps "
-    "that directory until the story advances), then re-gating it in Stage 5"
+    "re-measuring `HEAD` at step 5 with any runner or harness the escalated cycle built in `.scratch-<story_id>/` "
+    "(step 0 keeps that directory until the story advances), then re-gating it in Stage 5"
 )
 _FALLBACK = (
-    "When that directory is gone (a run under an earlier rule removed it at step 5, or an operator did), re-author the "
-    "runner for the story's declared gate set before step 5 runs."
+    "When the cycle built one there and that directory is gone (a run under an earlier rule removed it at step 5, or "
+    "an operator did), re-author it for the story's declared gate set before step 5 runs."
 )
 _FALLBACK_CHECK = (
     "Check it against the gates the escalated cycle's step-5 capture in `evidence-<story_id>/` names, when that folder "
@@ -329,12 +429,17 @@ def test_the_fourth_case_re_measures_with_the_cycles_runner():
     ("old", "new"),
     [
         # The pre-fix text: a step 5 with no runner named, and no fallback.
-        (" with the runner the escalated cycle left in `.scratch-<story_id>/` (step 0 keeps that directory until the "
-         "story advances)", ""),
+        (" with any runner or harness the escalated cycle built in `.scratch-<story_id>/` (step 0 keeps that directory "
+         "until the story advances)", ""),
         (" " + _FALLBACK + " " + _FALLBACK_CHECK, ""),
         (" " + _FALLBACK_CHECK, ""),
+        # The first wording, which presumed a runner every story left behind.
+        ("with any runner or harness the escalated cycle built in", "with the runner the escalated cycle left in"),
+        ("any runner or harness the escalated cycle built", "any runner the escalated cycle built"),
+        ("When the cycle built one there and that directory is gone", "When that directory is gone"),
+        ("re-author it for the story's declared gate set", "re-author the runner for the story's declared gate set"),
         # A fallback that restores a runner from the evidence folder, which holds nothing runnable.
-        ("re-author the runner for the story's declared gate set", "restore the runner from `evidence-<story_id>/`"),
+        ("re-author it for the story's declared gate set", "restore it from `evidence-<story_id>/`"),
         ("when that folder holds one, ", ""),
         # The fallback moved into a paragraph of its own, which a reader of the fourth case never reaches.
         (" " + _FALLBACK, "\n\n" + _FALLBACK),
