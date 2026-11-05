@@ -23,6 +23,15 @@ green, with a `flaky:` decision-log line, a `sweep` ledger row and nothing
 edited or committed, and any red in it is a red. Step 5 and the gate's backfill
 step 2 point at it, and the ledger schema lists the `sweep` source.
 
+Its review (#213) added: `--no-renames`, so the diff lists both sides of a
+rename; the `flaky:` line says the story's uncommitted changes sit on the
+`HEAD` both sweeps ran at at step 2; the ledger row names its `story`,
+`reason`, `suggested_action` and `status`; step 2 is named as the step that
+writes the marker; a timeout in the second sweep takes the loaded-machine
+paragraph first; gate.md's cap-only re-loop appends nothing to the ledger save
+that `sweep` row; and the evidence commit stages any `sweep` row the story's
+sweeps appended, which no commit of the story carries.
+
 Each predicate is checked against the live text and, as its anti-vacuous twin,
 against the text with the #213 wording removed (the pre-edit text) and against
 a one-clause mutant it must reject. Stated limit: this is a presence proof over
@@ -63,6 +72,16 @@ _SWEEP_SOURCE = (
     ", `sweep` (a non-critical finding: a case outside the story's changes that went red in one sweep and green in "
     "the next at the same tree, `references/execute.md` step 2)"
 )
+_CAP_ONLY_CARVE_OUT = (
+    " save the deferred-work `sweep` row its re-sweep owes for a red the story's changes do not explain "
+    "(`references/execute.md` step 2)"
+)
+_EVIDENCE_SWEEP_ROW = (
+    ", and any `sweep` row this story's sweeps appended (`references/execute.md` step 2) is tracked state no "
+    "commit of the story carries, since those stage only its source and test paths"
+)
+_EVIDENCE_HEAD = "**Commit the gate's evidence before the next story starts.**"
+_EVIDENCE_STAGING = "While `.current-story` still names this story, stage those of these paths"
 _INVARIANT = (
     "Only non-gate-blocking work (CONCERNS, non-critical findings, parked decisions, and the rows open `gate-gap:` "
     "lines become) is allowed onto the ledger"
@@ -116,6 +135,18 @@ def _source_line(gate: str) -> str:
     return next(line for line in gate.splitlines() if line.startswith("- `source` ∈"))
 
 
+def _reloop_bullet(gate: str) -> str:
+    start = gate.index("- **`reloop`**")
+    return gate[start : gate.index("- **`escalate`**", start)]
+
+
+def _evidence_commit_opening(gate: str) -> str:
+    """The evidence commit's paragraph up to its staging sentence: the list of
+    what that commit stages."""
+    start = gate.index(_EVIDENCE_HEAD)
+    return gate[start : gate.index(_EVIDENCE_STAGING, start)]
+
+
 # --- the pre-edit text: the live text with the #213 wording taken out ----------
 
 
@@ -128,7 +159,12 @@ def _execute_pre_edit(text: str) -> str:
 
 
 def _gate_pre_edit(gate: str) -> str:
-    return gate.replace(_GATE_POINTER + " ", "", 1).replace(_SWEEP_SOURCE, "", 1)
+    return (
+        gate.replace(_GATE_POINTER + " ", "", 1)
+        .replace(_SWEEP_SOURCE, "", 1)
+        .replace(_CAP_ONLY_CARVE_OUT, "", 1)
+        .replace(_EVIDENCE_SWEEP_ROW, "", 1)
+    )
 
 
 def test_the_pre_edit_text_is_a_real_reconstruction():
@@ -144,8 +180,12 @@ def test_the_pre_edit_text_is_a_real_reconstruction():
     assert "denies the story's own second commit" in _step2(pre)
     assert _RED_MEANS in _step5(pre)
     assert _GATE_POINTER not in gate_pre and "`sweep`" not in _source_line(gate_pre)
-    assert len(gate) - len(gate_pre) == len(_GATE_POINTER) + 1 + len(_SWEEP_SOURCE)
+    assert len(gate) - len(gate_pre) == (
+        len(_GATE_POINTER) + 1 + len(_SWEEP_SOURCE) + len(_CAP_ONLY_CARVE_OUT) + len(_EVIDENCE_SWEEP_ROW)
+    )
     assert _source_line(gate_pre).endswith("`decision` (parked decision).")
+    assert "writing no `class:` lines, appending nothing to the ledger, and skipping" in _reloop_bullet(gate_pre)
+    assert _evidence_commit_opening(gate_pre).endswith("are tracked state written after Execute's commit-at-green. ")
 
 
 # --- execute.md step 2: the rule -----------------------------------------------
@@ -174,8 +214,8 @@ def _qualifies_only_outside_the_changes(paragraph: str) -> bool:
     flat = _flat(paragraph)
     return bool(
         "is not yet this story's red when all three of these hold" in flat
-        and "its test file appears in neither `git diff --name-only <the sha in .baseline-<story_id>>` nor "
-        "`git status --porcelain --untracked-files=all`" in flat
+        and "its test file appears in neither `git diff --name-only --no-renames <the sha in .baseline-<story_id>>` "
+        "(which lists both sides of a rename) nor `git status --porcelain --untracked-files=all`" in flat
         and "its captured failure names no path either command lists" in flat
         and "the output shows the failure's cause inside that test" in flat
     )
@@ -204,19 +244,48 @@ def _records_the_flake(paragraph: str) -> bool:
     return bool(
         "When that second sweep shows no red at all, it is the step's green" in flat
         and re.search(r"log a `flaky:` line in `\.decision-log\.md` naming the case, its file, the `HEAD` both "
-                      r"sweeps ran at, the cause the output shows and both captures", flat)
-        and "append a row for the case to `{workflow.deferred_work_path}`, worded as a non-critical finding, with "
-        "`source` `sweep` and `severity` `med`" in flat
+                      r"sweeps ran at \(at step 2 the story's changes are uncommitted: they sit on that `HEAD`, "
+                      r"untouched between the two sweeps\), the cause the output shows and both captures", flat)
+        and "append a row for the case to `{workflow.deferred_work_path}`, worded as a non-critical finding" in flat
         and "edit, skip or retry-wrap nothing in that file, which is not this story's to change" in flat
     )
+
+
+def _names_the_ledger_row(paragraph: str) -> bool:
+    """Every column of the schema's row but its `id`, which the schema mints."""
+    return (
+        "worded as a non-critical finding (`references/gate.md`, \"Deferred-work ledger schema\"), with `source` "
+        "`sweep`, `severity` `med`, `story` this story's id, a `reason` naming the case, its file and both captures, "
+        "a `suggested_action` to fix the test outside this Epic's stories, and `status` `open`;"
+    ) in _flat(paragraph)
 
 
 def _keeps_the_marker_and_commits_nothing(paragraph: str) -> bool:
     flat = _flat(paragraph)
     return bool(
-        "This step then writes its marker from that second sweep" in flat
+        "Step 2 then writes its marker from that second sweep" in flat
         and "At step 5 nothing has changed, so commit nothing" in flat
         and "the marker stands as it does after a green first try" in flat
+    )
+
+
+_TIMEOUT_SENTENCE = (
+    "A timeout in the second sweep still takes the paragraph above first, as a timeout in any wide sweep does, "
+    "before it is read as that sweep's red."
+)
+_SECOND_RED_SENTENCE = (
+    "Any red in the second sweep, in that case or in another, is a red, and takes its step's route."
+)
+
+
+def _a_second_sweep_timeout_is_read_first(paragraph: str) -> bool:
+    """The loaded-machine paragraph still rules a timeout in the second sweep,
+    before the next sentence reads any red there as a red."""
+    flat = _flat(paragraph)
+    return bool(
+        _TIMEOUT_SENTENCE in flat
+        and "Any red in the second sweep" in flat
+        and flat.index(_TIMEOUT_SENTENCE) < flat.index("Any red in the second sweep")
     )
 
 
@@ -232,7 +301,9 @@ _CLAUSES = (
     _excludes_state_left_behind,
     _resweeps_once,
     _records_the_flake,
+    _names_the_ledger_row,
     _keeps_the_marker_and_commits_nothing,
+    _a_second_sweep_timeout_is_read_first,
     _a_second_red_is_a_red,
 )
 
@@ -265,6 +336,12 @@ def test_the_rule_predicate_rejects_the_pre_edit_execute_md():
         # Outside the diff alone lets through a cross-package regression the story caused.
         pytest.param(_qualifies_only_outside_the_changes, " nor `git status --porcelain --untracked-files=all`", "",
                      id="no-untracked"),
+        # The pre-review wording: a rename listed only its new path, so a test the
+        # story renamed away from read as one outside its changes.
+        pytest.param(_qualifies_only_outside_the_changes,
+                     "`git diff --name-only --no-renames <the sha in .baseline-<story_id>>` (which lists both sides of "
+                     "a rename)", "`git diff --name-only <the sha in .baseline-<story_id>>`", id="rename-one-side"),
+        pytest.param(_qualifies_only_outside_the_changes, " --no-renames", "", id="no-renames-dropped"),
         pytest.param(_qualifies_only_outside_the_changes, "its captured failure names no path either command lists; ",
                      "", id="names-a-changed-path"),
         pytest.param(_qualifies_only_outside_the_changes, "the output shows the failure's cause inside that test",
@@ -281,15 +358,46 @@ def test_the_rule_predicate_rejects_the_pre_edit_execute_md():
                      "Running the case alone answers it too", id="alone-answers"),
         pytest.param(_records_the_flake, "log a `flaky:` line in `.decision-log.md`", "log a line",
                      id="no-flaky-line"),
-        pytest.param(_records_the_flake, "with `source` `sweep` and `severity` `med`",
-                     "with `source` `gate` and `severity` `low`", id="wrong-ledger-row"),
-        pytest.param(_records_the_flake, ", worded as a non-critical finding,", ",", id="not-non-critical"),
+        # The pre-review wording: at step 2 a `HEAD` alone does not identify the
+        # uncommitted tree both sweeps ran on.
+        pytest.param(_records_the_flake, "the `HEAD` both sweeps ran at (at step 2 the story's changes are "
+                     "uncommitted: they sit on that `HEAD`, untouched between the two sweeps),",
+                     "the `HEAD` both sweeps ran at,", id="head-alone"),
+        pytest.param(_records_the_flake, "untouched between the two sweeps", "edited between the two sweeps",
+                     id="tree-moved"),
+        pytest.param(_records_the_flake, ", worded as a non-critical finding (", " (", id="not-non-critical"),
         pytest.param(_records_the_flake, "edit, skip or retry-wrap nothing in that file",
                      "fix the test in the story's range", id="edits-the-file"),
+        pytest.param(_names_the_ledger_row, "with `source` `sweep`, `severity` `med`",
+                     "with `source` `gate`, `severity` `low`", id="wrong-ledger-row"),
+        # The pre-review wording, which named two of the row's columns.
+        pytest.param(_names_the_ledger_row, "(`references/gate.md`, \"Deferred-work ledger schema\"), with `source` "
+                     "`sweep`, `severity` `med`, `story` this story's id, a `reason` naming the case, its file and both "
+                     "captures, a `suggested_action` to fix the test outside this Epic's stories, and `status` `open`",
+                     "with `source` `sweep` and `severity` `med` (`references/gate.md`, \"Deferred-work ledger "
+                     "schema\")", id="columns-unnamed"),
+        pytest.param(_names_the_ledger_row, "`story` this story's id, ", "", id="no-story"),
+        pytest.param(_names_the_ledger_row, " and both captures, a `suggested_action`", ", a `suggested_action`",
+                     id="reason-without-captures"),
+        pytest.param(_names_the_ledger_row, "to fix the test outside this Epic's stories",
+                     "to fix the test in the next story", id="fix-inside-the-epic"),
+        pytest.param(_names_the_ledger_row, ", and `status` `open`", "", id="no-status"),
         pytest.param(_keeps_the_marker_and_commits_nothing, "At step 5 nothing has changed, so commit nothing",
                      "At step 5, re-commit as for any red", id="recommits"),
         pytest.param(_keeps_the_marker_and_commits_nothing, "the marker stands as it does after a green first try",
                      "write a fresh marker from the second sweep", id="fresh-marker"),
+        # The pre-review wording, ambiguous in a paragraph that binds step 2,
+        # step 5 and the gate's sweeps.
+        pytest.param(_keeps_the_marker_and_commits_nothing, "Step 2 then writes its marker",
+                     "This step then writes its marker", id="this-step"),
+        # The pre-review wording: no sentence for a timeout in the second sweep.
+        pytest.param(_a_second_sweep_timeout_is_read_first, "A timeout in the second sweep still takes the paragraph "
+                     "above first, as a timeout in any wide sweep does, before it is read as that sweep's red. ", "",
+                     id="second-sweep-timeout-unruled"),
+        pytest.param(_a_second_sweep_timeout_is_read_first, "still takes the paragraph above first",
+                     "is that sweep's red, and skips the paragraph above", id="timeout-is-a-red"),
+        pytest.param(_a_second_sweep_timeout_is_read_first, _TIMEOUT_SENTENCE + " " + _SECOND_RED_SENTENCE,
+                     _SECOND_RED_SENTENCE + " " + _TIMEOUT_SENTENCE, id="timeout-after-the-red-route"),
         pytest.param(_a_second_red_is_a_red, "Any red in the second sweep, in that case or in another, is a red",
                      "A red in the same case in the second sweep is a red", id="other-case-unruled"),
         pytest.param(_a_second_red_is_a_red, "and takes its step's route", "and takes a third sweep",
@@ -438,6 +546,78 @@ def test_the_ledger_predicate_rejects_its_mutants(old, new):
     mutant = gate.replace(old, new, 1)
     assert mutant != gate, "the mutant must actually change the text"
     assert not _ledger_takes_a_sweep_row(mutant)
+
+
+def _cap_only_reloop_owes_its_sweep_row(gate: str) -> bool:
+    """A cap-only re-loop re-runs the full sweep, which execute.md step 2 binds,
+    so "appending nothing to the ledger" carves out the `sweep` row it can owe."""
+    bullet = _reloop_bullet(gate)
+    return bool(
+        "**A cap-only re-loop skips the ceremony.**" in bullet
+        and "writing no `class:` lines, appending nothing to the ledger" + _CAP_ONLY_CARVE_OUT
+        + ", and skipping `bmad-correct-course` entirely" in bullet
+    )
+
+
+def test_the_cap_only_reloop_carves_out_the_sweep_row():
+    assert _cap_only_reloop_owes_its_sweep_row(_gate())
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The pre-review wording, which forbade the row execute.md step 2 owes.
+        pytest.param(_CAP_ONLY_CARVE_OUT, "", id="pre-edit"),
+        pytest.param("save the deferred-work `sweep` row its re-sweep owes",
+                     "not even the deferred-work `sweep` row its re-sweep owes", id="row-forbidden"),
+        pytest.param("(`references/execute.md` step 2), and skipping `bmad-correct-course`",
+                     ", and skipping `bmad-correct-course`", id="no-pointer"),
+    ],
+)
+def test_the_cap_only_predicate_rejects_its_mutants(old, new):
+    gate = _gate()
+    assert gate.count(old) == 1, "the mutant must change the one clause it names"
+    mutant = gate.replace(old, new, 1)
+    assert mutant != gate, "the mutant must actually change the text"
+    assert not _cap_only_reloop_owes_its_sweep_row(mutant)
+
+
+def _evidence_commit_stages_the_sweep_row(gate: str) -> bool:
+    """A `sweep` row step 2 appends comes before the story's commit, which
+    stages only its source and test paths, so the evidence commit's list names
+    it beside the gate's own ledger rows."""
+    opening = _evidence_commit_opening(gate)
+    return bool(
+        "this gate's ledger rows and the decision log" in opening
+        and "are tracked state written after Execute's commit-at-green" + _EVIDENCE_SWEEP_ROW + ". " in opening
+    )
+
+
+def test_the_evidence_commit_stages_the_sweep_row():
+    assert _evidence_commit_stages_the_sweep_row(_gate())
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The pre-review wording: "this gate's ledger rows" alone, so a row
+        # execute.md appended stayed uncommitted.
+        pytest.param(_EVIDENCE_SWEEP_ROW, "", id="pre-edit"),
+        pytest.param("any `sweep` row this story's sweeps appended", "any `sweep` row this gate's sweeps appended",
+                     id="gate-sweeps-only"),
+        # Moved past the staging sentence, the row is named after the list the
+        # commit stages from.
+        pytest.param(_EVIDENCE_SWEEP_ROW + ". While `.current-story` still names this story, stage those of these "
+                     "paths", ". While `.current-story` still names this story, stage those of these paths"
+                     + _EVIDENCE_SWEEP_ROW, id="after-the-staging"),
+    ],
+)
+def test_the_evidence_commit_predicate_rejects_its_mutants(old, new):
+    gate = _gate()
+    assert gate.count(old) == 1, "the mutant must change the one clause it names"
+    mutant = gate.replace(old, new, 1)
+    assert mutant != gate, "the mutant must actually change the text"
+    assert not _evidence_commit_stages_the_sweep_row(mutant)
 
 
 # --- docs/how-it-works.md: the Execute summary ----------------------------------
