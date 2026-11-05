@@ -488,10 +488,8 @@ def _guard(command: str, cwd: Path, env: dict) -> tuple[int, str]:
     return proc.returncode, proc.stdout.strip()
 
 
-@pytest.mark.skipif(not shutil.which("bash"), reason="needs bash to run the command")
-@pytest.mark.parametrize("project_name", ["project", "my project"])
-@pytest.mark.parametrize("surface", ["resolve", "formalize", "parent", "execute"])
-def test_the_cat_command_clears_the_guard_and_appends(tmp_path: Path, surface: str, project_name: str):
+def _append_world(tmp_path: Path, surface: str, project_name: str) -> dict:
+    """A project whose run folder holds a log and a slice, with the guard's recall latch armed."""
     project = tmp_path / project_name
     folder = project / "_bmad-output" / "ultracode-goal" / _RUN
     folder.mkdir(parents=True)
@@ -523,19 +521,53 @@ def test_the_cat_command_clears_the_guard_and_appends(tmp_path: Path, surface: s
     log_path.write_text(head, encoding="utf-8")
     entry = "Closed d-1: the guard denied `git commit` and the operator's hook was fixed.\n"
     slice_path.write_text(entry, encoding="utf-8")
+    return {
+        "project": project,
+        "env": env,
+        "store": store,
+        "command": command,
+        "slice": slice_path,
+        "log": log_path,
+        "head": head,
+        "entry": entry,
+    }
 
+
+_SURFACES = pytest.mark.parametrize("surface", ["resolve", "formalize", "parent", "execute"])
+_PROJECTS = pytest.mark.parametrize("project_name", ["project", "my project"])
+
+
+@_PROJECTS
+@_SURFACES
+def test_the_cat_command_clears_the_guard(tmp_path: Path, surface: str, project_name: str):
+    world = _append_world(tmp_path, surface, project_name)
     # Control: the guard is armed in this world and reads Bash command strings.
-    code, out = _guard(f"cat {store.as_posix()}/runs/x.jsonl", project, env)
+    code, out = _guard(f"cat {world['store'].as_posix()}/runs/x.jsonl", world["project"], world["env"])
     assert code == 2 and "deny" in out, out
+    assert _guard(world["command"], world["project"], world["env"]) == (0, ""), (
+        "the guard must make no decision on the append"
+    )
 
+
+# The `bash` a Windows runner finds first on PATH can be WSL's launcher, which
+# cannot read a `C:/` path, so the append itself runs off Windows only; the
+# guard's half above runs everywhere.
+@pytest.mark.skipif(
+    sys.platform == "win32" or not shutil.which("bash"),
+    reason="needs a POSIX bash that reads the project's own paths",
+)
+@_PROJECTS
+@_SURFACES
+def test_the_cat_command_appends_the_slice(tmp_path: Path, surface: str, project_name: str):
+    world = _append_world(tmp_path, surface, project_name)
+    command, log_path, head, entry = world["command"], world["log"], world["head"], world["entry"]
     if " " in project_name:
         # Twin: bare, a path with a space splits into two words, so the
         # redirect lands on a stray file and the log never gets the entry.
-        bare = subprocess.run(["bash", "-c", _bare(command)], cwd=project, capture_output=True, text=True)
+        bare = subprocess.run(["bash", "-c", _bare(command)], cwd=world["project"], capture_output=True, text=True)
         assert bare.returncode != 0, bare
         assert log_path.read_text(encoding="utf-8") == head, "the bare form must not append"
 
-    assert _guard(command, project, env) == (0, ""), "the guard must make no decision on the append"
-    subprocess.run(["bash", "-c", command], cwd=project, check=True)
+    subprocess.run(["bash", "-c", command], cwd=world["project"], check=True)
     assert log_path.read_text(encoding="utf-8") == head + entry
-    assert slice_path.read_text(encoding="utf-8") == entry, "the slice is kept"
+    assert world["slice"].read_text(encoding="utf-8") == entry, "the slice is kept"
