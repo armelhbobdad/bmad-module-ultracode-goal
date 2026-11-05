@@ -2035,13 +2035,19 @@ def test_the_prescribed_listing_shows_a_test_the_plain_one_hides(tmp_path):
     assert every == ["?? tests/integration/b.test.ts"]
 
 
-def test_the_backfill_commit_removes_the_scratch_folder_its_claim_check_recreates():
-    """Execute removes `.scratch-<story_id>/` after step 5, before the gate;
-    the claim check writes its message files there again."""
+def test_the_backfill_commit_leaves_the_scratch_folder_in_place():
+    """Execute keeps `.scratch-<story_id>/` until the gate's advance route
+    (#206), so the backfill leaves it, its claim check's message files
+    included: a cap-only re-loop or a re-gate may still run its sweep."""
     step = _between(_backfill_commit(), _COMMIT_STEPS[4], "The new commit is now the commit under assessment")
-    assert re.search(r"remove `\.scratch-<story_id>/` again: the claim check's message files recreated it", step)
-    assert re.search(r"`references/execute\.md` step 0 has it removed before the story advances", step)
-    assert re.search(r"Remove the directory after step 5's re-verify goes green, before the story advances", EXECUTE)
+    assert re.search(
+        r"and leave `\.scratch-<story_id>/` in place, the claim check's message files included: "
+        r"`references/execute\.md` step 0 keeps it until the story advances, since a cap-only re-loop or a re-gate "
+        r"of this story may still run its sweep\.",
+        step,
+    )
+    assert not re.search(r"remove `\.scratch-<story_id>/`", step, re.I)
+    assert re.search(r"Remove the directory on the gate's advance route", EXECUTE)
 
 
 # --- a red backfill sweep, and nothing else, ends the cycle before trace -------
@@ -2624,6 +2630,11 @@ _HOOK_REJECTION_SENTENCES = {
         # write, and nothing of a hook's rejection of the evidence commit.
         ("**A hooks reason is fixed in place, not by a return to Stage 2.** When t", "a178c4791343"),
         ("**Commit at green** (one implementation commit per green story; the gate", "50b2448580e8"),
+        # Reviewed (#206): step 0's scratch folder is removed on the advance
+        # route once the evidence commit is made, its `evidence-commit-rejected`
+        # escalation is written or nothing is staged; it says when scratch goes,
+        # and nothing of how a hook's rejection of that commit is answered.
+        ("**Remove the directory on the gate's advance route, once its evidence co", "6e293defec56"),
         ("A fix that writes `.claude/settings.local.json` (a hook, its env, the al", "9df5f7b5d3f4"),
         ("A rejection whose fix needs a file changed, or whose output does not sho", "8232f495e53c"),
         ("Before the next story's step 0, also check whether the last advanced sto", "88ce12f730cc"),
@@ -3021,9 +3032,10 @@ def _resume(para: str) -> bool:
             para,
         )
         # M33: the committed backfill resumes at the rebuild and the three assessors, never at automate.
+        # #206: it leaves the story's scratch folder where it is, as the backfill does.
         and re.search(
-            r"After `gate-backfill: <sha>` with `HEAD` still `<sha>`, remove `\.scratch-<story_id>/` if it is still "
-            r"there, rebuild the worktree at that commit and run trace, NFR and test review on it\.",
+            r"After `gate-backfill: <sha>` with `HEAD` still `<sha>`, rebuild the worktree at that commit and run "
+            r"trace, NFR and test review on it\.",
             para,
         )
         and "run automate again on it" not in para
@@ -3079,6 +3091,18 @@ def test_resume_predicate_rejects_a_committed_backfill_that_runs_automate_again(
     para = _backfill_commit()
     mutant = para.replace(
         "rebuild the worktree at that commit and run trace, NFR and test review on it", "run automate again on it"
+    )
+    assert mutant != para, "the mutant must actually change the text"
+    assert not _resume(mutant)
+
+
+def test_resume_predicate_rejects_a_resume_that_removes_the_scratch_folder():
+    """#206: the old bullet removed `.scratch-<story_id>/` before trace, so a
+    later re-gate of the story found no runner."""
+    para = _backfill_commit()
+    mutant = para.replace(
+        "with `HEAD` still `<sha>`, rebuild the worktree",
+        "with `HEAD` still `<sha>`, remove `.scratch-<story_id>/` if it is still there, rebuild the worktree",
     )
     assert mutant != para, "the mutant must actually change the text"
     assert not _resume(mutant)
@@ -5886,22 +5910,26 @@ def test_fragment_predicate_rejects_a_sentence_that_contradicts_the_prose(which,
 # inside the Bash command, where bash ran a backticked name or a `$(...)` in it
 # and the commit still exited 0 with what was left. It now writes `message.txt`
 # in the story's scratch folder, commits from it, rewords it after a
-# `commit-msg` rejection, and removes the folder again before the next story.
+# `commit-msg` rejection, and removes the folder before the next story. Since
+# #206 this is the one place the folder is removed: the commit made, its
+# escalation written or nothing staged, and a resume removes one a `done`
+# story left.
 
 _EVIDENCE_MESSAGE_FILE = (
     "Before the commit call, write its message with Write to "
-    "`{workflow.implementation_artifacts}/.scratch-<story_id>/message.txt`, recreating the folder Execute removed "
-    "before the story advanced, or Reading the file first if an earlier session left it there, and commit from that "
-    "file (`git commit -F`), as the story's own commits do. Never put the message in the Bash command. After a "
+    "`{workflow.implementation_artifacts}/.scratch-<story_id>/message.txt`, Reading the file first when one is there "
+    "(step 4's claim check leaves one, as a backfill or an earlier session may) and creating the folder when it is "
+    "gone, and commit from that file (`git commit -F`), as the story's own commits do. Never put the message in the Bash command. After a "
     "double-quoted `-m`, or in a heredoc whose delimiter is unquoted, bash runs a backticked name or a `$(...)` in it "
     "as a command while it builds the arguments, and the commit still exits 0 with the text that is left. A quoted "
     "heredoc keeps the text, but the guard reads its lines as commands (a line that opens with `Git runs` is read as "
     "a git command it does not know, which it counts as a commit and a push), and the `$(cat <<'EOF' ...)` form is "
     "a command substitution, which a harness that statically analyses Bash strings refuses (`references/execute.md` "
     "step 2). "
-    "Once the commit is made, or the escalation below is written, remove `.scratch-<story_id>/` again, since the next "
-    "story's step 0 must not find it (`references/execute.md` step 0). A resume that finds the folder left by a run "
-    "that stopped after this commit removes it before the next story's step 0."
+    "Once the commit is made, the escalation below is written, or nothing is staged, remove `.scratch-<story_id>/`: "
+    "this is where `references/execute.md` step 0 has it removed, and the next story's step 0 must not find it. A "
+    "resume that finds `.scratch-<story_id>/` for a story whose row is already `done` removes it before the next "
+    "story's step 0."
 )
 _EVIDENCE_RESUME_MESSAGE = (
     "(its tests-ran marker still passes the guard), write the message file and commit from it as above, and refresh "
@@ -5943,7 +5971,13 @@ def test_the_evidence_commit_takes_its_message_from_a_file():
          "(its tests-ran marker still passes the guard), commit,"),
         ("so reword `message.txt` and retry from it (`-F`), with", "so reword it and retry, with"),
         # A Write onto a file an earlier session left, refused because this one never Read it.
-        (", or Reading the file first if an earlier session left it there,", ","),
+        (", Reading the file first when one is there (step 4's claim check leaves one, as a backfill or an earlier "
+         "session may) and creating the folder when it is gone,", ", creating the folder when it is gone,"),
+        # The first wording, which had Execute remove the folder before the gate (#206).
+        (", Reading the file first when one is there (step 4's claim check leaves one, as a backfill or an earlier "
+         "session may) and creating the folder when it is gone,",
+         ", recreating the folder Execute removed before the story advanced, or Reading the file first if an earlier "
+         "session left it there,"),
         # The message inline after all, where a pin breaks.
         ("commit from that file (`git commit -F`)", "commit with `git commit -m`"),
         ("story's step 0. For the story whose advance",
@@ -5962,11 +5996,19 @@ def test_the_evidence_commit_takes_its_message_from_a_file():
         ("and refresh its `.commit-<story_id>`.",
          "and refresh its `.commit-<story_id>`. A resume may pass the message after `-m`."),
         # The folder left for the next story's step 0 to find.
-        (" Once the commit is made, or the escalation below is written, remove `.scratch-<story_id>/` again, since "
-         "the next story's step 0 must not find it (`references/execute.md` step 0).", ""),
-        ("Once the commit is made, or the escalation below is written,", "Once the commit is made,"),
-        (" A resume that finds the folder left by a run that stopped after this commit removes it before the next "
-         "story's step 0.", ""),
+        (" Once the commit is made, the escalation below is written, or nothing is staged, remove "
+         "`.scratch-<story_id>/`: this is where `references/execute.md` step 0 has it removed, and the next story's "
+         "step 0 must not find it.", ""),
+        ("Once the commit is made, the escalation below is written, or nothing is staged,", "Once the commit is made,"),
+        # #206: nothing is staged on a gitignored artifact tree, so a removal
+        # keyed on the commit or its escalation alone left every story's folder.
+        ("Once the commit is made, the escalation below is written, or nothing is staged,",
+         "Once the commit is made, or the escalation below is written,"),
+        (" A resume that finds `.scratch-<story_id>/` for a story whose row is already `done` removes it before the "
+         "next story's step 0.", ""),
+        # The first resume sentence, which missed a run that stopped with nothing staged.
+        ("A resume that finds `.scratch-<story_id>/` for a story whose row is already `done` removes it",
+         "A resume that finds the folder left by a run that stopped after this commit removes it"),
         # The why dropped, which is what keeps a later edit from putting the message back inline.
         (" After a double-quoted `-m`, or in a heredoc whose delimiter is unquoted, bash runs a backticked name or a "
          "`$(...)` in it as a command while it builds the arguments, and the commit still exits 0 with the text that "

@@ -1,0 +1,408 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pytest"]
+# ///
+"""How long a story's `.scratch-<story_id>/` folder lasts (#206).
+
+Execute's step 0 removed the folder once step 5's re-verify went green, before
+the gate, and the gate's backfill and its resume removed it again. A runner or
+harness built there for the declared-gate sweep was gone for every later sweep
+of the same story that does not re-drive it: the re-gate a closed
+`operator-evidence-owed` escalation owes (the fourth resume case), the gate's
+backfill sweep, a cap-only re-loop's sweep and the step 5 the third resume case
+enters at. Each one had to re-author the runner by hand, which risks measuring
+another gate set.
+
+The folder now lasts until the gate's advance route, which removes it once the
+evidence commit is made, its `evidence-commit-rejected` escalation is written,
+or nothing is staged (the gitignored artifact tree, where no commit is made).
+A `reloop` or `escalate` verdict leaves it. This pins:
+
+- one removal point: every sentence on the skills' surfaces and the user docs
+  that names the folder beside a remove verb is one of four, step 0's rule,
+  the evidence-folder rule's reason, and the evidence commit's removal and its
+  resume;
+- step 0's rule, its widened reason and the verdicts that leave the folder;
+- the evidence commit's removal, nothing staged included, and the resume that
+  removes a folder a `done` story left;
+- the fourth resume case's runner and its fallback, in its own paragraph;
+- the backfill and its resume, which leave the folder in place.
+
+Each predicate is checked, as its anti-vacuous twin, against one-clause mutants
+it must reject, the old wording among them.
+
+Run: uv run --with pytest pytest skills/ultracode-goal/scripts/tests/test_scratch_lifetime_prose.py -v
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+SKILL = Path(__file__).resolve().parents[2]
+REFS = SKILL / "references"
+REPO = SKILL.parents[1]
+EXECUTE = (REFS / "execute.md").read_text(encoding="utf-8")
+GATE = (REFS / "gate.md").read_text(encoding="utf-8")
+
+
+def _flat(text: str) -> str:
+    return re.sub(r"\s+", " ", text)
+
+
+_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z`*(\"-])")
+_REMOVE = re.compile(
+    r"\b(?:remov\w*|delet\w*|rm -|clean\w* up|discard\w*|wip\w*|eras\w*|prun\w*|purg\w*|clear\w* (?:out|away)"
+    r"|drop\w*)\b",
+    re.I,
+)
+# The folder by its name, as a glob, or by what it is.
+_SCRATCH = re.compile(r"\.scratch-(?:<[^>]+>|\*)|\bscratch (?:directory|folder|dir)\b", re.I)
+# Inside step 0, which introduces it, the folder is also "the directory".
+_THE_DIRECTORY = re.compile(r"\bthe directory\b", re.I)
+
+_STEP0_START = "\n0. **Set the current story and record its baseline commit**"
+_STEP0_REMOVAL = (
+    "**Remove the directory on the gate's advance route, once its evidence commit is made, its "
+    "`evidence-commit-rejected` escalation is written, or nothing is staged for it** (`references/gate.md`, \"Commit "
+    "the gate's evidence before the next story starts\"), never earlier, and never later: the next story's step 0 "
+    "must not find it."
+)
+_STEP0_KEEP = (
+    "A `reloop` or `escalate` verdict leaves it in place, since the story still owes a cycle or a re-gate that runs "
+    "the sweep again."
+)
+_STEP0_OUTLIVES = (
+    "The directory outlives the step-4 commit and step 5 **deliberately**: step 5 re-runs the same declared-gate sweep "
+    "on the committed tree, and the gate's backfill sweep, a cap-only re-loop's sweep and the step 5 a resume enters "
+    "at (the third and fourth cases above) run it again without re-driving the story, so a runner or harness built "
+    "here is still needed there, and one lost before then gets re-authored by hand, a real, measured cost that risks "
+    "measuring a different gate set."
+)
+_STEP0_OLD_REMOVAL = (
+    "**Remove the directory after step 5's re-verify goes green, before the story advances**, never earlier, and "
+    "never later: the next story's step 0 must not find it."
+)
+_RULE_LEAD = (
+    "**Evidence never goes in scratch.** The scratch directory is removed when the story advances, while the story "
+    "record and the gate trail (`references/finalize.md`) cite their evidence after that, so the story's evidence has "
+    "a folder of its own, `{workflow.implementation_artifacts}/evidence-<story_id>/`, which no step removes."
+)
+_GATE_REMOVAL = (
+    "Once the commit is made, the escalation below is written, or nothing is staged, remove `.scratch-<story_id>/`: "
+    "this is where `references/execute.md` step 0 has it removed, and the next story's step 0 must not find it."
+)
+_GATE_RESUME = (
+    "A resume that finds `.scratch-<story_id>/` for a story whose row is already `done` removes it before the next "
+    "story's step 0."
+)
+# The four sentences that name the folder beside a remove verb, each exempt by
+# its own text, so a removal added inside one makes it a sentence the scan lists.
+_REMOVALS = (
+    ("execute.md", _STEP0_REMOVAL),
+    ("execute.md", _RULE_LEAD),
+    ("gate.md", _GATE_REMOVAL),
+    ("gate.md", _GATE_RESUME),
+)
+
+
+def _surfaces() -> dict[str, str]:
+    """Every skill's SKILL.md and stage references, and the user docs."""
+    skills = REPO / "skills"
+    paths = [*sorted(skills.glob("*/SKILL.md")), *sorted(skills.glob("*/references/*.md")),
+             *sorted((REPO / "docs").glob("*.md"))]
+    texts = {}
+    for path in paths:
+        name = path.name if path.parent == REFS else path.relative_to(REPO).as_posix()
+        texts[name] = path.read_text(encoding="utf-8")
+    return texts
+
+
+def _step0(execute: str) -> str:
+    start = execute.index(_STEP0_START)
+    end = execute.find("\n\n", start + 1)
+    return execute[start:] if end == -1 else execute[start:end]
+
+
+def _removal_sentences(texts: dict[str, str]) -> list[tuple[str, str]]:
+    """Each sentence that names the scratch folder beside a remove verb."""
+    found = set()
+    for name, text in texts.items():
+        candidates = [s for s in _SENTENCE.split(_flat(text)) if _SCRATCH.search(s)]
+        if name == "execute.md" and _STEP0_START in text:
+            candidates += [s for s in _SENTENCE.split(_flat(_step0(text))) if _THE_DIRECTORY.search(s)]
+        found.update((name, s.strip()) for s in candidates if _REMOVE.search(s))
+    return sorted(found)
+
+
+def test_the_folder_is_removed_at_one_point_only():
+    assert _removal_sentences(_surfaces()) == sorted(_REMOVALS)
+
+
+@pytest.mark.parametrize(
+    ("name", "old", "new"),
+    [
+        # The first rule, restored in step 0.
+        ("execute.md", _STEP0_REMOVAL, _STEP0_OLD_REMOVAL),
+        # The first rule, added beside the new one by the folder's name.
+        ("execute.md", None, "Remove `.scratch-<story_id>/` once step 5's re-verify goes green."),
+        # The backfill's removal, restored.
+        ("gate.md", "and leave `.scratch-<story_id>/` in place, the claim check's message files included:",
+         "and remove `.scratch-<story_id>/` again: the claim check's message files recreated it, and"),
+        # The backfill resume's removal, restored.
+        ("gate.md", "with `HEAD` still `<sha>`, rebuild the worktree",
+         "with `HEAD` still `<sha>`, remove `.scratch-<story_id>/` if it is still there, rebuild the worktree"),
+        # A removal on another route or surface.
+        ("gate.md", None, "On a `reloop`, delete `.scratch-<story_id>/` before the next cycle."),
+        ("finalize.md", None, "Remove every `.scratch-*` folder once the Epic's verdict is logged."),
+        ("skills/ultracode-goal/SKILL.md", None, "Drop the story's scratch folder once its sweep is green."),
+        ("docs/operating-tips.md", None, "You can delete the scratch directory once step 5 is green."),
+        # A removal added inside a sentence the scan exempts.
+        ("gate.md", "or nothing is staged, remove `.scratch-<story_id>/`:",
+         "or step 5's re-verify goes green, remove `.scratch-<story_id>/`:"),
+    ],
+)
+def test_the_scan_lists_a_removal_at_another_point(name, old, new):
+    texts = _surfaces()
+    if old is None:
+        texts[name] += "\n\n" + new + "\n"
+    else:
+        assert texts[name].count(old) == 1, old
+        texts[name] = texts[name].replace(old, new)
+    assert _removal_sentences(texts) != sorted(_REMOVALS)
+
+
+# --- step 0: kept until the advance route, and why ---------------------------------
+
+
+def _step0_keeps_scratch_until_advance(execute: str) -> bool:
+    try:
+        step0 = _flat(_step0(execute))
+    except ValueError:
+        return False
+    sentences = _SENTENCE.split(step0)
+    return bool(
+        _STEP0_OUTLIVES in sentences
+        and _STEP0_REMOVAL in sentences
+        and _STEP0_KEEP in sentences
+        and sentences.index(_STEP0_OUTLIVES) < sentences.index(_STEP0_REMOVAL) < sentences.index(_STEP0_KEEP)
+        and not re.search(r"after step 5's re-verify goes green", step0, re.I)
+    )
+
+
+def test_step0_keeps_the_folder_until_the_advance_route():
+    assert _step0_keeps_scratch_until_advance(EXECUTE)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (_STEP0_REMOVAL, _STEP0_OLD_REMOVAL),
+        (_STEP0_REMOVAL, _STEP0_REMOVAL + " Remove the directory after step 5's re-verify goes green, when no runner "
+         "is left."),
+        # The nothing-staged case dropped: a gitignored artifact tree leaves every story's folder behind.
+        (", its `evidence-commit-rejected` escalation is written, or nothing is staged for it**",
+         ", or its `evidence-commit-rejected` escalation is written**"),
+        ("once its evidence commit is made, its `evidence-commit-rejected` escalation is written, or nothing is staged "
+         "for it**", "once its evidence commit is made**"),
+        # The verdicts that keep it, dropped or narrowed.
+        (" " + _STEP0_KEEP, ""),
+        ("A `reloop` or `escalate` verdict leaves it in place", "A `reloop` verdict leaves it in place"),
+        # The reason narrowed back to step 5 alone.
+        ("and the gate's backfill sweep, a cap-only re-loop's sweep and the step 5 a resume enters at (the third and "
+         "fourth cases above) run it again without re-driving the story, ", ""),
+        ("the step 5 a resume enters at (the third and fourth cases above)", "the step 5 the third case enters at"),
+        # The rule moved out of step 0.
+        (" " + _STEP0_REMOVAL, ""),
+    ],
+)
+def test_step0_predicate_rejects_an_earlier_or_narrower_rule(old, new):
+    mutant = EXECUTE.replace(old, new)
+    assert mutant != EXECUTE, "the mutant must actually change the text"
+    assert not _step0_keeps_scratch_until_advance(mutant)
+
+
+def test_step0_cites_the_paragraph_that_removes_the_folder():
+    cited = re.search(r'\(`references/gate\.md`, "([^"]+)"\)', _STEP0_REMOVAL).group(1)
+    assert f"**{cited}.**" in GATE
+
+
+def test_the_rewritten_step0_line_has_no_em_dash_left():
+    """The removal rule shares one line with the rest of step 0, which held
+    seven em dashes; `validate:em-dash --strict` reads the whole added line."""
+    line = next(line for line in EXECUTE.splitlines() if line.startswith(_STEP0_START.lstrip("\n")))
+    assert chr(0x2014) not in line
+
+
+# --- the gate's advance route removes it ------------------------------------------
+
+_EVIDENCE_COMMIT = "**Commit the gate's evidence before the next story starts.**"
+
+
+def _gate_removes_scratch_on_the_advance_route(gate: str) -> bool:
+    flat = _flat(gate)
+    try:
+        advance = flat.index("- **`advance`**")
+        start = flat.index(_EVIDENCE_COMMIT, advance)
+        end = flat.index("When **every story of the Epic", start)
+    except ValueError:
+        return False
+    sentences = _SENTENCE.split(flat[start:end])
+    return bool(
+        _GATE_REMOVAL in sentences
+        and _GATE_RESUME in sentences
+        and sentences.index(_GATE_REMOVAL) + 1 == sentences.index(_GATE_RESUME)
+    )
+
+
+def test_the_advance_route_removes_the_folder_whatever_the_commit_does():
+    assert _gate_removes_scratch_on_the_advance_route(GATE)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The old trigger: nothing staged, as on a gitignored artifact tree, left the folder.
+        ("Once the commit is made, the escalation below is written, or nothing is staged,",
+         "Once the commit is made, or the escalation below is written,"),
+        # The old resume, which missed a run that stopped with nothing to commit.
+        (_GATE_RESUME, "A resume that finds the folder left by a run that stopped after this commit removes it before "
+         "the next story's step 0."),
+        (" " + _GATE_RESUME, ""),
+        # The removal dropped from the advance route.
+        (" " + _GATE_REMOVAL, ""),
+    ],
+)
+def test_advance_route_predicate_rejects_a_narrower_removal(old, new):
+    flat = _flat(GATE)
+    mutant = flat.replace(old, new)
+    assert mutant != flat, "the mutant must actually change the text"
+    assert not _gate_removes_scratch_on_the_advance_route(mutant)
+
+
+def test_advance_route_predicate_rejects_the_removal_on_the_reloop_route():
+    flat = _flat(GATE)
+    moved = flat.replace(" " + _GATE_REMOVAL, "").replace(
+        "- **`reloop`** (", "- **`reloop`** (" + _GATE_REMOVAL + " ", 1
+    )
+    assert moved != flat
+    assert not _gate_removes_scratch_on_the_advance_route(moved)
+
+
+# --- the fourth resume case re-measures with the runner, or re-authors it ------------
+
+_FOURTH_CASE = "**A fourth case: a closed `operator-evidence-owed` story owes a re-gate, not a re-drive.**"
+_RUNNER = (
+    "re-measuring `HEAD` at step 5 with the runner the escalated cycle left in `.scratch-<story_id>/` (step 0 keeps "
+    "that directory until the story advances), then re-gating it in Stage 5"
+)
+_FALLBACK = (
+    "When that directory is gone (a run under an earlier rule removed it at step 5, or an operator did), re-author the "
+    "runner for the story's declared gate set before step 5 runs."
+)
+_FALLBACK_CHECK = (
+    "Check it against the gates the escalated cycle's step-5 capture in `evidence-<story_id>/` names, when that folder "
+    "holds one, so the re-gate measures the gate set that cycle measured."
+)
+
+
+def _fourth_case_names_its_runner(execute: str) -> bool:
+    if execute.count(_FOURTH_CASE) != 1:
+        return False
+    paragraph = _flat(execute[execute.index(_FOURTH_CASE) :].split("\n\n")[0])
+    sentences = _SENTENCE.split(paragraph)
+    runner = next((i for i, s in enumerate(sentences) if _RUNNER in s), -1)
+    return bool(
+        runner != -1
+        and sentences[runner + 1 : runner + 3] == [_FALLBACK, _FALLBACK_CHECK]
+    )
+
+
+def test_the_fourth_case_re_measures_with_the_cycles_runner():
+    assert _fourth_case_names_its_runner(EXECUTE)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The pre-fix text: a step 5 with no runner named, and no fallback.
+        (" with the runner the escalated cycle left in `.scratch-<story_id>/` (step 0 keeps that directory until the "
+         "story advances)", ""),
+        (" " + _FALLBACK + " " + _FALLBACK_CHECK, ""),
+        (" " + _FALLBACK_CHECK, ""),
+        # A fallback that restores a runner from the evidence folder, which holds nothing runnable.
+        ("re-author the runner for the story's declared gate set", "restore the runner from `evidence-<story_id>/`"),
+        ("when that folder holds one, ", ""),
+        # The fallback moved into a paragraph of its own, which a reader of the fourth case never reaches.
+        (" " + _FALLBACK, "\n\n" + _FALLBACK),
+    ],
+)
+def test_fourth_case_predicate_rejects_a_case_with_no_runner(old, new):
+    mutant = EXECUTE.replace(old, new)
+    assert mutant != EXECUTE, "the mutant must actually change the text"
+    assert not _fourth_case_names_its_runner(mutant)
+
+
+# --- the backfill and its resume leave it in place ----------------------------------
+
+_BACKFILL_LEAVE = (
+    "and leave `.scratch-<story_id>/` in place, the claim check's message files included: `references/execute.md` "
+    "step 0 keeps it until the story advances, since a cap-only re-loop or a re-gate of this story may still run its "
+    "sweep."
+)
+
+
+def _between(text: str, start: str, end: str) -> str:
+    at = text.index(start)
+    return text[at : text.index(end, at)]
+
+
+def _backfill_leaves_scratch(gate: str) -> bool:
+    flat = _flat(gate)
+    try:
+        backfill = _between(flat, "**When automate backfills, commit the backfill before trace runs.**",
+                            "**A red backfill sweep ends the cycle at a re-loop.**")
+        resume = _between(flat, "**A resume after a backfill does not run automate again.**",
+                          "At any other `HEAD`, the story is not in this case")
+    except ValueError:
+        return False
+    removals = [
+        s for s in _SENTENCE.split(backfill + " " + resume) if _SCRATCH.search(s) and _REMOVE.search(s)
+    ]
+    return _BACKFILL_LEAVE in backfill and not removals
+
+
+def test_the_backfill_and_its_resume_leave_the_folder():
+    assert _backfill_leaves_scratch(GATE)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("and leave `.scratch-<story_id>/` in place, the claim check's message files included: `references/execute.md` "
+         "step 0 keeps it until the story advances, since a cap-only re-loop or a re-gate of this story may still run "
+         "its sweep.",
+         "and remove `.scratch-<story_id>/` again: the claim check's message files recreated it, and "
+         "`references/execute.md` step 0 has it removed before the story advances."),
+        ("with `HEAD` still `<sha>`, rebuild the worktree",
+         "with `HEAD` still `<sha>`, remove `.scratch-<story_id>/` if it is still there, rebuild the worktree"),
+        (", since a cap-only re-loop or a re-gate of this story may still run its sweep", ""),
+    ],
+)
+def test_backfill_predicate_rejects_a_removal_before_trace(old, new):
+    flat = _flat(GATE)
+    mutant = flat.replace(old, new)
+    assert mutant != flat, "the mutant must actually change the text"
+    assert not _backfill_leaves_scratch(mutant)
+
+
+def test_the_fragment_says_when_the_folder_goes():
+    fragment = (REPO / "changes" / "scratch-kept-until-advance.yaml").read_text(encoding="utf-8")
+    assert re.search(r"^type: changed$", fragment, re.M)
+    assert re.search(r"^issues: \[206\]$", fragment, re.M)
+    for token in ("`.scratch-<story_id>/`", "`operator-evidence-owed`", "`reloop`", "`escalate`",
+                  "`evidence-commit-rejected`"):
+        assert token in fragment, token
