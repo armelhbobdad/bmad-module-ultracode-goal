@@ -126,16 +126,27 @@ def _states_what_the_proof_leaves(bullet: str) -> bool:
     )
 
 
+_CANNOT_START_SCOPE = (
+    "This holds for any call a guard refuses this way, step 2's disarm, the Hooks write, the allowlist write and "
+    "`--assert-armed` among them, not only the probe."
+)
+# The #211 review's scope, which left out step 2's disarm and the Hooks write.
+_CANNOT_START_SCOPE_R1 = (
+    "This holds for any call after the Hooks write, the allowlist write and `--assert-armed` included, not only the "
+    "probe."
+)
+
+
 def _other_answers_stop(bullet: str) -> bool:
     """Another reason from the guard, or a guard that cannot start, stops; the
-    latter on any call after the Hooks write, not only on the probe."""
+    latter on any call such a guard refuses, step 2's disarm included, not only
+    on the probe (#211 review 2)."""
     flat = _flat(bullet)
     return bool(
         re.search(r"\*\*Another reason from the guard\*\*.*?Log it and stop, naming the reason", flat)
         and re.search(r"`Protected-branch guard: refusing` or a `Tests-ran guard: refusing` that names a story", flat)
         and re.search(r"\*\*A guard that cannot start\*\*.*?`failed; blocking`.*?Make no further call: stop", flat)
-        and "This holds for any call after the Hooks write, the allowlist write and `--assert-armed` included, not "
-        "only the probe." in flat
+        and _CANNOT_START_SCOPE in flat
         and 'troubleshooting\'s "Every tool call is refused"' in flat
     )
 
@@ -159,24 +170,39 @@ def _retries_once_spaced(bullet: str) -> bool:
     )
 
 
+_RESUME_IN_THE_LAUNCH_SETTINGS = (
+    "resume this conversation with **ultracode** effort and Auto Mode on, as at launch, since a resumed session takes "
+    "the effort and the mode its launch sets"
+)
+_RESUME_COMMANDS = (
+    "`claude --continue --effort ultracode --permission-mode auto` in the project resumes the most recent "
+    "conversation; when another one in the project is more recent, `claude --resume` with the same two flags lets "
+    "them pick this one"
+)
+_RECHECK_HEAD = (
+    "Then re-check step 4's session clause (**ultracode** effort and **Auto Mode** on). When it fails, tell the "
+    "operator which of the two is off, ask them to turn it on and say continue, and re-check it then: this is not "
+    "step 4's stop, since `/ucg-resolve` has no RED to work for a session setting. Once it holds, re-run"
+)
+_RECHECK_ASKS = _RECHECK_HEAD + " `--assert-armed` and the probe, and go on to the briefing only on the refusal above"
+
+
 def _routes_both_modes(bullet: str) -> bool:
-    """Attended: resume the conversation in the launch's mode, re-check step
-    4's session clause and probe again, else stop unlatched. Headless: a RED
-    blocker whose way back is a new invocation."""
+    """Attended: resume the conversation with the launch's effort and mode
+    (both flags named), re-check step 4's session clause, asking for a setting
+    that is off rather than stopping as step 4 does, and probe again, else stop
+    unlatched. Headless: a RED blocker whose way back is a new invocation."""
     flat = _flat(bullet)
     attended = flat[flat.find("**Attended:**") : flat.find("**Headless:**")]
     headless = flat[flat.find("**Headless:**") :]
     return bool(
         "**Attended:**" in flat
         and "**Headless:**" in flat
-        and "resume this conversation with Auto Mode on, as at launch, since a resumed session takes the mode its "
-        "launch sets" in attended
-        and "`claude --continue` in the project resumes the most recent conversation; when another one in the "
-        "project is more recent, `claude --resume` lets them pick this one" in attended
+        and _RESUME_IN_THE_LAUNCH_SETTINGS in attended
+        and _RESUME_COMMANDS in attended
         and "resuming re-runs no part of this stage, so it writes nothing again" in attended
-        and "Then re-check step 4's session clause (**ultracode** effort and **Auto Mode** on), and stop as step 4 "
-        "does when it fails; then re-run `--assert-armed` and the probe, and go on to the briefing only on the "
-        "refusal above" in attended
+        and _RECHECK_ASKS in attended
+        and "stop as step 4 does" not in attended
         and "still does not refuse the call, stop: remove this run's recall latch first" in attended
         and 'troubleshooting\'s "Hooks not firing"' in attended
         and "record a **RED** blocker" in headless
@@ -226,8 +252,9 @@ def test_the_probe_predicate_rejects_the_pre_edit_step5():
         (_states_what_the_proof_leaves, " " + _EARLIER_GUARD_RESIDUAL, ""),
         (_other_answers_stop, "Log it and stop, naming the reason", "Take it as the proof too"),
         (_other_answers_stop, "Make no further call: stop", "Retry it"),
-        (_other_answers_stop, " This holds for any call after the Hooks write, the allowlist write and "
-         "`--assert-armed` included, not only the probe.", ""),
+        (_other_answers_stop, " " + _CANNOT_START_SCOPE, ""),
+        # The #211 review's scope, before its round 2 named step 2's disarm.
+        (_other_answers_stop, _CANNOT_START_SCOPE, _CANNOT_START_SCOPE_R1),
         (_retries_once_spaced, "Re-run `preflight_check.py --assert-armed` as above, which spaces the two calls, "
          "then make", "Make"),
         (_retries_once_spaced, "which spaces the two calls", "which also gives the file watcher a few seconds"),
@@ -238,16 +265,28 @@ def test_the_probe_predicate_rejects_the_pre_edit_step5():
          "or a refusal from the permission classifier. PreToolUse hooks run before any permission check, so none "
          "of these comes from the guard."),
         (_retries_once_spaced, "the Stop hook, written to the same file, counts no turn either", "the Stop hook runs"),
-        (_routes_both_modes, "resume this conversation with Auto Mode on", "start a new session"),
-        (_routes_both_modes, "resume this conversation with Auto Mode on, as at launch, since a resumed session "
-         "takes the mode its launch sets, and say continue. `claude --continue` in the project resumes the most "
-         "recent conversation; when another one in the project is more recent, `claude --resume` lets them pick "
+        (_routes_both_modes, "resume this conversation with **ultracode** effort and Auto Mode on",
+         "start a new session"),
+        (_routes_both_modes, "resume this conversation with **ultracode** effort and Auto Mode on, as at launch, "
+         "since a resumed session takes the effort and the mode its launch sets, and say continue. `claude "
+         "--continue --effort ultracode --permission-mode auto` in the project resumes the most recent conversation; "
+         "when another one in the project is more recent, `claude --resume` with the same two flags lets them pick "
          "this one, or they reopen the session in the desktop app. The resumed session reads the file as it "
          "starts, and resuming",
          "resume this conversation (`claude --continue` in the project, or reopen the session in the desktop "
          "app), which reads the file as it starts, and say continue. Resuming"),
-        (_routes_both_modes, "Then re-check step 4's session clause (**ultracode** effort and **Auto Mode** on), "
-         "and stop as step 4 does when it fails; then re-run", "Then re-run"),
+        (_routes_both_modes, _RECHECK_HEAD, "Then re-run"),
+        # The #211 review's resume, before its round 2: Auto Mode alone, the
+        # bare commands, and a failed re-check that stopped as step 4 does.
+        (_routes_both_modes, _RESUME_IN_THE_LAUNCH_SETTINGS,
+         "resume this conversation with Auto Mode on, as at launch, since a resumed session takes the mode its "
+         "launch sets"),
+        (_routes_both_modes, _RESUME_COMMANDS,
+         "`claude --continue` in the project resumes the most recent conversation; when another one in the project "
+         "is more recent, `claude --resume` lets them pick this one"),
+        (_routes_both_modes, _RECHECK_HEAD,
+         "Then re-check step 4's session clause (**ultracode** effort and **Auto Mode** on), and stop as step 4 does "
+         "when it fails; then re-run"),
         (_routes_both_modes, "go on to the briefing only on the refusal above", "go on to the briefing"),
         (_routes_both_modes, "still does not refuse the call, stop: remove this run's recall latch first",
          "still does not refuse the call, go on unguarded"),
@@ -267,8 +306,21 @@ def test_each_probe_clause_rejects_its_one_clause_mutant(clause, old, new):
 
 _CANNOT_START_IS_NOT_THE_CLASSIFIER = (
     "A refusal that names the guard's command with `failed; blocking` or `timed out; blocking`, or shows `uv`'s own "
-    "error, such as `error: Failed to spawn`, is not the classifier's: no approval under `/permissions` fixes it, "
-    "and it takes step 5's last bullet's \"A guard that cannot start\" instead."
+    "error, such as `error: Failed to spawn`, is not the classifier's, whichever write or call it refuses, the disarm "
+    "included: no approval under `/permissions` fixes it, and it takes step 5's last bullet's \"A guard that cannot "
+    "start\" instead."
+)
+_UNNEEDED_DISARM = (
+    "Any other refused write of a disarm the pass does not need (the paragraph above) is no stop: skip that disarm, "
+    "log it, and go on."
+)
+# The #211 review's wording: the unneeded disarm's "go on" came first, and the
+# carve-out did not say it held for the disarm.
+_STEP2_R1 = (
+    "A refused write of a disarm the pass does not need (the paragraph above) is no stop: skip that disarm, log it, "
+    "and go on. A refusal that names the guard's command with `failed; blocking` or `timed out; blocking`, or shows "
+    "`uv`'s own error, such as `error: Failed to spawn`, is not the classifier's: no approval under `/permissions` "
+    "fixes it, and it takes step 5's last bullet's \"A guard that cannot start\" instead."
 )
 
 
@@ -278,12 +330,16 @@ def _refused_write_paragraph(text: str) -> str:
 
 
 def _refused_write_spares_a_guard_that_cannot_start(paragraph: str) -> bool:
-    """The calls after the Hooks write that step 2's rule covers include the
-    allowlist write and `--assert-armed`, which a guard that cannot start
-    refuses first; approving them under `/permissions` cannot fix it, so the
-    rule hands that refusal to step 5's sub-bullet before it reads any other
-    refusal as the classifier's (#211 review)."""
-    head = _CANNOT_START_IS_NOT_THE_CLASSIFIER + " Treat any other refusal of the write, or of any call after it"
+    """A guard that cannot start refuses whichever call comes first, a disarm
+    the pass does not need, the Hooks write, the allowlist write or
+    `--assert-armed`; approving it under `/permissions` cannot fix it, so the
+    rule hands that refusal to step 5's sub-bullet before it lets an unneeded
+    disarm go on or reads any other refusal as the classifier's (#211 review,
+    round 2)."""
+    head = (
+        _CANNOT_START_IS_NOT_THE_CLASSIFIER + " " + _UNNEEDED_DISARM
+        + " Treat any other refusal of the write, or of any call after it"
+    )
     return head in paragraph
 
 
@@ -291,12 +347,15 @@ def test_step2_hands_a_guard_that_cannot_start_to_step5():
     assert _refused_write_spares_a_guard_that_cannot_start(_refused_write_paragraph(_preflight()))
 
 
-def test_the_step2_predicate_rejects_the_paragraph_as_211_left_it():
+@pytest.mark.parametrize("round_", ["211", "211 review"])
+def test_the_step2_predicate_rejects_the_paragraph_as_211_left_it(round_: str):
     paragraph = _refused_write_paragraph(_preflight())
-    assert paragraph.count(_CANNOT_START_IS_NOT_THE_CLASSIFIER) == 1
-    assert not _refused_write_spares_a_guard_that_cannot_start(
-        paragraph.replace(" " + _CANNOT_START_IS_NOT_THE_CLASSIFIER, "")
-    )
+    now = _CANNOT_START_IS_NOT_THE_CLASSIFIER + " " + _UNNEEDED_DISARM
+    assert paragraph.count(now) == 1
+    # As #211 left it there was no carve-out; its review put one after the
+    # unneeded disarm's "go on", scoped to no write.
+    before = _UNNEEDED_DISARM.replace("Any other refused", "A refused") if round_ == "211" else _STEP2_R1
+    assert not _refused_write_spares_a_guard_that_cannot_start(paragraph.replace(now, before))
 
 
 def test_the_probe_is_the_last_bullet_of_step5_after_the_allowlist():
@@ -433,7 +492,7 @@ _DOC_CLAIMS = {
     ),
     "architecture.md": (
         _DOCS / "architecture.md",
-        "checks the file, and then proves that the running session loaded them before the run goes unattended",
+        "checks the file, and then proves that the running session runs the guard before the run goes unattended",
         "and asserts they are active before the run goes unattended",
     ),
     "how-it-works.md": (
@@ -444,7 +503,7 @@ _DOC_CLAIMS = {
     ),
     "why-ultracode-goal.md": (
         _DOCS / "why-ultracode-goal.md",
-        "and preflight proves that the running session loaded it before the run goes unattended.",
+        "and preflight proves that the running session runs it before the run goes unattended.",
         "and asserted active before the run goes unattended.",
     ),
     "execute.md": (
@@ -479,6 +538,84 @@ def test_the_docs_predicate_rejects_the_pre_edit_claim(name: str):
     assert not _claims_only_the_file(mutant, now)
 
 
+_TS_RESUME = (
+    "resume the conversation with ultracode effort and Auto Mode on, as you launched it, since a resumed session "
+    "takes the effort and the mode its launch sets"
+)
+_TS_COMMANDS = (
+    "`claude --continue --effort ultracode --permission-mode auto` in the project resumes the most recent "
+    "conversation, `claude --resume` with the same two flags lets you pick this one when another in the project is "
+    "more recent, or reopen it in the desktop app."
+)
+_TS_SETTING_OFF = "When either setting is off there, preflight names it and asks you to turn it on and say continue."
+# Each cause of another reason paired with its own fix, as the bullet on a
+# story set in Claude Code's environment gives the first (#211 review 2).
+_TS_EACH_CAUSE_ITS_FIX = (
+    "For the variable, unset it where you start Claude Code, then start Claude Code again; for an earlier arming, "
+    "quit and start Claude Code again so it loads the file this run wrote. Then invoke the run again."
+)
+_TS_ONE_FIX_FOR_BOTH = (
+    "Unset the variable, or quit and start Claude Code again so it loads the file this run wrote, then invoke the "
+    "run again."
+)
+# Live smoke test, #211 review 2: another hook's refusal alone reads
+# `PreToolUse:Bash hook error: [<its command>]: <its stderr>`.
+_TS_ANOTHER_HOOK = (
+    "- **A refusal from another hook.** A probe result that names another hook's command in brackets and holds no "
+    "guard reason, such as `PreToolUse:Bash hook error: [<its command>]: <its stderr>`, is that hook's refusal, so "
+    "the guard did not refuse the call. Check `/hooks` for the guard, as the bullets above say."
+)
+
+
+# The probe proves that the session runs a guard, not which arming's matcher
+# and env it runs with (the probe bullet's residual), so no summary of it says
+# the session "loaded" the hooks (#211 review 2). Each entry: the file, its
+# wording now, and its wording as the #211 review left it.
+_RUNS_NOT_LOADED = {
+    "fragment summary": (
+        _REPO / "changes" / "preflight-proves-hooks-running.yaml",
+        "Preflight now proves that the running Claude Code session runs the guard it arms, and stops when it does "
+        "not.",
+        "Preflight now proves that the running Claude Code session loaded the hooks it arms, and stops when it did "
+        "not.",
+    ),
+    "architecture.md": (
+        _DOCS / "architecture.md",
+        "and then proves that the running session runs the guard before the run goes unattended",
+        "and then proves that the running session loaded them before the run goes unattended",
+    ),
+    "why-ultracode-goal.md": (
+        _DOCS / "why-ultracode-goal.md",
+        "and preflight proves that the running session runs it before the run goes unattended.",
+        "and preflight proves that the running session loaded it before the run goes unattended.",
+    ),
+}
+_LOADED_CLAIM = re.compile(r"proves? that the running (?:Claude Code )?session loaded", re.I)
+
+
+def _claims_a_guard_runs(text: str, now: str) -> bool:
+    flat = _flat(text)
+    return now in flat and not _LOADED_CLAIM.search(flat)
+
+
+@pytest.mark.parametrize("name", sorted(_RUNS_NOT_LOADED))
+def test_the_summaries_say_the_session_runs_the_guard(name: str):
+    path, now, _ = _RUNS_NOT_LOADED[name]
+    assert _claims_a_guard_runs(path.read_text(encoding="utf-8"), now)
+
+
+@pytest.mark.parametrize("name", sorted(_RUNS_NOT_LOADED))
+def test_the_summaries_predicate_rejects_the_loaded_claim(name: str):
+    path, now, before = _RUNS_NOT_LOADED[name]
+    text = _flat(path.read_text(encoding="utf-8"))
+    assert text.count(now) == 1
+    mutant = text.replace(now, before)
+    assert mutant != text
+    assert not _claims_a_guard_runs(mutant, now)
+    # The scan alone rejects it too: an empty `now` is in any text.
+    assert not _claims_a_guard_runs(mutant, "")
+
+
 def _troubleshooting_covers_the_probe(text: str) -> bool:
     flat = _flat(text)
     section = flat[flat.index("## Hooks not firing") : flat.index("## Every tool call is refused")]
@@ -486,10 +623,9 @@ def _troubleshooting_covers_the_probe(text: str) -> bool:
         "Or preflight stops before the launch, saying the hooks are in `.claude/settings.local.json` and this "
         "session does not run them." in section
         and "**Hooks written while the session ran, and not loaded.**" in section
-        and "resume the conversation with Auto Mode on, as you launched it, since a resumed session takes the mode "
-        "its launch sets" in section
-        and "`claude --continue` in the project resumes the most recent conversation, `claude --resume` lets you "
-        "pick this one when another in the project is more recent, or reopen it in the desktop app." in section
+        and _TS_RESUME in section
+        and _TS_COMMANDS in section
+        and _TS_SETTING_OFF in section
         and "`/hooks` lists the hooks it loaded" in section
         and all(name in section for name in ("`disableAllHooks`", "`allowManagedHooksOnly`", "`--setting-sources`",
                                              "`--bare`"))
@@ -498,6 +634,9 @@ def _troubleshooting_covers_the_probe(text: str) -> bool:
         "tests-ran marker is fresh, and something staged, the guard allows the call" in section
         and "Unset the variable where you start Claude Code, start it again, then invoke the run again." in section
         and "**The probe refused for another reason.**" in section
+        and _TS_EACH_CAUSE_ITS_FIX in section
+        and _TS_ONE_FIX_FOR_BOTH not in section
+        and _TS_ANOTHER_HOOK in section
         and "**This session does not run the hooks.**" in flat
         and "See [Hooks not firing](#hooks-not-firing)." in flat
     )
@@ -511,12 +650,15 @@ def test_troubleshooting_says_what_the_probe_finds_and_what_to_do():
     "drop",
     [
         "**Hooks written while the session ran, and not loaded.**",
-        "with Auto Mode on, as you launched it, since a resumed session takes the mode its launch sets, ",
-        "`claude --resume` lets you pick this one when another in the project is more recent, ",
+        "with ultracode effort and Auto Mode on, as you launched it, since a resumed session takes the effort and the "
+        "mode its launch sets, ",
+        "`claude --resume` with the same two flags lets you pick this one when another in the project is more recent, ",
+        " " + _TS_SETTING_OFF,
         "`allowManagedHooksOnly`",
         "**A story set in Claude Code's environment.**",
         "Unset the variable where you start Claude Code, start it again, then invoke the run again.",
         "**The probe refused for another reason.**",
+        "**A refusal from another hook.**",
         "See [Hooks not firing](#hooks-not-firing).",
     ],
 )
@@ -526,22 +668,39 @@ def test_the_troubleshooting_predicate_rejects_a_dropped_part(drop: str):
     assert not _troubleshooting_covers_the_probe(text.replace(drop, ""))
 
 
-def test_the_troubleshooting_predicate_rejects_the_resume_as_211_left_it():
-    """Twin of the #211 review's resume wording: the bare `--continue`, with no
-    word of the mode or of picking this conversation."""
-    text = _flat((_DOCS / "troubleshooting.md").read_text(encoding="utf-8"))
-    now = (
+_TS_RESUME_NOW = (
+    _TS_RESUME + ", and then to say continue: " + _TS_COMMANDS + " The resumed session reads the file as it starts. "
+    + _TS_SETTING_OFF
+)
+
+
+@pytest.mark.parametrize(
+    "before",
+    [
+        # As #211 left it: the bare `--continue`, with no word of the mode or
+        # of picking this conversation.
+        "resume the conversation (`claude --continue` in the project, or reopen it in the desktop app), which reads "
+        "the file as it starts, and then to say continue.",
+        # As its review left it: Auto Mode alone, and no flag named.
         "resume the conversation with Auto Mode on, as you launched it, since a resumed session takes the mode its "
         "launch sets, and then to say continue: `claude --continue` in the project resumes the most recent "
         "conversation, `claude --resume` lets you pick this one when another in the project is more recent, or "
-        "reopen it in the desktop app. The resumed session reads the file as it starts."
-    )
-    before = (
-        "resume the conversation (`claude --continue` in the project, or reopen it in the desktop app), which reads "
-        "the file as it starts, and then to say continue."
-    )
-    assert text.count(now) == 1
-    assert not _troubleshooting_covers_the_probe(text.replace(now, before))
+        "reopen it in the desktop app. The resumed session reads the file as it starts.",
+    ],
+    ids=["211", "211 review"],
+)
+def test_the_troubleshooting_predicate_rejects_the_resume_as_211_left_it(before: str):
+    text = _flat((_DOCS / "troubleshooting.md").read_text(encoding="utf-8"))
+    assert text.count(_TS_RESUME_NOW) == 1
+    assert not _troubleshooting_covers_the_probe(text.replace(_TS_RESUME_NOW, before))
+
+
+def test_the_troubleshooting_predicate_rejects_one_fix_for_two_causes():
+    """Twin of the #211 review's "Unset the variable, or quit and start Claude
+    Code again", which paired two causes with one "or"."""
+    text = _flat((_DOCS / "troubleshooting.md").read_text(encoding="utf-8"))
+    assert text.count(_TS_EACH_CAUSE_ITS_FIX) == 1
+    assert not _troubleshooting_covers_the_probe(text.replace(_TS_EACH_CAUSE_ITS_FIX, _TS_ONE_FIX_FOR_BOTH))
 
 
 # --- the fragment's migration line --------------------------------------------
@@ -553,12 +712,17 @@ def _migration(text: str) -> str:
     return _flat(text[text.index("\nmigration:") : text.index("\nissues:")])
 
 
+_MIGRATION_SETTING_OFF = "When preflight then names either setting as off, turn it on and say continue."
+
+
 def _migration_resumes_in_the_launch_mode(migration: str) -> bool:
     return bool(
-        "resume the conversation with Auto Mode on, as you launched it, since a resumed session takes the mode its "
-        "launch sets" in migration
-        and "`claude --continue` in the project resumes the most recent conversation, `claude --resume` lets you "
-        "pick this one when another in the project is more recent" in migration
+        "resume the conversation with ultracode effort and Auto Mode on, as you launched it, since a resumed session "
+        "takes the effort and the mode its launch sets" in migration
+        and "`claude --continue --effort ultracode --permission-mode auto` in the project resumes the most recent "
+        "conversation, `claude --resume` with the same two flags lets you pick this one when another in the project "
+        "is more recent" in migration
+        and _MIGRATION_SETTING_OFF in migration
         and 'see "Hooks not firing" in the troubleshooting guide' in migration
     )
 
@@ -567,17 +731,30 @@ def test_the_migration_resumes_in_the_launch_mode():
     assert _migration_resumes_in_the_launch_mode(_migration(_FRAGMENT.read_text(encoding="utf-8")))
 
 
-def test_the_migration_predicate_rejects_the_line_as_211_left_it():
-    migration = _migration(_FRAGMENT.read_text(encoding="utf-8"))
-    now = (
+@pytest.mark.parametrize(
+    "before",
+    [
+        # As #211 left it.
+        "resume the conversation (`claude --continue` in the project, or reopen it in the desktop app) and say "
+        "continue",
+        # As its review left it: Auto Mode alone, no flag named, and no word of
+        # a setting that is off.
         "resume the conversation with Auto Mode on, as you launched it, since a resumed session takes the mode its "
         "launch sets, and say continue (`claude --continue` in the project resumes the most recent conversation, "
         "`claude --resume` lets you pick this one when another in the project is more recent, or reopen it in the "
-        "desktop app)"
-    )
-    before = (
-        "resume the conversation (`claude --continue` in the project, or reopen it in the desktop app) and say "
-        "continue"
+        "desktop app), or start a new session and invoke the run again; a headless run takes a new invocation.",
+    ],
+    ids=["211", "211 review"],
+)
+def test_the_migration_predicate_rejects_the_line_as_211_left_it(before: str):
+    migration = _migration(_FRAGMENT.read_text(encoding="utf-8"))
+    now = (
+        "resume the conversation with ultracode effort and Auto Mode on, as you launched it, since a resumed session "
+        "takes the effort and the mode its launch sets, and say continue (`claude --continue --effort ultracode "
+        "--permission-mode auto` in the project resumes the most recent conversation, `claude --resume` with the "
+        "same two flags lets you pick this one when another in the project is more recent, or reopen it in the "
+        "desktop app), or start a new session and invoke the run again; a headless run takes a new invocation. "
+        + _MIGRATION_SETTING_OFF
     )
     assert migration.count(now) == 1
     assert not _migration_resumes_in_the_launch_mode(migration.replace(now, before))
@@ -628,7 +805,7 @@ def _armed_project(tmp_path: Path, branch: str) -> tuple[Path, Path]:
     return repo, impl
 
 
-def _probe_guard(guard: Path, repo: Path, impl: Path) -> tuple[int, str]:
+def _probe_guard(guard: Path, repo: Path, impl: Path, **extra: str) -> tuple[int, str]:
     event = {
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
@@ -641,7 +818,7 @@ def _probe_guard(guard: Path, repo: Path, impl: Path) -> tuple[int, str]:
         cwd=repo,
         capture_output=True,
         text=True,
-        env=_env(ULTRACODE_IMPL_ARTIFACTS=str(impl)),
+        env=_env(ULTRACODE_IMPL_ARTIFACTS=str(impl), **extra),
     )
     reason = ""
     if proc.stdout.strip():
@@ -684,6 +861,26 @@ def test_with_a_story_set_the_guard_refuses_it_at_the_empty_index(tmp_path: Path
     code, reason = _probe_guard(_GUARD, repo, impl)
     assert code == 2 and reason.startswith("Empty-index guard: refusing")
     assert not _refuses_the_probe(code, reason)
+
+
+def test_a_story_in_claude_codes_environment_lets_the_probe_through(tmp_path: Path):
+    """Backs troubleshooting's "A story set in Claude Code's environment": with
+    `ULTRACODE_STORY_ID` naming a story whose tests-ran marker is fresh (its
+    `baseline=` line matches the story's baseline) and something staged, a
+    guard that runs allows the probe, which preflight reads as a session that
+    does not run the hooks (#211 review 2). `_env` strips the variable, so it is
+    passed here alone."""
+    repo, impl = _armed_project(tmp_path, "ultracode/epic-7")
+    _git(repo, "add", "f.txt")
+    assert not (impl / ".current-story").exists()
+    assert _probe_guard(_GUARD, repo, impl, ULTRACODE_STORY_ID="7-1") == (0, "")
+    # Controls: the same project without the variable is refused with the
+    # proof, so the variable is what lets the call through; and with a marker
+    # whose baseline is another commit's, the guard refuses it otherwise.
+    assert _refuses_the_probe(*_probe_guard(_GUARD, repo, impl))
+    (impl / ".tests-ran-7-1").write_text("baseline=" + "0" * 40 + "\n", encoding="utf-8")
+    code, reason = _probe_guard(_GUARD, repo, impl, ULTRACODE_STORY_ID="7-1")
+    assert code == 2 and reason.startswith("Marker-freshness guard: refusing")
 
 
 def test_the_guard_pin_rejects_a_guard_that_exempts_dry_run(tmp_path: Path):

@@ -2734,6 +2734,11 @@ _HOOK_REJECTION_SENTENCES = {
         # Stop hook (its inference is a sentence of its own that names no
         # refusal), so it left this scan.
         ("- **No refusal from the guard**: git's own output, a permission prompt w", "4a6d30ecd36b"),
+        # Reviewed (#211 review 2): the scope of "A guard that cannot start",
+        # widened to any call such a guard refuses, step 2's disarm and the
+        # Hooks write named. It stops the run on a guard that cannot run, and
+        # names no evidence commit or a hook's rejection of a commit.
+        ("This holds for any call a guard refuses this way, step 2's disarm, the H", "c0292fadac3a"),
         ("Claude Code only invokes a PreToolUse group for tools its matcher select", "5df2ca1f552d"),
         ("Deleting it costs nothing a later step needs: step 0 writes it afresh be", "df83ff84a5f2"),
         ("If the operator declines, or the resumed session still does not refuse t", "e971900cd84f"),
@@ -2784,6 +2789,11 @@ _HOOK_REJECTION_SENTENCES = {
         # new invocation, and neither names the evidence commit.
         ("- **A setting that keeps the file's hooks from running.** When a resumed", "50d3dce3619b"),
         ("- **The probe refused for another reason.** Any guard reason other than ", "a12f53e23685"),
+        # Reviewed (#211 review 2): a probe result that names another hook's
+        # command in brackets and holds no guard reason is that hook's
+        # refusal, read as the guard not refusing the probe; it names no
+        # evidence commit and answers no hook's rejection of a commit.
+        ("- **A refusal from another hook.** A probe result that names another hoo", "cc87de24d5f9"),
         ("--- title: Troubleshooting description: Maps the real failure modes of a", "74417cea7b2a"),
         # Reviewed (#186): the same refused settings write on a resume; no
         # hook's rejection of the evidence commit. Reviewed again (4.1.0) when
