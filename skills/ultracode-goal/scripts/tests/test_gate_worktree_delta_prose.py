@@ -1586,7 +1586,11 @@ _GAP_ROUTE_SENTENCES = {
         ("Of what automate's pass and its backfill produce, it is the one thing th", "1e0272c410c2"),
         ("On `owed: true`, take `escalate` with `kind` `operator-evidence-owed`: `", "2c68ae51e44a"),
         ("On a `reloop` from `gate_eval.py` that is not cap-only, each open `gate-", "563f6cff0aa6"),
-        ("One heading per Epic, then a row per parked item; `status` is `open` at ", "f1e1214fac05"),
+        # Reviewed (#213): the fence before the `source` bullet ends without a
+        # period, so this sentence runs on through the `source` list, which now
+        # adds `sweep`, a non-critical finding the INVARIANT allows onto the
+        # ledger; it routes no gap differently.
+        ("One heading per Epic, then a row per parked item; `status` is `open` at ", "a5cb0535620f"),
         ("Only non-gate-blocking work (CONCERNS, non-critical findings, parked dec", "cf302cd47862"),
         ("Then take the `reloop` route under \"Route on the verdict\" with the red a", "495cb8d41eb8"),
     ),
