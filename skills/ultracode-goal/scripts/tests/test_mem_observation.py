@@ -371,11 +371,18 @@ def test_write_redacts_known_secrets(tmp_path, home):
 
 
 @_needs_git
-def test_write_redacts_an_advisory_sig(tmp_path, home):
-    record = _record_of(tmp_path, _repo(tmp_path), "--advisory", "sig=token=supersecretvalue123,recurred=yes")
+@pytest.mark.parametrize("sig, secret", [
+    ("token=supersecretvalue123", "supersecretvalue123"),
+    # Shaped like a record id but no run_id: redacted like any other sig.
+    ("epic-sk-abcdefghijklmnopqrstuv", "sk-abcdefghijklmnopqrstuv"),
+], ids=["token", "not-a-run-id"])
+def test_write_redacts_an_advisory_sig(tmp_path, home, sig, secret):
+    assert not mc.valid_run_id(sig)
+    record = _record_of(tmp_path, _repo(tmp_path), "--advisory", f"sig={sig},recurred=yes")
     (advisory,) = record["advisories"]
     assert advisory["recurred"] == "yes"
-    assert "supersecretvalue123" not in advisory["sig"]
+    assert secret not in advisory["sig"]
+    assert "[redacted]" in advisory["sig"]
 
 
 @_needs_git
@@ -483,6 +490,63 @@ def test_write_computes_recurred_for_each_advisory_on_its_own(tmp_path, home):
         "--advisory", f"sig={_RUN}", "--advisory", f"sig={_RUN_C}", run_id="epic-7-20260607T090000Z",
     )
     assert advisories == [{"sig": _RUN, "recurred": "yes"}, {"sig": _RUN_C, "recurred": "no"}]
+
+
+# An epic slug can hold `sk-`, where redact's key pattern starts: the sig was
+# redacted before it was read as a record id, so epic-desk-booking-<stamp>
+# became epic-de[redacted], which names no record, and the advisory stored
+# `unknown` with a mangled sig whatever the record said. The record's own
+# run_id was stored as given. A sig that passes the run_id check now is too.
+_DESK = "epic-desk-booking-20260601T000000Z"
+_DESK_B = "epic-desk-booking-20260602T000000Z"
+
+
+def _desk_advisories(tmp_path: Path, repo: Path, script: Path = SCRIPT) -> list[dict]:
+    """The advisories ``script`` stores for _DESK_B, a desk-booking run that
+    names _DESK's record and shares its root cause."""
+    prior = _write(
+        tmp_path / "impl", tmp_path / "store", repo, _DESK,
+        "--epic", "desk-booking", "--verdict", "blocked", "--root-cause", _RACE,
+    )
+    assert _out(prior)["status"] == "written"
+    proc = subprocess.run(
+        [
+            sys.executable, str(script), "write", "--impl-artifacts", str(tmp_path / "impl"),
+            "--store", str(tmp_path / "store"), "--epic", "desk-booking", "--run-id", _DESK_B,
+            "--gate-status", "PASS", "--verdict", "blocked", "--cwd", str(repo),
+            "--valid-until-date", _DATE, "--root-cause", _RACE, "--advisory", f"sig={_DESK}",
+        ],
+        capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONPATH": str(SCRIPT.parent)},
+    )
+    out = _out(proc)
+    assert out["status"] == "written", out
+    record = json.loads(Path(out["path"]).read_text(encoding="utf-8"))
+    assert record["run_id"] == _DESK_B
+    return record["advisories"]
+
+
+@_needs_git
+def test_write_keeps_a_record_id_whose_epic_slug_holds_sk_and_computes_recurred_from_it(tmp_path, home):
+    assert mc.valid_run_id(_DESK)
+    assert mc.redact(_DESK) == "epic-de[redacted]"  # the id the old order mangled
+    assert _desk_advisories(tmp_path, _repo(tmp_path)) == [{"sig": _DESK, "recurred": "yes"}]
+
+
+@_needs_git
+def test_redacting_the_sig_before_it_is_read_as_a_record_id_stores_unknown(tmp_path, home):
+    # The twin of the test above: the same write, with the sig redacted first
+    # as it was before the fix, stores the mangled sig and `unknown`.
+    source = SCRIPT.read_text(encoding="utf-8")
+    now, before = 'sig = fields.get("sig", "")', 'sig = mc.redact(fields.get("sig", ""))'
+    assert source.count(now) == 1
+    mutant = source.replace(now, before)
+    assert mutant != source, "the mutant must actually change the text"
+    script = tmp_path / "mutant" / SCRIPT.name
+    script.parent.mkdir()
+    script.write_text(mutant, encoding="utf-8")
+    advisories = _desk_advisories(tmp_path, _repo(tmp_path), script)
+    assert advisories == [{"sig": "epic-de[redacted]", "recurred": "unknown"}]
 
 
 @_needs_git

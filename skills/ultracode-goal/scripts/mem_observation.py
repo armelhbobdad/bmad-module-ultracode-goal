@@ -31,13 +31,15 @@ write
     the record to ``<impl>/mem-outbox.<run_id>.jsonl`` with
     ``WARN mem-write-deferred``. Each ``--advisory sig=<record id>`` names a
     record Stage 1 consumed by its ``id`` (the run_id of the run that wrote
-    it). With no ``recurred`` given, write reads that record from this repo's
-    store folder and stores ``yes`` when a root-cause signature whose class is
-    not ``other`` is in both records, ``no`` when that record has one and this
-    run shares none, and ``unknown`` otherwise (a sig that is no run_id, a
-    record it cannot read, one with no such signature, or a run that did not
-    advance and names no root cause). An explicit ``recurred`` is stored as
-    given, any value but yes, no or unknown as unknown.
+    it). A sig that passes the run_id check is stored as given, as ``run_id``
+    is; any other sig is redacted. With no ``recurred`` given, write reads that
+    record from this repo's store folder and stores ``yes`` when a root-cause
+    signature whose class is not ``other`` is in both records, ``no`` when that
+    record has one and this run shares none, and ``unknown`` otherwise (a sig
+    that is no run_id, a record it cannot read, one with no such signature, or
+    a run that did not advance and names no root cause). An explicit
+    ``recurred`` is stored as given, any value but yes, no or unknown as
+    unknown.
 
 drain --store
     Replays each spilled record through the same write and removes it once it
@@ -275,7 +277,12 @@ def _build_payload(args: argparse.Namespace, gate_status: str, store: Path | Non
     advisories = []
     for raw in args.advisory or []:
         fields = _parse_kv(raw)
-        sig = mc.redact(fields.get("sig", ""))
+        sig = fields.get("sig", "")
+        # A record id is kept as given, as the record's own run_id is: redact's
+        # `sk-` key pattern would turn epic-desk-booking-<stamp> into
+        # epic-de[redacted], which names no record. Any other sig is redacted.
+        if not mc.valid_run_id(sig):
+            sig = mc.redact(sig)
         if "recurred" in fields:
             recurred = fields["recurred"]
             if recurred not in _RECURRED_VALUES:
