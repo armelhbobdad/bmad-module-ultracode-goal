@@ -2,4 +2,4 @@ type: fixed
 scope: ultracode-goal
 summary: |
   A `dlog-slice-<story_id>-<n>.md` file, the entry Execute writes when `.decision-log.md` is too large to Read, now sits beside the log in the run folder that holds it, as the step always said it should, and is appended with `cat "<log folder>/dlog-slice-<story_id>-<n>.md" >> "<log folder>/.decision-log.md"`, both paths in full. Before, the step named the slice under `{workflow.implementation_artifacts}`, another folder, and appended it to a relative `.decision-log.md`. Each slice is numbered one past the highest already there, so a later invocation never reuses a name. The skill now gives the same rule to every stage from Ingest & Scope on, labelling a slice `stage<k>` when no story writes it, and Finalize's decision-log audit looks for this session's slices beside the log.
-issues: [208]
+issues: [208, 210]
