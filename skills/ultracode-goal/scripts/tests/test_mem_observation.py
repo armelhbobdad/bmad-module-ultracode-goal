@@ -25,6 +25,7 @@ Run: uv run --with pytest pytest test_mem_observation.py -v
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -443,7 +444,10 @@ def test_write_computes_recurred_from_the_consumed_records_root_causes(
     ((_RACE,), (_RACE,), "blocked", "../x"),
     ((_RACE,), (_RACE,), "blocked", ""),
     ((_RACE,), (_RACE,), "blocked", _RUN_C),  # a run the store holds no record of
-    ((_RACE,), (_RACE,), "blocked", _RUN_B),  # this run's own id
+    # This run's own id. The payload is built before this run's record exists,
+    # so the store holds no record of it and this row stores `unknown` with or
+    # without the own-id guard. The _computed_recurred tests below pin the guard.
+    ((_RACE,), (_RACE,), "blocked", _RUN_B),
     ((), (_RACE,), "blocked", _RUN),  # the record names no root cause
     (("class=other,path=src/z.py",), ("class=other,path=src/z.py",), "blocked", _RUN),
     ((_RACE,), (), "blocked", _RUN),  # a handoff or a decision-pending stop observed nothing
@@ -454,6 +458,56 @@ def test_write_stores_unknown_when_recurrence_cannot_be_decided(tmp_path, home, 
     extra = [arg for cause in this_run for arg in ("--root-cause", cause)]
     advisories = _recurred_of(tmp_path, repo, "--verdict", verdict, *extra, "--advisory", f"sig={sig}")
     assert advisories == [{"sig": sig, "recurred": "unknown"}]
+
+
+# The guard that makes this run's own id `unknown` cannot be seen through
+# `write`: the first write of a run reads no record of it, and a second write
+# of the same run is `skipped-existing`. These two call _computed_recurred
+# directly, against a store that already holds the record of the run the
+# advisory names, which shares this run's race-condition root cause.
+_OWN_ID_GUARD = "if record_id == run_id or not mc.valid_run_id(record_id):"
+
+
+def _own_record_recurred(tmp_path: Path, module: object, run_id: str) -> str:
+    """What ``module``'s _computed_recurred returns for an advisory naming _RUN,
+    whose record the store holds, in the run ``run_id`` with _RUN's root cause."""
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, _RACE, run_id=_RUN)
+    fingerprint = mc.repo_fingerprint(str(repo))["value"]
+    assert mc.read_run_record(tmp_path / "store", fingerprint, _RUN) is not None
+    path = "src/x.py"
+    signatures = [{"class": "race-condition", "path": path, "sig": _signature("race-condition", path, fingerprint)}]
+    return module._computed_recurred(
+        tmp_path / "store", fingerprint, _RUN, run_id=run_id, verdict="blocked", signatures=signatures
+    )
+
+
+@_needs_git
+def test_computed_recurred_is_unknown_for_this_runs_own_record_when_it_shares_a_root_cause(tmp_path, home):
+    import mem_observation  # noqa: PLC0415  (scripts dir is on sys.path)
+
+    assert Path(mem_observation.__file__).resolve() == SCRIPT
+    # The control: another run naming the same record decides `yes`.
+    assert _own_record_recurred(tmp_path / "other", mem_observation, _RUN_B) == "yes"
+    assert _own_record_recurred(tmp_path / "own", mem_observation, _RUN) == "unknown"
+
+
+@_needs_git
+def test_computed_recurred_without_the_own_id_guard_reads_this_runs_own_record_as_yes(tmp_path, home):
+    # The twin of the test above: the same call, through a copy of the script
+    # whose guard no longer compares the record id with this run's id, reads
+    # this run's own record as a recurrence.
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert source.count(_OWN_ID_GUARD) == 1
+    mutant = source.replace(_OWN_ID_GUARD, "if not mc.valid_run_id(record_id):")
+    assert mutant != source, "the mutant must actually change the text"
+    script = tmp_path / "mutant" / SCRIPT.name
+    script.parent.mkdir()
+    script.write_text(mutant, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("mem_observation_without_own_id_guard", script)
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    assert _own_record_recurred(tmp_path, module, _RUN) == "yes"
 
 
 @_needs_git
