@@ -36,6 +36,7 @@ Contents:
   - validate_record / classify_record     per-record validation
   - write_run_record                      the immutable per-run writer
   - iter_store_records / read_store       the reader over a list of roots
+  - read_run_record                       one run's record, by its run_id
   - probe_store                           the write probe the latch runs
   - is_legacy_payload / legacy_payload_to_record   outbox migration
   - build_latch_v2 / measure_latch_v2 / latch_view   latch v2
@@ -1334,6 +1335,35 @@ def read_store(
         else:
             dropped[item.status] += 1
     return records, dropped
+
+
+def read_run_record(
+    store_root: str | os.PathLike[str] | None, fingerprint: str | None, run_id: object
+) -> dict | None:
+    """The record of one run, read from ``<store>/<fingerprint-dir>/runs/<run_id>.jsonl``, or None.
+
+    The record is returned only when classify_record() reads it as RECORD_OK
+    for ``fingerprint`` and it names ``run_id`` itself. Anything else is None:
+    an unset root, a run_id that fails valid_run_id(), a fingerprint with no
+    directory name, a file that is absent, is not a regular file or cannot be
+    read, and one that holds something else (unparseable bytes, the wrong
+    shape, a newer schema, another repo's record or another run's). It never
+    raises on a bad value or an OSError, and it never writes.
+    """
+    if store_root is None:
+        return None
+    try:
+        path = run_file_path(store_root, fingerprint, run_id)
+    except ValueError:
+        return None
+    try:
+        raw = _read_run_file(path)
+    except OSError:
+        return None
+    record = None if raw is None else _parse_run_file_bytes(raw)
+    if record is None or classify_record(record, fingerprint) != RECORD_OK:
+        return None
+    return record if record["run_id"] == run_id else None
 
 
 # ---------------------------------------------------------------------------

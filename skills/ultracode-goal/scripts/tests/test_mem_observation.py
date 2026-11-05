@@ -384,6 +384,128 @@ def test_write_normalizes_an_unknown_advisory_recurred_value(tmp_path, home):
     assert record["advisories"] == [{"sig": "abc", "recurred": "unknown"}]
 
 
+# --- write: an advisory with no `recurred` has it computed from the store ----
+#
+# Finalize used to pass `--advisory sig=<s>,recurred=<yes|no|unknown>` with
+# neither value defined, so runs of one Epic stored `recurred` both ways. The
+# advisory now names the consumed record by its id (the run_id of the run that
+# wrote it), and write decides `recurred` by comparing root-cause signatures,
+# with class `other` left out as mem_recall's recurrence count leaves it out.
+# Before the fix, every one of these stored `unknown`.
+
+_RACE = "class=race-condition,path=src/x.py"
+_FLAKE = "class=test-flake,path=tests/y.py"
+
+
+def _prior(tmp_path: Path, repo: Path, *root_causes: str, run_id: str = _RUN) -> None:
+    """The consumed record: a blocked run with these root causes, in the store."""
+    extra = [arg for cause in root_causes for arg in ("--root-cause", cause)]
+    out = _out(_write(tmp_path / "impl", tmp_path / "store", repo, run_id, "--verdict", "blocked", *extra))
+    assert out["status"] == "written", out
+
+
+def _recurred_of(tmp_path: Path, repo: Path, *extra: str, run_id: str = _RUN_B) -> list[dict]:
+    """The advisories the record of ``run_id`` stores, written with ``extra``."""
+    out = _out(_write(tmp_path / "impl", tmp_path / "store", repo, run_id, *extra))
+    assert out["status"] == "written", out
+    return json.loads(Path(out["path"]).read_text(encoding="utf-8"))["advisories"]
+
+
+@_needs_git
+@pytest.mark.parametrize("prior, this_run, verdict, expected", [
+    ((_RACE,), (_RACE,), "blocked", "yes"),
+    ((_RACE, _FLAKE), (_FLAKE,), "blocked", "yes"),
+    ((_RACE,), (_FLAKE,), "blocked", "no"),
+    ((_RACE,), (), "advance", "no"),
+    # An `other` signature in both records never makes it recur.
+    ((_RACE, "class=other,path=src/z.py"), ("class=other,path=src/z.py",), "blocked", "no"),
+], ids=["shared", "one-of-two-shared", "different-cause", "advanced", "only-other-shared"])
+def test_write_computes_recurred_from_the_consumed_records_root_causes(
+    tmp_path, home, prior, this_run, verdict, expected
+):
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, *prior)
+    extra = [arg for cause in this_run for arg in ("--root-cause", cause)]
+    advisories = _recurred_of(tmp_path, repo, "--verdict", verdict, *extra, "--advisory", f"sig={_RUN}")
+    assert advisories == [{"sig": _RUN, "recurred": expected}]
+
+
+@_needs_git
+@pytest.mark.parametrize("prior, this_run, verdict, sig", [
+    ((_RACE,), (_RACE,), "blocked", "abc123def456"),  # a root-cause signature, not a record id
+    ((_RACE,), (_RACE,), "blocked", "../x"),
+    ((_RACE,), (_RACE,), "blocked", ""),
+    ((_RACE,), (_RACE,), "blocked", _RUN_C),  # a run the store holds no record of
+    ((_RACE,), (_RACE,), "blocked", _RUN_B),  # this run's own id
+    ((), (_RACE,), "blocked", _RUN),  # the record names no root cause
+    (("class=other,path=src/z.py",), ("class=other,path=src/z.py",), "blocked", _RUN),
+    ((_RACE,), (), "blocked", _RUN),  # a handoff or a decision-pending stop observed nothing
+], ids=["signature", "path", "empty", "absent", "own-id", "no-cause", "only-other", "blocked-no-cause"])
+def test_write_stores_unknown_when_recurrence_cannot_be_decided(tmp_path, home, prior, this_run, verdict, sig):
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, *prior)
+    extra = [arg for cause in this_run for arg in ("--root-cause", cause)]
+    advisories = _recurred_of(tmp_path, repo, "--verdict", verdict, *extra, "--advisory", f"sig={sig}")
+    assert advisories == [{"sig": sig, "recurred": "unknown"}]
+
+
+@_needs_git
+@pytest.mark.parametrize("content", ["another-repo", "another-run", "unparseable", "directory"])
+def test_write_stores_unknown_for_a_record_that_is_not_this_repos_record_of_that_run(
+    tmp_path, home, content
+):
+    # The file named after the consumed id holds something else: it is never
+    # read as that record, and the write still lands.
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, _RACE, run_id=_RUN_C)
+    runs = _runs_of(tmp_path / "store", repo)
+    target = runs / f"{_RUN}.jsonl"
+    record = json.loads((runs / f"{_RUN_C}.jsonl").read_text(encoding="utf-8"))
+    if content == "another-repo":
+        target.write_text(json.dumps({**record, "run_id": _RUN, "fingerprint": "ffffffffffffffff"}), encoding="utf-8")
+    elif content == "another-run":
+        target.write_text(json.dumps(record), encoding="utf-8")
+    elif content == "unparseable":
+        target.write_bytes(b"{not json")
+    else:
+        target.mkdir()
+    advisories = _recurred_of(tmp_path, repo, "--verdict", "blocked", "--root-cause", _RACE, "--advisory", f"sig={_RUN}")
+    assert advisories == [{"sig": _RUN, "recurred": "unknown"}]
+
+
+@_needs_git
+def test_write_computes_recurred_for_each_advisory_on_its_own(tmp_path, home):
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, _RACE, run_id=_RUN)
+    _prior(tmp_path, repo, _FLAKE, run_id=_RUN_C)
+    advisories = _recurred_of(
+        tmp_path, repo, "--verdict", "blocked", "--root-cause", _RACE,
+        "--advisory", f"sig={_RUN}", "--advisory", f"sig={_RUN_C}", run_id="epic-7-20260607T090000Z",
+    )
+    assert advisories == [{"sig": _RUN, "recurred": "yes"}, {"sig": _RUN_C, "recurred": "no"}]
+
+
+@_needs_git
+@pytest.mark.parametrize("given", ["yes", "no", "unknown"])
+def test_write_stores_an_explicit_recurred_as_given(tmp_path, home, given):
+    # The record would compute `yes`; an explicit value is kept all the same.
+    repo = _repo(tmp_path)
+    _prior(tmp_path, repo, _RACE)
+    advisories = _recurred_of(
+        tmp_path, repo, "--verdict", "blocked", "--root-cause", _RACE, "--advisory", f"sig={_RUN},recurred={given}"
+    )
+    assert advisories == [{"sig": _RUN, "recurred": given}]
+
+
+@_needs_git
+def test_write_with_a_computed_recurred_still_parks_the_record_when_the_store_is_unwritable(tmp_path, home):
+    # The store cannot be read either: `unknown`, and the record waits in the outbox.
+    repo = _repo(tmp_path)
+    impl = tmp_path / "impl"
+    entry = _spill_via_write(tmp_path, impl, repo, _RUN_B, "--advisory", f"sig={_RUN}")
+    assert entry["payload"]["advisories"] == [{"sig": _RUN, "recurred": "unknown"}]
+
+
 DEFERRED_LEDGER = """# Deferred Work
 
 ## Epic 7 deferred

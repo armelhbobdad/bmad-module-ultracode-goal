@@ -29,7 +29,15 @@ write
     byte-identical; a foreign or unparseable target is never touched and the
     entry is dead-lettered with ``NOTE mem-target-foreign``; an OSError spills
     the record to ``<impl>/mem-outbox.<run_id>.jsonl`` with
-    ``WARN mem-write-deferred``.
+    ``WARN mem-write-deferred``. Each ``--advisory sig=<record id>`` names a
+    record Stage 1 consumed by its ``id`` (the run_id of the run that wrote
+    it). With no ``recurred`` given, write reads that record from this repo's
+    store folder and stores ``yes`` when a root-cause signature whose class is
+    not ``other`` is in both records, ``no`` when that record has one and this
+    run shares none, and ``unknown`` otherwise (a sig that is no run_id, a
+    record it cannot read, one with no such signature, or a run that did not
+    advance and names no root cause). An explicit ``recurred`` is stored as
+    given, any value but yes, no or unknown as unknown.
 
 drain --store
     Replays each spilled record through the same write and removes it once it
@@ -191,13 +199,68 @@ def _count_deferred(deferred_path: Path | None, epic: str) -> int:
     return sum(1 for line in section if line.lstrip().startswith("- "))
 
 
-def _build_payload(args: argparse.Namespace, gate_status: str) -> dict:
+_RECURRED_VALUES = ("yes", "no", "unknown")
+
+
+def _recurrence_signatures(signatures: object) -> set[str]:
+    """The signatures of a record's root causes that can recur: every class but
+    ``other``, the rule mem_recall's recurrence count applies."""
+    if not isinstance(signatures, list):
+        return set()
+    return {
+        entry["sig"]
+        for entry in signatures
+        if isinstance(entry, dict)
+        and isinstance(entry.get("sig"), str)
+        and entry["sig"]
+        and mc.canonical_class(entry.get("class")) != "other"
+    }
+
+
+def _computed_recurred(
+    store: Path | None,
+    fingerprint: str | None,
+    record_id: str,
+    *,
+    run_id: str,
+    verdict: str,
+    signatures: list[dict],
+) -> str:
+    """Whether the root cause of the record an advisory names recurred in this run.
+
+    ``record_id`` is the consumed record's ``id``: the run_id of the run that
+    wrote it, read from this repo's folder of the store. ``yes`` when a
+    root-cause signature whose class is not ``other`` is in both that record
+    and this run (the same class and artifact path), ``no`` when that record
+    names such a root cause and this run shares none of them, and ``unknown``
+    otherwise: the id is not a run_id or is this run's own, the record cannot
+    be read or is not this repo's record of that run, it names no root cause
+    outside ``other``, or this run did not advance and names no root cause
+    (a handoff or a ``decision-pending`` stop observed nothing). A matching
+    gate status or verdict is not a recurrence. Never raises.
+    """
+    if record_id == run_id or not mc.valid_run_id(record_id):
+        return "unknown"
+    if not signatures and verdict.lower() != "advance":
+        return "unknown"
+    record = mc.read_run_record(store, fingerprint, record_id)
+    if record is None:
+        return "unknown"
+    prior = _recurrence_signatures(record.get("signatures"))
+    if not prior:
+        return "unknown"
+    return "yes" if prior & _recurrence_signatures(signatures) else "no"
+
+
+def _build_payload(args: argparse.Namespace, gate_status: str, store: Path | None = None) -> dict:
     """The structured run payload write stores, after adding
     ``created_at_epoch`` and ``project`` (mc.store_record).
 
     It is the shape the removed ``build`` embedded in its claude-mem
     ``{text,title,project}`` wrapper, so a legacy outbox entry drain converts
-    becomes the same record.
+    becomes the same record. An advisory that passes no ``recurred`` has it
+    computed against ``store`` (_computed_recurred); one that passes it keeps
+    it, any value but yes, no or unknown read as unknown.
     """
     fingerprint = mc.repo_fingerprint(args.cwd or ".").get("value")
 
@@ -207,13 +270,20 @@ def _build_payload(args: argparse.Namespace, gate_status: str) -> dict:
         sig = _signature(parsed["class"], parsed["path"], fingerprint)
         signatures.append({"class": parsed["class"], "path": parsed["path"], "sig": sig})
 
+    verdict = mc.redact(args.verdict).strip() or "blocked"
+
     advisories = []
     for raw in args.advisory or []:
         fields = _parse_kv(raw)
         sig = mc.redact(fields.get("sig", ""))
-        recurred = fields.get("recurred", "unknown")
-        if recurred not in ("yes", "no", "unknown"):
-            recurred = "unknown"
+        if "recurred" in fields:
+            recurred = fields["recurred"]
+            if recurred not in _RECURRED_VALUES:
+                recurred = "unknown"
+        else:
+            recurred = _computed_recurred(
+                store, fingerprint, sig, run_id=args.run_id, verdict=verdict, signatures=signatures
+            )
         advisories.append({"sig": sig, "recurred": recurred})
 
     deferred_path = Path(args.deferred) if args.deferred else None
@@ -223,8 +293,6 @@ def _build_payload(args: argparse.Namespace, gate_status: str) -> dict:
         "sha": args.valid_until_sha if args.valid_until_sha else None,
         "date": args.valid_until_date if args.valid_until_date else mc.utc_now_iso(),
     }
-
-    verdict = mc.redact(args.verdict).strip() or "blocked"
 
     payload = {
         "ucg": 1,
@@ -426,7 +494,7 @@ def cmd_write(args: argparse.Namespace) -> int:
 
     cwd = args.cwd or "."
     created_at_epoch = mc.utc_now_epoch_ms()
-    payload = _build_payload(args, gate_status)
+    payload = _build_payload(args, gate_status, store)
     if mc.fingerprint_dir(payload["fingerprint"]) is None:
         # No commit yet (or not a git repo): the record could never name its
         # folder, now or on a later drain, so nothing is written or spilled.

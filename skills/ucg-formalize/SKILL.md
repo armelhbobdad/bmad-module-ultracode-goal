@@ -226,7 +226,7 @@ one-line evidence fields:
            "candidate": "<only when this answers a seeded judgment candidate: its id, copied as given>"}],
  "concerns": [{"source": "<artifact path:line>", "note": "<cosmetic / non-blocking gap, one line>",
                "candidate": "<only when this answers a seeded judgment candidate: its id, copied as given>"}],
- "advisories_checked": [{"sig": "<advisory id>", "status": "recurred|not-observed|unknown"}]}
+ "advisories_checked": [{"sig": "<the recalled record's id, copied as given>", "status": "recurred|not-observed|unknown"}]}
 ```
 
 **Mint ids before mapping, and apply the operator's closes.** Hand the returned scan
