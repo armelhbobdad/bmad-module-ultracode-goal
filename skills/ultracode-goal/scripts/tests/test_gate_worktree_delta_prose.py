@@ -2727,6 +2727,13 @@ _HOOK_REJECTION_SENTENCES = {
         # conversation or stops. None names the evidence commit or answers a
         # hook's rejection of a commit the run makes.
         ("A second call the guard does not refuse means this session does not run ", "1102333b06d6"),
+        # Reviewed (#211 review): the probe's "No refusal from the guard" list
+        # gained a refusal from another PreToolUse hook, one that holds none of
+        # the guard's reasons; it is read as no refusal and retried once, and
+        # names no evidence commit. The proof sentence no longer names the
+        # Stop hook (its inference is a sentence of its own that names no
+        # refusal), so it left this scan.
+        ("- **No refusal from the guard**: git's own output, a permission prompt w", "4a6d30ecd36b"),
         ("Claude Code only invokes a PreToolUse group for tools its matcher select", "5df2ca1f552d"),
         ("Deleting it costs nothing a later step needs: step 0 writes it afresh be", "df83ff84a5f2"),
         ("If the operator declines, or the resumed session still does not refuse t", "e971900cd84f"),
@@ -2743,7 +2750,6 @@ _HOOK_REJECTION_SENTENCES = {
         # commit.
         ("Left unquoted, a project or skill path that holds a space (a project und", "d0797efaddc8"),
         ("Now that the group is armed for every tool, the hook IS invoked for a `W", "54ce49130885"),
-        ("That refusal is the proof, for the Stop hook written beside the guard to", "83ece1426ebe"),
         ("The Stop budget hook carries no `onFailure`: Claude Code ignores the key", "63209639b79d"),
         ("The guard's item carries `\"onFailure\": \"block\"` beside `\"type\"` and `\"co", "dcd78ba37079"),
         ("The same assertion is scriptable: `preflight_check.py --assert-armed` pe", "09a4c30a9245"),
