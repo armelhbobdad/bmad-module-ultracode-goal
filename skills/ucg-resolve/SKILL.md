@@ -309,7 +309,7 @@ with `<n>` one past the highest number a `dlog-slice-resolve-*.md` in that folde
 carries (`1` when there is none): the name has to be new for every append, or Write finds
 the file on disk and asks for the Read again. Then append it in one Bash call, with both
 paths in full:
-`cat {project-root}/_bmad-output/ultracode-goal/<run folder>/dlog-slice-resolve-<n>.md >> {project-root}/_bmad-output/ultracode-goal/<run folder>/.decision-log.md`.
+`cat "{project-root}/_bmad-output/ultracode-goal/<run folder>/dlog-slice-resolve-<n>.md" >> "{project-root}/_bmad-output/ultracode-goal/<run folder>/.decision-log.md"`.
 Keep the slice rather than deleting it: it is the only copy of the entry if the append is
 interrupted. This holds for every entry the pass writes, the coupled-stories entry above
 included.

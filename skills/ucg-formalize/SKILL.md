@@ -57,7 +57,7 @@ recomputes the readiness verdict. Each verdict and remediation lands in
   above in full and `<n>` is one past the highest number a `dlog-slice-formalize-*.md` in
   it already carries (`1` when there is none), so the name is new for every append. Then
   append it in one Bash call, with both paths in full:
-  `cat <run folder>/dlog-slice-formalize-<n>.md >> <run folder>/.decision-log.md`. Keep
+  `cat "<run folder>/dlog-slice-formalize-<n>.md" >> "<run folder>/.decision-log.md"`. Keep
   the slice rather than deleting it: it is the only copy of the entry if the append is
   interrupted.
 

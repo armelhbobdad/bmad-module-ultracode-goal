@@ -22,12 +22,18 @@ paths in full, and Finalize's audit looking for slices there. Every check reds
 on the text as it stood before #208, and the `cat` command each surface gives
 is run as written: the guard makes no decision on it and it appends the slice.
 
+Each `cat` double-quotes both paths. `{project-root}` is wherever the project
+sits, and a space in it splits a bare path into two words, so the append
+fails. The command is run from a project path that holds a space too, and
+the bare form, as #208 first gave it, reds a quoting check of its own.
+
 Stdlib + pytest only.
 """
 
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -117,14 +123,27 @@ def _finalize_audit(w: dict) -> str:
     return _line(w["finalize"], "Walk every entry ")
 
 
-_RESOLVE_SLICE = "{project-root}/_bmad-output/ultracode-goal/<run folder>/dlog-slice-resolve-<n>.md"
-_RESOLVE_CAT = (
-    "`cat {project-root}/_bmad-output/ultracode-goal/<run folder>/dlog-slice-resolve-<n>.md >> "
-    "{project-root}/_bmad-output/ultracode-goal/<run folder>/.decision-log.md`"
-)
-_FORMALIZE_CAT = "`cat <run folder>/dlog-slice-formalize-<n>.md >> <run folder>/.decision-log.md`"
-_PARENT_CAT = "`cat <log folder>/dlog-slice-<label>-<n>.md >> <log folder>/.decision-log.md`"
-_EXECUTE_CAT = "`cat <log folder>/dlog-slice-<story_id>-<n>.md >> <log folder>/.decision-log.md`"
+_RESOLVE_DIR = "{project-root}/_bmad-output/ultracode-goal/<run folder>"
+_RESOLVE_SLICE = _RESOLVE_DIR + "/dlog-slice-resolve-<n>.md"
+_RESOLVE_CAT = f'`cat "{_RESOLVE_SLICE}" >> "{_RESOLVE_DIR}/.decision-log.md"`'
+_FORMALIZE_CAT = '`cat "<run folder>/dlog-slice-formalize-<n>.md" >> "<run folder>/.decision-log.md"`'
+_PARENT_CAT = '`cat "<log folder>/dlog-slice-<label>-<n>.md" >> "<log folder>/.decision-log.md"`'
+_EXECUTE_CAT = '`cat "<log folder>/dlog-slice-<story_id>-<n>.md" >> "<log folder>/.decision-log.md"`'
+
+# The `cat` a surface gives, found whatever its quoting: one per surface.
+_CAT_RE = re.compile(r'`(cat [^`]*dlog-slice-[^`]*>>[^`]*\.decision-log\.md"?)`')
+# Both of its paths in double quotes, so a space in either stays in one word.
+_QUOTED_CAT_RE = re.compile(r'cat "[^"`]+" >> "[^"`]+"')
+
+
+def _bare(text: str) -> str:
+    """The text with its double quotes dropped, for the checks on the paths."""
+    return text.replace('"', "")
+
+
+def _quotes_both_paths(text: str) -> bool:
+    found = _CAT_RE.findall(_norm(text))
+    return len(found) == 1 and bool(_QUOTED_CAT_RE.fullmatch(found[0]))
 
 
 # One named check per rule. Each reads one surface and keys on one sentence, so
@@ -147,7 +166,8 @@ _CHECKS = {
         "with `<n>` one past the highest number a `dlog-slice-resolve-*.md` in that folder already carries"
         in _resolve_log(w)
     ),
-    "resolve appends with one cat, both paths in full": lambda w: _RESOLVE_CAT in _resolve_log(w),
+    "resolve appends with one cat, both paths in full": lambda w: _bare(_RESOLVE_CAT) in _bare(_resolve_log(w)),
+    "resolve double-quotes both paths in its cat": lambda w: _quotes_both_paths(_resolve_log(w)),
     "resolve keeps the slice": lambda w: "Keep the slice rather than deleting it" in _resolve_log(w),
     "resolve covers the coupled-stories entry": lambda w: (
         "This holds for every entry the pass writes, the coupled-stories entry above included." in _resolve_log(w)
@@ -163,7 +183,10 @@ _CHECKS = {
         "a new file beside the log, `<run folder>/dlog-slice-formalize-<n>.md`, where `<run folder>` is the "
         "resolved folder above in full" in _formalize_conventions(w)
     ),
-    "formalize appends with one cat, both paths in full": lambda w: _FORMALIZE_CAT in _formalize_conventions(w),
+    "formalize appends with one cat, both paths in full": lambda w: (
+        _bare(_FORMALIZE_CAT) in _bare(_formalize_conventions(w))
+    ),
+    "formalize double-quotes both paths in its cat": lambda w: _quotes_both_paths(_formalize_conventions(w)),
     "formalize's remediation log points at its conventions": lambda w: (
         "Log each remediation to `.decision-log.md` as you apply it, appended the way Conventions says."
         in _norm(w["formalize"])
@@ -180,7 +203,8 @@ _CHECKS = {
         "`<label>` is the story's id for an entry about a story and `stage<k>` for one a stage writes outside a story"
         in _parent_rule(w)
     ),
-    "the parent skill appends with one cat, both paths in full": lambda w: _PARENT_CAT in _parent_rule(w),
+    "the parent skill appends with one cat, both paths in full": lambda w: _bare(_PARENT_CAT) in _bare(_parent_rule(w)),
+    "the parent skill double-quotes both paths in its cat": lambda w: _quotes_both_paths(_parent_rule(w)),
     # --- execute.md step 4, the rule's owner ---------------------------------
     "execute puts the slice beside the log, not in implementation_artifacts": lambda w: (
         "a NEW sibling file beside the log, in the folder that holds `.decision-log.md` and never in "
@@ -191,7 +215,8 @@ _CHECKS = {
         "`<n>` is one past the highest number a `dlog-slice-<story_id>-*.md` there already carries"
         in _execute_step4(w)
     ),
-    "execute appends with one cat, both paths in full": lambda w: _EXECUTE_CAT in _execute_step4(w),
+    "execute appends with one cat, both paths in full": lambda w: _bare(_EXECUTE_CAT) in _bare(_execute_step4(w)),
+    "execute double-quotes both paths in its cat": lambda w: _quotes_both_paths(_execute_step4(w)),
     # --- finalize's audit -----------------------------------------------------
     "finalize audits the slices beside the log": lambda w: (
         "this session's own `dlog-slice-*.md` files, which sit beside the log in the run folder (never in "
@@ -262,7 +287,7 @@ def _pre_208(w: dict) -> dict:
     old["execute"] = _replace(
         w["execute"],
         "Compose this session's entry with Write into a NEW sibling file beside the log",
-        "/.decision-log.md`.",
+        '/.decision-log.md"`.',
         _OLD_EXECUTE_SLICE,
     )
     old["finalize"] = _replace(
@@ -342,9 +367,54 @@ def test_the_slice_back_in_implementation_artifacts_reds():
     assert "execute puts the slice beside the log, not in implementation_artifacts" in _unmet(moved)
     assert _slices_in_implementation_artifacts(moved) == ["execute"]
 
-    relative_cat = "`cat dlog-slice-resolve-<n>.md >> .decision-log.md`."
-    relative = {**w, "resolve": _replace(w["resolve"], "`cat {project-root}", ".decision-log.md`.", relative_cat)}
+    relative_cat = '`cat "dlog-slice-resolve-<n>.md" >> ".decision-log.md"`.'
+    relative = {**w, "resolve": _replace(w["resolve"], '`cat "{project-root}', '.decision-log.md"`.', relative_cat)}
     assert _unmet(relative) == ["resolve appends with one cat, both paths in full"]
+
+
+# Each surface's `cat` as #208 first gave it, both paths bare.
+_UNQUOTED_CATS = {
+    "resolve": (
+        "resolve",
+        "`cat {project-root}/_bmad-output/ultracode-goal/<run folder>/dlog-slice-resolve-<n>.md >> "
+        "{project-root}/_bmad-output/ultracode-goal/<run folder>/.decision-log.md`",
+        _RESOLVE_CAT,
+    ),
+    "formalize": (
+        "formalize",
+        "`cat <run folder>/dlog-slice-formalize-<n>.md >> <run folder>/.decision-log.md`",
+        _FORMALIZE_CAT,
+    ),
+    "parent": (
+        "the parent skill",
+        "`cat <log folder>/dlog-slice-<label>-<n>.md >> <log folder>/.decision-log.md`",
+        _PARENT_CAT,
+    ),
+    "execute": (
+        "execute",
+        "`cat <log folder>/dlog-slice-<story_id>-<n>.md >> <log folder>/.decision-log.md`",
+        _EXECUTE_CAT,
+    ),
+}
+
+
+def test_the_unquoted_cat_reds_its_quoting_check_alone():
+    """Twin: the bare command on one surface reds that surface's quoting check,
+    and only that one: its paths are still in full, only the quotes are gone."""
+    w = _world()
+    for surface, (owner, unquoted, quoted) in _UNQUOTED_CATS.items():
+        assert _bare(quoted) == unquoted, surface
+        pattern = re.compile(r"\s+".join(map(re.escape, quoted.split(" "))))
+        assert len(pattern.findall(w[surface])) == 1, surface
+        mutated = {**w, surface: pattern.sub(lambda _: unquoted, w[surface], count=1)}
+        assert _unmet(mutated) == [f"{owner} double-quotes both paths in its cat"], surface
+
+    # One path quoted is not enough: the log's path is the one a space splits
+    # into a redirect target and a stray argument.
+    half = _EXECUTE_CAT.replace('>> "<log folder>/.decision-log.md"', ">> <log folder>/.decision-log.md")
+    assert half != _EXECUTE_CAT
+    mutated = {**w, "execute": w["execute"].replace(_EXECUTE_CAT, half, 1)}
+    assert _unmet(mutated) == ["execute double-quotes both paths in its cat"]
 
 
 def _slices_in_implementation_artifacts(w: dict) -> list[str]:
@@ -385,7 +455,7 @@ def test_every_slice_name_matches_finalizes_audit_glob():
 
 
 def _cat_command(text: str) -> str:
-    found = re.findall(r"`(cat [^`]*dlog-slice-[^`]*>>[^`]*\.decision-log\.md)`", _norm(text))
+    found = _CAT_RE.findall(_norm(text))
     assert len(found) == 1, found
     return found[0]
 
@@ -419,9 +489,10 @@ def _guard(command: str, cwd: Path, env: dict) -> tuple[int, str]:
 
 
 @pytest.mark.skipif(not shutil.which("bash"), reason="needs bash to run the command")
+@pytest.mark.parametrize("project_name", ["project", "my project"])
 @pytest.mark.parametrize("surface", ["resolve", "formalize", "parent", "execute"])
-def test_the_cat_command_clears_the_guard_and_appends(tmp_path: Path, surface: str):
-    project = tmp_path / "project"
+def test_the_cat_command_clears_the_guard_and_appends(tmp_path: Path, surface: str, project_name: str):
+    project = tmp_path / project_name
     folder = project / "_bmad-output" / "ultracode-goal" / _RUN
     folder.mkdir(parents=True)
     home = tmp_path / "home"
@@ -444,9 +515,12 @@ def test_the_cat_command_clears_the_guard_and_appends(tmp_path: Path, surface: s
         command = command.replace(placeholder, value)
     assert not re.search(r"[<>{}]\w|\w[<>{}]", command.replace(" >> ", " ")), command
 
-    slice_path, log_path = (Path(p) for p in command[len("cat ") :].split(" >> "))
+    words = shlex.split(command)
+    assert len(words) == 4 and words[0] == "cat" and words[2] == ">>", words
+    slice_path, log_path = Path(words[1]), Path(words[3])
     assert slice_path.parent == log_path.parent == folder, "the slice sits beside the log"
-    log_path.write_text("## 2026-06-04 session\n", encoding="utf-8")
+    head = "## 2026-06-04 session\n"
+    log_path.write_text(head, encoding="utf-8")
     entry = "Closed d-1: the guard denied `git commit` and the operator's hook was fixed.\n"
     slice_path.write_text(entry, encoding="utf-8")
 
@@ -454,7 +528,14 @@ def test_the_cat_command_clears_the_guard_and_appends(tmp_path: Path, surface: s
     code, out = _guard(f"cat {store.as_posix()}/runs/x.jsonl", project, env)
     assert code == 2 and "deny" in out, out
 
+    if " " in project_name:
+        # Twin: bare, a path with a space splits into two words, so the
+        # redirect lands on a stray file and the log never gets the entry.
+        bare = subprocess.run(["bash", "-c", _bare(command)], cwd=project, capture_output=True, text=True)
+        assert bare.returncode != 0, bare
+        assert log_path.read_text(encoding="utf-8") == head, "the bare form must not append"
+
     assert _guard(command, project, env) == (0, ""), "the guard must make no decision on the append"
     subprocess.run(["bash", "-c", command], cwd=project, check=True)
-    assert log_path.read_text(encoding="utf-8") == "## 2026-06-04 session\n" + entry
+    assert log_path.read_text(encoding="utf-8") == head + entry
     assert slice_path.read_text(encoding="utf-8") == entry, "the slice is kept"
