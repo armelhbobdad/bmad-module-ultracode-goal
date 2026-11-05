@@ -54,8 +54,9 @@ def test_reloop_route_generalizes_before_fixing():
 
 def test_reloop_route_names_the_epic_scoped_ledger_append_only():
     bullet = _reloop_bullet()
-    # Both mentions carry the epic-scoped name: the evidence read and the append.
-    assert bullet.count(".class-ledger-<epic_id>.md") == 2
+    # Every mention carries the epic-scoped name: the evidence read, the append,
+    # and the cap-only re-loop's "appending nothing to" (#213 review 2).
+    assert bullet.count(".class-ledger-<epic_id>.md") == 3
     assert "**append-only**" in bullet
     assert re.search(r"named for the Epic", bullet), (
         "the ledger's epic scoping is load-bearing: an unscoped ledger grows "
@@ -75,7 +76,9 @@ def test_flat_score_tripwire_is_profile_scoped():
 def test_cap_only_reloop_skips_the_ceremony():
     bullet = _reloop_bullet()
     assert "**A cap-only re-loop skips the ceremony.**" in bullet
-    assert re.search(r"writing no `class:` lines, appending nothing to the ledger", bullet)
+    # The class ledger by its file name (#213 review 2): the bullet's one other
+    # ledger, the deferred-work one, takes the re-sweep's `sweep` row.
+    assert re.search(r"writing no `class:` lines, appending nothing to `\.class-ledger-<epic_id>\.md`", bullet)
     assert re.search(r"skipping `bmad-correct-course` entirely", bullet)
     assert re.search(r"do not count toward the flat-score tripwire", bullet)
 

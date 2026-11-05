@@ -32,6 +32,15 @@ paragraph first; gate.md's cap-only re-loop appends nothing to the ledger save
 that `sweep` row; and the evidence commit stages any `sweep` row the story's
 sweeps appended, which no commit of the story carries.
 
+Its second review (#213 review 2) added: the cap-only re-loop names both
+files, appending nothing to `.class-ledger-<epic_id>.md` and no row to
+`{workflow.deferred_work_path}` save that `sweep` row, where "the ledger" read
+as the class ledger the bullet is about; a gate step that writes a marker after
+its sweep by its own rule (the backfill's step 3, a cap-only re-loop's
+`scope=full` refresh) writes it from the second sweep too; and a second-sweep
+timeout whose package passes in isolation puts no red in that sweep, with the
+isolation run's capture cited beside both sweeps' captures.
+
 Each predicate is checked against the live text and, as its anti-vacuous twin,
 against the text with the #213 wording removed (the pre-edit text) and against
 a one-clause mutant it must reject. Stated limit: this is a presence proof over
@@ -72,10 +81,13 @@ _SWEEP_SOURCE = (
     ", `sweep` (a non-critical finding: a case outside the story's changes that went red in one sweep and green in "
     "the next at the same tree, `references/execute.md` step 2)"
 )
-_CAP_ONLY_CARVE_OUT = (
-    " save the deferred-work `sweep` row its re-sweep owes for a red the story's changes do not explain "
-    "(`references/execute.md` step 2)"
+# The cap-only re-loop's ledger clause, and the pre-#213 wording it replaced:
+# the pre-edit reconstruction swaps one for the other.
+_CAP_ONLY_CLAUSE = (
+    "appending nothing to `.class-ledger-<epic_id>.md` and no row to `{workflow.deferred_work_path}` save the "
+    "`sweep` row its re-sweep owes for a red the story's changes do not explain (`references/execute.md` step 2)"
 )
+_CAP_ONLY_PRE = "appending nothing to the ledger"
 _EVIDENCE_SWEEP_ROW = (
     ", and any `sweep` row this story's sweeps appended (`references/execute.md` step 2) is tracked state no "
     "commit of the story carries, since those stage only its source and test paths"
@@ -162,7 +174,7 @@ def _gate_pre_edit(gate: str) -> str:
     return (
         gate.replace(_GATE_POINTER + " ", "", 1)
         .replace(_SWEEP_SOURCE, "", 1)
-        .replace(_CAP_ONLY_CARVE_OUT, "", 1)
+        .replace(_CAP_ONLY_CLAUSE, _CAP_ONLY_PRE, 1)
         .replace(_EVIDENCE_SWEEP_ROW, "", 1)
     )
 
@@ -181,7 +193,12 @@ def test_the_pre_edit_text_is_a_real_reconstruction():
     assert _RED_MEANS in _step5(pre)
     assert _GATE_POINTER not in gate_pre and "`sweep`" not in _source_line(gate_pre)
     assert len(gate) - len(gate_pre) == (
-        len(_GATE_POINTER) + 1 + len(_SWEEP_SOURCE) + len(_CAP_ONLY_CARVE_OUT) + len(_EVIDENCE_SWEEP_ROW)
+        len(_GATE_POINTER)
+        + 1
+        + len(_SWEEP_SOURCE)
+        + len(_CAP_ONLY_CLAUSE)
+        - len(_CAP_ONLY_PRE)
+        + len(_EVIDENCE_SWEEP_ROW)
     )
     assert _source_line(gate_pre).endswith("`decision` (parked decision).")
     assert "writing no `class:` lines, appending nothing to the ledger, and skipping" in _reloop_bullet(gate_pre)
@@ -269,9 +286,26 @@ def _keeps_the_marker_and_commits_nothing(paragraph: str) -> bool:
     )
 
 
+_GATE_MARKER_CLAUSE = (
+    ", and a gate step that writes one after its sweep by its own rule (`references/gate.md`: the backfill's step 3 "
+    "once its sweep is green, a cap-only re-loop's `scope=full` refresh) writes it from that second sweep too"
+)
+
+
+def _gate_markers_come_from_the_second_sweep(paragraph: str) -> bool:
+    """The paragraph binds the gate's sweeps too, and two of them write a
+    marker by their own rule: each writes it from the second sweep, as step 2
+    does."""
+    return "Step 2 then writes its marker from that second sweep" + _GATE_MARKER_CLAUSE + "." in _flat(paragraph)
+
+
 _TIMEOUT_SENTENCE = (
     "A timeout in the second sweep still takes the paragraph above first, as a timeout in any wide sweep does, "
     "before it is read as that sweep's red."
+)
+_ISOLATION_SENTENCE = (
+    "When that package then passes in isolation, the timeout puts no red in the second sweep, and the `flaky:` "
+    "line and the ledger row cite that isolation run's capture beside both sweeps' captures."
 )
 _SECOND_RED_SENTENCE = (
     "Any red in the second sweep, in that case or in another, is a red, and takes its step's route."
@@ -289,6 +323,14 @@ def _a_second_sweep_timeout_is_read_first(paragraph: str) -> bool:
     )
 
 
+def _an_isolated_pass_leaves_no_red(paragraph: str) -> bool:
+    """What the loaded-machine paragraph's isolated re-run leaves when the
+    package passes: no red in the second sweep, and its capture cited with the
+    two sweeps' captures, right after the sentence that sends the timeout
+    there."""
+    return _TIMEOUT_SENTENCE + " " + _ISOLATION_SENTENCE in _flat(paragraph)
+
+
 def _a_second_red_is_a_red(paragraph: str) -> bool:
     return "Any red in the second sweep, in that case or in another, is a red, and takes its step's route" in _flat(
         paragraph
@@ -303,7 +345,9 @@ _CLAUSES = (
     _records_the_flake,
     _names_the_ledger_row,
     _keeps_the_marker_and_commits_nothing,
+    _gate_markers_come_from_the_second_sweep,
     _a_second_sweep_timeout_is_read_first,
+    _an_isolated_pass_leaves_no_red,
     _a_second_red_is_a_red,
 )
 
@@ -390,14 +434,33 @@ def test_the_rule_predicate_rejects_the_pre_edit_execute_md():
         # step 5 and the gate's sweeps.
         pytest.param(_keeps_the_marker_and_commits_nothing, "Step 2 then writes its marker",
                      "This step then writes its marker", id="this-step"),
+        # The round-1 wording, which named step 2's marker alone though the
+        # paragraph binds the gate's sweeps, two of which write a marker.
+        pytest.param(_gate_markers_come_from_the_second_sweep, _GATE_MARKER_CLAUSE, "", id="step2-marker-only"),
+        pytest.param(_gate_markers_come_from_the_second_sweep, "the backfill's step 3 once its sweep is green, ", "",
+                     id="no-backfill-marker"),
+        pytest.param(_gate_markers_come_from_the_second_sweep, ", a cap-only re-loop's `scope=full` refresh", "",
+                     id="no-cap-only-marker"),
+        pytest.param(_gate_markers_come_from_the_second_sweep, "writes it from that second sweep too",
+                     "writes it from the first sweep", id="gate-marker-from-first-sweep"),
         # The pre-review wording: no sentence for a timeout in the second sweep.
         pytest.param(_a_second_sweep_timeout_is_read_first, "A timeout in the second sweep still takes the paragraph "
                      "above first, as a timeout in any wide sweep does, before it is read as that sweep's red. ", "",
                      id="second-sweep-timeout-unruled"),
         pytest.param(_a_second_sweep_timeout_is_read_first, "still takes the paragraph above first",
                      "is that sweep's red, and skips the paragraph above", id="timeout-is-a-red"),
-        pytest.param(_a_second_sweep_timeout_is_read_first, _TIMEOUT_SENTENCE + " " + _SECOND_RED_SENTENCE,
-                     _SECOND_RED_SENTENCE + " " + _TIMEOUT_SENTENCE, id="timeout-after-the-red-route"),
+        pytest.param(_a_second_sweep_timeout_is_read_first,
+                     _TIMEOUT_SENTENCE + " " + _ISOLATION_SENTENCE + " " + _SECOND_RED_SENTENCE,
+                     _SECOND_RED_SENTENCE + " " + _TIMEOUT_SENTENCE + " " + _ISOLATION_SENTENCE,
+                     id="timeout-after-the-red-route"),
+        # The round-1 wording: no word on what an isolated pass leaves.
+        pytest.param(_an_isolated_pass_leaves_no_red, " " + _ISOLATION_SENTENCE, "", id="isolated-pass-unruled"),
+        pytest.param(_an_isolated_pass_leaves_no_red, "the timeout puts no red in the second sweep",
+                     "the timeout is still that sweep's red", id="isolated-pass-is-a-red"),
+        pytest.param(_an_isolated_pass_leaves_no_red, ", and the `flaky:` line and the ledger row cite that isolation "
+                     "run's capture beside both sweeps' captures", "", id="isolation-capture-uncited"),
+        pytest.param(_an_isolated_pass_leaves_no_red, "the `flaky:` line and the ledger row cite",
+                     "the `flaky:` line cites", id="ledger-row-omits-isolation"),
         pytest.param(_a_second_red_is_a_red, "Any red in the second sweep, in that case or in another, is a red",
                      "A red in the same case in the second sweep is a red", id="other-case-unruled"),
         pytest.param(_a_second_red_is_a_red, "and takes its step's route", "and takes a third sweep",
@@ -550,12 +613,13 @@ def test_the_ledger_predicate_rejects_its_mutants(old, new):
 
 def _cap_only_reloop_owes_its_sweep_row(gate: str) -> bool:
     """A cap-only re-loop re-runs the full sweep, which execute.md step 2 binds,
-    so "appending nothing to the ledger" carves out the `sweep` row it can owe."""
+    so it appends nothing to the class ledger and no row to the deferred-work
+    ledger save the `sweep` row it can owe, each file named."""
     bullet = _reloop_bullet(gate)
     return bool(
         "**A cap-only re-loop skips the ceremony.**" in bullet
-        and "writing no `class:` lines, appending nothing to the ledger" + _CAP_ONLY_CARVE_OUT
-        + ", and skipping `bmad-correct-course` entirely" in bullet
+        and "writing no `class:` lines, " + _CAP_ONLY_CLAUSE + ", and skipping `bmad-correct-course` entirely"
+        in bullet
     )
 
 
@@ -567,9 +631,18 @@ def test_the_cap_only_reloop_carves_out_the_sweep_row():
     ("old", "new"),
     [
         # The pre-review wording, which forbade the row execute.md step 2 owes.
-        pytest.param(_CAP_ONLY_CARVE_OUT, "", id="pre-edit"),
-        pytest.param("save the deferred-work `sweep` row its re-sweep owes",
-                     "not even the deferred-work `sweep` row its re-sweep owes", id="row-forbidden"),
+        pytest.param(_CAP_ONLY_CLAUSE, _CAP_ONLY_PRE, id="pre-edit"),
+        # The round-1 wording: "the ledger", in a bullet whose ledger is the
+        # class ledger, for two files.
+        pytest.param("appending nothing to `.class-ledger-<epic_id>.md` and no row to `{workflow.deferred_work_path}` "
+                     "save the `sweep` row", "appending nothing to the ledger save the deferred-work `sweep` row",
+                     id="one-ledger-for-two-files"),
+        # The carve-out read against the class ledger, where no `sweep` row goes.
+        pytest.param(" and no row to `{workflow.deferred_work_path}` save", " save", id="class-ledger-carve-out"),
+        pytest.param("appending nothing to `.class-ledger-<epic_id>.md` and no row",
+                     "appending nothing to the ledger and no row", id="class-ledger-unnamed"),
+        pytest.param("save the `sweep` row its re-sweep owes", "not even the `sweep` row its re-sweep owes",
+                     id="row-forbidden"),
         pytest.param("(`references/execute.md` step 2), and skipping `bmad-correct-course`",
                      ", and skipping `bmad-correct-course`", id="no-pointer"),
     ],
