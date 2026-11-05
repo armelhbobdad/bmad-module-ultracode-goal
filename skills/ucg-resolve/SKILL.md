@@ -38,7 +38,9 @@ more than a note-taker.
   `{project-root}/_bmad-output/ultracode-goal/<run folder>/.decision-log.md` — the module's
   default runs root, which no `customize.toml` scalar carries. Write to the folder whose
   Epic the enumerated artifacts belong to; ask the operator when more than one could be it,
-  and when none exists append nothing rather than create a stray log.
+  and when none exists append nothing rather than create a stray log. Append to it with
+  Write/Edit, never a Bash heredoc, as section 3 says, which also covers a log too large to
+  Read.
 
 ## On Activation
 
@@ -296,7 +298,21 @@ The two dispositions are genuinely different things, not two names for one:
   anything**. The artifact stays exactly where it is, the item stays pending, and the next
   preflight still blocks on it.
 
-Record each answer and its disposition in `.decision-log.md` as you apply it.
+Record each answer and its disposition in `.decision-log.md` as you apply it, with
+Write/Edit and never a Bash heredoc. A heredoc puts decision prose (commit and push verbs,
+backticked names, apostrophes) into a Bash command string, and the PreToolUse guard's git
+gates read that string as commands (`{ucg-root}/references/execute.md`, step 4, gives the
+reason). Once the log is too large to Read affordably, do not Read it, since both file
+tools refuse a file this session has not Read. Write the entry instead to a new file beside
+the log, `{project-root}/_bmad-output/ultracode-goal/<run folder>/dlog-slice-resolve-<n>.md`,
+with `<n>` one past the highest number a `dlog-slice-resolve-*.md` in that folder already
+carries (`1` when there is none): the name has to be new for every append, or Write finds
+the file on disk and asks for the Read again. Then append it in one Bash call, with both
+paths in full:
+`cat {project-root}/_bmad-output/ultracode-goal/<run folder>/dlog-slice-resolve-<n>.md >> {project-root}/_bmad-output/ultracode-goal/<run folder>/.decision-log.md`.
+Keep the slice rather than deleting it: it is the only copy of the entry if the append is
+interrupted. This holds for every entry the pass writes, the coupled-stories entry above
+included.
 
 ## 4. Hand control back to the existing resume
 

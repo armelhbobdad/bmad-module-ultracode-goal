@@ -61,7 +61,7 @@ These exist because the documented mechanics make the intuitive shortcut wrong. 
 | 6 | Finalize | Auto Memory capture, optional retrospective, decision-log audit, report | `references/finalize.md` |
 | 7 | Health Check | Terminal self-improvement audit — Finalize's close-out loads it; capture real workflow friction | `references/health-check.md` |
 
-Run the stages in order; each routes by the testable conditions stated in its file. The decision log is canonical memory — record scope, the preflight verdict, every gate outcome, and every deferral as you go.
+Run the stages in order; each routes by the testable conditions stated in its file. The decision log is canonical memory: record scope, the preflight verdict, every gate outcome, and every deferral as you go. **Append it with Write/Edit, never a Bash heredoc**, from Stage 1 on: a heredoc puts the log's prose into a Bash command string, and the guard's git gates read that string as commands (`references/execute.md`, step 4, gives the reason). Once the log is too large to Read affordably, do not Read it: Write the entry to a new file beside the log, in the run folder that holds it, `<log folder>/dlog-slice-<label>-<n>.md`, where `<log folder>` is that folder's full path, `<label>` is the story's id for an entry about a story and `stage<k>` for one a stage writes outside a story (`stage1` for Ingest & Scope), and `<n>` is one past the highest number a `dlog-slice-<label>-*.md` there already carries, so the name is new for every append. Then append it in one Bash call, `cat <log folder>/dlog-slice-<label>-<n>.md >> <log folder>/.decision-log.md`, and keep the slice.
 
 ## Headless
 

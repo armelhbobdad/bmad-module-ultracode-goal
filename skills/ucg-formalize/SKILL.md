@@ -47,7 +47,19 @@ recomputes the readiness verdict. Each verdict and remediation lands in
   for this Epic when one exists (appending a session entry), otherwise create
   `epic-<id>-<UTC yyyymmddThhmmssZ>` for this standalone check. That resolved path is
   what the Headless `decision_log` key carries, so two invocations over the same Epic
-  cannot scatter their verdicts across two files.
+  cannot scatter their verdicts across two files. Append to the log with Write/Edit,
+  never a Bash heredoc: a heredoc puts the log's prose into a Bash command string, and the
+  PreToolUse guard's git gates read that string as commands
+  (`{ucg-root}/references/execute.md`, step 4, gives the reason). Once the log is too large
+  to Read affordably, do not Read it, since both file tools refuse a file this session has
+  not Read. Write the entry instead to a new file beside the log,
+  `<run folder>/dlog-slice-formalize-<n>.md`, where `<run folder>` is the resolved folder
+  above in full and `<n>` is one past the highest number a `dlog-slice-formalize-*.md` in
+  it already carries (`1` when there is none), so the name is new for every append. Then
+  append it in one Bash call, with both paths in full:
+  `cat <run folder>/dlog-slice-formalize-<n>.md >> <run folder>/.decision-log.md`. Keep
+  the slice rather than deleting it: it is the only copy of the entry if the append is
+  interrupted.
 
 ## On Activation
 
@@ -165,7 +177,8 @@ its `detail`: record it as a non-remediable blocker naming the kind and route to
 kind blocks loudly instead of being guessed at, and the halt catch-all below then covers
 the never-remediated case as well as the remediated-but-unfixed one.
 
-Log each remediation to `.decision-log.md` as you apply it. Never
+Log each remediation to `.decision-log.md` as you apply it, appended the way Conventions
+says. Never
 auto-remediate a `judgment_candidate`, and never auto-remediate a
 `remediable: false` mechanical gap (an unreadable artifact cannot be fixed from its
 own unreadable content).
