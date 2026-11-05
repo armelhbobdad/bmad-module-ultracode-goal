@@ -2716,8 +2716,16 @@ _HOOK_REJECTION_SENTENCES = {
         # resume, routed through an escalation /ucg-resolve closes; it says
         # nothing of a hook's rejection of the evidence commit.
         ("A resume never reaches this stage: when its hooks need re-arming and the", "c5d3cb28c9ca"),
+        # Reviewed (#211): step 5's liveness probe, a `git commit --dry-run`
+        # the guard must refuse while no story is set. Its refusal is the
+        # proof, acted on in nothing; a second call it does not refuse means
+        # the session does not run the hooks, and the run resumes the
+        # conversation or stops. None names the evidence commit or answers a
+        # hook's rejection of a commit the run makes.
+        ("A second call the guard does not refuse means this session does not run ", "1102333b06d6"),
         ("Claude Code only invokes a PreToolUse group for tools its matcher select", "5df2ca1f552d"),
         ("Deleting it costs nothing a later step needs: step 0 writes it afresh be", "df83ff84a5f2"),
+        ("If the operator declines, or the resumed session still does not refuse t", "e971900cd84f"),
         # Reviewed (#186 review, 4.1.0): an unquoted hook command's cost, now
         # the budget hook's as the shell or uv exits (a stop let through, or
         # sent back up to eight times in a row); nothing of a hook's rejection
@@ -2731,6 +2739,7 @@ _HOOK_REJECTION_SENTENCES = {
         # commit.
         ("Left unquoted, a project or skill path that holds a space (a project und", "d0797efaddc8"),
         ("Now that the group is armed for every tool, the hook IS invoked for a `W", "54ce49130885"),
+        ("That refusal is the proof, for the Stop hook written beside the guard to", "83ece1426ebe"),
         ("The Stop budget hook carries no `onFailure`: Claude Code ignores the key", "63209639b79d"),
         ("The guard's item carries `\"onFailure\": \"block\"` beside `\"type\"` and `\"co", "dcd78ba37079"),
         ("The same assertion is scriptable: `preflight_check.py --assert-armed` pe", "09a4c30a9245"),
@@ -2759,6 +2768,12 @@ _HOOK_REJECTION_SENTENCES = {
     "troubleshooting.md": (
         ("**What to check.** - **Older Claude Code.** The hook returns a `deny` de", "b9349b662d21"),
         ("- **A refused settings write.** Preflight writes its hooks and allow rul", "298ba71ea2eb"),
+        # Reviewed (#211): what keeps a session from running the hooks once
+        # preflight's probe was not refused, and what another reason from the
+        # guard on that probe means; each is cleared by the operator before a
+        # new invocation, and neither names the evidence commit.
+        ("- **A setting that keeps the file's hooks from running.** When a resumed", "50d3dce3619b"),
+        ("- **The probe refused for another reason.** Any guard reason other than ", "a12f53e23685"),
         ("--- title: Troubleshooting description: Maps the real failure modes of a", "74417cea7b2a"),
         # Reviewed (#186): the same refused settings write on a resume; no
         # hook's rejection of the evidence commit. Reviewed again (4.1.0) when
@@ -2786,6 +2801,12 @@ _HOOK_REJECTION_SENTENCES = {
         ("On a run UCG 3.x armed, that resume is also the one that re-arms the hoo", "f128489bf7e7"),
         ("Start from the symptom you observed and follow it to the section that ex", "b8cdcd44aae2"),
         ("A drive that stops before a story's gate logs its verdict can leave one ", "c624e906aef8"),
+    ),
+    # Reviewed (#211): Stage 2's arming, which now ends with the probe the
+    # guard must refuse or preflight stops; a check before the launch, and
+    # nothing of a hook's rejection of the evidence commit.
+    "how-it-works.md": (
+        ("Then the skill arms the environment: asserts the Epic branch off `epic_b", "aa2eaecb7507"),
     ),
     "operating-tips.md": (
         ("The Epic is finished. | | `evidence-owed` | Every story is `done`, but a", "2dbc62bde6cc"),
