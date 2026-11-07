@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [7.0.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v6.0.0...v7.0.0) (2026-11-07)
+
+### Breaking changes
+
+- **ultracode-goal:** The PreToolUse guard now refuses any `git commit` while the index holds an intent-to-add entry (`git add -N`), with a reason that starts `Intent-to-add guard: refusing` and names each such path. A commit leaves such an entry out while the index keeps it, and over a path HEAD holds (`git rm --cached`, then `git add -N`) it deletes HEAD's file; the un-skip proof read a marked acceptance test as an empty file with no `test.skip(` in it, so a commit that left a still-skipped acceptance test out went through, where the same file untracked was refused. The check runs after the empty-index check and before the un-skip proof, and it refuses the commit when git cannot list the entries. An index that holds only marks on new files still gets the empty-index refusal; a mark over a path HEAD holds counts as staged work there, since the commit would delete that file, and this check refuses it. A commit made with such an entry in the index used to pass the guard and now halts. (issue [#217](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/217))
+
+  **Migration:** Clear each path the refusal names before the commit. Stage each marked file the commit should carry (`git add -- <path>`); a mark on a path HEAD already holds is cleared the same way, staging the file in place, since moving it aside would stage its deletion. For a marked new file the commit should not carry, move it aside into the story's `.scratch-<story_id>/` folder, run `git add -- <path>`, which clears its entry, then move it back, where it is untracked again; delete it only when nothing needs it. Then commit again.
+
+### Added
+
+- **ultracode-goal:** `scripts/claim_check.py` takes `--amend`, which compares the paths the texts name with what an amend of HEAD would commit: the index against HEAD's first parent, or the empty tree when HEAD has none, the same list `git commit --dry-run --amend` shows, with an intent-to-add entry left out. Before, the check Execute runs ahead of a re-verify amend listed every path the amended commit already carried from HEAD in `not_in_diff`, and the rule for that list would have the run strip true claims. Execute's step 4 now passes `--amend` on every run of the check for an amend, a reworded message's re-run included, and reads the amend's whole diff for its hunk pass. With `--amend` the output adds a `base` key naming what the index was compared with, and an unborn HEAD exits `2` with "nothing to amend"; without it the output is unchanged. (issue [#218](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/218))
+
+### Changed
+
+- **ultracode-goal:** Execute's step-2 sweep now sees a story's new files. Before each sweep it marks the story's own new files intent-to-add (`git add -N`), taken file by file from the `??` entries of `git status --porcelain --untracked-files=all`, so a conformance gate scoped to git's file list (a `git ls-files`-based check) scans them and reds before the commit, not at the re-verify after it, where the fix cost an amend and two more full sweeps. A folder, a sibling story's tests, the story's scratch and evidence folders, a run marker and an ignored path are never marked. The commit stages every marked path, and the re-verify on the committed tree still catches what a mark cannot reach: an ignored or generated file, a file made after the last mark, and a gate that reads staged content, which a mark leaves empty. A gate that fails on any uncommitted change, such as `git diff --exit-code`, now reds at step 2 on a story that only adds files, as it already did on a story that edits a tracked one. (issue [#217](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/217))
+
+### Fixed
+
+- **ultracode-goal:** The triage `scripts/drive_epic.py` prints after a spawn stops now names an intent-to-add file the story moved. It reads `git status` with `--no-renames`: with rename detection on, git paired a moved tracked file's mark with its old path into one rename entry, and the `DANGER` list left that file out. It also names a mark over a path HEAD holds (`git rm --cached`, then `git add -N`, status `DA`), which it used to leave out. The list now also says that `git restore <path>` empties these files, as `git checkout -- <path>` does, and that `git reset --hard` deletes a new one and reverts a tracked one to HEAD, discarding its edits. Execute now marks a story's new files intent-to-add before each sweep, so a session killed before its commit leaves such files routinely. (issue [#217](https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/217))
+
 ## [6.0.0](https://github.com/armelhbobdad/bmad-module-ultracode-goal/compare/v5.0.0...v6.0.0) (2026-11-06)
 
 ### Breaking changes
