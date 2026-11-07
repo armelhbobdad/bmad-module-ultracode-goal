@@ -52,12 +52,22 @@ _ARCHITECTURE = _REPO / "docs" / "architecture.md"
 
 _HEAD = "**Mark this story's new files intent-to-add before every sweep this step runs.**"
 _NEXT_HEAD = "**Scope the sweep on three axes, not one.**"
+_STEP4_CLEARING = (
+    "and a mark on a path `HEAD` already holds is staged in place like the rest; a marked new file the story will not "
+    "ship is moved aside into `.scratch-<story_id>/` before that call, so staging its path drops its entry the same "
+    "way, and moved back after it, untracked again (deleted instead only when nothing needs it): "
+)
 _STEP4_SENTENCE = (
     "Those paths take in every path step 2 marked intent-to-add, a marked file since deleted included (staging a "
-    "deleted file's path drops its entry), and a marked file the story will not ship is moved out of the work tree "
-    "before that call, so staging its path drops its entry the same way, and moved back after it, untracked again "
-    "(deleted instead only when nothing needs it): the guard refuses any commit while the index holds a mark, naming "
-    "each one, because the commit would leave that file out while the index keeps it."
+    "deleted file's path drops its entry), " + _STEP4_CLEARING + "the guard refuses any commit while the index holds "
+    "a mark, naming each one, because the commit would leave that file out while the index keeps it, or, for a mark "
+    "on a path `HEAD` holds, delete `HEAD`'s file."
+)
+# The round-2 wording: moving a `DA` mark aside stages its deletion.
+_STEP4_CLEARING_R2 = (
+    "and a marked file the story will not ship is moved out of the work tree before that call, so staging its path "
+    "drops its entry the same way, and moved back after it, untracked again (deleted instead only when nothing needs "
+    "it): "
 )
 # The round-1 wording of the clause a review replaced: deleting or moving out
 # lost a file the tree still needs.
@@ -101,7 +111,8 @@ _PREFLIGHT_SENTENCE = (
 )
 _ARCHITECTURE_CLAUSE = (
     ", or while it holds an intent-to-add entry (`git add -N`, which Execute makes for a story's new files before its "
-    "sweep), naming each one, since the commit would leave that file out"
+    "sweep), naming each one, since the commit would leave that file out, or, for a mark over a path HEAD holds, "
+    "delete HEAD's file"
 )
 
 
@@ -219,25 +230,45 @@ def _marking_again_is_safe(paragraph: str) -> bool:
     ) in _flat(paragraph)
 
 
+_QUOTING = (
+    "Without `-z`, any name git prints inside double quotes is C-quoted (a space, a double quote, a backslash or a "
+    "control character in it, and under git's default `core.quotePath` a non-ASCII byte, which it writes as an octal "
+    "escape: `\"my file.ts\"`, `\"caf\\303\\251.ts\"`): pass it as the name it stands for, its escapes decoded and "
+    "quoted for the shell, never as printed, which matches no file."
+)
+# The round-2 wording: it named three characters and printed octal escapes
+# whatever `core.quotePath` says.
+_QUOTING_R2 = (
+    "Without `-z`, git prints a name that holds a space, a double quote or a non-ASCII byte C-quoted, in double "
+    "quotes with octal escapes (`\"my file.ts\"`, `\"caf\\303\\251.ts\"`): pass such a name as the file name "
+    "it stands for, its escapes decoded and quoted for the shell, never as printed, which matches no file."
+)
+
+
 def _passes_a_quoted_name_as_the_file_name(paragraph: str) -> bool:
-    return (
-        "Without `-z`, git prints a name that holds a space, a double quote or a non-ASCII byte C-quoted, in double "
-        "quotes with octal escapes (`\"my file.ts\"`, `\"caf\\303\\251.ts\"`): pass such a name as the file name "
-        "it stands for, its escapes decoded and quoted for the shell, never as printed, which matches no file."
-    ) in _flat(paragraph)
+    return _QUOTING in _flat(paragraph)
 
 
 _RECOVERY = (
     "A non-zero exit can leave some paths marked and others not: git refuses an ignored path and marks the rest, and a "
     "path that matches no file makes git exit 128 and mark none of the paths in the call. After any non-zero exit, "
     "read `git status --porcelain --no-renames --untracked-files=all` again, where a marked file shows as ` A`, and "
-    "mark again, in one more call, every chosen path still listed `??` that git did not refuse as ignored."
+    "mark again, in one more call, every chosen path still listed `??` that git did not refuse as ignored. When that "
+    "call fails too, mark nothing more: log the paths left unmarked in `.decision-log.md` and sweep, since step 5 runs "
+    "the tracked-file gates on the commit."
 )
 # The round-1 wording: it covered only an ignored path, and marked nothing again.
 _RECOVERY_PRE = (
     "A non-zero exit can leave some paths marked and others not (git refuses an ignored path and marks the rest): "
     "read `git status --porcelain --no-renames` again, where a marked file shows as ` A`, and mark no path git "
     "refused."
+)
+# The round-2 wording: nothing said what follows when the one more call fails.
+_RECOVERY_R2 = (
+    "A non-zero exit can leave some paths marked and others not: git refuses an ignored path and marks the rest, and a "
+    "path that matches no file makes git exit 128 and mark none of the paths in the call. After any non-zero exit, "
+    "read `git status --porcelain --no-renames --untracked-files=all` again, where a marked file shows as ` A`, and "
+    "mark again, in one more call, every chosen path still listed `??` that git did not refuse as ignored."
 )
 
 
@@ -246,15 +277,25 @@ def _rereads_status_after_a_failure(paragraph: str) -> bool:
 
 
 _CLEARING = (
-    "A marked file the story will not ship (a sibling story's test marked by mistake, a mark another session left) is "
-    "moved out of the work tree, then `git add -- <path>` clears its entry, and the file is moved back, where it is "
-    "untracked again; delete it instead only when nothing needs it. The guard refuses any commit while the index holds "
-    "a mark (step 4)."
+    "A mark on a path `HEAD` already holds (status `DA`) is cleared by staging the file in place, `git add -- <path>`, "
+    "since moving it aside would stage its deletion. A marked new file the story will not ship (a sibling story's test "
+    "marked by mistake, a mark another session left) is moved aside into "
+    "`{workflow.implementation_artifacts}/.scratch-<story_id>/`, untracked in the run's own folder, then "
+    "`git add -- <path>` clears its entry, and the file is moved back, where it is untracked again; delete it instead "
+    "only when nothing needs it. The guard refuses any commit while the index holds a mark (step 4)."
 )
 # The round-1 wording: deleting or moving out lost a file the tree still needs.
 _CLEARING_PRE = (
     "A marked file the story will not ship is deleted or moved out of the tree, then `git add -- <path>` clears its "
     "entry, since the guard refuses any commit while the index holds a mark (step 4)."
+)
+# The round-2 wording: moving a `DA` mark aside stages its deletion, and a
+# file parked outside the tree is recorded nowhere.
+_CLEARING_R2 = (
+    "A marked file the story will not ship (a sibling story's test marked by mistake, a mark another session left) is "
+    "moved out of the work tree, then `git add -- <path>` clears its entry, and the file is moved back, where it is "
+    "untracked again; delete it instead only when nothing needs it. The guard refuses any commit while the index holds "
+    "a mark (step 4)."
 )
 
 
@@ -265,8 +306,10 @@ def _clears_a_mark_without_an_undo_command(paragraph: str) -> bool:
 
 _DIRTY_TREE = (
     "A gate that fails on any uncommitted change (`git diff --exit-code`, say) reads a mark as one, as it reads an "
-    "edit to a tracked file: that red is the state before the commit and does not count against the tests-ran marker "
-    "this step writes once all three go green, since step 5 runs that gate on the committed tree, where a red is a "
+    "edit to a tracked file. Its red is the state before the commit, and does not count against the tests-ran marker "
+    "this step writes once all three go green, only when its output names no path but those this story changes or "
+    "marks: any other path in it (a stale generated file the story never touched, say) makes it a red. State in the "
+    "printed evidence that the red was read that way. Step 5 runs that gate on the committed tree, where a red is a "
     "red."
 )
 # The round-1 wording: it left open whether that red holds back the marker.
@@ -274,6 +317,13 @@ _DIRTY_TREE_PRE = (
     "A gate that fails on any uncommitted change (`git diff --exit-code`, say) reads a mark as one, as it reads an "
     "edit to a tracked file: that red is the state before the commit, and step 5 runs the gate again on the "
     "committed tree."
+)
+# The round-2 wording: it exempted every red of such a gate, a real one too.
+_DIRTY_TREE_R2 = (
+    "A gate that fails on any uncommitted change (`git diff --exit-code`, say) reads a mark as one, as it reads an "
+    "edit to a tracked file: that red is the state before the commit and does not count against the tests-ran marker "
+    "this step writes once all three go green, since step 5 runs that gate on the committed tree, where a red is a "
+    "red."
 )
 
 
@@ -339,6 +389,11 @@ def test_the_mark_predicate_rejects_the_pre_edit_execute_md():
                      id="quoted-as-printed"),
         pytest.param(_passes_a_quoted_name_as_the_file_name, "its escapes decoded and quoted for the shell, ", "",
                      id="escapes-kept"),
+        pytest.param(_passes_a_quoted_name_as_the_file_name, "a double quote, a backslash or a control character in "
+                     "it", "or a double quote in it", id="only-space-and-quote"),
+        pytest.param(_passes_a_quoted_name_as_the_file_name, "and under git's default `core.quotePath` a non-ASCII "
+                     "byte, which it writes as an octal escape", "and a non-ASCII byte, always as an octal escape",
+                     id="octal-always"),
         pytest.param(_rereads_status_after_a_failure, "`git status --porcelain --no-renames --untracked-files=all`",
                      "`git status --porcelain --untracked-files=all`", id="renames-on"),
         # A new folder collapses to one `?? <folder>/` entry, which lists no
@@ -352,18 +407,38 @@ def test_the_mark_predicate_rejects_the_pre_edit_execute_md():
         pytest.param(_rereads_status_after_a_failure, "and mark again, in one more call, every chosen path still "
                      "listed `??` that git did not refuse as ignored", "and mark no path git refused",
                      id="no-second-call"),
-        pytest.param(_clears_a_mark_without_an_undo_command, "is moved out of the work tree, then "
-                     "`git add -- <path>` clears its entry", "is unmarked with `git reset -q -- <path>`",
+        pytest.param(_rereads_status_after_a_failure, " When that call fails too, mark nothing more: log the paths "
+                     "left unmarked in `.decision-log.md` and sweep, since step 5 runs the tracked-file gates on the "
+                     "commit.", "", id="second-failure-unruled"),
+        pytest.param(_rereads_status_after_a_failure, "mark nothing more", "mark again until it succeeds",
+                     id="retry-forever"),
+        pytest.param(_rereads_status_after_a_failure, "log the paths left unmarked in `.decision-log.md` and ", "",
+                     id="unmarked-unlogged"),
+        pytest.param(_clears_a_mark_without_an_undo_command, "is moved aside into "
+                     "`{workflow.implementation_artifacts}/.scratch-<story_id>/`, untracked in the run's own folder, "
+                     "then `git add -- <path>` clears its entry", "is unmarked with `git reset -q -- <path>`",
                      id="reset"),
-        pytest.param(_clears_a_mark_without_an_undo_command, "is moved out of the work tree, then "
-                     "`git add -- <path>` clears its entry", "is unmarked with `git rm --cached -- <path>`",
+        pytest.param(_clears_a_mark_without_an_undo_command, "is moved aside into "
+                     "`{workflow.implementation_artifacts}/.scratch-<story_id>/`, untracked in the run's own folder, "
+                     "then `git add -- <path>` clears its entry", "is unmarked with `git rm --cached -- <path>`",
                      id="rm-cached"),
         pytest.param(_clears_a_mark_without_an_undo_command, ", and the file is moved back, where it is untracked "
                      "again; delete it instead only when nothing needs it", "", id="never-moved-back"),
-        pytest.param(_reads_a_dirty_tree_red_as_the_pre_commit_state, "that red is the state before the commit",
-                     "that red is the story's", id="dirty-tree-red-is-the-storys"),
-        pytest.param(_reads_a_dirty_tree_red_as_the_pre_commit_state, " and does not count against the tests-ran "
+        pytest.param(_clears_a_mark_without_an_undo_command, "A mark on a path `HEAD` already holds (status `DA`) is "
+                     "cleared by staging the file in place, `git add -- <path>`, since moving it aside would stage its "
+                     "deletion. ", "", id="tracked-path-moved-aside"),
+        pytest.param(_clears_a_mark_without_an_undo_command, "moved aside into "
+                     "`{workflow.implementation_artifacts}/.scratch-<story_id>/`, untracked in the run's own folder",
+                     "moved out of the work tree", id="parked-outside-the-run"),
+        pytest.param(_reads_a_dirty_tree_red_as_the_pre_commit_state, "Its red is the state before the commit",
+                     "Its red is the story's", id="dirty-tree-red-is-the-storys"),
+        pytest.param(_reads_a_dirty_tree_red_as_the_pre_commit_state, ", and does not count against the tests-ran "
                      "marker this step writes once all three go green", "", id="marker-held-back"),
+        pytest.param(_reads_a_dirty_tree_red_as_the_pre_commit_state, ", only when its output names no path but those "
+                     "this story changes or marks: any other path in it (a stale generated file the story never "
+                     "touched, say) makes it a red", "", id="every-red-exempt"),
+        pytest.param(_reads_a_dirty_tree_red_as_the_pre_commit_state, " State in the printed evidence that the red was "
+                     "read that way.", "", id="reading-unstated"),
     ],
 )
 def test_each_mark_clause_rejects_its_one_clause_mutant(clause, old, new):
@@ -378,18 +453,21 @@ def test_each_mark_clause_rejects_its_one_clause_mutant(clause, old, new):
 @pytest.mark.parametrize(
     ("clause", "old", "new"),
     [
-        pytest.param(_rereads_status_after_a_failure, _RECOVERY, _RECOVERY_PRE, id="recovery"),
-        pytest.param(_clears_a_mark_without_an_undo_command, _CLEARING, _CLEARING_PRE, id="clearing"),
+        pytest.param(_rereads_status_after_a_failure, _RECOVERY, _RECOVERY_PRE, id="recovery-round-1"),
+        pytest.param(_rereads_status_after_a_failure, _RECOVERY, _RECOVERY_R2, id="recovery-round-2"),
+        pytest.param(_clears_a_mark_without_an_undo_command, _CLEARING, _CLEARING_PRE, id="clearing-round-1"),
+        pytest.param(_clears_a_mark_without_an_undo_command, _CLEARING, _CLEARING_R2, id="clearing-round-2"),
         pytest.param(_reads_a_dirty_tree_red_as_the_pre_commit_state, _DIRTY_TREE, _DIRTY_TREE_PRE,
-                     id="dirty-tree"),
-        pytest.param(_passes_a_quoted_name_as_the_file_name, " Without `-z`, git prints a name that holds a space, a "
-                     "double quote or a non-ASCII byte C-quoted, in double quotes with octal escapes "
-                     "(`\"my file.ts\"`, `\"caf\\303\\251.ts\"`): pass such a name as the file name it stands for, "
-                     "its escapes decoded and quoted for the shell, never as printed, which matches no file.", "",
-                     id="quoting"),
+                     id="dirty-tree-round-1"),
+        pytest.param(_reads_a_dirty_tree_red_as_the_pre_commit_state, _DIRTY_TREE, _DIRTY_TREE_R2,
+                     id="dirty-tree-round-2"),
+        pytest.param(_passes_a_quoted_name_as_the_file_name, _QUOTING, _QUOTING_R2, id="quoting-round-2"),
+        # Not an earlier wording: round 1 had no such sentence, so its twin is
+        # the sentence deleted.
+        pytest.param(_passes_a_quoted_name_as_the_file_name, " " + _QUOTING, "", id="quoting-deleted"),
     ],
 )
-def test_each_reviewed_clause_rejects_its_round_1_wording(clause, old, new):
+def test_each_reviewed_clause_rejects_its_earlier_wording(clause, old, new):
     paragraph = _flat(_paragraph(_read(_EXECUTE)))
     assert paragraph.count(old) == 1
     mutant = paragraph.replace(old, new, 1)
@@ -455,9 +533,11 @@ def test_step4_stages_every_marked_path():
         pytest.param("every path step 2 marked", "the paths step 2 marked that still exist", id="existing-only"),
         pytest.param("the guard refuses any commit while the index holds a mark, naming each one",
                      "the commit carries any mark left", id="mark-rides"),
-        pytest.param("is moved out of the work tree before that call, so staging its path drops its entry the same "
-                     "way, and moved back after it, untracked again (deleted instead only when nothing needs it): ",
-                     _STEP4_LOSES_THE_FILE, id="round-1-loses-the-file"),
+        pytest.param(_STEP4_CLEARING, "and a marked file the story will not ship " + _STEP4_LOSES_THE_FILE,
+                     id="round-1-loses-the-file"),
+        pytest.param(_STEP4_CLEARING, _STEP4_CLEARING_R2, id="round-2-moves-a-tracked-mark-aside"),
+        pytest.param(", or, for a mark on a path `HEAD` holds, delete `HEAD`'s file", "",
+                     id="tracked-path-deletion-unsaid"),
     ],
 )
 def test_the_step4_predicate_rejects_its_mutants(old, new):
@@ -673,12 +753,14 @@ def test_fact_a_nonzero_exit_can_still_mark_the_other_paths(repo: Path):
 
 
 def test_fact_a_name_printed_c_quoted_marks_nothing_as_printed(repo: Path):
-    """Without `-z`, status C-quotes a name with a space or a non-ASCII byte;
-    passed as printed it matches no file, and git exits 128 marking nothing.
-    Passed as the file name it stands for, it marks."""
+    """Without `-z`, status C-quotes a name with a space, and one with a
+    non-ASCII byte under git's default `core.quotePath` (this repository's
+    config is the default: no global or system file is read); passed as
+    printed it matches no file, and git exits 128 marking nothing. Passed as
+    the file name it stands for, it marks."""
     _write(repo, "my file.ts")
     _write(repo, "caf\u00e9.ts")
-    printed = _git(repo, "-c", "core.quotePath=true", "status", "--porcelain", "--untracked-files=all")
+    printed = _git(repo, "status", "--porcelain", "--untracked-files=all")
     quoted = [line[3:] for line in printed.splitlines() if line.startswith('?? "')]
     assert '"my file.ts"' in quoted
     # The non-ASCII name as git spells it (octal escapes, whatever the
@@ -706,16 +788,34 @@ def test_fact_a_path_that_matches_no_file_marks_none_in_the_call(repo: Path):
     assert " A src/new.ts" in _names(_git(repo, "status", "--porcelain", "--no-renames", "-z"))
 
 
-def test_fact_moving_a_mark_out_and_back_leaves_the_file_untracked(repo: Path, tmp_path: Path):
-    """The way out of a mark on a file the tree still needs: out, stage the
-    path, back. The file keeps its bytes and is untracked again."""
+def test_fact_moving_a_mark_aside_and_back_leaves_the_file_untracked(repo: Path):
+    """The way out of a mark on a new file the tree still needs: aside into
+    the untracked scratch folder, stage the path, back. The file keeps its
+    bytes and is untracked again."""
     _write(repo, "tests/sibling.spec.ts", "sibling story's test\n")
     _git(repo, "add", "-N", "--", "tests/sibling.spec.ts")
-    (repo / "tests/sibling.spec.ts").rename(tmp_path / "parked.ts")
+    scratch = repo / "_bmad-output" / ".scratch-1-1"
+    scratch.mkdir(parents=True)
+    (repo / "tests/sibling.spec.ts").rename(scratch / "sibling.spec.ts")
     _git(repo, "add", "--", "tests/sibling.spec.ts")
-    (tmp_path / "parked.ts").rename(repo / "tests/sibling.spec.ts")
+    (scratch / "sibling.spec.ts").rename(repo / "tests/sibling.spec.ts")
     assert "?? tests/sibling.spec.ts" in _names(_git(repo, "status", "--porcelain", "--untracked-files=all", "-z"))
     assert (repo / "tests/sibling.spec.ts").read_text(encoding="utf-8") == "sibling story's test\n"
+
+
+def test_fact_a_mark_on_a_tracked_path_is_cleared_in_place_not_aside(repo: Path):
+    """A mark over a path HEAD holds (`DA`): moved aside, staging the path
+    stages its deletion; staged in place, the entry is HEAD's file again."""
+    _git(repo, "rm", "-q", "--cached", "--", "base.txt")
+    _git(repo, "add", "-N", "--", "base.txt")
+    assert "DA base.txt" in _names(_git(repo, "status", "--porcelain", "--no-renames", "-z"))
+    (repo / "base.txt").rename(repo / "parked.txt")
+    _git(repo, "add", "--", "base.txt")
+    (repo / "parked.txt").rename(repo / "base.txt")
+    aside = _names(_git(repo, "status", "--porcelain", "--no-renames", "-z"))
+    assert "D  base.txt" in aside and "?? base.txt" in aside, "moved aside, the commit would delete it"
+    _git(repo, "add", "--", "base.txt")
+    assert _names(_git(repo, "status", "--porcelain", "--no-renames", "-z")) == []
 
 
 def test_fact_marking_again_changes_nothing(repo: Path):

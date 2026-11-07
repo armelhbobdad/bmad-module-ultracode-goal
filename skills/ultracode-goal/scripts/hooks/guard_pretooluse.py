@@ -31,8 +31,8 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      story's new files) is no staged work here. Then, no `git commit` while
      the index holds any intent-to-add entry, or while that probe cannot
      answer (fail closed): a commit leaves such an entry out while the index
-     keeps it, and `git show :<path>` reads it as an empty blob. The deny
-     names each entry.
+     keeps it (over a path HEAD holds, it deletes HEAD's file), and
+     `git show :<path>` reads it as an empty blob. The deny names each entry.
   5. Un-skip proof: in production (an atdd-checklist for the current story is on
      disk), no `git commit` while the STAGED CONTENT of any acceptance-test file
      that checklist enumerates still contains `test.skip(`. The files are the
@@ -299,11 +299,14 @@ def _intent_to_add_entries(cwd: str | None) -> list[str] | None:
     Porcelain `git diff --cached` reads such an entry as absent from the
     index, which is why the empty-index probe above never counts one as
     staged work, and the same command with `--ita-visible-in-index` reads it
-    as an empty file: the entries are the (status, path) pairs the second
-    lists and the first does not. Pairs, not names: a mark over a path HEAD
+    as an empty file. An entry that is no mark reads the same in both, so
+    the marks are the paths of the (status, path) pairs only one of them
+    lists. Pairs, not names, and both directions: a mark over a path HEAD
     holds (`git rm --cached p`, then `git add -N p`, status `DA`) is listed
-    by both, as `M` by the second and `D` by the first, and a name-only
-    subtraction dropped it, so a commit that deletes the file went through.
+    as `M` with marks visible and `D` without, so a name-only subtraction
+    dropped it; over a file HEAD holds empty (an `__init__.py`), the visible
+    form lists nothing at all (the mark's empty blob is HEAD's) and only the
+    other lists `D`. Either way the commit deletes HEAD's file.
     Both compare the index with HEAD (with the empty tree on an unborn HEAD),
     so a marked file since deleted or moved out of the work tree is still
     listed, where `git status` would show it as ` D` or pair it into a
@@ -328,9 +331,11 @@ def _intent_to_add_entries(cwd: str | None) -> list[str] | None:
         # `-z` with `--no-renames`: a status field, then its path, each
         # NUL-terminated, so the fields pair up in order.
         fields = out.stdout.split(b"\0")[:-1]
+        if len(fields) % 2:
+            return None  # a status with no path: unreadable output -> fail closed
         listed.append(set(zip(fields[0::2], fields[1::2])))
     visible_pairs, plain_pairs = listed
-    return sorted({os.fsdecode(path) for _, path in visible_pairs - plain_pairs})
+    return sorted({os.fsdecode(path) for _, path in visible_pairs ^ plain_pairs})
 
 
 def _impl_artifacts(cwd: str | None) -> Path | None:
@@ -4048,13 +4053,17 @@ def _git_write_gates(cwd: str | None, verbs: set[str], unknown: list[str]) -> No
                 "Intent-to-add guard: refusing `git commit`, because the index "
                 "holds intent-to-add entries (`git add -N`) for "
                 f"{', '.join(f'`{path}`' for path in marked)}. A commit leaves "
-                "such an entry out while the index keeps it, and its staged "
-                "content reads as an empty file. Stage each one the story ships "
-                "(`git add -- <path>`) in a prior, SEPARATE tool call; for one it "
-                "will not ship, move the file out of the work tree, run "
-                "`git add -- <path>`, which clears its entry, then move the file "
-                "back, where it is untracked again (delete it only when nothing "
-                "needs it). Then commit as a second, distinct tool call.",
+                "such an entry out while the index keeps it (over a path HEAD "
+                "holds, it deletes HEAD's file), and its staged content reads as "
+                "an empty file. Stage each one the story ships "
+                "(`git add -- <path>`) in a prior, SEPARATE tool call. A mark on "
+                "a path HEAD already holds is cleared the same way, staging the "
+                "file in place, since moving it aside would stage its deletion. "
+                "For a new file the story will not ship, move it aside into the "
+                "story's `.scratch-<story_id>/` folder, run `git add -- <path>`, "
+                "which clears its entry, then move it back, where it is untracked "
+                "again (delete it only when nothing needs it). Then commit as a "
+                "second, distinct tool call.",
                 hint,
             )
         _unskip_gate(cwd, story)

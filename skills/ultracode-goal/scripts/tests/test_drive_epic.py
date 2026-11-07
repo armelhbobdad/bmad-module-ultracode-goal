@@ -1445,6 +1445,10 @@ def test_the_triage_names_a_mark_over_a_tracked_path(tmp_path):
 
     assert "DA tracked.rs" in triage["dirty_paths"]
     assert "tracked.rs" in triage["intent_to_add"]
+    # The warning it is listed under says what `git reset --hard` does to it.
+    rendered = "\n".join(drive_epic.render_triage(triage))
+    assert "intent-to-add: tracked.rs" in rendered
+    assert "`git reset --hard` DELETES a new one and reverts a tracked one to HEAD, discarding its edits" in rendered
     # The blank-index reading, the twin: it misses the `DA` entry.
     entries = drive_epic.porcelain_entries(
         drive_epic._git_out(root, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
@@ -1477,7 +1481,7 @@ def test_the_triage_names_intent_to_add_paths_with_the_truncation_warning(git_pr
     assert "TRUNCATES these to zero bytes" in out
     # The other two commands an operator reaches for after a crash.
     assert "`git restore <path>` empties them the same way" in out
-    assert "`git reset --hard` DELETES them" in out
+    assert "`git reset --hard` DELETES a new one and reverts a tracked one to HEAD" in out
 
 
 def test_the_triage_never_writes_to_the_tree(git_project):

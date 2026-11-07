@@ -2517,7 +2517,11 @@ _ITA_CALL_SITE = "        marked = _intent_to_add_entries(cwd)\n"
 _ITA_PROBE_FAILURE = "            return None  # any non-zero exit is a probe failure -> fail closed"
 _ITA_PROBE_ARGV = '["git", "-c", "diff.relative=false", "diff", "--cached", *visible,'
 _EMPTY_INDEX_PROBE = '            ["git", "diff", "--cached", "--quiet"],'
-_ITA_PAIR_SUBTRACTION = "    return sorted({os.fsdecode(path) for _, path in visible_pairs - plain_pairs})"
+_ITA_PAIR_SUBTRACTION = "    return sorted({os.fsdecode(path) for _, path in visible_pairs ^ plain_pairs})"
+_ITA_ODD_FIELDS = (
+    "        if len(fields) % 2:\n"
+    "            return None  # a status with no path: unreadable output -> fail closed\n"
+)
 
 
 def _mark(repo: Path, rel: str, body: str) -> None:
@@ -2554,8 +2558,9 @@ def test_ita_leftover_beside_staged_work_denies_naming_it(tmp_path: Path) -> Non
     reason = _assert_ita_deny(code, out, "src/leftover.ts", "docs/a note.md")
     # How to clear it: stage it, or delete or move it out and stage the path.
     assert "`git add -- <path>`" in reason
-    assert "move the file out of the work tree, run `git add -- <path>`" in reason
-    assert "then move the file back, where it is untracked again" in reason
+    assert "A mark on a path HEAD already holds is cleared the same way, staging the file in place" in reason
+    assert "move it aside into the story's `.scratch-<story_id>/` folder, run `git add -- <path>`" in reason
+    assert "then move it back, where it is untracked again" in reason
     assert "delete it only when nothing needs it" in reason
     assert "SEPARATE tool call" in reason
     # The order the paths are named in is git's, sorted.
@@ -2593,20 +2598,23 @@ def test_ita_mark_is_named_wherever_its_file_went(tmp_path: Path, after: str) ->
     assert "`src/renamed.ts`" not in reason, "an untracked file is no mark"
 
 
-@pytest.mark.parametrize("clear", ["stage", "delete-then-add", "move-out-and-back"])
+@pytest.mark.parametrize("clear", ["stage", "delete-then-add", "move-aside-and-back"])
 def test_ita_cleared_marks_let_the_commit_through(tmp_path: Path, clear: str) -> None:
-    # The ways the deny gives: stage the file; or move it out, stage the path,
-    # which drops its entry, and move it back, untracked again; or delete it
-    # and stage the path. None needs `git reset`, `git rm` or `git restore`.
+    # The ways the deny gives for a new file: stage it; or move it aside into
+    # the story's scratch folder, stage the path, which drops its entry, and
+    # move it back, untracked again; or delete it and stage the path. None
+    # needs `git reset`, `git rm` or `git restore`.
     repo, impl = _green_story_repo(tmp_path, stage=True)
     _mark(repo, "src/new.ts", "export const y = 2;\n")
+    scratch = impl / ".scratch-STORY-1"
     if clear == "delete-then-add":
         (repo / "src/new.ts").unlink()
-    elif clear == "move-out-and-back":
-        (repo / "src/new.ts").rename(tmp_path / "kept.ts")
+    elif clear == "move-aside-and-back":
+        scratch.mkdir()
+        (repo / "src/new.ts").rename(scratch / "new.ts")
     _git(repo, "add", "--", "src/new.ts")
-    if clear == "move-out-and-back":
-        (tmp_path / "kept.ts").rename(repo / "src/new.ts")
+    if clear == "move-aside-and-back":
+        (scratch / "new.ts").rename(repo / "src/new.ts")
         status = subprocess.run(
             ["git", "status", "--porcelain", "--", "src/new.ts"], cwd=repo, capture_output=True, text=True
         ).stdout
@@ -2634,6 +2642,67 @@ def test_ita_mark_over_a_tracked_path_denies(tmp_path: Path) -> None:
     code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
 
     _assert_ita_deny(code, out, "f.txt")
+
+
+def test_ita_mark_over_a_tracked_path_is_cleared_in_place(tmp_path: Path) -> None:
+    # Staging the file where it is clears a `DA` mark and keeps the file
+    # HEAD holds; moving it aside first would stage its deletion.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    _mark_over_a_tracked_path(repo)
+    _git(repo, "add", "--", "f.txt")
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    assert code == 0
+    assert out is None
+    _git(repo, "commit", "-q", "-m", "story")
+    tree = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "f.txt" in tree, "the commit keeps the file HEAD held"
+
+
+def test_ita_mark_over_an_empty_tracked_file_denies(tmp_path: Path) -> None:
+    # HEAD holds the file empty (an `__init__.py`): the mark's empty blob is
+    # HEAD's, so the visible form lists nothing and only the plain form lists
+    # `D`. Only a difference taken both ways sees it.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    (repo / "pkg").mkdir()
+    (repo / "pkg/__init__.py").write_text("")
+    _git(repo, "add", "--", "pkg/__init__.py")
+    _git(repo, "commit", "-q", "-m", "package")
+    _git(repo, "rm", "-q", "--cached", "--", "pkg/__init__.py")
+    _git(repo, "add", "-N", "--", "pkg/__init__.py")
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    _assert_ita_deny(code, out, "pkg/__init__.py")
+
+
+def test_mutant_one_way_difference_lets_an_empty_tracked_file_mark_through(tmp_path: Path) -> None:
+    """Twin: the visible pairs minus the plain ones, as the round-1 probe
+    took them, miss the mark over an empty tracked file, and the commit
+    that deletes it is allowed."""
+    mutant = _write_mutant(
+        tmp_path,
+        "one_way_ita",
+        _ITA_PAIR_SUBTRACTION,
+        "    return sorted({os.fsdecode(path) for _, path in visible_pairs - plain_pairs})",
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    (repo / "pkg").mkdir()
+    (repo / "pkg/__init__.py").write_text("")
+    _git(repo, "add", "--", "pkg/__init__.py")
+    _git(repo, "commit", "-q", "-m", "package")
+    _git(repo, "rm", "-q", "--cached", "--", "pkg/__init__.py")
+    _git(repo, "add", "-N", "--", "pkg/__init__.py")
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 0, "the empty-tracked-file mark deny assertion must red"
+    assert out is None
 
 
 def test_mutant_name_only_subtraction_lets_a_tracked_path_mark_through(tmp_path: Path) -> None:
@@ -2839,6 +2908,58 @@ def _git_failing_on_ita(tmp_path: Path) -> str:
     )
     fake.chmod(0o755)
     return f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
+def _git_printing_an_unpaired_field(tmp_path: Path) -> str:
+    """A PATH whose `git` answers the probe's visible form with its real
+    output and one more status with no path after it, exit 0."""
+    real = shutil.which("git")
+    assert real, "git must be on PATH"
+    bin_dir = tmp_path / "fake-bin-odd"
+    bin_dir.mkdir()
+    fake = bin_dir / "git"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f'for arg in "$@"; do [ "$arg" = "--ita-visible-in-index" ] && '
+        f'{{ "{real}" "$@"; printf \'A\\000\'; exit 0; }}; done\n'
+        f'exec "{real}" "$@"\n'
+    )
+    fake.chmod(0o755)
+    return f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake git is a POSIX shell script")
+def test_ita_probe_unpaired_field_denies(tmp_path: Path) -> None:
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+
+    code, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "PATH": _git_printing_an_unpaired_field(tmp_path)},
+    )
+
+    assert code == 2
+    reason = _reason(out)
+    assert reason.startswith("Intent-to-add guard: refusing `git commit`")
+    assert "could not be read" in reason
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake git is a POSIX shell script")
+def test_mutant_unpaired_field_dropped_allows_commit(tmp_path: Path) -> None:
+    """Twin: without the odd-count check, zip drops the unpaired field and
+    the probe reads no mark."""
+    mutant = _write_mutant(tmp_path, "ita_odd_fields", _ITA_ODD_FIELDS, "")
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+
+    code, out = _run_mutant_hook(
+        mutant,
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "PATH": _git_printing_an_unpaired_field(tmp_path)},
+    )
+
+    assert code == 0, "the unpaired-field deny assertion must red"
+    assert out is None
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake git is a POSIX shell script")

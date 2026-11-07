@@ -644,7 +644,8 @@ def intent_to_add_paths(entries: list[tuple[str, str, str]]) -> list[str]:
     the index column - misses every one of them. A `git checkout -- <path>`
     against one then rewrites it to ZERO BYTES and exits 0, silently, because
     the index entry it restores from is empty; `git restore <path>` does the
-    same, and `git reset --hard` deletes the file outright.
+    same, and `git reset --hard` deletes a new file outright and reverts one
+    HEAD holds to HEAD's copy, discarding the story's edits.
 
     A mark over a path HEAD holds (`git rm --cached p`, then `git add -N p`)
     reads ``DA``: the index column says the tracked file is gone, and the
@@ -662,7 +663,7 @@ def intent_to_add_paths(entries: list[tuple[str, str, str]]) -> list[str]:
     destructive-data hazard that fires exactly when someone is cleaning up after
     a crash, which is when they are least likely to be reading carefully.
     """
-    return [path for x, y, path in entries if x in " D" and y == "A"]
+    return [path for x, y, path in entries if x in (" ", "D") and y == "A"]
 
 
 def _relative_to_repo(repo: Path, path: Path) -> str | None:
@@ -804,7 +805,8 @@ def render_triage(triage: dict) -> list[str]:
             f"  DANGER: {len(triage['intent_to_add'])} intent-to-add path(s) below. "
             "`git checkout -- <path>` TRUNCATES these to zero bytes and exits 0, "
             "`git restore <path>` empties them the same way, and `git reset --hard` "
-            "DELETES them. Back them up and verify the copies before reverting anything."
+            "DELETES a new one and reverts a tracked one to HEAD, discarding its edits. "
+            "Back them up and verify the copies before reverting anything."
         )
         for path in triage["intent_to_add"]:
             lines.append(f"  intent-to-add: {path}")
