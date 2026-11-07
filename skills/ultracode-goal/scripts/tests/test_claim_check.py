@@ -1824,8 +1824,9 @@ def test_an_unborn_head_has_nothing_to_amend(tmp_path):
 
 def test_a_failed_parent_probe_is_not_read_as_a_root_commit(repo, tmp_path, capsys, monkeypatch):
     """`rev-parse --verify -q HEAD~1` exiting other than 0 or 1 (a timeout, a
-    broken parent object) while HEAD resolves is no root commit: the empty
-    tree would read every index path as carried and the check as clean."""
+    git that cannot read the repository) while HEAD resolves is no root
+    commit: the empty tree would read every index path as carried and the
+    check as clean."""
     message_text = _the_218_case(repo)
     asked = cc._rev_parse
 
@@ -1838,6 +1839,42 @@ def test_a_failed_parent_probe_is_not_read_as_a_root_commit(repo, tmp_path, caps
     message.write_text(message_text, encoding="utf-8")
     assert cc.main(["--message", str(message), "--project-root", str(repo), "--amend"]) == 2
     assert "not a git work tree" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_a_head_whose_commit_object_is_missing_gets_no_empty_tree(repo, tmp_path, capsys):
+    """`HEAD~1` exits 1 there, as at a root commit, and plain `HEAD` still
+    resolves from the ref; `HEAD^{commit}` reads the object and does not, so
+    the check reads it as nothing to amend, never as a root commit."""
+    message_text = _the_218_case(repo)
+    head = _git_text(repo, "rev-parse", "HEAD")
+    obj = repo / ".git" / "objects" / head[:2] / head[2:]
+    obj.chmod(0o644)  # git writes objects read-only, which Windows will not unlink
+    obj.unlink()
+    assert subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD~1"], cwd=repo).returncode == 1
+    assert subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=repo, capture_output=True).returncode == 0
+    with pytest.raises(cc.NothingToAmend):
+        cc.amend_base(repo)
+    message = tmp_path / "message.txt"
+    message.write_text(message_text, encoding="utf-8")
+    assert cc.main(["--message", str(message), "--project-root", str(repo), "--amend"]) == 2
+    assert "nothing to amend" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_mutant_plain_head_probe_reads_a_missing_commit_as_a_root(repo, monkeypatch):
+    """Twin: with the second probe on plain `HEAD`, which resolves from the
+    ref, the missing commit reads as a root commit and the empty tree is the
+    base."""
+    _the_218_case(repo)
+    head = _git_text(repo, "rev-parse", "HEAD")
+    obj = repo / ".git" / "objects" / head[:2] / head[2:]
+    obj.chmod(0o644)
+    obj.unlink()
+    asked = cc._rev_parse
+    monkeypatch.setattr(
+        cc, "_rev_parse", lambda root, rev: asked(root, "HEAD" if rev == "HEAD^{commit}" else rev)
+    )
+    empty_tree = _git_text(repo, "hash-object", "-t", "tree", "--stdin", stdin=b"")
+    assert cc.amend_base(repo) == empty_tree
 
 
 def test_an_amend_outside_a_work_tree_is_still_not_a_git_work_tree(tmp_path):

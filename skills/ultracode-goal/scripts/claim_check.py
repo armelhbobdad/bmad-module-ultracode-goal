@@ -326,17 +326,20 @@ def amend_base(project_root: Path) -> str | None:
     no parent git can read, and an amend of it commits the whole index: the
     empty tree stands in, asked of git (`hash-object -t tree` on empty input,
     which writes nothing) so a SHA-256 repository gets its own id. When HEAD
-    itself resolves to nothing (an unborn branch), there is nothing to amend.
+    names no readable commit (an unborn branch, or a HEAD whose commit object
+    is missing, where `HEAD~1` also exits 1), there is nothing to amend: the
+    second probe is `HEAD^{commit}`, which reads the object, since plain
+    `HEAD` resolves from the ref alone.
     """
     code, sha = _rev_parse(project_root, "HEAD~1")
     if code == 0 and sha:
         return sha
     if code != 1:
-        # Not "no such commit" but a probe that failed (a timeout, a broken
-        # parent object): the empty tree would read every index path as
-        # carried, and the check as clean.
+        # Not "no such commit" but a probe that failed (a timeout, a git that
+        # cannot read the repository): the empty tree would read every index
+        # path as carried, and the check as clean.
         return None
-    code, _ = _rev_parse(project_root, "HEAD")
+    code, _ = _rev_parse(project_root, "HEAD^{commit}")
     if code == 1:
         raise NothingToAmend
     if code != 0:
