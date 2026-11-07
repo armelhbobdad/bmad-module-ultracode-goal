@@ -646,9 +646,14 @@ def intent_to_add_paths(entries: list[tuple[str, str, str]]) -> list[str]:
     the index entry it restores from is empty; `git restore <path>` does the
     same, and `git reset --hard` deletes the file outright.
 
-    It reads ` A` only, so the status it is given must come from
-    `--no-renames`: with rename detection on, a mark on a moved file reads
-    ` R` and is missed.
+    A mark over a path HEAD holds (`git rm --cached p`, then `git add -N p`)
+    reads ``DA``: the index column says the tracked file is gone, and the
+    worktree column is the same ``A``. So the worktree column must be ``A``
+    and the index column blank or ``D``.
+
+    It reads the worktree column's ``A`` only, so the status it is given must
+    come from `--no-renames`: with rename detection on, a mark on a moved
+    file reads ` R` and is missed.
 
     Read off the parsed columns rather than sniffed out of the raw line, because
     every string-sniffing shortcut here has a filename that defeats it.
@@ -657,7 +662,7 @@ def intent_to_add_paths(entries: list[tuple[str, str, str]]) -> list[str]:
     destructive-data hazard that fires exactly when someone is cleaning up after
     a crash, which is when they are least likely to be reading carefully.
     """
-    return [path for x, y, path in entries if x == " " and y == "A"]
+    return [path for x, y, path in entries if x in " D" and y == "A"]
 
 
 def _relative_to_repo(repo: Path, path: Path) -> str | None:

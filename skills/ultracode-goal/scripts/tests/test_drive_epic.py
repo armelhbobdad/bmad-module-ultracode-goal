@@ -1431,6 +1431,27 @@ def test_the_triage_names_a_mark_on_a_moved_file(tmp_path):
     assert sorted(triage["intent_to_add"]) == ["moved.rs", "plain.rs"]
 
 
+def test_the_triage_names_a_mark_over_a_tracked_path(tmp_path):
+    """`git rm --cached`, then `git add -N`: status `DA`, which a blank-index
+    reading never named, and which `git checkout --` truncates the same way."""
+    root = _moved_mark_repo(tmp_path)
+    (root / "tracked.rs").write_text("fn tracked() {}\n", encoding="utf-8")
+    _git(root, "add", "tracked.rs")
+    _git(root, "commit", "-qm", "tracked")
+    _git(root, "rm", "-q", "--cached", "--", "tracked.rs")
+    _git(root, "add", "-N", "--", "tracked.rs")
+
+    triage = drive_epic.post_stop_triage(root, drive_epic.head_sha(root))
+
+    assert "DA tracked.rs" in triage["dirty_paths"]
+    assert "tracked.rs" in triage["intent_to_add"]
+    # The blank-index reading, the twin: it misses the `DA` entry.
+    entries = drive_epic.porcelain_entries(
+        drive_epic._git_out(root, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
+    )
+    assert "tracked.rs" not in [p for x, y, p in entries if x == " " and y == "A"]
+
+
 def test_with_rename_detection_on_a_moved_files_mark_goes_unnamed(tmp_path):
     """Twin: the status read without `--no-renames` (the old call) pairs the
     moved file's mark with its old path into one ` R` entry, and the triage

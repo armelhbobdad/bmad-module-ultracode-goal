@@ -296,23 +296,27 @@ def _intent_to_add_entries(cwd: str | None) -> list[str] | None:
     """The index's intent-to-add entries (`git add -N`), named from the top
     level, or None when git cannot say (the caller fails closed on None).
 
-    Porcelain `git diff --cached` leaves such an entry out, which is why the
-    empty-index probe above never counts one as staged work, and the same
-    command with `--ita-visible-in-index` lists it as an added file: the
-    entries are the names the second lists and the first does not. Both
-    compare the index with HEAD (with the empty tree on an unborn HEAD), so a
-    marked file since deleted or moved out of the work tree is still listed,
-    where `git status` would show it as ` D` or pair it into a rename.
-    `diff.relative=false` keeps both lists whole and named from the top level
-    whatever folder the hook runs in. Its own probe on purpose: this hook
-    imports nothing from its siblings.
+    Porcelain `git diff --cached` reads such an entry as absent from the
+    index, which is why the empty-index probe above never counts one as
+    staged work, and the same command with `--ita-visible-in-index` reads it
+    as an empty file: the entries are the (status, path) pairs the second
+    lists and the first does not. Pairs, not names: a mark over a path HEAD
+    holds (`git rm --cached p`, then `git add -N p`, status `DA`) is listed
+    by both, as `M` by the second and `D` by the first, and a name-only
+    subtraction dropped it, so a commit that deletes the file went through.
+    Both compare the index with HEAD (with the empty tree on an unborn HEAD),
+    so a marked file since deleted or moved out of the work tree is still
+    listed, where `git status` would show it as ` D` or pair it into a
+    rename. `diff.relative=false` keeps both lists whole and named from the
+    top level whatever folder the hook runs in. Its own probe on purpose:
+    this hook imports nothing from its siblings.
     """
-    listed: list[set[bytes]] = []
+    listed: list[set[tuple[bytes, bytes]]] = []
     for visible in (["--ita-visible-in-index"], []):
         try:
             out = subprocess.run(
                 ["git", "-c", "diff.relative=false", "diff", "--cached", *visible,
-                 "--name-only", "--no-renames", "-z"],
+                 "--name-status", "--no-renames", "-z"],
                 cwd=cwd or None,
                 capture_output=True,
                 timeout=10,
@@ -321,8 +325,12 @@ def _intent_to_add_entries(cwd: str | None) -> list[str] | None:
             return None  # git missing, timeout, ...: cannot answer -> fail closed
         if out.returncode != 0:
             return None  # any non-zero exit is a probe failure -> fail closed
-        listed.append({name for name in out.stdout.split(b"\0") if name})
-    return sorted(os.fsdecode(name) for name in listed[0] - listed[1])
+        # `-z` with `--no-renames`: a status field, then its path, each
+        # NUL-terminated, so the fields pair up in order.
+        fields = out.stdout.split(b"\0")[:-1]
+        listed.append(set(zip(fields[0::2], fields[1::2])))
+    visible_pairs, plain_pairs = listed
+    return sorted({os.fsdecode(path) for _, path in visible_pairs - plain_pairs})
 
 
 def _impl_artifacts(cwd: str | None) -> Path | None:
@@ -4043,9 +4051,10 @@ def _git_write_gates(cwd: str | None, verbs: set[str], unknown: list[str]) -> No
                 "such an entry out while the index keeps it, and its staged "
                 "content reads as an empty file. Stage each one the story ships "
                 "(`git add -- <path>`) in a prior, SEPARATE tool call; for one it "
-                "will not ship, delete the file or move it out of the work tree, "
-                "then `git add -- <path>` clears its entry. Then commit as a "
-                "second, distinct tool call.",
+                "will not ship, move the file out of the work tree, run "
+                "`git add -- <path>`, which clears its entry, then move the file "
+                "back, where it is untracked again (delete it only when nothing "
+                "needs it). Then commit as a second, distinct tool call.",
                 hint,
             )
         _unskip_gate(cwd, story)

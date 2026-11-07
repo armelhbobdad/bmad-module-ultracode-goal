@@ -673,9 +673,11 @@ def test_mutant_unconditional_deny_reds_nonempty_index_commit(tmp_path: Path) ->
     assert code == 2, "the raising-probe assertion stays green"
 
 
-def test_mutant_probe_exception_fails_open_allows_commit(tmp_path: Path) -> None:
+def test_mutant_probe_exception_fails_open_passes_the_empty_index_check(tmp_path: Path) -> None:
     """Twin (exception half): the except branch reports "something is staged",
-    the fail-OPEN shape _current_branch uses. Only the raising-probe assertion
+    the fail-OPEN shape _current_branch uses, so the mutant lets the commit
+    past the empty-index check, where the intent-to-add check (#217), which
+    fails closed on its own, refuses it. Only the raising-probe assertion
     reds; the exit-128 one does not, because a non-repo cwd returns 128 without
     ever entering the except branch."""
     mutant = _write_mutant(
@@ -722,9 +724,11 @@ def test_mutant_probe_exception_fails_open_allows_commit(tmp_path: Path) -> None
     assert code == 0, "the allow-path assertion stays green"
 
 
-def test_mutant_probe_unknown_exit_code_fails_open_allows_commit(tmp_path: Path) -> None:
-    """Twin (exit-code half): read "anything not 0" as staged, so 128 becomes a
-    legitimate allow. Only the exit-128 assertion reds — the raising-probe one
+def test_mutant_probe_unknown_exit_code_fails_open_passes_the_empty_index_check(tmp_path: Path) -> None:
+    """Twin (exit-code half): read "anything not 0" as staged, so the mutant
+    lets an exit-128 commit past the empty-index check, where the
+    intent-to-add check (#217), which fails closed on its own, refuses it.
+    Only the exit-128 assertion reds; the raising-probe one
     stays green (the except branch is untouched), as do the plain allow (exit 1)
     and deny (exit 0) paths. That is what makes this an independent proof of the
     exit-code obligation rather than a second copy of the exception twin."""
@@ -2513,6 +2517,7 @@ _ITA_CALL_SITE = "        marked = _intent_to_add_entries(cwd)\n"
 _ITA_PROBE_FAILURE = "            return None  # any non-zero exit is a probe failure -> fail closed"
 _ITA_PROBE_ARGV = '["git", "-c", "diff.relative=false", "diff", "--cached", *visible,'
 _EMPTY_INDEX_PROBE = '            ["git", "diff", "--cached", "--quiet"],'
+_ITA_PAIR_SUBTRACTION = "    return sorted({os.fsdecode(path) for _, path in visible_pairs - plain_pairs})"
 
 
 def _mark(repo: Path, rel: str, body: str) -> None:
@@ -2549,7 +2554,9 @@ def test_ita_leftover_beside_staged_work_denies_naming_it(tmp_path: Path) -> Non
     reason = _assert_ita_deny(code, out, "src/leftover.ts", "docs/a note.md")
     # How to clear it: stage it, or delete or move it out and stage the path.
     assert "`git add -- <path>`" in reason
-    assert "delete the file or move it out of the work tree" in reason
+    assert "move the file out of the work tree, run `git add -- <path>`" in reason
+    assert "then move the file back, where it is untracked again" in reason
+    assert "delete it only when nothing needs it" in reason
     assert "SEPARATE tool call" in reason
     # The order the paths are named in is git's, sorted.
     assert reason.index("`docs/a note.md`") < reason.index("`src/leftover.ts`")
@@ -2586,20 +2593,68 @@ def test_ita_mark_is_named_wherever_its_file_went(tmp_path: Path, after: str) ->
     assert "`src/renamed.ts`" not in reason, "an untracked file is no mark"
 
 
-@pytest.mark.parametrize("clear", ["stage", "delete-then-add"])
+@pytest.mark.parametrize("clear", ["stage", "delete-then-add", "move-out-and-back"])
 def test_ita_cleared_marks_let_the_commit_through(tmp_path: Path, clear: str) -> None:
-    # The two ways the deny gives: stage the file, or delete it and stage the
-    # path, which drops its entry. Neither needs `git reset`, `git rm` or
-    # `git restore`.
+    # The ways the deny gives: stage the file; or move it out, stage the path,
+    # which drops its entry, and move it back, untracked again; or delete it
+    # and stage the path. None needs `git reset`, `git rm` or `git restore`.
     repo, impl = _green_story_repo(tmp_path, stage=True)
     _mark(repo, "src/new.ts", "export const y = 2;\n")
     if clear == "delete-then-add":
         (repo / "src/new.ts").unlink()
+    elif clear == "move-out-and-back":
+        (repo / "src/new.ts").rename(tmp_path / "kept.ts")
     _git(repo, "add", "--", "src/new.ts")
+    if clear == "move-out-and-back":
+        (tmp_path / "kept.ts").rename(repo / "src/new.ts")
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", "src/new.ts"], cwd=repo, capture_output=True, text=True
+        ).stdout
+        assert status == "?? src/new.ts\n", "the file is back, untracked"
 
     code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
 
     assert code == 0
+    assert out is None
+
+
+def _mark_over_a_tracked_path(repo: Path) -> None:
+    """`git rm --cached f.txt`, then `git add -N f.txt`: status `DA`. The
+    commit would delete the file HEAD holds."""
+    _git(repo, "rm", "-q", "--cached", "--", "f.txt")
+    _git(repo, "add", "-N", "--", "f.txt")
+
+
+def test_ita_mark_over_a_tracked_path_denies(tmp_path: Path) -> None:
+    # Both diffs list the path, `M` with marks visible and `D` without, so
+    # only a (status, path) comparison sees the mark.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    _mark_over_a_tracked_path(repo)
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    _assert_ita_deny(code, out, "f.txt")
+
+
+def test_mutant_name_only_subtraction_lets_a_tracked_path_mark_through(tmp_path: Path) -> None:
+    """Twin: subtract names instead of (status, path) pairs, as the first
+    version of the probe did. The path is in both lists, so the mark drops
+    out and the commit that deletes the file is allowed."""
+    mutant = _write_mutant(
+        tmp_path,
+        "name_only_ita",
+        _ITA_PAIR_SUBTRACTION,
+        "    return sorted({os.fsdecode(path) for _, path in visible_pairs}"
+        " - {os.fsdecode(path) for _, path in plain_pairs})",
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    _mark_over_a_tracked_path(repo)
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 0, "the tracked-path mark deny assertion must red"
     assert out is None
 
 
