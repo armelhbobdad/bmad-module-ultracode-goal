@@ -52,14 +52,16 @@ _ARCHITECTURE = _REPO / "docs" / "architecture.md"
 
 _HEAD = "**Mark this story's new files intent-to-add before every sweep this step runs.**"
 _NEXT_HEAD = "**Scope the sweep on three axes, not one.**"
+# Four sentences, so the one that names the scratch folder holds no remove
+# verb (test_scratch_lifetime_prose.py: the folder is removed at one point).
 _STEP4_CLEARING = (
-    "and a mark on a path `HEAD` already holds is staged in place like the rest; a marked new file the story will not "
-    "ship is moved aside into `.scratch-<story_id>/` before that call, so staging its path drops its entry the same "
-    "way, and moved back after it, untracked again (deleted instead only when nothing needs it): "
+    "and a mark on a path `HEAD` already holds is staged in place like the rest. A marked new file the story will not "
+    "ship is moved aside into `.scratch-<story_id>/` before that call, so staging its path clears its entry the same "
+    "way, and moved back after it, untracked again. Such a file is deleted instead only when nothing needs it. "
 )
 _STEP4_SENTENCE = (
     "Those paths take in every path step 2 marked intent-to-add, a marked file since deleted included (staging a "
-    "deleted file's path drops its entry), " + _STEP4_CLEARING + "the guard refuses any commit while the index holds "
+    "deleted file's path drops its entry), " + _STEP4_CLEARING + "The guard refuses any commit while the index holds "
     "a mark, naming each one, because the commit would leave that file out while the index keeps it, or, for a mark "
     "on a path `HEAD` holds, delete `HEAD`'s file."
 )
@@ -281,8 +283,8 @@ _CLEARING = (
     "since moving it aside would stage its deletion. A marked new file the story will not ship (a sibling story's test "
     "marked by mistake, a mark another session left) is moved aside into "
     "`{workflow.implementation_artifacts}/.scratch-<story_id>/`, untracked in the run's own folder, then "
-    "`git add -- <path>` clears its entry, and the file is moved back, where it is untracked again; delete it instead "
-    "only when nothing needs it. The guard refuses any commit while the index holds a mark (step 4)."
+    "`git add -- <path>` clears its entry, and the file is moved back, where it is untracked again. Delete such a file "
+    "instead only when nothing needs it. The guard refuses any commit while the index holds a mark (step 4)."
 )
 # The round-1 wording: deleting or moving out lost a file the tree still needs.
 _CLEARING_PRE = (
@@ -423,7 +425,9 @@ def test_the_mark_predicate_rejects_the_pre_edit_execute_md():
                      "then `git add -- <path>` clears its entry", "is unmarked with `git rm --cached -- <path>`",
                      id="rm-cached"),
         pytest.param(_clears_a_mark_without_an_undo_command, ", and the file is moved back, where it is untracked "
-                     "again; delete it instead only when nothing needs it", "", id="never-moved-back"),
+                     "again", "", id="never-moved-back"),
+        pytest.param(_clears_a_mark_without_an_undo_command, " Delete such a file instead only when nothing needs it.",
+                     "", id="deletion-unbounded"),
         pytest.param(_clears_a_mark_without_an_undo_command, "A mark on a path `HEAD` already holds (status `DA`) is "
                      "cleared by staging the file in place, `git add -- <path>`, since moving it aside would stage its "
                      "deletion. ", "", id="tracked-path-moved-aside"),
@@ -531,8 +535,8 @@ def test_step4_stages_every_marked_path():
         pytest.param(", a marked file since deleted included (staging a deleted file's path drops its entry)", "",
                      id="deleted-left"),
         pytest.param("every path step 2 marked", "the paths step 2 marked that still exist", id="existing-only"),
-        pytest.param("the guard refuses any commit while the index holds a mark, naming each one",
-                     "the commit carries any mark left", id="mark-rides"),
+        pytest.param("The guard refuses any commit while the index holds a mark, naming each one",
+                     "The commit carries any mark left", id="mark-rides"),
         pytest.param(_STEP4_CLEARING, "and a marked file the story will not ship " + _STEP4_LOSES_THE_FILE,
                      id="round-1-loses-the-file"),
         pytest.param(_STEP4_CLEARING, _STEP4_CLEARING_R2, id="round-2-moves-a-tracked-mark-aside"),
