@@ -646,6 +646,38 @@ def test_preflight_and_architecture_name_the_intent_to_add_refusal():
     assert "The marker, freshness, staged-index, intent-to-add, and recall-latch checks fail **closed**" in architecture
 
 
+_SECURITY_CLAUSE = (
+    "and, after that check, while the index holds an intent-to-add entry (`git add -N`, which Execute makes "
+    "for a story's new files before its sweep), naming each one,"
+)
+_SECURITY_FAIL_CLOSED = "or an unanswerable intent-to-add probe denies the commit"
+
+
+def _security_names_the_refusal(text: str) -> bool:
+    flat = _flat(text)
+    start = flat.find("4. denies a `git commit` while the staged index is empty")
+    end = flat.find("5. when the guard is armed", start)
+    return start != -1 and end != -1 and _SECURITY_CLAUSE in flat[start:end] and _SECURITY_FAIL_CLOSED in flat
+
+
+def test_security_md_names_the_intent_to_add_refusal():
+    assert _security_names_the_refusal(_read(_REPO / "SECURITY.md"))
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param(_SECURITY_CLAUSE, "", id="no-refusal-in-invariant-4"),
+        pytest.param(", an unanswerable staged-index probe " + _SECURITY_FAIL_CLOSED,
+                     " or an unanswerable staged-index probe denies the commit", id="pre-edit-fail-closed"),
+    ],
+)
+def test_the_security_predicate_rejects_the_pre_edit_wording(old, new):
+    text = _flat(_read(_REPO / "SECURITY.md"))
+    assert text.count(old) == 1
+    assert not _security_names_the_refusal(text.replace(old, new, 1))
+
+
 # --- the git facts the prose relies on ------------------------------------------
 # Each one is a sentence above that a git which behaved otherwise would make
 # false. Run against a temporary repository, immune to the runner's config.
