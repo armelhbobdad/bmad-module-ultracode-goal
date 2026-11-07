@@ -1404,6 +1404,46 @@ def test_a_rename_entry_does_not_shift_the_parse(tmp_path):
     assert drive_epic.intent_to_add_paths(entries) == ["zz_after.rs"]
 
 
+def _moved_mark_repo(tmp_path):
+    """A story that moved a tracked file and marked the new path, as Execute
+    step 2 marks a new file before its sweep (#217), beside a plain mark."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+    # git's default, set here so a contributor's own config cannot turn it off.
+    _git(root, "config", "status.renames", "true")
+    (root / "old.rs").write_text("fn precious() {}\n// more lines\n", encoding="utf-8")
+    _git(root, "add", "old.rs")
+    _git(root, "commit", "-qm", "seed")
+    (root / "old.rs").rename(root / "moved.rs")
+    (root / "plain.rs").write_text("fn plain() {}\n", encoding="utf-8")
+    _git(root, "add", "-N", "--", "moved.rs", "plain.rs")
+    return root
+
+
+def test_the_triage_names_a_mark_on_a_moved_file(tmp_path):
+    root = _moved_mark_repo(tmp_path)
+
+    triage = drive_epic.post_stop_triage(root, drive_epic.head_sha(root))
+
+    assert sorted(triage["intent_to_add"]) == ["moved.rs", "plain.rs"]
+
+
+def test_with_rename_detection_on_a_moved_files_mark_goes_unnamed(tmp_path):
+    """Twin: the status read without `--no-renames` (the old call) pairs the
+    moved file's mark with its old path into one ` R` entry, and the triage
+    names only the plain mark."""
+    root = _moved_mark_repo(tmp_path)
+    entries = drive_epic.porcelain_entries(
+        drive_epic._git_out(root, "status", "--porcelain", "-z", "--untracked-files=all")
+    )
+
+    assert (" ", "R", "moved.rs") in entries, "git pairs the move into a rename here"
+    assert drive_epic.intent_to_add_paths(entries) == ["plain.rs"]
+
+
 def test_the_triage_names_intent_to_add_paths_with_the_truncation_warning(git_project, capsys, monkeypatch):
     fake = FakeSession(git_project, [(None, None)], code=1, intent_to_add=True)
     monkeypatch.setattr(drive_epic, "spawn", fake)
@@ -1414,6 +1454,9 @@ def test_the_triage_names_intent_to_add_paths_with_the_truncation_warning(git_pr
     out = capsys.readouterr().out
     assert "intent-to-add: rescue_me.rs" in out
     assert "TRUNCATES these to zero bytes" in out
+    # The other two commands an operator reaches for after a crash.
+    assert "`git restore <path>` empties them the same way" in out
+    assert "`git reset --hard` DELETES them" in out
 
 
 def test_the_triage_never_writes_to_the_tree(git_project):

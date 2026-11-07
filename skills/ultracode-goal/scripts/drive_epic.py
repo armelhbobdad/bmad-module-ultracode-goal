@@ -105,12 +105,17 @@ entry carries a BLANK index column and `A` in the worktree column, so the
 obvious `^A ` match - which reads the index column - misses every one of them,
 and `git checkout -- <path>` then truncates one to zero bytes and exits 0.
 
-The status read is `--porcelain -z`, and that is not cosmetic. Without `-z` git
-C-QUOTES any path holding a space or a non-ASCII byte, so a file named
-`a -> b.txt` arrives quoted and splits on its own arrow, and `café.rs` arrives
-as octal escapes. Both then name a file that does not exist, inside the very
-warning that tells an operator which files to back up before reverting. Under
-`-z` nothing is quoted and the bytes are the path.
+The status read is `--porcelain -z --no-renames`, and that is not cosmetic.
+Without `-z` git C-QUOTES any path holding a space or a non-ASCII byte, so a
+file named `a -> b.txt` arrives quoted and splits on its own arrow, and
+`café.rs` arrives as octal escapes. Both then name a file that does not exist,
+inside the very warning that tells an operator which files to back up before
+reverting. Under `-z` nothing is quoted and the bytes are the path. Without
+`--no-renames` git pairs a tracked file a story moved (`mv old new`, then
+`git add -N new`, as Execute marks a new file before its sweep) into one
+` R new` entry, whose worktree column is `R`, not `A`, so the moved file's
+mark went unnamed. Execute marks every new file now, so the triage must name
+each one.
 
 An UNREADABLE pre-spawn HEAD (an unborn HEAD: `git init` with no commit yet) is
 its own reading, never "nothing landed". Folding it into "unmoved" let a session
@@ -638,7 +643,12 @@ def intent_to_add_paths(entries: list[tuple[str, str, str]]) -> list[str]:
     and ``A`` in the worktree column, so the obvious ``^A `` match - which reads
     the index column - misses every one of them. A `git checkout -- <path>`
     against one then rewrites it to ZERO BYTES and exits 0, silently, because
-    the index entry it restores from is empty.
+    the index entry it restores from is empty; `git restore <path>` does the
+    same, and `git reset --hard` deletes the file outright.
+
+    It reads ` A` only, so the status it is given must come from
+    `--no-renames`: with rename detection on, a mark on a moved file reads
+    ` R` and is missed.
 
     Read off the parsed columns rather than sniffed out of the raw line, because
     every string-sniffing shortcut here has a filename that defeats it.
@@ -690,7 +700,12 @@ def post_stop_triage(repo: Path, head_before: str | None, run_artifacts: Path | 
     # `?? _bmad-output/` entry, which no per-file prefix test can match - so the
     # run-artifacts exclusion below silently missed the commonest case, and the
     # report named a directory where an operator needs the files.
-    porcelain = _git_out(repo, "status", "--porcelain", "-z", "--untracked-files=all")
+    # `--no-renames` because a mark on a moved file otherwise pairs with the
+    # old path into a ` R` entry, whose worktree column is not `A`, and goes
+    # unnamed (see the module docstring).
+    porcelain = _git_out(
+        repo, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"
+    )
     head_after = head_sha(repo)
     triage = {
         "git_available": porcelain is not None and head_after is not None,
@@ -782,8 +797,9 @@ def render_triage(triage: dict) -> list[str]:
     if triage["intent_to_add"]:
         lines.append(
             f"  DANGER: {len(triage['intent_to_add'])} intent-to-add path(s) below. "
-            "`git checkout -- <path>` TRUNCATES these to zero bytes and exits 0. "
-            "Back them up and verify the copies before reverting anything."
+            "`git checkout -- <path>` TRUNCATES these to zero bytes and exits 0, "
+            "`git restore <path>` empties them the same way, and `git reset --hard` "
+            "DELETES them. Back them up and verify the copies before reverting anything."
         )
         for path in triage["intent_to_add"]:
             lines.append(f"  intent-to-add: {path}")

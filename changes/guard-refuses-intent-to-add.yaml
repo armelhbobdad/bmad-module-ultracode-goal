@@ -1,0 +1,7 @@
+type: breaking
+scope: ultracode-goal
+summary: |
+  The PreToolUse guard now refuses any `git commit` while the index holds an intent-to-add entry (`git add -N`), with a reason that starts `Intent-to-add guard: refusing` and names each such path. A commit leaves such an entry out while the index keeps it, and the un-skip proof read a marked acceptance test as an empty file with no `test.skip(` in it, so a commit that left a still-skipped acceptance test out went through, where the same file untracked was refused. The check runs after the empty-index check and before the un-skip proof, and it refuses the commit when git cannot list the entries. An index that holds only such entries still gets the empty-index refusal. A commit made with such an entry in the index used to pass the guard and now halts.
+migration: |
+  Before the commit, stage each marked file the commit should carry (`git add -- <path>`); for one it should not carry, delete the file or move it out of the work tree, then run `git add -- <path>` to clear its entry. `git status --porcelain --no-renames` lists a marked file with ` A`. Then commit again.
+issues: [217]

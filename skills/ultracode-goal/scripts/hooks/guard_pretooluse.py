@@ -26,7 +26,13 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      after HEAD moves. Fail closed: a marker with no `baseline=` line, or an
      unreadable baseline file, denies.
   4. No `git commit` while the staged index is empty (a commit that captures no
-     work), or while the staged-index probe cannot answer (fail closed).
+     work), or while the staged-index probe cannot answer (fail closed). An
+     intent-to-add entry (`git add -N`, which Execute's step 2 makes for a
+     story's new files) is no staged work here. Then, no `git commit` while
+     the index holds any intent-to-add entry, or while that probe cannot
+     answer (fail closed): a commit leaves such an entry out while the index
+     keeps it, and `git show :<path>` reads it as an empty blob. The deny
+     names each entry.
   5. Un-skip proof: in production (an atdd-checklist for the current story is on
      disk), no `git commit` while the STAGED CONTENT of any acceptance-test file
      that checklist enumerates still contains `test.skip(`. The files are the
@@ -34,7 +40,8 @@ Enforces invariants that must NOT live in memory (context, not enforcement):
      such list, or one naming no JS/TS test file, is scanned whole for
      test-file paths. A list that cannot be read as a list denies. This reads
      the blob being committed, not a diff, so it also catches a story's first
-     commit, where there is no prior blob to compare against.
+     commit, where there is no prior blob to compare against. It runs after
+     invariant 4, so it never reads an intent-to-add entry's empty blob.
   6. Cross-Session Recall, claude-mem: while a run latch (.mem-state.json) is
      present, every claude-mem MCP call (the plugin form and both bare-server
      forms, an MCP resource read or listing on a claude-mem server, and a
@@ -283,6 +290,39 @@ def _staged_index_nonempty(cwd: str | None) -> bool:
     if out.returncode == 1:
         return True  # something staged
     return False  # any other exit code is a probe failure -> fail closed
+
+
+def _intent_to_add_entries(cwd: str | None) -> list[str] | None:
+    """The index's intent-to-add entries (`git add -N`), named from the top
+    level, or None when git cannot say (the caller fails closed on None).
+
+    Porcelain `git diff --cached` leaves such an entry out, which is why the
+    empty-index probe above never counts one as staged work, and the same
+    command with `--ita-visible-in-index` lists it as an added file: the
+    entries are the names the second lists and the first does not. Both
+    compare the index with HEAD (with the empty tree on an unborn HEAD), so a
+    marked file since deleted or moved out of the work tree is still listed,
+    where `git status` would show it as ` D` or pair it into a rename.
+    `diff.relative=false` keeps both lists whole and named from the top level
+    whatever folder the hook runs in. Its own probe on purpose: this hook
+    imports nothing from its siblings.
+    """
+    listed: list[set[bytes]] = []
+    for visible in (["--ita-visible-in-index"], []):
+        try:
+            out = subprocess.run(
+                ["git", "-c", "diff.relative=false", "diff", "--cached", *visible,
+                 "--name-only", "--no-renames", "-z"],
+                cwd=cwd or None,
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None  # git missing, timeout, ...: cannot answer -> fail closed
+        if out.returncode != 0:
+            return None  # any non-zero exit is a probe failure -> fail closed
+        listed.append({name for name in out.stdout.split(b"\0") if name})
+    return sorted(os.fsdecode(name) for name in listed[0] - listed[1])
 
 
 def _impl_artifacts(cwd: str | None) -> Path | None:
@@ -1531,9 +1571,12 @@ def _repo_relative(raw: str, cwd: str | None) -> str:
 def _staged_blob(path: str, cwd: str | None) -> tuple[bool, str]:
     """Return (readable, staged content) for one path via `git show :<path>`.
 
-    `:<path>` addresses the index, i.e. exactly the bytes this commit would
-    write. readable is False when the probe could not answer at all (git
-    missing, timeout, path not in the index): the caller fails closed on it.
+    `:<path>` addresses the index, i.e. the bytes this commit would write for
+    a staged path. An intent-to-add entry is the exception: it reads as the
+    empty blob with exit 0, and the commit leaves it out, so _git_write_gates
+    refuses any commit while the index holds one before this read runs.
+    readable is False when the probe could not answer at all (git missing,
+    timeout, path not in the index): the caller fails closed on it.
     """
     try:
         out = subprocess.run(
@@ -3891,8 +3934,8 @@ def _decide() -> None:
             f"tool_input is a JSON {_json_kind(tool_input)}, not an object, so "
             "the command cannot be read for a `git commit` or `git push`, and "
             "it is refused (failing closed) rather than let past the "
-            "protected-branch, tests-ran, freshness, empty-index and un-skip "
-            "checks."
+            "protected-branch, tests-ran, freshness, empty-index, intent-to-add "
+            "and un-skip checks."
         )
     command = tool_input.get("command") or ""
     if not isinstance(command, str):
@@ -3910,8 +3953,8 @@ def _decide() -> None:
             f"for a `git commit` or `git push` failed ({type(exc).__name__}): "
             "whether it runs one cannot be told, so it is refused (failing "
             "closed) rather than let past the protected-branch, tests-ran, "
-            "freshness, empty-index and un-skip checks. Run it as shorter, "
-            "plainer commands."
+            "freshness, empty-index, intent-to-add and un-skip checks. Run it as "
+            "shorter, plainer commands."
         )
     if not verbs:
         _allow()
@@ -3926,18 +3969,19 @@ def _decide() -> None:
         _deny(
             f"Commit/push guard: refusing this `git {'/'.join(sorted(verbs))}`, "
             f"because checking it raised an error ({type(exc).__name__}: {detail}), "
-            "so the protected-branch, tests-ran, freshness, empty-index and "
-            "un-skip checks could not all run, and it is refused (failing "
-            "closed) rather than let through unchecked. Fix what the error "
-            "names, then run it again."
+            "so the protected-branch, tests-ran, freshness, empty-index, "
+            "intent-to-add and un-skip checks could not all run, and it is "
+            "refused (failing closed) rather than let through unchecked. Fix "
+            "what the error names, then run it again."
         )
 
 
 def _git_write_gates(cwd: str | None, verbs: set[str], unknown: list[str]) -> NoReturn:
     """The checks a Bash command that commits or pushes must pass: the
     protected branch for either verb, then, for a commit, the tests-ran
-    marker, its freshness, a staged index and the un-skip proof. Each one
-    denies; a command that passes them all is allowed."""
+    marker, its freshness, a staged index, an index with no intent-to-add
+    entry and the un-skip proof. Each one denies; a command that passes them
+    all is allowed."""
     hint = _unknown_hint(unknown)
 
     protected = _protected_branches()
@@ -3979,6 +4023,29 @@ def _git_write_gates(cwd: str | None, verbs: set[str], unknown: list[str]) -> No
                 "are unsupported inside a story loop: the guard evaluates the "
                 "command string before it runs, so anything they would stage "
                 "does not exist yet at that point.",
+                hint,
+            )
+        marked = _intent_to_add_entries(cwd)
+        if marked is None:
+            _deny(
+                "Intent-to-add guard: refusing `git commit`, because the index "
+                "could not be read for intent-to-add entries (`git add -N`), so "
+                "whether this commit would leave one out cannot be told. Failing "
+                "closed. Check that git can read this repository's index, then "
+                "commit.",
+                hint,
+            )
+        if marked:
+            _deny(
+                "Intent-to-add guard: refusing `git commit`, because the index "
+                "holds intent-to-add entries (`git add -N`) for "
+                f"{', '.join(f'`{path}`' for path in marked)}. A commit leaves "
+                "such an entry out while the index keeps it, and its staged "
+                "content reads as an empty file. Stage each one the story ships "
+                "(`git add -- <path>`) in a prior, SEPARATE tool call; for one it "
+                "will not ship, delete the file or move it out of the work tree, "
+                "then `git add -- <path>` clears its entry. Then commit as a "
+                "second, distinct tool call.",
                 hint,
             )
         _unskip_gate(cwd, story)
