@@ -1491,7 +1491,7 @@ _AMEND_SENTENCE = (
     "for that amend, a reword's re-run included: it compares the texts with what the amend would commit (the index "
     "against `HEAD`'s first parent, or the empty tree at a root commit), so a path the amended commit already "
     "carries from `HEAD` stays out of `not_in_diff`, and for that amend the hunk pass reads "
-    "`git diff --cached HEAD~1` (at a root commit, `git diff --cached` with the `base` the check printed)."
+    "`git diff --cached <base>`, with the `base` the check printed."
 )
 _AMEND_SENTENCE_PRE = "Run the same check before any re-commit or amend step 5 makes."
 
@@ -1502,8 +1502,10 @@ def _runs_the_amend_check(paragraph: str) -> bool:
         and "before an amend with `--amend` added" in paragraph
         and "on every run for that amend, a reword's re-run included" in paragraph
         and "the index against `HEAD`'s first parent, or the empty tree at a root commit" in paragraph
-        and "for that amend the hunk pass reads `git diff --cached HEAD~1`" in paragraph
-        and "with the `base` the check printed" in paragraph
+        # `<base>` for every amend: neither a root commit nor a shallow
+        # clone's oldest commit has a `HEAD~1`.
+        and "for that amend the hunk pass reads `git diff --cached <base>`, with the `base` the check printed"
+        in paragraph
         # The closing sentence, not a second command line: one `uv run` line.
         and sum(line.startswith("uv run ") for line in paragraph.splitlines()) == 1
         and paragraph.rstrip().endswith(_AMEND_SENTENCE)
@@ -1521,9 +1523,12 @@ def test_step4_runs_the_check_with_amend_before_an_amend():
         pytest.param(_AMEND_SENTENCE, _AMEND_SENTENCE_PRE, id="pre-edit"),
         pytest.param(", and before an amend with `--amend` added", ", and before an amend", id="no-flag"),
         pytest.param(", a reword's re-run included", "", id="reword-plain"),
-        pytest.param("`git diff --cached HEAD~1`", "`git diff --cached`", id="hunk-pass-against-head"),
-        pytest.param(" (at a root commit, `git diff --cached` with the `base` the check printed)", "",
-                     id="no-root-hunk-pass"),
+        pytest.param("`git diff --cached <base>`", "`git diff --cached`", id="hunk-pass-against-head"),
+        # The round-1 wording: `HEAD~1`, which a shallow clone's oldest commit lacks.
+        pytest.param("`git diff --cached <base>`, with the `base` the check printed",
+                     "`git diff --cached HEAD~1` (at a root commit, `git diff --cached` with the `base` the check "
+                     "printed)", id="head-1-with-a-root-case"),
+        pytest.param(", with the `base` the check printed", "", id="base-unnamed"),
         pytest.param(_AMEND_SENTENCE, "", id="dropped"),
     ],
 )
@@ -1815,6 +1820,24 @@ def test_an_unborn_head_has_nothing_to_amend(tmp_path):
     assert json.loads(proc.stdout)["staged"] == ["a.py"]
     with pytest.raises(cc.NothingToAmend):
         cc.check("adds a.py", root, amend=True)
+
+
+def test_a_failed_parent_probe_is_not_read_as_a_root_commit(repo, tmp_path, capsys, monkeypatch):
+    """`rev-parse --verify -q HEAD~1` exiting other than 0 or 1 (a timeout, a
+    broken parent object) while HEAD resolves is no root commit: the empty
+    tree would read every index path as carried and the check as clean."""
+    message_text = _the_218_case(repo)
+    asked = cc._rev_parse
+
+    def failing_parent(project_root, rev):
+        return (128, "") if rev == "HEAD~1" else asked(project_root, rev)
+
+    monkeypatch.setattr(cc, "_rev_parse", failing_parent)
+    assert cc.check(message_text, repo, amend=True) is None
+    message = tmp_path / "message.txt"
+    message.write_text(message_text, encoding="utf-8")
+    assert cc.main(["--message", str(message), "--project-root", str(repo), "--amend"]) == 2
+    assert "not a git work tree" in json.loads(capsys.readouterr().err)["error"]
 
 
 def test_an_amend_outside_a_work_tree_is_still_not_a_git_work_tree(tmp_path):

@@ -331,6 +331,11 @@ def amend_base(project_root: Path) -> str | None:
     code, sha = _rev_parse(project_root, "HEAD~1")
     if code == 0 and sha:
         return sha
+    if code != 1:
+        # Not "no such commit" but a probe that failed (a timeout, a broken
+        # parent object): the empty tree would read every index path as
+        # carried, and the check as clean.
+        return None
     code, _ = _rev_parse(project_root, "HEAD")
     if code == 1:
         raise NothingToAmend
