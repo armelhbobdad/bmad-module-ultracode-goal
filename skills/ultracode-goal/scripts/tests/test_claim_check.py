@@ -1483,6 +1483,72 @@ def _claim_paragraph() -> tuple[str, str]:
     return text[start:end], text
 
 
+# Step 4's closing sentence (#218): before an amend the check compares the
+# texts with what the amend would commit, so a path HEAD already carries is not
+# listed, and the hunk pass reads the amend's whole diff.
+_AMEND_SENTENCE = (
+    "Run the same check before any re-commit step 5 makes, and before an amend with `--amend` added, on every run "
+    "for that amend, a reword's re-run included: it compares the texts with what the amend would commit (the index "
+    "against `HEAD`'s first parent, or the empty tree at a root commit), so a path the amended commit already "
+    "carries from `HEAD` stays out of `not_in_diff`, and for that amend the hunk pass reads "
+    "`git diff --cached <base>`, with the `base` the check printed."
+)
+_AMEND_SENTENCE_PRE = "Run the same check before any re-commit or amend step 5 makes."
+
+
+def _runs_the_amend_check(paragraph: str) -> bool:
+    return bool(
+        "before any re-commit step 5 makes" in paragraph
+        and "before an amend with `--amend` added" in paragraph
+        and "on every run for that amend, a reword's re-run included" in paragraph
+        and "the index against `HEAD`'s first parent, or the empty tree at a root commit" in paragraph
+        # `<base>` for every amend: neither a root commit nor a shallow
+        # clone's oldest commit has a `HEAD~1`.
+        and "for that amend the hunk pass reads `git diff --cached <base>`, with the `base` the check printed"
+        in paragraph
+        # The closing sentence, not a second command line: one `uv run` line.
+        and sum(line.startswith("uv run ") for line in paragraph.splitlines()) == 1
+        and paragraph.rstrip().endswith(_AMEND_SENTENCE)
+    )
+
+
+def test_step4_runs_the_check_with_amend_before_an_amend():
+    paragraph, _ = _claim_paragraph()
+    assert _runs_the_amend_check(paragraph)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param(_AMEND_SENTENCE, _AMEND_SENTENCE_PRE, id="pre-edit"),
+        pytest.param(", and before an amend with `--amend` added", ", and before an amend", id="no-flag"),
+        pytest.param(", a reword's re-run included", "", id="reword-plain"),
+        pytest.param("`git diff --cached <base>`", "`git diff --cached`", id="hunk-pass-against-head"),
+        # The round-1 wording: `HEAD~1`, which a shallow clone's oldest commit lacks.
+        pytest.param("`git diff --cached <base>`, with the `base` the check printed",
+                     "`git diff --cached HEAD~1` (at a root commit, `git diff --cached` with the `base` the check "
+                     "printed)", id="head-1-with-a-root-case"),
+        pytest.param(", with the `base` the check printed", "", id="base-unnamed"),
+        pytest.param(_AMEND_SENTENCE, "", id="dropped"),
+    ],
+)
+def test_the_amend_rule_rejects_its_mutants(old, new):
+    paragraph, _ = _claim_paragraph()
+    assert paragraph.count(old) == 1, "the mutant must change the one clause it names"
+    mutant = paragraph.replace(old, new, 1)
+    assert mutant != paragraph
+    assert not _runs_the_amend_check(mutant)
+
+
+def test_the_amend_rule_rejects_a_second_command_line():
+    """Twin: the flag written as a second fenced `uv run` line instead of in
+    the closing sentence."""
+    paragraph, _ = _claim_paragraph()
+    line = next(line for line in paragraph.splitlines() if line.startswith("uv run "))
+    mutant = paragraph.replace(line, line + "\n" + line + " --amend", 1)
+    assert not _runs_the_amend_check(mutant)
+
+
 def test_step4_runs_the_check_between_staging_and_the_commit():
     paragraph, _ = _claim_paragraph()
     assert "between the staging call and the commit call" in paragraph
@@ -1539,7 +1605,8 @@ def test_step4_runs_the_check_between_staging_and_the_commit():
     assert "start no new run to back a sentence" in paragraph
     # A sentence softened in a staged file must reach the commit.
     assert "Re-stage every file this pass edited, in its own `git add` call" in paragraph
-    assert "Run the same check before any re-commit or amend step 5 makes." in paragraph
+    # Before an amend the check runs with `--amend` (#218), on every run for it.
+    assert _AMEND_SENTENCE in paragraph
     # An edit described by its content still needs its hunk, and a forward
     # reference the commit makes false is found and corrected.
     assert "read `git diff --cached` once and find the hunk for each edit the message or the notes say this commit makes" in paragraph
@@ -1578,5 +1645,283 @@ def test_the_documented_command_is_not_a_git_write():
     )
     guard = _load("guard_pretooluse", GUARD)
     assert guard._git_writes(resolved) == set()
+    # Before an amend the same line runs with `--amend` added (#218): still no
+    # git write the guard would gate.
+    assert guard._git_writes(resolved + " --amend") == set()
     # The message file's name keeps the commit verb out of the command entirely.
     assert "commit" not in resolved
+
+
+# --- `--amend` (#218): compare with what an amend of HEAD would commit --------
+#
+# Step 5 amends the story's commit, and step 4's claim check before it read the
+# staged diff alone: every path the amended commit already carried from HEAD
+# landed in `not_in_diff`, and the rule for that list would have the conductor
+# strip true claims. With `--amend` the index is compared with HEAD's first
+# parent (the empty tree when HEAD has none), which is the list git's own
+# `commit --dry-run --amend` shows.
+
+
+def _git_text(repo: Path, *args: str, stdin: bytes | None = None) -> str:
+    proc = subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, input=stdin)
+    return proc.stdout.decode("utf-8").strip()
+
+
+def _amend_oracle(repo: Path) -> list[str]:
+    """The paths `git commit --amend` would commit, as git's own dry run lists
+    them: each entry whose index column says it is staged against HEAD's first
+    parent. Rename detection off, so a rename lists both names."""
+    proc = subprocess.run(
+        ["git", "-c", "status.renames=false", "commit", "--dry-run", "--amend", "--porcelain", "-z"],
+        cwd=repo,
+        capture_output=True,
+    )
+    entries = [entry for entry in proc.stdout.decode("utf-8").split("\0") if entry]
+    return sorted(entry[3:] for entry in entries if entry[0] not in " ?!")
+
+
+def _the_218_case(repo: Path) -> str:
+    """Step 4 committed the guard and its test; step 5 stages a fixture for an
+    amend, and the message names all three."""
+    _stage(repo, "src/guard.py")
+    _stage(repo, "tests/test_guard.py")
+    _commit(repo, "src/guard.py", "tests/test_guard.py")
+    _stage(repo, "src/fixture.ts")
+    return "fix(guard): tighten `src/guard.py`, cover it in `tests/test_guard.py`, add `src/fixture.ts`"
+
+
+def test_an_amend_reads_the_paths_head_already_carries(repo):
+    message = _the_218_case(repo)
+    plain = cc.check(message, repo)
+    # The reported failure, which the plain check still gives: right before a
+    # commit that adds to HEAD, wrong before an amend.
+    assert plain["not_in_diff"] == ["src/guard.py", "tests/test_guard.py"]
+    assert "base" not in plain
+    amended = cc.check(message, repo, amend=True)
+    assert amended["clean"] is True and amended["not_in_diff"] == []
+    assert amended["staged"] == ["src/fixture.ts", "src/guard.py", "tests/test_guard.py"]
+    assert amended["base"] == _git_text(repo, "rev-parse", "HEAD~1")
+    # A message-only amend, nothing staged, still carries HEAD's paths.
+    _git(repo, "reset", "-q", "--", "src/fixture.ts")
+    out = cc.check("fix(guard): tighten `src/guard.py` and `tests/test_guard.py`", repo, amend=True)
+    assert out["staged"] == ["src/guard.py", "tests/test_guard.py"] and out["clean"] is True
+
+
+def test_mutant_head_base_lists_what_head_carries(repo, monkeypatch):
+    """Twin: an amend compared with HEAD itself is the plain staged diff, and
+    the #218 assertion above reds."""
+    message = _the_218_case(repo)
+    monkeypatch.setattr(cc, "amend_base", lambda project_root: "HEAD")
+    out = cc.check(message, repo, amend=True)
+    assert out["not_in_diff"] == ["src/guard.py", "tests/test_guard.py"]
+
+
+def test_mutant_ignored_flag_lists_what_head_carries(repo, monkeypatch):
+    """Twin: a base resolved but never handed to the diff."""
+    message = _the_218_case(repo)
+    unbased = cc.staged_paths
+    monkeypatch.setattr(cc, "staged_paths", lambda project_root, base=None: unbased(project_root))
+    out = cc.check(message, repo, amend=True)
+    assert out["not_in_diff"] == ["src/guard.py", "tests/test_guard.py"]
+
+
+def _plain(repo: Path) -> None:
+    _stage(repo, "src/guard.py")
+    _commit(repo, "src/guard.py")
+    _stage(repo, "src/fixture.ts")
+    # A mark the amend leaves out, as a commit does.
+    (repo / "src/marked.ts").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "-N", "--", "src/marked.ts")
+
+
+def _rename(repo: Path) -> None:
+    _git(repo, "mv", "old.py", "src/new.py")
+    _git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "move")
+    _stage(repo, "src/fixture.ts")
+
+
+def _merge(repo: Path) -> None:
+    _git(repo, "checkout", "-q", "-b", "side")
+    _stage(repo, "src/fixture.ts")
+    _commit(repo, "src/fixture.ts")
+    _git(repo, "checkout", "-q", "-")
+    _stage(repo, "src/guard.py")
+    _commit(repo, "src/guard.py")
+    _git(repo, "-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "-m", "merge", "side")
+    _stage(repo, "tests/test_guard.py")
+
+
+def _root(repo: Path) -> None:
+    _stage(repo, "src/guard.py")
+
+
+@pytest.mark.parametrize(
+    ("shape", "expected"),
+    [
+        pytest.param(_plain, ["src/fixture.ts", "src/guard.py"], id="plain"),
+        pytest.param(_rename, ["old.py", "src/fixture.ts", "src/new.py"], id="rename"),
+        # The first parent: the side branch's file is what the merge brought in.
+        pytest.param(_merge, ["src/fixture.ts", "tests/test_guard.py"], id="merge"),
+        # No parent: the amend commits the whole index.
+        pytest.param(_root, ["old.py", "skills/ucg-formalize/SKILL.md", "src/fixture.ts", "src/guard.py",
+                             "tests/test_guard.py"], id="root"),
+    ],
+)
+def test_the_amend_list_is_what_git_amend_commits(repo, shape, expected):
+    shape(repo)
+    out = cc.check("x", repo, amend=True)
+    assert out["staged"] == expected
+    assert out["staged"] == _amend_oracle(repo)
+
+
+def test_an_amend_leaves_a_mark_out(repo):
+    """An intent-to-add entry (Execute step 2's mark, #217) is in neither an
+    amend nor the list, so a text that names it still lists it."""
+    _plain(repo)
+    out = cc.check("adds `src/marked.ts` and `src/fixture.ts`", repo, amend=True)
+    assert "src/marked.ts" not in out["staged"]
+    assert out["not_in_diff"] == ["src/marked.ts"]
+
+
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
+def test_a_root_amend_compares_with_the_repositorys_own_empty_tree(tmp_path, object_format):
+    root = tmp_path / "repo"
+    root.mkdir()
+    if subprocess.run(["git", "init", "-q", f"--object-format={object_format}"], cwd=root,
+                      capture_output=True).returncode != 0:
+        pytest.skip(f"this git cannot make a {object_format} repository")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+    (root / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _commit(root, "a.py")
+    _stage(root, "a.py")
+    out = cc.check("changes a.py", root, amend=True)
+    empty_tree = _git_text(root, "hash-object", "-t", "tree", "--stdin", stdin=b"")
+    assert out["base"] == empty_tree
+    assert len(empty_tree) == {"sha1": 40, "sha256": 64}[object_format]
+    assert out["staged"] == ["a.py"] and out["clean"] is True
+
+
+def test_an_unborn_head_has_nothing_to_amend(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _git(root, "add", "a.py")
+    message = tmp_path / "message.txt"
+    message.write_text("adds a.py", encoding="utf-8")
+    argv = [sys.executable, str(SCRIPT), "--message", str(message), "--project-root", str(root)]
+    proc = subprocess.run([*argv, "--amend"], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 2
+    assert "nothing to amend" in json.loads(proc.stderr)["error"]
+    # The plain check still runs there: the staged diff of a first commit.
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0
+    assert json.loads(proc.stdout)["staged"] == ["a.py"]
+    with pytest.raises(cc.NothingToAmend):
+        cc.check("adds a.py", root, amend=True)
+
+
+def test_a_failed_parent_probe_is_not_read_as_a_root_commit(repo, tmp_path, capsys, monkeypatch):
+    """`rev-parse --verify -q HEAD~1` exiting other than 0 or 1 (a timeout, a
+    git that cannot read the repository) while HEAD resolves is no root
+    commit: the empty tree would read every index path as carried and the
+    check as clean."""
+    message_text = _the_218_case(repo)
+    asked = cc._rev_parse
+
+    def failing_parent(project_root, rev):
+        return (128, "") if rev == "HEAD~1" else asked(project_root, rev)
+
+    monkeypatch.setattr(cc, "_rev_parse", failing_parent)
+    assert cc.check(message_text, repo, amend=True) is None
+    message = tmp_path / "message.txt"
+    message.write_text(message_text, encoding="utf-8")
+    assert cc.main(["--message", str(message), "--project-root", str(repo), "--amend"]) == 2
+    assert "not a git work tree" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_a_head_whose_commit_object_is_missing_gets_no_empty_tree(repo, tmp_path, capsys):
+    """`HEAD~1` exits 1 there, as at a root commit, and plain `HEAD` still
+    resolves from the ref; `HEAD^{commit}` reads the object and does not, so
+    the check reads it as nothing to amend, never as a root commit."""
+    message_text = _the_218_case(repo)
+    head = _git_text(repo, "rev-parse", "HEAD")
+    obj = repo / ".git" / "objects" / head[:2] / head[2:]
+    obj.chmod(0o644)  # git writes objects read-only, which Windows will not unlink
+    obj.unlink()
+    assert subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD~1"], cwd=repo).returncode == 1
+    assert subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=repo, capture_output=True).returncode == 0
+    with pytest.raises(cc.NothingToAmend):
+        cc.amend_base(repo)
+    message = tmp_path / "message.txt"
+    message.write_text(message_text, encoding="utf-8")
+    assert cc.main(["--message", str(message), "--project-root", str(repo), "--amend"]) == 2
+    assert "nothing to amend" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_mutant_plain_head_probe_reads_a_missing_commit_as_a_root(repo, monkeypatch):
+    """Twin: with the second probe on plain `HEAD`, which resolves from the
+    ref, the missing commit reads as a root commit and the empty tree is the
+    base."""
+    _the_218_case(repo)
+    head = _git_text(repo, "rev-parse", "HEAD")
+    obj = repo / ".git" / "objects" / head[:2] / head[2:]
+    obj.chmod(0o644)
+    obj.unlink()
+    asked = cc._rev_parse
+    monkeypatch.setattr(
+        cc, "_rev_parse", lambda root, rev: asked(root, "HEAD" if rev == "HEAD^{commit}" else rev)
+    )
+    empty_tree = _git_text(repo, "hash-object", "-t", "tree", "--stdin", stdin=b"")
+    assert cc.amend_base(repo) == empty_tree
+
+
+def test_an_amend_outside_a_work_tree_is_still_not_a_git_work_tree(tmp_path):
+    message = tmp_path / "message.txt"
+    message.write_text("adds a.py", encoding="utf-8")
+    nowhere = tmp_path / "plain-folder"
+    nowhere.mkdir()
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--message", str(message), "--project-root", str(nowhere), "--amend"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 2
+    assert "not a git work tree" in json.loads(proc.stderr)["error"]
+
+
+def test_base_is_printed_only_with_the_flag(repo, tmp_path, capsys):
+    message = tmp_path / "message.txt"
+    message.write_text(_the_218_case(repo), encoding="utf-8")
+    argv = ["--message", str(message), "--project-root", str(repo)]
+    assert cc.main(argv) == 0
+    plain = json.loads(capsys.readouterr().out)
+    assert list(plain) == ["named", "staged", "not_in_diff", "ignored", "clean"]
+    assert cc.main([*argv, "--amend"]) == 0
+    amended = json.loads(capsys.readouterr().out)
+    assert list(amended) == ["named", "staged", "not_in_diff", "ignored", "clean", "base"]
+    assert amended["clean"] is True and plain["clean"] is False
+
+
+def test_mutant_cli_dropping_the_flag_prints_the_plain_result(repo, tmp_path, capsys, monkeypatch):
+    """Twin: a `--amend` the CLI parses and never hands to the check."""
+    message = tmp_path / "message.txt"
+    message.write_text(_the_218_case(repo), encoding="utf-8")
+    checked = cc.check
+    monkeypatch.setattr(cc, "check", lambda text, root, roots=(), amend=False: checked(text, root, roots))
+    assert cc.main(["--message", str(message), "--project-root", str(repo), "--amend"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "base" not in out and out["not_in_diff"] == ["src/guard.py", "tests/test_guard.py"]
+
+
+def test_an_amend_below_the_top_level_names_paths_from_it(subdir_project):
+    app = subdir_project
+    _stage(app, "src/a.py")
+    _commit(app, "src/a.py")
+    _stage(app, "src/b.py")
+    message = "feat: change src/a.py and src/b.py"
+    assert cc.check(message, app)["not_in_diff"] == ["src/a.py"]
+    out = cc.check(message, app, amend=True)
+    assert out["staged"] == ["app/src/a.py", "app/src/b.py"]
+    assert out["clean"] is True
+    assert out["base"] == _git_text(app, "rev-parse", "HEAD~1")

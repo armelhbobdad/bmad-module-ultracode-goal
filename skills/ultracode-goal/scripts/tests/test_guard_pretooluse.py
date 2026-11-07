@@ -673,9 +673,11 @@ def test_mutant_unconditional_deny_reds_nonempty_index_commit(tmp_path: Path) ->
     assert code == 2, "the raising-probe assertion stays green"
 
 
-def test_mutant_probe_exception_fails_open_allows_commit(tmp_path: Path) -> None:
+def test_mutant_probe_exception_fails_open_passes_the_empty_index_check(tmp_path: Path) -> None:
     """Twin (exception half): the except branch reports "something is staged",
-    the fail-OPEN shape _current_branch uses. Only the raising-probe assertion
+    the fail-OPEN shape _current_branch uses, so the mutant lets the commit
+    past the empty-index check, where the intent-to-add check (#217), which
+    fails closed on its own, refuses it. Only the raising-probe assertion
     reds; the exit-128 one does not, because a non-repo cwd returns 128 without
     ever entering the except branch."""
     mutant = _write_mutant(
@@ -692,8 +694,14 @@ def test_mutant_probe_exception_fails_open_allows_commit(tmp_path: Path) -> None
         mutant, _commit_event(repo), repo,
         {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "PATH": str(empty_bin)},
     )
-    assert code == 0, "the raising-probe assertion must red under a fail-open except"
-    assert out is None
+    # The raising-probe assertion reds: the empty-index check lets the commit
+    # past. The intent-to-add probe behind it (#217) fails closed on its own,
+    # so the commit is still refused, by that check instead.
+    assert code == 2
+    assert "Empty-index guard" not in _reason(out), (
+        "the raising-probe assertion must red under a fail-open except"
+    )
+    assert _reason(out).startswith("Intent-to-add guard: refusing")
 
     # ... while the exit-128 path never reaches the except branch and still denies.
     nonrepo = tmp_path / "nonrepo"
@@ -716,9 +724,11 @@ def test_mutant_probe_exception_fails_open_allows_commit(tmp_path: Path) -> None
     assert code == 0, "the allow-path assertion stays green"
 
 
-def test_mutant_probe_unknown_exit_code_fails_open_allows_commit(tmp_path: Path) -> None:
-    """Twin (exit-code half): read "anything not 0" as staged, so 128 becomes a
-    legitimate allow. Only the exit-128 assertion reds — the raising-probe one
+def test_mutant_probe_unknown_exit_code_fails_open_passes_the_empty_index_check(tmp_path: Path) -> None:
+    """Twin (exit-code half): read "anything not 0" as staged, so the mutant
+    lets an exit-128 commit past the empty-index check, where the
+    intent-to-add check (#217), which fails closed on its own, refuses it.
+    Only the exit-128 assertion reds; the raising-probe one
     stays green (the except branch is untouched), as do the plain allow (exit 1)
     and deny (exit 0) paths. That is what makes this an independent proof of the
     exit-code obligation rather than a second copy of the exception twin."""
@@ -735,8 +745,14 @@ def test_mutant_probe_unknown_exit_code_fails_open_allows_commit(tmp_path: Path)
     code, out = _run_mutant_hook(
         mutant, _commit_event(nonrepo), nonrepo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
     )
-    assert code == 0, "the exit-128 assertion must red when 128 is read as staged"
-    assert out is None
+    # The exit-128 assertion reds: the empty-index check reads 128 as staged
+    # work. The intent-to-add probe behind it (#217) fails closed on the same
+    # repository, so that check refuses the commit instead.
+    assert code == 2
+    assert "Empty-index guard" not in _reason(out), (
+        "the exit-128 assertion must red when 128 is read as staged"
+    )
+    assert _reason(out).startswith("Intent-to-add guard: refusing")
 
     empty_bin = tmp_path / "empty-bin"
     empty_bin.mkdir()
@@ -2478,6 +2494,517 @@ def test_mutant_empty_list_authoritative_allows_skipped_commit(tmp_path: Path) -
 
     assert code == 0, "the empty-list fallback assertion must red"
     assert out is None
+
+
+# ---------------------------------------------------------------------------
+# Intent-to-add guard (#217): no `git commit` while the index holds a mark.
+#
+# Execute step 2 marks a story's new files intent-to-add (`git add -N`) so a
+# gate scoped to git's file list sees them before the commit. A mark is no
+# staged work: porcelain `git diff --cached` leaves it out (so an index of marks
+# alone is still the empty-index deny), a commit leaves it out while the index
+# keeps it, and `git show :<path>` reads it as the empty blob with exit 0, which
+# holds no `test.skip(`. So a marked acceptance test the story never staged
+# passed the un-skip proof, where the same file untracked was refused. The
+# guard now refuses any commit while a mark is left, after the empty-index
+# check and before the un-skip proof, naming each marked path.
+#
+# Each deny below has a twin: the hook with the check taken out (the old text)
+# allows the same commit.
+# ---------------------------------------------------------------------------
+
+_ITA_CALL_SITE = "        marked = _intent_to_add_entries(cwd)\n"
+_ITA_PROBE_FAILURE = "            return None  # any non-zero exit is a probe failure -> fail closed"
+_ITA_PROBE_ARGV = '["git", "-c", "diff.relative=false", "diff", "--cached", *visible,'
+_EMPTY_INDEX_PROBE = '            ["git", "diff", "--cached", "--quiet"],'
+_ITA_PAIR_SUBTRACTION = "    return sorted({os.fsdecode(path) for _, path in visible_pairs ^ plain_pairs})"
+_ITA_ODD_FIELDS = (
+    "        if len(fields) % 2:\n"
+    "            return None  # a status with no path: unreadable output -> fail closed\n"
+)
+
+
+def _mark(repo: Path, rel: str, body: str) -> None:
+    """Write a new file and mark it intent-to-add, as execute.md step 2 does."""
+    target = repo / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(body)
+    _git(repo, "add", "-N", "--", rel)
+
+
+def _without_the_ita_check(tmp_path: Path) -> Path:
+    """The hook as it stood before the intent-to-add check: no mark is read."""
+    return _write_mutant(tmp_path, "no_ita_check", _ITA_CALL_SITE, "        marked = []\n")
+
+
+def _assert_ita_deny(code: int, out: dict | None, *paths: str) -> str:
+    assert code == 2
+    reason = _reason(out)
+    assert reason.startswith("Intent-to-add guard: refusing `git commit`")
+    assert "Empty-index guard" not in reason and "Un-skip proof" not in reason
+    for path in paths:
+        assert f"`{path}`" in reason, f"the deny must name {path}"
+    assert "\u2014" not in reason, "the deny holds no em dash"
+    return reason
+
+
+def test_ita_leftover_beside_staged_work_denies_naming_it(tmp_path: Path) -> None:
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    _mark(repo, "src/leftover.ts", "export const x = 1;\n")
+    _mark(repo, "docs/a note.md", "note\n")
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    reason = _assert_ita_deny(code, out, "src/leftover.ts", "docs/a note.md")
+    # How to clear it: stage it, or delete or move it out and stage the path.
+    assert "`git add -- <path>`" in reason
+    assert "A mark on a path HEAD already holds is cleared the same way, staging the file in place" in reason
+    assert "move it aside into the story's `.scratch-<story_id>/` folder, run `git add -- <path>`" in reason
+    assert "then move it back, where it is untracked again" in reason
+    assert "delete it only when nothing needs it" in reason
+    assert "SEPARATE tool call" in reason
+    # The order the paths are named in is git's, sorted.
+    assert reason.index("`docs/a note.md`") < reason.index("`src/leftover.ts`")
+
+
+def test_mutant_without_ita_check_allows_leftover_mark(tmp_path: Path) -> None:
+    mutant = _without_the_ita_check(tmp_path)
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    _mark(repo, "src/leftover.ts", "export const x = 1;\n")
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 0, "the leftover-mark deny assertion must red without the check"
+    assert out is None
+
+
+@pytest.mark.parametrize("after", ["kept", "deleted", "moved"])
+def test_ita_mark_is_named_wherever_its_file_went(tmp_path: Path, after: str) -> None:
+    # A marked file deleted or moved out of the work tree keeps its entry: git
+    # status shows it as ` D` or pairs it into a rename, and the probe still
+    # lists it by the path the index holds.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    _mark(repo, "src/new.ts", "export const y = 2;\n")
+    if after == "deleted":
+        (repo / "src/new.ts").unlink()
+    elif after == "moved":
+        (repo / "src/new.ts").rename(repo / "src/renamed.ts")
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    reason = _assert_ita_deny(code, out, "src/new.ts")
+    assert "`src/renamed.ts`" not in reason, "an untracked file is no mark"
+
+
+@pytest.mark.parametrize("clear", ["stage", "delete-then-add", "move-aside-and-back"])
+def test_ita_cleared_marks_let_the_commit_through(tmp_path: Path, clear: str) -> None:
+    # The ways the deny gives for a new file: stage it; or move it aside into
+    # the story's scratch folder, stage the path, which drops its entry, and
+    # move it back, untracked again; or delete it and stage the path. None
+    # needs `git reset`, `git rm` or `git restore`.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    _mark(repo, "src/new.ts", "export const y = 2;\n")
+    scratch = impl / ".scratch-STORY-1"
+    if clear == "delete-then-add":
+        (repo / "src/new.ts").unlink()
+    elif clear == "move-aside-and-back":
+        scratch.mkdir()
+        (repo / "src/new.ts").rename(scratch / "new.ts")
+    _git(repo, "add", "--", "src/new.ts")
+    if clear == "move-aside-and-back":
+        (scratch / "new.ts").rename(repo / "src/new.ts")
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", "src/new.ts"], cwd=repo, capture_output=True, text=True
+        ).stdout
+        assert status == "?? src/new.ts\n", "the file is back, untracked"
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    assert code == 0
+    assert out is None
+
+
+def _mark_over_a_tracked_path(repo: Path) -> None:
+    """`git rm --cached f.txt`, then `git add -N f.txt`: status `DA`. The
+    commit would delete the file HEAD holds."""
+    _git(repo, "rm", "-q", "--cached", "--", "f.txt")
+    _git(repo, "add", "-N", "--", "f.txt")
+
+
+def test_ita_mark_over_a_tracked_path_denies(tmp_path: Path) -> None:
+    # Both diffs list the path, `M` with marks visible and `D` without, so
+    # only a (status, path) comparison sees the mark.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    _mark_over_a_tracked_path(repo)
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    _assert_ita_deny(code, out, "f.txt")
+
+
+def test_ita_mark_over_a_tracked_path_is_cleared_in_place(tmp_path: Path) -> None:
+    # Staging the file where it is clears a `DA` mark and keeps the file
+    # HEAD holds; moving it aside first would stage its deletion.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    _mark_over_a_tracked_path(repo)
+    _git(repo, "add", "--", "f.txt")
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    assert code == 0
+    assert out is None
+    _git(repo, "commit", "-q", "-m", "story")
+    tree = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "f.txt" in tree, "the commit keeps the file HEAD held"
+
+
+def test_ita_mark_over_an_empty_tracked_file_denies(tmp_path: Path) -> None:
+    # HEAD holds the file empty (an `__init__.py`): the mark's empty blob is
+    # HEAD's, so the visible form lists nothing and only the plain form lists
+    # `D`. Only a difference taken both ways sees it.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    (repo / "pkg").mkdir()
+    (repo / "pkg/__init__.py").write_text("")
+    _git(repo, "add", "--", "pkg/__init__.py")
+    _git(repo, "commit", "-q", "-m", "package")
+    _git(repo, "rm", "-q", "--cached", "--", "pkg/__init__.py")
+    _git(repo, "add", "-N", "--", "pkg/__init__.py")
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    _assert_ita_deny(code, out, "pkg/__init__.py")
+
+
+def test_mutant_one_way_difference_lets_an_empty_tracked_file_mark_through(tmp_path: Path) -> None:
+    """Twin: the visible pairs minus the plain ones, as the round-1 probe
+    took them, miss the mark over an empty tracked file, and the commit
+    that deletes it is allowed."""
+    mutant = _write_mutant(
+        tmp_path,
+        "one_way_ita",
+        _ITA_PAIR_SUBTRACTION,
+        "    return sorted({os.fsdecode(path) for _, path in visible_pairs - plain_pairs})",
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    (repo / "pkg").mkdir()
+    (repo / "pkg/__init__.py").write_text("")
+    _git(repo, "add", "--", "pkg/__init__.py")
+    _git(repo, "commit", "-q", "-m", "package")
+    _git(repo, "rm", "-q", "--cached", "--", "pkg/__init__.py")
+    _git(repo, "add", "-N", "--", "pkg/__init__.py")
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 0, "the empty-tracked-file mark deny assertion must red"
+    assert out is None
+
+
+def test_mutant_name_only_subtraction_lets_a_tracked_path_mark_through(tmp_path: Path) -> None:
+    """Twin: subtract names instead of (status, path) pairs, as the first
+    version of the probe did. The path is in both lists, so the mark drops
+    out and the commit that deletes the file is allowed."""
+    mutant = _write_mutant(
+        tmp_path,
+        "name_only_ita",
+        _ITA_PAIR_SUBTRACTION,
+        "    return sorted({os.fsdecode(path) for _, path in visible_pairs}"
+        " - {os.fsdecode(path) for _, path in plain_pairs})",
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    _mark_over_a_tracked_path(repo)
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 0, "the tracked-path mark deny assertion must red"
+    assert out is None
+
+
+def test_ita_only_marks_staged_is_still_the_empty_index_deny(tmp_path: Path) -> None:
+    # Nothing but marks in the index: the empty-index probe, porcelain
+    # `git diff --cached --quiet`, does not count a mark as staged work, and it
+    # runs first.
+    repo, impl = _green_story_repo(tmp_path, stage=False)
+    _mark(repo, "src/new.ts", "export const y = 2;\n")
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    assert code == 2
+    reason = _reason(out)
+    assert "Empty-index guard" in reason
+    assert "Intent-to-add guard" not in reason
+
+
+def test_mutant_ita_visible_empty_index_probe_counts_a_mark_as_staged(tmp_path: Path) -> None:
+    """Twin: an empty-index probe that sees marks reads a marks-only index as
+    staged work, so the empty-index assertion above reds (the intent-to-add
+    check is then what refuses)."""
+    mutant = _write_mutant(
+        tmp_path,
+        "ita_visible_probe",
+        _EMPTY_INDEX_PROBE,
+        '            ["git", "diff", "--cached", "--ita-visible-in-index", "--quiet"],',
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=False)
+    _mark(repo, "src/new.ts", "export const y = 2;\n")
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 2
+    assert "Empty-index guard" not in _reason(out)
+
+
+@pytest.mark.parametrize("state", ["skipped", "unskipped-unstaged", "deleted"])
+def test_ita_marked_acceptance_test_denies_before_the_unskip_proof(
+    tmp_path: Path, state: str
+) -> None:
+    # The listed acceptance test was marked at step 2 and never staged in full:
+    # still skipped, un-skipped only in the work tree, or deleted. Untracked,
+    # the un-skip proof refuses it (`git show :` fails); marked, it reads the
+    # empty blob, so the intent-to-add check must refuse first.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={"story.txt": "story work"},
+        checklist=_listed_checklist(_LISTED_BLOCK),
+    )
+    _mark(repo, _ACCEPTANCE_REL, _SKIPPED_ACCEPTANCE)
+    if state == "unskipped-unstaged":
+        (repo / _ACCEPTANCE_REL).write_text(_CLEAN_ACCEPTANCE)
+    elif state == "deleted":
+        (repo / _ACCEPTANCE_REL).unlink()
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    _assert_ita_deny(code, out, _ACCEPTANCE_REL)
+
+
+@pytest.mark.parametrize("state", ["skipped", "unskipped-unstaged", "deleted"])
+def test_mutant_without_ita_check_lets_a_marked_acceptance_test_through(
+    tmp_path: Path, state: str
+) -> None:
+    """Twin: without the check, the un-skip proof reads the mark's empty blob
+    as a staged file with no skip in it and allows the commit, which then
+    leaves the acceptance test out."""
+    mutant = _without_the_ita_check(tmp_path)
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={"story.txt": "story work"},
+        checklist=_listed_checklist(_LISTED_BLOCK),
+    )
+    _mark(repo, _ACCEPTANCE_REL, _SKIPPED_ACCEPTANCE)
+    if state == "unskipped-unstaged":
+        (repo / _ACCEPTANCE_REL).write_text(_CLEAN_ACCEPTANCE)
+    elif state == "deleted":
+        (repo / _ACCEPTANCE_REL).unlink()
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(repo), repo, _production_env(impl, tests_root)
+    )
+
+    assert code == 0, "the marked-acceptance-test deny assertion must red"
+    assert out is None
+
+
+def test_ita_untracked_acceptance_test_is_still_the_unskip_deny(tmp_path: Path) -> None:
+    # Control for the pair above: the same file never marked is refused by the
+    # un-skip proof, as it was before the mark existed.
+    repo, impl, tests_root = _production_repo(
+        tmp_path,
+        staged={"story.txt": "story work"},
+        checklist=_listed_checklist(_LISTED_BLOCK),
+    )
+    (repo / _ACCEPTANCE_REL).parent.mkdir(parents=True, exist_ok=True)
+    (repo / _ACCEPTANCE_REL).write_text(_SKIPPED_ACCEPTANCE)
+
+    code, out = _run_hook(_commit_event(repo), repo, _production_env(impl, tests_root))
+
+    assert code == 2
+    reason = _reason(out)
+    assert "Un-skip proof" in reason and f"git show :{_ACCEPTANCE_REL}" in reason
+
+
+def test_ita_mark_on_an_unborn_head_denies(tmp_path: Path) -> None:
+    # A story's first-ever commit: HEAD names no commit, and both diffs compare
+    # the index with the empty tree.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "symbolic-ref", "HEAD", "refs/heads/ultracode/epic-42")
+    impl = repo / "impl"
+    impl.mkdir()
+    (impl / ".current-story").write_text("STORY-1")
+    _write_story_markers(impl, marker_sha=_BASELINE_SHA, baseline_sha=_BASELINE_SHA)
+    (repo / "story.txt").write_text("story work")
+    _git(repo, "add", "--", "story.txt")
+    _mark(repo, "src/new.ts", "export const y = 2;\n")
+
+    code, out = _run_hook(_commit_event(repo), repo, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    _assert_ita_deny(code, out, "src/new.ts")
+
+
+def test_ita_probe_reads_from_the_top_level_in_a_subfolder(tmp_path: Path) -> None:
+    # The session runs in a subfolder of a repository whose config sets
+    # diff.relative, and the mark sits outside that subfolder: the probe still
+    # lists it, named from the top level.
+    repo, impl = _green_story_repo(tmp_path, stage=False)
+    _git(repo, "config", "diff.relative", "true")
+    sub = repo / "app"
+    sub.mkdir()
+    (sub / "story.txt").write_text("story work")
+    _git(repo, "add", "--", "app/story.txt")
+    _mark(repo, "lib/new.ts", "export const y = 2;\n")
+
+    code, out = _run_hook(_commit_event(sub), sub, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)})
+
+    _assert_ita_deny(code, out, "lib/new.ts")
+
+
+def test_mutant_relative_ita_probe_misses_a_mark_outside_the_subfolder(tmp_path: Path) -> None:
+    """Twin: without `diff.relative=false`, both lists keep to the subfolder
+    and the mark outside it goes unread."""
+    mutant = _write_mutant(
+        tmp_path, "relative_ita_probe", _ITA_PROBE_ARGV, '["git", "diff", "--cached", *visible,'
+    )
+    repo, impl = _green_story_repo(tmp_path, stage=False)
+    _git(repo, "config", "diff.relative", "true")
+    sub = repo / "app"
+    sub.mkdir()
+    (sub / "story.txt").write_text("story work")
+    _git(repo, "add", "--", "app/story.txt")
+    _mark(repo, "lib/new.ts", "export const y = 2;\n")
+
+    code, out = _run_mutant_hook(
+        mutant, _commit_event(sub), sub, {"ULTRACODE_IMPL_ARTIFACTS": str(impl)}
+    )
+
+    assert code == 0, "the top-level assertion must red"
+    assert out is None
+
+
+def _git_failing_on_ita(tmp_path: Path) -> str:
+    """A PATH whose `git` fails only the intent-to-add probe's visible form,
+    so the empty-index probe still answers and the deny is this probe's."""
+    real = shutil.which("git")
+    assert real, "git must be on PATH"
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "git"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'for arg in "$@"; do [ "$arg" = "--ita-visible-in-index" ] && exit 128; done\n'
+        f'exec "{real}" "$@"\n'
+    )
+    fake.chmod(0o755)
+    return f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
+def _git_printing_an_unpaired_field(tmp_path: Path) -> str:
+    """A PATH whose `git` answers the probe's visible form with its real
+    output and one more status with no path after it, exit 0."""
+    real = shutil.which("git")
+    assert real, "git must be on PATH"
+    bin_dir = tmp_path / "fake-bin-odd"
+    bin_dir.mkdir()
+    fake = bin_dir / "git"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f'for arg in "$@"; do [ "$arg" = "--ita-visible-in-index" ] && '
+        f'{{ "{real}" "$@"; printf \'A\\000\'; exit 0; }}; done\n'
+        f'exec "{real}" "$@"\n'
+    )
+    fake.chmod(0o755)
+    return f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake git is a POSIX shell script")
+def test_ita_probe_unpaired_field_denies(tmp_path: Path) -> None:
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+
+    code, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "PATH": _git_printing_an_unpaired_field(tmp_path)},
+    )
+
+    assert code == 2
+    reason = _reason(out)
+    assert reason.startswith("Intent-to-add guard: refusing `git commit`")
+    assert "could not be read" in reason
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake git is a POSIX shell script")
+def test_mutant_unpaired_field_dropped_allows_commit(tmp_path: Path) -> None:
+    """Twin: without the odd-count check, zip drops the unpaired field and
+    the probe reads no mark."""
+    mutant = _write_mutant(tmp_path, "ita_odd_fields", _ITA_ODD_FIELDS, "")
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+
+    code, out = _run_mutant_hook(
+        mutant,
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "PATH": _git_printing_an_unpaired_field(tmp_path)},
+    )
+
+    assert code == 0, "the unpaired-field deny assertion must red"
+    assert out is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake git is a POSIX shell script")
+def test_ita_probe_failure_denies(tmp_path: Path) -> None:
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+
+    code, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "PATH": _git_failing_on_ita(tmp_path)},
+    )
+
+    assert code == 2
+    reason = _reason(out)
+    assert reason.startswith("Intent-to-add guard: refusing `git commit`")
+    assert "could not be read" in reason and "Failing closed" in reason
+    assert "\u2014" not in reason
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake git is a POSIX shell script")
+def test_mutant_ita_probe_failure_read_as_no_marks_allows_commit(tmp_path: Path) -> None:
+    """Twin: a probe failure read as "no marks" lets the commit through."""
+    mutant = _write_mutant(tmp_path, "ita_probe_open", _ITA_PROBE_FAILURE, "            return []")
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+
+    code, out = _run_mutant_hook(
+        mutant,
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl), "PATH": _git_failing_on_ita(tmp_path)},
+    )
+
+    assert code == 0, "the probe-failure deny assertion must red"
+    assert out is None
+
+
+def test_ita_probe_is_the_guards_own_code() -> None:
+    # The hook stays self-contained: the probe is a function of its own, not
+    # an import of drive_epic's status reader.
+    src = _hook_source()
+    assert "def _intent_to_add_entries(cwd: str | None) -> list[str] | None:" in src
+    assert "import drive_epic" not in src and "from drive_epic" not in src
+    assert src.index(_EMPTY_INDEX_CALL_SITE) < src.index(_ITA_CALL_SITE) < src.index(
+        "        _unskip_gate(cwd, story)"
+    )
 
 
 # ---------------------------------------------------------------------------

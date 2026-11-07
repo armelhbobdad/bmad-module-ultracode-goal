@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  Execute's step-2 sweep now sees a story's new files. Before each sweep it marks the story's own new files intent-to-add (`git add -N`), taken file by file from the `??` entries of `git status --porcelain --untracked-files=all`, so a conformance gate scoped to git's file list (a `git ls-files`-based check) scans them and reds before the commit, not at the re-verify after it, where the fix cost an amend and two more full sweeps. A folder, a sibling story's tests, the story's scratch and evidence folders, a run marker and an ignored path are never marked. The commit stages every marked path, and the re-verify on the committed tree still catches what a mark cannot reach: an ignored or generated file, a file made after the last mark, and a gate that reads staged content, which a mark leaves empty. A gate that fails on any uncommitted change, such as `git diff --exit-code`, now reds at step 2 on a story that only adds files, as it already did on a story that edits a tracked one.
+issues: [217]

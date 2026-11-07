@@ -204,7 +204,9 @@ def test_the_pre_edit_fixture_is_a_real_snapshot():
         "copied, never re-derived",                      # step 2's marker rule
         "denies a commit whose staged index is empty",                     # step 4's guard denial
         "stage this story's source + test paths explicitly",
-        "a story's **new** files are still untracked at step 2",  # step 5's reason
+        # step 5's reason: since #217 step 2 marks the new files, and step 5
+        # names what the marks cannot reach, but still the same kind of gate.
+        "**conformance gate scoped to *tracked* files**",
         "never overwrite it",                            # step 0's resume rule
         "scope that test run wide enough to catch cross-package regressions",
     ):
