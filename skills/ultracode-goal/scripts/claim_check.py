@@ -3,7 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""List the paths a commit message names that the staged diff does not touch.
+"""List the paths a commit message names that the staged diff (with `--amend`,
+the amended commit) does not touch.
 
 A commit message that says a path changed, when the commit leaves that path
 alone, is a claim about the tree that needs no judgment to refute. The field
@@ -62,6 +63,16 @@ text names one from the project root, so when the project root is a folder
 below the top level (a BMAD install in a monorepo's `app/`), `src/a.py` and
 `app/src/a.py` both name a staged `app/src/a.py`.
 
+Before an amend, `--amend` compares the texts with what the amend would commit
+instead: the same command is given HEAD's first parent (`HEAD~1`), or the empty
+tree when HEAD has none (a root commit, a shallow clone's oldest commit), so a
+path the amended commit already carries from HEAD matches as a staged one does.
+That is the list `git commit --amend` shows: an intent-to-add entry stays out of
+it, a merge is compared with its first parent, and a path HEAD changed that the
+index has restored to its content in HEAD's parent drops out. Without `--amend`
+a path only HEAD changed is in `not_in_diff`, which is right before a commit
+that adds to HEAD, and wrong before an amend.
+
 Matching. A named path that exists in the work tree or the index must match a
 staged path exactly, or be a directory holding one: `README.md` does not match
 a staged `docs/README.md` when a root `README.md` exists, and below the top
@@ -93,17 +104,22 @@ string, an issue reference or a token holding a glob or a `$` is not a path.
 
 Usage:
     uv run claim_check.py --message <file, or - for stdin> [--message <file> ...] [--project-root <dir>]
-        [--artifacts-root <dir> ...] [--tea-config <file>]
+        [--artifacts-root <dir> ...] [--tea-config <file>] [--amend]
 
 Output: JSON on stdout, `{"named": [...], "staged": [...], "not_in_diff":
 [...], "ignored": [...], "clean": bool}`, where `clean` means `not_in_diff`
-is empty and `staged` lists paths from the top level, as git does. Stdin and
-the JSON are UTF-8 whatever the console's code page, and a staged name that
-is not UTF-8 is written as its `\\udcXX` escape, which a JSON reader reads
-back as the name git holds. Several `--message` files are read as one text,
-in order. Exit 0 whenever it ran (a non-empty `not_in_diff` is a result, not
-an error); exit 2 when a message file cannot be read, when `-` (stdin) is
-given more than once, or when the project root is not a git work tree.
+is empty and `staged` lists paths from the top level, as git does. With
+`--amend`, `staged` lists the paths the amended commit carries, and one more
+key, `base`, gives the commit or tree they were compared with (the full id of
+HEAD's first parent, or the empty tree's); without it the output is the one
+before the flag. Stdin and the JSON are UTF-8 whatever the console's code page,
+and a staged name that is not UTF-8 is written as its `\\udcXX` escape, which
+a JSON reader reads back as the name git holds. Several `--message` files are
+read as one text, in order. Exit 0 whenever it ran (a non-empty `not_in_diff`
+is a result, not an error); exit 2 when a message file cannot be read, when
+`-` (stdin) is given more than once, when the project root is not a git work
+tree, or when `--amend` is given and HEAD names no commit ("nothing to
+amend").
 """
 
 from __future__ import annotations
@@ -286,11 +302,63 @@ def project_prefix(project_root: Path) -> str:
     return proc.stdout.decode("utf-8", errors="surrogateescape").rstrip("\r\n")
 
 
-def staged_paths(project_root: Path) -> list[str] | None:
+class NothingToAmend(Exception):
+    """`--amend` was given and HEAD names no commit (an unborn branch)."""
+
+
+def _rev_parse(project_root: Path, rev: str) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "-q", rev], cwd=project_root, capture_output=True, timeout=60
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return 128, ""
+    return proc.returncode, proc.stdout.decode("ascii", errors="replace").strip()
+
+
+def amend_base(project_root: Path) -> str | None:
+    """What an amend of HEAD compares the index with: HEAD's first parent, or
+    the empty tree when HEAD has none. None when git cannot say.
+
+    `rev-parse --verify -q` exits 1 for a name that resolves to nothing and 128
+    outside a repository. `HEAD~1`, not `HEAD^`, so a hand-run copy needs no
+    quoting in cmd.exe. A root commit, or a shallow clone's oldest commit, has
+    no parent git can read, and an amend of it commits the whole index: the
+    empty tree stands in, asked of git (`hash-object -t tree` on empty input,
+    which writes nothing) so a SHA-256 repository gets its own id. When HEAD
+    itself resolves to nothing (an unborn branch), there is nothing to amend.
+    """
+    code, sha = _rev_parse(project_root, "HEAD~1")
+    if code == 0 and sha:
+        return sha
+    code, _ = _rev_parse(project_root, "HEAD")
+    if code == 1:
+        raise NothingToAmend
+    if code != 0:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "hash-object", "-t", "tree", "--stdin"],
+            cwd=project_root,
+            input=b"",
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    tree = proc.stdout.decode("ascii", errors="replace").strip()
+    return tree if proc.returncode == 0 and tree else None
+
+
+def staged_paths(project_root: Path, base: str | None = None) -> list[str] | None:
+    """The paths the index changes against HEAD, or against `base` when one
+    is given. Porcelain `git diff --cached` on purpose: it leaves an
+    intent-to-add entry out, as a commit or an amend does."""
     try:
         proc = subprocess.run(
             # From the top level even where diff.relative would name them from the cwd.
-            ["git", "-c", "diff.relative=false", "diff", "--cached", "--name-only", "--no-renames", "-z"],
+            ["git", "-c", "diff.relative=false", "diff", "--cached", "--name-only", "--no-renames", "-z"]
+            + ([base, "--"] if base else []),
             cwd=project_root,
             capture_output=True,
             timeout=60,
@@ -593,8 +661,19 @@ def ignored_paths(
     return found
 
 
-def check(message: str, project_root: Path, artifacts_roots: list[Path] | tuple = ()) -> dict | None:
-    staged = staged_paths(project_root)
+def check(
+    message: str, project_root: Path, artifacts_roots: list[Path] | tuple = (), amend: bool = False
+) -> dict | None:
+    """The comparison; None when git cannot read the work tree. With `amend`,
+    the paths an amend of HEAD would commit stand in for the staged ones, and
+    the result carries the `base` they were compared with. Raises
+    NothingToAmend when `amend` is asked and HEAD names no commit."""
+    base = None
+    if amend:
+        base = amend_base(project_root)
+        if base is None:
+            return None
+    staged = staged_paths(project_root, base)
     if staged is None:
         return None
     prefix = project_prefix(project_root)
@@ -602,13 +681,16 @@ def check(message: str, project_root: Path, artifacts_roots: list[Path] | tuple 
     unmatched = [path for path in named if not _matches(path, staged, project_root, prefix)]
     ignored = ignored_paths(unmatched, project_root, artifacts_roots, staged)
     missing = [path for path in unmatched if path not in ignored]
-    return {
+    result = {
         "named": named,
         "staged": staged,
         "not_in_diff": missing,
         "ignored": [path for path in unmatched if path in ignored],
         "clean": not missing,
     }
+    if amend:
+        result["base"] = base
+    return result
 
 
 def _tea_root(tea_config: str, project_root: Path) -> Path | None:
@@ -640,7 +722,8 @@ def _tea_root(tea_config: str, project_root: Path) -> Path | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="List the paths a commit message names that the staged diff does not touch."
+        description="List the paths a commit message names that the staged diff (with --amend, the amended "
+        "commit) does not touch."
     )
     parser.add_argument(
         "--message",
@@ -663,6 +746,12 @@ def main(argv: list[str] | None = None) -> int:
         metavar="FILE",
         help="the TEA config ({project-root} is substituted): its test-artifacts root, resolved as preflight "
         "resolves it, is read as one more --artifacts-root, the folder that holds atdd-checklist-<story_id>.md",
+    )
+    parser.add_argument(
+        "--amend",
+        action="store_true",
+        help="compare with what an amend of HEAD would commit (the index against HEAD's first parent, or the empty "
+        "tree for a root commit) instead of the staged diff; run it before an amend",
     )
     args = parser.parse_args(argv)
     if args.message.count("-") > 1:
@@ -687,7 +776,11 @@ def main(argv: list[str] | None = None) -> int:
         tea_root = _tea_root(args.tea_config, Path(args.project_root))
         if tea_root is not None:
             roots.append(tea_root)
-    result = check(message, Path(args.project_root), roots)
+    try:
+        result = check(message, Path(args.project_root), roots, amend=args.amend)
+    except NothingToAmend:
+        print(json.dumps({"error": "nothing to amend: HEAD names no commit in %s" % args.project_root}), file=sys.stderr)
+        return 2
     if result is None:
         print(json.dumps({"error": "not a git work tree: %s" % args.project_root}), file=sys.stderr)
         return 2

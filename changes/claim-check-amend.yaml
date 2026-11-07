@@ -1,0 +1,5 @@
+type: added
+scope: ultracode-goal
+summary: |
+  `scripts/claim_check.py` takes `--amend`, which compares the paths the texts name with what an amend of HEAD would commit: the index against HEAD's first parent, or the empty tree when HEAD has none, the same list `git commit --dry-run --amend` shows, with an intent-to-add entry left out. Before, the check Execute runs ahead of a re-verify amend listed every path the amended commit already carried from HEAD in `not_in_diff`, and the rule for that list would have the run strip true claims. Execute's step 4 now passes `--amend` on every run of the check for an amend, a reworded message's re-run included, and reads the amend's whole diff for its hunk pass. With `--amend` the output adds a `base` key naming what the index was compared with, and an unborn HEAD exits `2` with "nothing to amend"; without it the output is unchanged.
+issues: [218]
