@@ -230,9 +230,13 @@ the file holds more than one entry for that `id`, carry each forward, in file or
 write one entry in their place. Leave `history` off an entry that replaced nothing. A pass
 that only parks an item records one line, while the entry it replaces can hold the
 operator's whole ruling: a plain replacement would erase that ruling, and nothing in the
-pass would report the loss. Every reader of the file keys on `id` and `action` alone
+pass would report the loss. Every reader of the file but one keys on `id` and `action` alone
 (`{ucg-root}/scripts/red_ids.py`, which preflight and the resume read it through), so
-`history` changes no suppression.
+`history` changes no suppression. The one is the gate's re-read of rulings at the start of
+each cycle (`{ucg-root}/references/gate.md`, "An owned `gate-gap:` line is not this
+story's to close"), which reads the `answer` and the `history` of each `close` entry and
+applies only the latest ruling for each line or AC: a later return or reassignment
+replaces an earlier one.
 
 **If an existing `.decisions.json` is unreadable, unparseable, or parsed but missing a
 list-valued `decisions`, stop — do not overwrite it.** Say which file failed and why. This
@@ -278,18 +282,45 @@ The two dispositions are genuinely different things, not two names for one:
   every AC it lists, made at the commit it names. Those are the story's
   `**Gate-ability:** operator-evidence` ACs; a plain `operator` tag is work the dev agent
   builds, never evidence this close waits on. If one is missing, say which and record
-  `defer`. An AC the escalation names as partly recorded, with the ids of the records TEA
+  `defer`. An AC the operator moves out of the story in writing needs no record, and the
+  close waits for the move instead: the story file must carry it in the moved-AC form
+  (`{ucg-root}/references/gate.md`, "A moved AC leaves the story's list"), its number
+  starting no item under `## Acceptance Criteria` and a note under an H2 heading of its own
+  after that section naming that number, the owner and the ruling. Until it does, record
+  `defer`. When it does, write `{workflow.implementation_artifacts}/.moved-<story_id>`,
+  one line per AC it moves, opened by its `AC-<n>`, `AC-<n> to <owner> per <ruling>`,
+  adding to any lines already there, and an `oracle=<absolute path>` line for each oracle
+  source the operator edited with the move (a relative one resolved against
+  `{project-root}`, and only a path inside the work tree `git rev-parse --show-toplevel`
+  prints); log each open `gate-gap:` line on the moved AC again, under the story's key,
+  with `owned-by` the same owner per the same ruling; and log the move in the story's
+  `.decision-log.md` entry as a `moved:` line, which records it for a reader and which no
+  step reads. A written return of a moved AC to the story is applied here too, as
+  `{ucg-root}/references/gate.md`, "A moved AC leaves the story's list", says: its line
+  leaves the record, and the record goes once no AC line is left. A decomposed child's AC
+  is not moved this way: it lives in its parent's story file, which is never edited and
+  which every sibling reads; record `defer` and propose a re-plan of the split instead. An
+  escalation whose `decision_needed` opens with "The moved-AC check refused (exit 1)"
+  closes, its moved ACs owing no record, only once the operator states in writing that
+  each source it names no longer lists the AC for this story and you have added each
+  source they edited inside the work tree to `.moved-<story_id>` as an `oracle=<absolute
+  path>` line, or once they return the AC in writing; until then record `defer`. One that
+  opens with "The moved-AC check refused (exit 2)" closes at once when it is the story's
+  first exit-2 refusal at that commit; when it says one came before at that commit, it
+  closes only once the operator confirms in writing that trace can write its files there,
+  and until then record `defer`. An AC the escalation names as partly recorded, with the
+  ids of the records TEA
   already counted for it, closes only on a `pass` record at that commit whose `id` is not
   among the ones the escalation names, or on the operator's written narrowing or move of
   the AC: the records already counted are not enough, since re-gating them changes
   nothing. This surface never writes a record itself: the operator is its producer
   (`{ucg-root}/references/gate.md`, "Operator evidence is a recorded live result"). A
-  ruling that narrows or moves the AC is the operator's story edit: record it, then close.
+  ruling that narrows or moves the AC is the operator's story edit: record it, naming each
+  AC a move retires, then close.
   **That close also writes the story's re-gate marker and resets its turn counter.** Write
   `{workflow.implementation_artifacts}/.regate-<story_id>` as two lines, `sha=` the
   assessed commit the sidecar names (in full, as `git rev-parse` prints it) and
-  `decision=` the id you closed, then delete the sidecar as for any close, and delete
-  `{workflow.implementation_artifacts}/.budget-<story_id>.json`: waiting for operator
+  `decision=` the id you closed, then delete the sidecar as for any close, and delete `{workflow.implementation_artifacts}/.budget-<story_id>.json`: waiting for operator
   evidence is not the story's work. The marker is the re-gate entry. While its `sha=`
   names `HEAD`, the resume's `--assert-armed` call routes the story `gate-owed`, so it
   re-enters at Stage 5 to re-gate that commit, and is never re-driven from step 0, where

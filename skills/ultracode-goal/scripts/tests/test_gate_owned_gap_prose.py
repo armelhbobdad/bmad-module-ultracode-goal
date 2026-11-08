@@ -205,7 +205,8 @@ _NEVER_CLOSES = (
 )
 _LEDGER_ONCE = (
     "It is none of a re-loop's findings, so it gets no `class:` line, and it reaches the ledger once, as the row an "
-    "`advance` or a `defer` gives every open line (the bullets above), with `source` `gate`, `severity` `med` and "
+    "`advance` or a `defer` gives every open line (the bullets above), except an owned line on a moved AC, which "
+    "rides that AC's row, with `source` `gate`, `severity` `med` and "
     "`story` this story, its `reason` the line's state (`unmeasured`, `unkilled`, or the summary that recorded its "
     "rows) with the owner and the ruling, and its `suggested_action` naming the owner."
 )
@@ -253,10 +254,33 @@ def _section(text: str, heading: str) -> str:
 # --- the pre-edit text: the live text with the #221 wording taken out -------------
 
 
+# The moved-AC form (#222) builds on owned lines and cites this paragraph, so
+# the reconstruction takes it out with them, leaving no reference to a
+# paragraph the pre-edit text does not hold.
+_MOVED_FORM_HEAD = "**A moved AC leaves the story's list.**"
+# The sentences outside the moved-AC form that #222 wrote to say "owned" of a
+# moved AC's open lines; the reconstruction allows the word there and nowhere
+# else.
+_MOVED_AC_SAYS_OWNED = (
+    "the owner as an owned line names one, the AC's open `gate-gap:` lines logged again as owned,",
+    ", except an owned line on a moved AC, which rides that AC's row",
+)
+
+
+def _moved_form(text: str) -> str:
+    if _MOVED_FORM_HEAD not in text:
+        return ""
+    start = text.index(_MOVED_FORM_HEAD)
+    return text[start : text.index("\n\n", start)]
+
+
 def _pre_edit(text: str) -> str:
     paragraph = _paragraph(text)
     if paragraph:
         text = text.replace(paragraph + "\n\n", "", 1)
+    form = _moved_form(text)
+    if form:
+        text = text.replace(form + "\n\n", "", 1)
     for old, new in _EDITS:
         text = text.replace(new, old, 1)
     return text
@@ -268,8 +292,18 @@ def test_the_pre_edit_text_is_a_real_reconstruction():
     for old, new in _EDITS:
         assert live.count(new) == 1, new[:80]
         assert pre.count(old) == 1 and new not in pre, old[:80]
-    assert _HEAD not in pre and "owned" not in pre
-    assert len(live) - len(pre) == len(_paragraph(live)) + 2 + sum(len(new) - len(old) for old, new in _EDITS)
+    # No reference to the paragraph is left dangling, and no plain "owned" is
+    # left outside the sentences #222 wrote that say it of a moved AC's lines.
+    assert _HEAD not in pre and _OWNED not in pre and "owned-by" not in pre
+    rest = _flat(pre)
+    for sentence in _MOVED_AC_SAYS_OWNED:
+        assert rest.count(sentence) <= 1, sentence
+        rest = rest.replace(sentence, "")
+    assert "owned" not in rest
+    form = _moved_form(live)
+    assert len(live) - len(pre) == (
+        len(_paragraph(live)) + 2 + (len(form) + 2 if form else 0) + sum(len(new) - len(old) for old, new in _EDITS)
+    )
     # The carry's last bullet is followed again by the operator-evidence paragraph.
     assert _CARRY_LAST_BULLET + "\n\n" + _NEXT_HEAD in pre
 

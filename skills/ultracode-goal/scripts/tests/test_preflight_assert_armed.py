@@ -2711,6 +2711,27 @@ def test_a_closed_operator_evidence_owed_story_is_re_gated_not_re_driven(tmp_pat
         assert story["route"] == "gate-owed"
 
 
+def test_a_regate_marker_with_extra_lines_still_routes_the_re_gate(tmp_path: Path) -> None:
+    """The reader keys on `sha=` and `decision=` alone, so a marker that holds
+    other lines too (one an operator or an earlier release wrote) still reads
+    `fresh` and routes the re-gate."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    trace, head = _failed_gate(root, impl)
+    (impl / f".regate-{_ESC_STORY}").write_text(
+        f"sha={head}\ndecision=operator-evidence-owed:trace/trace-{_ESC_STORY}.md:0123456789ab\n"
+        "note=written by /ucg-resolve\nnote=a second line\n",
+        encoding="utf-8",
+    )
+    code, out = _run(root, "--story", _ESC_STORY, "--trace-output", str(trace), impl=impl)
+    story = out["checks"]["story"]
+    assert code == 0
+    assert story["regate"]["state"] == "fresh"
+    assert story["regate"]["sha"] == head
+    assert story["route"] == "gate-owed"
+
+
 def test_a_regate_marker_short_sha_naming_head_is_fresh(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _arm(root)

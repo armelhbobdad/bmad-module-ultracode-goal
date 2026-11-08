@@ -1589,10 +1589,18 @@ _GAP_ROUTE_SENTENCES = {
         ("No `gate-gap:` line, on any criterion, sends a story to this route: only", "4a7a9665cb92"),
         ("No such row is a gate FAIL or a critical finding, whatever its criterion", "fcea9e5c10a5"),
         ("Of what automate's pass and its backfill produce, it is the one thing th", "1e0272c410c2"),
-        ("On `owed: true`, take `escalate` with `kind` `operator-evidence-owed`: `", "2c68ae51e44a"),
+        # Reviewed (#222): the escalation's close now names the operator's
+        # written move of the AC in the form the story file carries; TEA's gap
+        # line is still only its evidence, and no gap routes the story.
+        ("On `owed: true`, take `escalate` with `kind` `operator-evidence-owed`: `", "0a822bc51744"),
+        # Reviewed (#222): a moved AC's owned lines fold into its one `med` row
+        # on `advance` or `defer`; nothing re-loops or escalates the story.
+        ("On `advance` or `defer`, append one ledger row per moved AC, with `sourc", "e6975db60451"),
         # Reviewed (#221): an owned line is none of a re-loop's findings and reaches the
         # ledger once, at `med`, on `advance` or `defer`; it sends no story anywhere.
-        ("It is none of a re-loop's findings, so it gets no `class:` line, and it ", "1d533eaefce8"),
+        # Reviewed (#222): an owned line on a moved AC rides that AC's one row
+        # instead of a row of its own; still `med`, still no route.
+        ("It is none of a re-loop's findings, so it gets no `class:` line, and it ", "8ae018fd80d0"),
         # Reviewed (#221): an owned line is left out of a re-loop's findings, as an
         # `unmeasured` or `unkilled` one is.
         ("On a `reloop` from `gate_eval.py` that is not cap-only, each open `gate-", "2e6141e5acbc"),
@@ -1601,8 +1609,9 @@ _GAP_ROUTE_SENTENCES = {
         # adds `sweep`, a non-critical finding the INVARIANT allows onto the
         # ledger; it routes no gap differently. Reviewed (#221): the `gate` source
         # also names a risk or a gap a written ruling assigned to another owner,
-        # a `med` row like every other `gate-gap:` row.
-        ("One heading per Epic, then a row per parked item; `status` is `open` at ", "982dd715617c"),
+        # a `med` row like every other `gate-gap:` row. Reviewed (#222): it also
+        # names an AC the operator moved out of the story, a `med` row too.
+        ("One heading per Epic, then a row per parked item; `status` is `open` at ", "845a970d6724"),
         ("Only non-gate-blocking work (CONCERNS, non-critical findings, parked dec", "cf302cd47862"),
         # Reviewed (#221): the red sweep's re-loop leaves an owned line out of its
         # findings; the red alone ends the cycle.
@@ -1673,6 +1682,7 @@ def _gate_surfaces() -> dict[str, str]:
             "count fragment": (changes / "mutate-check-count-misreads.yaml").read_text(encoding="utf-8"),
             "reused-server fragment": (changes / "gate-worktree-reused-server.yaml").read_text(encoding="utf-8"),
             "owned-gap fragment": (changes / "gate-owned-gap-lines.yaml").read_text(encoding="utf-8"),
+            "moved-AC fragment": (changes / "gate-moved-ac-regate.yaml").read_text(encoding="utf-8"),
         }
     )
     return surfaces
@@ -3727,7 +3737,8 @@ def test_a_gap_never_changes_a_route():
     assert "the INVARIANT below sends it to a re-loop" not in GATE
     ledger = next(line for line in GATE.splitlines() if line.startswith("- `source` ∈"))
     assert (
-        "`gate` (CONCERNS, an operator-evidence AC's evidence still owed, or an open `gate-gap:` line: a coverage "
+        "`gate` (CONCERNS, an operator-evidence AC's evidence still owed, an AC the operator moved out of the story, "
+        "or an open `gate-gap:` line: a coverage "
         "gap automate reported rather than backfilled, a risk on a P0 criterion it left unmeasured, a gap whose rows "
         "could not run, a backfilled test that was never written, a backfilled test that did not kill its mutant, or a "
         "risk or a gap a written ruling assigned to another owner)"
@@ -3749,7 +3760,7 @@ _NEITHER = (
 )
 _LEDGER_ROW = (
     "On `advance` or `defer`, each open line becomes a ledger row with `source` `gate` and `severity` `med`, "
-    "whatever its criterion's priority."
+    "whatever its criterion's priority, except an owned line on a moved AC, which rides that AC's row."
 )
 _INVARIANT_ROW = (
     "A row from a `gate-gap:` line is neither a FAIL nor a critical finding, whatever its criterion's priority, so it "
@@ -3824,7 +3835,7 @@ def test_a_gate_gap_row_is_a_med_ledger_row_whatever_its_priority():
             "does **not** belong here",
         ),
         # A row with no fixed severity can be written `high` and meet the bar.
-        ("gate", " and `severity` `med`, whatever its criterion's priority.", "."),
+        ("gate", " and `severity` `med`, whatever its criterion's priority, except", ", except"),
         ("gate", " A row from an open `gate-gap:` line is always `med`: whatever its criterion's priority, it is "
          "neither a gate FAIL nor a P0/critical finding, so it belongs here and never re-loops or escalates the "
          "story.", ""),

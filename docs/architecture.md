@@ -57,6 +57,7 @@ skills/ultracode-goal/
 │   ├── preflight_check.py         #   mechanical preflight facts + blocker budget
 │   ├── gate_eval.py               #   gate status -> verdict (the completion authority)
 │   ├── operator_owed.py           #   is a gate FAIL owed only operator-evidence ACs' records? (fail-closed)
+│   ├── moved_ac_check.py          #   does trace's matrix still score an AC the operator moved out? (fail-closed)
 │   ├── mutate_check.py            #   mutation harness: attributable-red proof for the story's guards
 │   ├── probe_servers.py           #   which URLs a test runner may reuse already answer, from which folder; stops a server the run left up
 │   ├── link_worktree_deps.py      #   links the main tree's dependency folders into the gate worktree
