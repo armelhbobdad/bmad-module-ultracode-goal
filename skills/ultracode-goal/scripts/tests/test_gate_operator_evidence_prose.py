@@ -57,6 +57,7 @@ _REPO_ROOT = _SKILL_ROOT.parents[1]
 GATE_MODEL = (_REPO_ROOT / "docs" / "gate-model.md").read_text(encoding="utf-8")
 HOW_IT_WORKS = (_REPO_ROOT / "docs" / "how-it-works.md").read_text(encoding="utf-8")
 FRAGMENT = (_REPO_ROOT / "changes" / "gate-operator-evidence-owed.yaml").read_text(encoding="utf-8")
+MOVED_FRAGMENT = (_REPO_ROOT / "changes" / "gate-moved-ac-regate.yaml").read_text(encoding="utf-8")
 
 _EVIDENCE_TAG = "`**Gate-ability:** operator-evidence`"
 _PLAIN_TAG = "`**Gate-ability:** operator`"
@@ -307,6 +308,7 @@ def test_every_surface_keys_the_owed_class_on_operator_evidence():
         "docs/gate-model.md": GATE_MODEL,
         "docs/how-it-works.md": HOW_IT_WORKS,
         "changes fragment": FRAGMENT,
+        "moved-AC fragment": MOVED_FRAGMENT,
     }
     for name, text in surfaces.items():
         flat = _norm(text)

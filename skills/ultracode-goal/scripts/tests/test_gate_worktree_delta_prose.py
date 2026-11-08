@@ -1540,6 +1540,7 @@ def test_no_surface_sends_a_gap_to_a_reloop_before_trace():
         "backfill fragment": (_REPO_ROOT / "changes" / "gate-automate-backfill-commit.yaml").read_text(
             encoding="utf-8"
         ),
+        "owned-gap fragment": (_REPO_ROOT / "changes" / "gate-owned-gap-lines.yaml").read_text(encoding="utf-8"),
     }
     for name, text in surfaces.items():
         flat = re.sub(r"\s+", " ", text)
@@ -1571,9 +1572,13 @@ _ROUTE_NAMES = re.compile(r"\bFAIL\b|gate-blocking|`defer`|`blocked`|decision-pe
 _SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z`*(\"-])")
 _GAP_ROUTE_SENTENCES = {
     "gate.md": (
-        ("**A red backfill sweep and the `gate-gap:` lines take this route their o", "5a2e9c096ce6"),
+        # Reviewed (#221): an owned line joins the lines a red sweep's re-loop leaves
+        # out of its findings; it names no new route for any line.
+        ("**A red backfill sweep and the `gate-gap:` lines take this route their o", "d2a9e620b518"),
         ("- A row that reads `GREEN` is still a gap unless it reads killed when re", "3e2d3fc82a87"),
-        ("A `gate-gap:` line never changes the route the verdict takes, and each r", "50bb3001484c"),
+        # Reviewed (#221): the carry's reloop bullet leaves an owned line out of the
+        # findings too; the route still comes from the verdict alone.
+        ("A `gate-gap:` line never changes the route the verdict takes, and each r", "4a8a2a2078d8"),
         ("A re-loop sent to close a reported gap often adds only a test, which lea", "9d1ca0df0d3f"),
         ("A re-run of the previous backfill's mutation table alone would leave a r", "72d065e855d6"),
         ("A red backfill sweep ends the cycle here instead, before trace (\"A red b", "8f40b503ed2c"),
@@ -1584,15 +1589,33 @@ _GAP_ROUTE_SENTENCES = {
         ("No `gate-gap:` line, on any criterion, sends a story to this route: only", "4a7a9665cb92"),
         ("No such row is a gate FAIL or a critical finding, whatever its criterion", "fcea9e5c10a5"),
         ("Of what automate's pass and its backfill produce, it is the one thing th", "1e0272c410c2"),
-        ("On `owed: true`, take `escalate` with `kind` `operator-evidence-owed`: `", "2c68ae51e44a"),
-        ("On a `reloop` from `gate_eval.py` that is not cap-only, each open `gate-", "563f6cff0aa6"),
+        # Reviewed (#222): the escalation's close now names the operator's
+        # written move of the AC in the form the story file carries; TEA's gap
+        # line is still only its evidence, and no gap routes the story.
+        ("On `owed: true`, take `escalate` with `kind` `operator-evidence-owed`: `", "0a822bc51744"),
+        # Reviewed (#222): a moved AC's owned lines fold into its one `med` row
+        # on `advance` or `defer`; nothing re-loops or escalates the story.
+        ("On `advance` or `defer`, append one ledger row per moved AC, with `sourc", "e6975db60451"),
+        # Reviewed (#221): an owned line is none of a re-loop's findings and reaches the
+        # ledger once, at `med`, on `advance` or `defer`; it sends no story anywhere.
+        # Reviewed (#222): an owned line on a moved AC rides that AC's one row
+        # instead of a row of its own; still `med`, still no route.
+        ("It is none of a re-loop's findings, so it gets no `class:` line, and it ", "8ae018fd80d0"),
+        # Reviewed (#221): an owned line is left out of a re-loop's findings, as an
+        # `unmeasured` or `unkilled` one is.
+        ("On a `reloop` from `gate_eval.py` that is not cap-only, each open `gate-", "2e6141e5acbc"),
         # Reviewed (#213): the fence before the `source` bullet ends without a
         # period, so this sentence runs on through the `source` list, which now
         # adds `sweep`, a non-critical finding the INVARIANT allows onto the
-        # ledger; it routes no gap differently.
-        ("One heading per Epic, then a row per parked item; `status` is `open` at ", "a5cb0535620f"),
+        # ledger; it routes no gap differently. Reviewed (#221): the `gate` source
+        # also names a risk or a gap a written ruling assigned to another owner,
+        # a `med` row like every other `gate-gap:` row. Reviewed (#222): it also
+        # names an AC the operator moved out of the story, a `med` row too.
+        ("One heading per Epic, then a row per parked item; `status` is `open` at ", "845a970d6724"),
         ("Only non-gate-blocking work (CONCERNS, non-critical findings, parked dec", "cf302cd47862"),
-        ("Then take the `reloop` route under \"Route on the verdict\" with the red a", "495cb8d41eb8"),
+        # Reviewed (#221): the red sweep's re-loop leaves an owned line out of its
+        # findings; the red alone ends the cycle.
+        ("Then take the `reloop` route under \"Route on the verdict\" with the red a", "52e54d5b0a27"),
     ),
     # Reviewed: the heartbeat's time gap since a prior run, and a formalize gap, not coverage gaps.
     "preflight.md": (
@@ -1658,6 +1681,8 @@ def _gate_surfaces() -> dict[str, str]:
             "collection fragment": (changes / "mutate-check-collection-error.yaml").read_text(encoding="utf-8"),
             "count fragment": (changes / "mutate-check-count-misreads.yaml").read_text(encoding="utf-8"),
             "reused-server fragment": (changes / "gate-worktree-reused-server.yaml").read_text(encoding="utf-8"),
+            "owned-gap fragment": (changes / "gate-owned-gap-lines.yaml").read_text(encoding="utf-8"),
+            "moved-AC fragment": (changes / "gate-moved-ac-regate.yaml").read_text(encoding="utf-8"),
         }
     )
     return surfaces
@@ -2059,8 +2084,8 @@ def test_the_backfill_commit_leaves_the_scratch_folder_in_place():
 
 _PRE_TRACE = "**A red backfill sweep ends the cycle at a re-loop.**"
 _FINDINGS = (
-    "with the red and every open `gate-gap:` line of this cycle that is neither `unmeasured` nor `unkilled` as its "
-    "findings"
+    "with the red and every open `gate-gap:` line of this cycle that is neither `unmeasured`, `unkilled` nor owned as "
+    "its findings"
 )
 _RESUME_POINTER = (
     "A resume that finds this verdict logged and `HEAD` still at its `assessed-commit:` commit takes this re-loop "
@@ -2122,13 +2147,14 @@ def test_a_red_sweep_alone_ends_the_cycle_at_a_reloop_before_trace():
     assert re.search(
         r"A re-loop that ended its cycle before trace \(\"A red backfill sweep ends the cycle at a re-loop\", under "
         r"\"Backfill the gate evidence\"\) takes the full route above, with its red and every open `gate-gap:` line "
-        r"of its cycle that is neither `unmeasured` nor `unkilled` as its findings, and the gate after it is a full one",
+        r"of its cycle that is neither `unmeasured`, `unkilled` nor owned as its findings, and the gate after it is a "
+        r"full one",
         reloop,
     )
     # M21: the reloop bullet's own sentence that makes a gap one of gate_eval's re-loop's findings.
     assert re.search(
         r"On a `reloop` from `gate_eval\.py` that is not cap-only, each open `gate-gap:` line that is neither "
-        r"`unmeasured` nor `unkilled` is among the findings the generalize step reads, though none of them is a "
+        r"`unmeasured`, `unkilled` nor owned is among the findings the generalize step reads, though none of them is a "
         r"reason for the verdict",
         reloop,
     )
@@ -3436,21 +3462,23 @@ def _bounds_automate(para: str) -> bool:
         )
         # M11: a re-gate of the same commit is still the full instrument, which is what lets it advance.
         and re.search(
-            r"so automate has nothing left to look at there unless an open line names another commit, and the gate "
-            r"is still the full instrument\.",
+            r"so automate has nothing left to look at there unless an open line that is not owned names another "
+            r"commit, and the gate is still the full instrument\.",
             para,
         )
         and "unless a gap's rows last ran on another commit" not in para
         and re.search(
             r"automate's scope is the diff from the previous gate's `assessed-commit` line to the commit under assessment, "
-            r"plus the mutation rows behind the previous cycle's backfilled gaps and behind every open `gate-gap:` line",
+            r"plus the mutation rows behind the previous cycle's backfilled gaps and behind every open `gate-gap:` line "
+            r"that is not owned \(\"An owned `gate-gap:` line is not this story's to close\" below\)",
             para,
         )
         and re.search(
             r"It re-runs, at the commit under assessment, whatever the diff covers, the mutation rows behind each gap "
             r"the previous cycle backfilled \(the `scripts/mutate_check\.py` table rows recorded in the summary named "
-            r"for that cycle's `gate-backfill-base:` commit\) and behind each open `gate-gap:` line \(the rows "
-            r"recorded in the summary the line names\)",
+            r"for that cycle's `gate-backfill-base:` commit\), never a gap whose test step 1 of \"When automate "
+            r"backfills\" moved aside for an owned line, and behind each open `gate-gap:` line that is not owned "
+            r"\(the rows recorded in the summary the line names\)",
             para,
         )
         and re.search(
@@ -3462,14 +3490,15 @@ def _bounds_automate(para: str) -> bool:
         and re.search(r"whether the re-gate is full or delta", para)
         and re.search(r"It searches for new gaps only in code that diff changes", para)
         and re.search(
-            r"When that diff is empty, automate still runs, for the open `gate-gap:` lines alone, when any of them "
-            r"names a commit other than the commit under assessment\. Otherwise skip automate and the rebuild, and "
-            r"carry the open lines unchanged, `unmeasured` ones included",
+            r"When that diff is empty, automate still runs, for the open `gate-gap:` lines that are not owned and "
+            r"nothing else, when any of them names a commit other than the commit under assessment\. Otherwise skip "
+            r"automate and the rebuild, and carry the open lines unchanged, `unmeasured` and owned ones included",
             para,
         )
         and re.search(
-            r"Each automate pass leaves every open line naming the commit that pass measured, so no cycle runs "
-            r"automate at a commit an earlier cycle's pass has measured",
+            r"Each automate pass leaves every open line that is not owned naming the commit that pass measured, so no "
+            r"cycle runs automate at a commit an earlier cycle's pass has measured, and an owned line, which keeps the "
+            r"commit it names, never makes automate run",
             para,
         )
         and re.search(r"no `assessed-commit` line, automate runs in full", para)
@@ -3533,7 +3562,7 @@ def test_bound_predicate_rejects_a_later_cycle_that_never_remeasures_a_gap():
         # M11
         (", and the gate is still the full instrument", ""),
         # The first wording keyed this on rows, which an `unmeasured` line does not have.
-        ("unless an open line names another commit", "unless a gap's rows last ran on another commit"),
+        ("unless an open line that is not owned names another commit", "unless a gap's rows last ran on another commit"),
         # Without the exception a later pass backfills an equivalent mutant again in every cycle.
         (", except a row behind an open `unkilled` line, which keeps that line open and gets no new test", ""),
         # A resume that finds no summary at all runs automate again; the bound must say so.
@@ -3695,7 +3724,7 @@ def test_a_gap_never_changes_a_route():
     para = _bound()
     assert re.search(r"A `gate-gap:` line never changes the route the verdict takes", para)
     assert re.search(
-        r"On a `reloop` that is not cap-only, each open line that is neither `unmeasured` nor `unkilled` is one of "
+        r"On a `reloop` that is not cap-only, each open line that is neither `unmeasured`, `unkilled` nor owned is one of "
         r"the findings the generalize step reads",
         para,
     )
@@ -3708,9 +3737,11 @@ def test_a_gap_never_changes_a_route():
     assert "the INVARIANT below sends it to a re-loop" not in GATE
     ledger = next(line for line in GATE.splitlines() if line.startswith("- `source` ∈"))
     assert (
-        "`gate` (CONCERNS, an operator-evidence AC's evidence still owed, or an open `gate-gap:` line: a coverage "
+        "`gate` (CONCERNS, an operator-evidence AC's evidence still owed, an AC the operator moved out of the story, "
+        "or an open `gate-gap:` line: a coverage "
         "gap automate reported rather than backfilled, a risk on a P0 criterion it left unmeasured, a gap whose rows "
-        "could not run, a backfilled test that was never written, or a backfilled test that did not kill its mutant)"
+        "could not run, a backfilled test that was never written, a backfilled test that did not kill its mutant, or a "
+        "risk or a gap a written ruling assigned to another owner)"
     ) in ledger
     assert re.search(r"take the verdict's `reasons` and the review's findings", GATE)
 
@@ -3729,7 +3760,7 @@ _NEITHER = (
 )
 _LEDGER_ROW = (
     "On `advance` or `defer`, each open line becomes a ledger row with `source` `gate` and `severity` `med`, "
-    "whatever its criterion's priority."
+    "whatever its criterion's priority, except an owned line on a moved AC, which rides that AC's row."
 )
 _INVARIANT_ROW = (
     "A row from a `gate-gap:` line is neither a FAIL nor a critical finding, whatever its criterion's priority, so it "
@@ -3749,8 +3780,8 @@ _BACKFILLED_NOT_PARKED = (
     "A gap automate finds on a P0 criterion is backfilled rather than parked (\"Automate backfills every gap it finds "
     "on a P0 criterion\", under the same section), and `gate_eval.py` decides on the test, so a `gate-gap:` line on a "
     "P0 criterion is only ever a risk or a gap nobody has measured yet, a backfilled test that was never written, "
-    "or a "
-    "backfilled test that did not kill its mutant."
+    "a backfilled test that did not kill its mutant, or a risk or a gap a written ruling assigned to another owner "
+    "(\"An owned `gate-gap:` line is not this story's to close\", under the same section)."
 )
 _GATE_MODEL_LEDGER = (
     "Only non-gate-blocking work (CONCERNS, non-critical findings, parked decisions, and the coverage gaps automate "
@@ -3804,7 +3835,7 @@ def test_a_gate_gap_row_is_a_med_ledger_row_whatever_its_priority():
             "does **not** belong here",
         ),
         # A row with no fixed severity can be written `high` and meet the bar.
-        ("gate", " and `severity` `med`, whatever its criterion's priority.", "."),
+        ("gate", " and `severity` `med`, whatever its criterion's priority, except", ", except"),
         ("gate", " A row from an open `gate-gap:` line is always `med`: whatever its criterion's priority, it is "
          "neither a gate FAIL nor a P0/critical finding, so it belongs here and never re-loops or escalates the "
          "story.", ""),
@@ -3888,8 +3919,8 @@ def _carries_gaps(para: str, reloop: str) -> bool:
         and "keeps the line" not in para
         # M5: what the carried line names once a pass has measured it again.
         and re.search(
-            r"A carried line that pass does not close is logged afresh in place of the copied line, naming this commit "
-            r"and this pass's summary, or `unmeasured` while the risk still is or the gap's rows still cannot run, or "
+            r"A carried line that is not owned and that pass does not close is logged afresh in place of the copied "
+            r"line, naming this commit and this pass's summary, or `unmeasured` while the risk still is or the gap's rows still cannot run, or "
             r"`unkilled`, naming its test, while a test backfilled for the gap has not killed its rows\.",
             para,
         )
@@ -5138,7 +5169,7 @@ def _unkilled_rule(gate: str) -> bool:
         and "A gap behind an open `unkilled` line already has its test, so no pass writes it another while its rows "
         "can run" in flat
         and "in place of any `unkilled` line logged for that gap" in flat
-        and "every open `gate-gap:` line of this cycle that is neither `unmeasured` nor `unkilled` as its findings"
+        and "every open `gate-gap:` line of this cycle that is neither `unmeasured`, `unkilled` nor owned as its findings"
         in flat
         and "an `unkilled` line's row says the backfilled test did not kill the mutant, which may be equivalent" in flat
     )
@@ -5214,8 +5245,8 @@ def _replay_operator_regates(gate: str, regates: int) -> list[str | None]:
     which leaves the operator's records counting."""
     flat = re.sub(r"\s+", " ", gate)
     runs_for_a_line = (
-        "When that diff is empty, automate still runs, for the open `gate-gap:` lines alone, when any of them names "
-        "a commit other than the commit under assessment" in flat
+        "When that diff is empty, automate still runs, for the open `gate-gap:` lines that are not owned and nothing "
+        "else, when any of them names a commit other than the commit under assessment" in flat
     )
     no_search = "It searches for new gaps only in code that diff changes" in flat
     no_test = _NO_SECOND_TEST in flat
@@ -5223,7 +5254,10 @@ def _replay_operator_regates(gate: str, regates: int) -> list[str | None]:
         "When this step stages nothing, there is no backfill: skip steps 2 through 5, and the commit under "
         "assessment stays the `gate-backfill-base:` commit" in flat
     )
-    renamed = "A carried line that pass does not close is logged afresh in place of the copied line, naming this commit" in flat
+    renamed = (
+        "A carried line that is not owned and that pass does not close is logged afresh in place of the copied line, "
+        "naming this commit" in flat
+    )
     assert runs_for_a_line and no_search and no_commit and renamed
     head, line_names, made = 1, 0, []
     for _ in range(regates):

@@ -53,7 +53,8 @@ nothing.
 
 TEA's own per-criterion classification is trusted as given, the same trust the
 gate places in gate_status. The cross-checks catch a stale or foreign matrix,
-not a criterion TEA classified wrongly.
+not a criterion TEA classified wrongly. `read_matrix` holds them, apart from
+the FAIL-only check above, so moved_ac_check.py reads the matrix the same way.
 
 Prints one JSON object and exits 0: `owed`, `open` (the requirement ids below
 FULL), `operator` (the open ones owed operator evidence), `evidence` (each of
@@ -73,6 +74,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gate_eval  # noqa: E402  (sibling script, path set above)
@@ -179,41 +181,50 @@ def _gate_reads_owed(args: argparse.Namespace, reasons: list[str]) -> bool:
     return True
 
 
-def evaluate(args: argparse.Namespace) -> dict:
-    reasons: list[str] = []
-    out: dict = {
-        "owed": False,
-        "open": [],
-        "operator": [],
-        "evidence": {},
-        "partial": {},
-        "assessed_commit": None,
-        "reasons": reasons,
-    }
-    if not _gate_reads_owed(args, reasons):
-        return out
+class TraceMatrix(NamedTuple):
+    """TEA's Phase 1 coverage matrix for one story's trace, checked against its summary.
 
-    trace_output = Path(args.trace_output)
-    report = _own_artifact(trace_output, "trace-{}.md", args.story)
+    A NamedTuple, not a dataclass: the tests load this file by path, without a
+    `sys.modules` entry, which a dataclass's annotation check needs.
+    """
+
+    path: Path
+    matrix: dict
+    requirements: list[dict]
+    live_records: list
+    commit: str
+
+
+def read_matrix(trace_output: Path, story: str, reasons: list[str]) -> TraceMatrix | None:
+    """The story's trace matrix, or None with the reason appended when it cannot be trusted.
+
+    The report must be exactly `trace-<story>.md` and declare itself a trace
+    report; its `tempCoverageMatrixPath` must be absolute and name a
+    PHASE_1_COMPLETE matrix whose P0-P3 counts equal the story's own
+    `e2e-trace-summary-<story>.json`, whose requirements recount to them, and
+    whose `source_sha`, when it has one, names the summary's commit, which must
+    be named. moved_ac_check.py reads the matrix through this too.
+    """
+    report = _own_artifact(trace_output, "trace-{}.md", story)
     if report is None or not gate_eval._declares_trace_report(report):
-        reasons.append(f"no trace report named trace-{args.story}.md in {trace_output}")
-        return out
+        reasons.append(f"no trace report named trace-{story}.md in {trace_output}")
+        return None
     report_text = gate_eval._read_text(report)
     matrix_hint = gate_eval._frontmatter(report_text or "").get("tempCoverageMatrixPath", "")
     if not matrix_hint or not Path(matrix_hint).is_absolute():
         reasons.append(
             f"{report.name} names no absolute tempCoverageMatrixPath, so TEA's coverage matrix cannot be read"
         )
-        return out
+        return None
     matrix = gate_eval._read_json(Path(matrix_hint))
     if matrix is None or matrix.get("phase") != "PHASE_1_COMPLETE":
         reasons.append(f"{matrix_hint} is not a readable PHASE_1_COMPLETE coverage matrix")
-        return out
-    summary_path = _own_artifact(trace_output, "e2e-trace-summary-{}.json", args.story)
+        return None
+    summary_path = _own_artifact(trace_output, "e2e-trace-summary-{}.json", story)
     summary = gate_eval._read_json(summary_path) if summary_path else None
     if summary is None:
-        reasons.append(f"no readable e2e-trace-summary-{args.story}.json in {trace_output}")
-        return out
+        reasons.append(f"no readable e2e-trace-summary-{story}.json in {trace_output}")
+        return None
 
     try:
         matrix_counts = {p: _counts(matrix["coverage_statistics"]["priority_breakdown"], p) for p in PRIORITIES}
@@ -228,13 +239,13 @@ def evaluate(args: argparse.Namespace) -> dict:
             raise TypeError("live_records is not a list")
     except (KeyError, TypeError) as exc:
         reasons.append(f"the coverage matrix or the summary lacks a coverage field ({exc})")
-        return out
+        return None
     stale = [p for p in PRIORITIES if matrix_counts[p] != summary_counts[p]]
     if stale:
         reasons.append(
             f"the matrix disagrees with {summary_path.name} on {', '.join(stale)}: it is not this gate's matrix"
         )
-        return out
+        return None
     recount = {
         p: (
             sum(1 for r in requirements if r.get("priority") == p),
@@ -244,15 +255,36 @@ def evaluate(args: argparse.Namespace) -> dict:
     }
     if recount != matrix_counts:
         reasons.append("the matrix's requirements do not recount to its own priority breakdown")
-        return out
+        return None
     commit = summary.get("source_sha")
     if not isinstance(commit, str) or not commit.strip():
         reasons.append(f"{summary_path.name} names no source_sha, so no commit to record the evidence at")
-        return out
+        return None
     matrix_commit = matrix.get("source_sha")
     if isinstance(matrix_commit, str) and matrix_commit.strip() and not _same_commit(matrix_commit, commit):
         reasons.append(f"the matrix measured {matrix_commit}, not the summary's {commit}")
+        return None
+    return TraceMatrix(Path(matrix_hint), matrix, requirements, live_records, commit)
+
+
+def evaluate(args: argparse.Namespace) -> dict:
+    reasons: list[str] = []
+    out: dict = {
+        "owed": False,
+        "open": [],
+        "operator": [],
+        "evidence": {},
+        "partial": {},
+        "assessed_commit": None,
+        "reasons": reasons,
+    }
+    if not _gate_reads_owed(args, reasons):
         return out
+
+    trace = read_matrix(Path(args.trace_output), args.story, reasons)
+    if trace is None:
+        return out
+    requirements, live_records, commit = trace.requirements, trace.live_records, trace.commit
     story_text = gate_eval._read_text(Path(args.story_file))
     if story_text is None:
         reasons.append(f"story file {args.story_file} could not be read")

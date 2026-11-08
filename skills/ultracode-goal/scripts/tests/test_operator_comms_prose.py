@@ -320,10 +320,13 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
     #      now points at that naming step (the rollup refuses an isolated dir);
     #   9. the heading each gate cycle's entries go under, the one
     #      `scripts/gate_trail.py` reads a recorded verdict from, which no
-    #      reference named before.
+    #      reference named before;
+    #  10. and 11. the check after an operator's move of an AC (#222) and its
+    #      command: before `gate_eval.py`, `moved_ac_check.py` refuses while
+    #      trace's matrix still scores a moved AC.
     live = _gate_run_section()
     added = [p for p in _paragraphs(live) if p not in _paragraphs(fixture)]
-    assert len(added) == 9, [p[:60] for p in added]
+    assert len(added) == 11, [p[:60] for p in added]
     assert _print_paragraph(live) in added, "the verdict-print paragraph must be one of them"
     provenance = [p for p in added if "gate-provenance" in p]
     assert len(provenance) == 1, [p[:60] for p in added]
@@ -335,6 +338,13 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
     assert len(delta) == 1, [p[:60] for p in added]
     heading = [p for p in added if "`### Story <story_id>: gate`" in p]
     assert len(heading) == 1, [p[:60] for p in added]
+    moved = [
+        p
+        for p in added
+        if p.startswith("**After a move, check that trace scored no moved AC")
+        or (p.startswith("```") and "moved_ac_check.py" in p)
+    ]
+    assert len(moved) == 2, [p[:60] for p in added]
 
     # The removed side, asserted rather than commented: the ONLY fixture
     # paragraphs allowed to go missing from the live section are the two

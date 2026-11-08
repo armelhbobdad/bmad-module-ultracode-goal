@@ -303,7 +303,9 @@ _CARRY_RULE = (
     "field but `id` and `history` copied verbatim"
 )
 _CARRY_DUPLICATES = "carry each forward, in file order, and write one entry in their place"
-_READERS_IGNORE = "Every reader of the file keys on `id` and `action` alone"
+# Every reader but the gate's re-read of rulings (#222), which reads `answer`
+# and `history` to take the latest ruling for each line or AC.
+_READERS_IGNORE = "Every reader of the file but one keys on `id` and `action` alone"
 _REPORT_REPLACED = (
     "Name every entry this pass replaced, by `id`, with the earlier answer it carried into `history`"
 )
