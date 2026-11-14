@@ -16,6 +16,13 @@ Covers:
     the issue's current state instead of the event's snapshot
   - A `labeled` event acts only for `health-check` or an `fp-*` label: a
     maintainer's triage label never re-flags or re-closes an issue
+  - The job runs for an issue labeled `health-check` or titled
+    `[health-check]...`. An issue with no `fp-*` label (a reporter without
+    push access sets none) gets the `fp-*` label created, a 422 ignored, then
+    the labels it lacks added, from its title or else its body's Fingerprint
+    and Severity sections, and is then deduped or flagged as a labeled issue
+    is; an unfilled template (its placeholder, or only a `Section
+    fingerprint:` line) gets no call, and a labeled issue no label call
   - A shared section fingerprint under another defect key (a body line, or a
     keyless issue's label) with an earlier open issue gets the
     `possible-duplicate` label, then one "Possible duplicate" comment, and is
@@ -118,6 +125,25 @@ def _issue(number: int, fp: str, section_fp: str | None, *extra: str, state: str
             "body": _body(section_fp) if body is None else body}
 
 
+def _bare(number: int, title: str, body: str, *labels: str) -> dict:
+    """An issue as GitHub files it for a reporter without push access: no label they passed survives."""
+    return {"number": number, "state": "open", "labels": list(labels), "title": title, "body": body}
+
+
+def _template(fp: str | None = None, severity: str | None = None, section_fp: str | None = None) -> str:
+    """The issue template's body as a reporter submits it, with the given fields filled in."""
+    text = ISSUE_TEMPLATE.read_text(encoding="utf-8").split("---\n", 2)[2]
+    for value, old, new in (
+        (fp, "`fp-XXXXXXX`\n\nSection fingerprint:", f"`{fp}`\n\nSection fingerprint:"),
+        (section_fp, "Section fingerprint: `fp-XXXXXXX`", f"Section fingerprint: `{section_fp}`"),
+        (severity, "covered at all -->\n", f"covered at all -->\n`{severity}`\n"),
+    ):
+        if value:
+            assert text.count(old) == 1, old
+            text = text.replace(old, new)
+    return text
+
+
 def _run(tmp_path: Path, issue: dict, others: list[dict], label_exists: bool = False, event: str = "opened",
          label: str | None = None) -> list:
     (tmp_path / "script.js").write_text(_script(), encoding="utf-8")
@@ -192,6 +218,159 @@ def test_another_event_makes_no_call(tmp_path):
 def test_an_issue_without_a_fingerprint_label_makes_no_call(tmp_path):
     issue = {"number": 12, "labels": ["health-check"], "body": _body(FP_S)}
     assert _run(tmp_path, issue, [_issue(10, FP_A, FP_S)]) == []
+
+
+# --- a report filed without labels -----------------------------------------------
+
+TITLE_B = f"[health-check][bug][{FP_B}] ultracode-goal/gate: x"
+FP_T = "fp-1234abc"
+
+
+def _labeled(number: int, *labels: str) -> list:
+    return ["label", number, list(labels)]
+
+
+@needs_node
+@pytest.mark.parametrize("label_exists", [False, True], ids=["new-label", "label-exists"])
+def test_an_unlabeled_report_is_labeled_from_its_title(tmp_path, label_exists):
+    # Filed by a reporter without push access: GitHub kept none of its labels. A 422 on the fp-* label is no error.
+    calls = _run(tmp_path, _bare(12, TITLE_B, _body(FP_S)), [], label_exists=label_exists)
+    assert calls == [["createLabel", FP_B], _labeled(12, "health-check", "workflow-improvement", "bug", FP_B)]
+
+
+@needs_node
+def test_the_title_is_read_whatever_its_case(tmp_path):
+    # The job's startsWith ignores case, so the title it lets through is read the same way.
+    calls = _run(tmp_path, _bare(12, "[Health-Check][Bug][FP-BBBBBBB] ultracode-goal/gate: x", _body(FP_S)), [])
+    assert calls == [["createLabel", FP_B], _labeled(12, "health-check", "workflow-improvement", "bug", FP_B)]
+
+
+def _filed_titles() -> list[str]:
+    """Every issue title the stage reference tells the health check to write, as a template."""
+    text = HEALTH_CHECK_MD.read_text(encoding="utf-8")
+    titles = re.findall(r"(\[health-check\](?:\[[^\]\s]*\])* \{workflow\}: [^\"`\n]*)", text)
+    # The first run's `--title` (§5a-ii), the §5c submit command's, and the regression treatment's.
+    assert len(titles) == 3, titles
+    assert sum(f'--title "{title}"' in text for title in titles) == 2
+    assert sum("REGRESSION: " in title for title in titles) == 1
+    return titles
+
+
+@needs_node
+@pytest.mark.parametrize("severity", ["bug", "friction", "gap"])
+def test_every_title_the_health_check_writes_is_read_by_the_action(tmp_path, severity):
+    fp = "fp-0a1b2c3"
+    for template in _filed_titles():
+        title = (template.replace("{severity}", severity).replace("{fp}", fp)
+                 .replace("{workflow}", "ultracode-goal/gate").replace("{short description}", "x"))
+        calls = _run(tmp_path, _bare(12, title, ""), [])
+        assert calls == [["createLabel", fp], _labeled(12, "health-check", "workflow-improvement", severity, fp)], title
+
+
+@needs_node
+def test_an_unlabeled_report_is_then_flagged_as_a_labeled_one_is(tmp_path):
+    keyless = _issue(9, FP_S, None)
+    calls = _run(tmp_path, _bare(12, TITLE_B, _body(FP_S)), [keyless])
+    assert calls[:2] == [["createLabel", FP_B], _labeled(12, "health-check", "workflow-improvement", "bug", FP_B)]
+    assert calls[2:] == _run(tmp_path, _issue(12, FP_B, FP_S), [keyless])
+    _assert_flagged(calls[2:], 12, "#9", FP_S)
+
+
+@needs_node
+def test_an_unlabeled_exact_duplicate_is_labeled_then_closed(tmp_path):
+    earlier = _issue(9, FP_B, FP_S)
+    calls = _run(tmp_path, _bare(12, TITLE_B, _body(FP_S)), [earlier])
+    assert calls[:2] == [["createLabel", FP_B], _labeled(12, "health-check", "workflow-improvement", "bug", FP_B)]
+    assert [c[:2] for c in calls[2:]] == [["comment", 12], ["label", 12], ["update", 12], ["react", 9]]
+    assert calls[2][2].startswith(f"Auto-deduped: same fingerprint `{FP_B}` as #9.")
+    assert calls[3:] == [["label", 12, ["duplicate"]], ["update", 12, "closed", "not_planned"], ["react", 9, "+1"]]
+    assert calls[2:] == _run(tmp_path, _issue(12, FP_B, FP_S), [earlier])
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"## Severity\n`bug`\n\n## Fingerprint\n`{FP_T}`\n\nSection fingerprint: `{FP_S}`\n",
+        # The section line first: the fingerprint is the first one on any other line.
+        f"## Fingerprint\nSection fingerprint: `{FP_S}`\n`{FP_T}`\n\n## Severity\n**bug**\n",
+        # What a comment holds is never read.
+        f"## Fingerprint\n<!-- not `fp-7777777` -->\n`{FP_T}`\n\n## Severity\n<!--\ngap\n-->\nbug\n",
+        _template(fp=FP_T, severity="bug", section_fp=FP_S),
+        # Filed from the web, the body has CRLF line endings.
+        _template(fp=FP_T, severity="bug", section_fp=FP_S).replace("\n", "\r\n"),
+    ],
+    ids=["sections", "section-line-first", "comments", "issue-template", "issue-template-crlf"],
+)
+def test_a_template_filing_whose_labels_were_dropped_is_labeled_from_its_body(tmp_path, body):
+    calls = _run(tmp_path, _bare(12, "[health-check] x", body), [])
+    assert calls == [["createLabel", FP_T], _labeled(12, "health-check", "workflow-improvement", "bug", FP_T)]
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"## Fingerprint\n`{FP_T}`\n\n## Finding\nOne sentence.\n",
+        f"## Severity\n\n## Fingerprint\n`{FP_T}`\n",
+        f"## Severity\nbug or gap\n\n## Fingerprint\n`{FP_T}`\n",
+        # The template's Severity comment names every severity: a comment is never read.
+        _template(fp=FP_T, section_fp=FP_S),
+    ],
+    ids=["no-section", "empty-section", "not-one-severity", "issue-template"],
+)
+def test_a_report_with_no_severity_gets_no_severity_label(tmp_path, body):
+    calls = _run(tmp_path, _bare(12, "[health-check] x", body), [])
+    assert calls == [["createLabel", FP_T], _labeled(12, "health-check", "workflow-improvement", FP_T)]
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"## Fingerprint\n`fp-XXXXXXX`\n\nSection fingerprint: `{FP_S}`\n\n## Severity\nbug\n",
+        _template(severity="bug", section_fp=FP_S),
+        _template(),
+        # A fingerprint outside the Fingerprint section is not the report's.
+        f"## Fingerprint\n`fp-XXXXXXX`\n\n## Finding\nSee `{FP_T}`.\n",
+        # A decorated section line is still the section fingerprint, never the defect's: only a line that is the
+        # fingerprint alone is read, or the report would be closed against a keyless issue on a section match.
+        f"## Fingerprint\n`fp-XXXXXXX`\n**Section fingerprint:** `{FP_S}`\n",
+        f"## Fingerprint\n`fp-XXXXXXX`\n- Section fingerprint: `{FP_S}`\n",
+        f"## Fingerprint\n`fp-XXXXXXX`\n> Section fingerprint: `{FP_S}`\n",
+    ],
+    ids=["sections", "issue-template", "issue-template-unfilled", "fp-elsewhere", "bold-section-line",
+         "bulleted-section-line", "quoted-section-line"],
+)
+@pytest.mark.parametrize("labels", [(), ("health-check", "workflow-improvement")], ids=["bare", "template-labels"])
+def test_an_unfilled_template_gets_no_label_and_no_call(tmp_path, body, labels):
+    assert _run(tmp_path, _bare(12, "[health-check] x", body, *labels), [_issue(9, FP_S, None)]) == []
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "issue, added",
+    [
+        # Filed from the template: its labels are kept, and the fp-* and severity ones are not set.
+        (_bare(12, "[health-check] x", _template(fp=FP_T, severity="gap", section_fp=FP_S),
+               "health-check", "workflow-improvement"), ["gap", FP_T]),
+        (_bare(12, TITLE_B, _body(FP_S), "health-check", "bug"), ["workflow-improvement", FP_B]),
+    ],
+    ids=["template-labels", "title"],
+)
+def test_only_the_missing_labels_are_added(tmp_path, issue, added):
+    calls = _run(tmp_path, issue, [])
+    assert calls == [["createLabel", added[-1]], _labeled(12, *added)]
+
+
+@needs_node
+def test_a_collaborators_labeled_report_gets_no_label_call(tmp_path):
+    # The labels went on with the issue: the title is never read, even when it names another fingerprint.
+    issue = {**_issue(12, FP_A, FP_S), "title": TITLE_B}
+    assert _run(tmp_path, issue, []) == []
+    calls = _run(tmp_path, issue, [_issue(10, FP_A, FP_S)])
+    assert [c[:2] for c in calls] == [["comment", 12], ["label", 12], ["update", 12], ["react", 10]]
+    assert calls[1] == ["label", 12, ["duplicate"]]
 
 
 # --- section fingerprint: flag, never close ----------------------------------
@@ -280,6 +459,14 @@ def test_runs_for_one_issue_never_overlap_and_a_pending_one_may_be_replaced():
     }
 
 
+def test_the_job_runs_for_a_health_check_label_or_title():
+    # An issue filed by a reporter without push access carries no label, only the title the health check writes.
+    assert _workflow()["jobs"]["dedup"]["if"] == (
+        "contains(github.event.issue.labels.*.name, 'health-check') "
+        "|| startsWith(github.event.issue.title, '[health-check]')"
+    )
+
+
 def test_the_github_script_pin_is_kept():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert f"uses: {GITHUB_SCRIPT_PIN}" in text
@@ -291,6 +478,14 @@ def test_the_header_says_a_section_match_is_flagged_and_never_closed():
     assert "adds the `possible-duplicate` label" in flowed
     assert "It closes nothing on that match" in flowed
     assert "numbered below this one" in flowed
+
+
+def test_the_header_says_an_unlabeled_report_is_labeled_from_its_title_or_body():
+    header = WORKFLOW.read_text(encoding="utf-8").split('"on":', 1)[0]
+    flowed = " ".join(re.sub(r"^#\s?", "", header, flags=re.MULTILINE).split())
+    assert "or whose title starts with `[health-check]`" in flowed
+    assert "`[health-check][{severity}][{fp}] ...`, or else from the body's `## Fingerprint` and `## Severity`" in flowed
+    assert "never from a `Section fingerprint:` line or the template's `fp-XXXXXXX` placeholder" in flowed
 
 
 # --- the body the health check files -------------------------------------------

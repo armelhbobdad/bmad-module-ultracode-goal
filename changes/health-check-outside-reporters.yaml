@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  A health-check report from someone without push access to the health-check repository is now filed and deduped. Such a reporter can neither create the new `fp-*` label nor set any label, so `gh issue create --label` failed on the missing label and the first report of every defect only ever went to the local queue, and where the label existed GitHub dropped the labels, so the dedup Action skipped the issue. The health check now runs a failed `gh issue create` once more without `--label`, and records the issue as `created` when that succeeds. The dedup Action now also runs for an issue whose title starts with `[health-check]`, and labels an issue that has no `fp-*` label from its title, or else from its body's Fingerprint and Severity sections, before it dedups it. The commands printed for a queued finding now say to drop `gh label create` and `--label` without push access.
+issues: [227]
