@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  The attended health-check gate now shows each finding's issue title and its full body before you answer. Every finding is fingerprinted and its body drafted to `hc-body-<fingerprint>.md` in the run folder first, in headless runs too, and every route uses that draft unchanged: `[Y]` and `[A]` post it, `[Q]` and every failure queue it, and `[E]` edits it. After approval the draft changes only when the defect turns out to be a regression of a fixed one (an opening line links the fix, and the title gains `REGRESSION: `) or when you file anyway at an open issue with the same fingerprint (a more specific defect key rewrites the fingerprint); a comment you choose to add to a matching issue is shown to you before it is posted. `[Y]` now submits the `bug` findings and keeps the `friction` and `gap` ones local, and the new `[A]` submits every finding, so the second question about friction and gap findings that followed `[Y]` is gone. The drafts also stay in the run folder when the gate is never answered.
+issues: [226]

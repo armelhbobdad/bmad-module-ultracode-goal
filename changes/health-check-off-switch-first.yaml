@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  With `health_check_repo` set to an empty value, an attended run no longer announces the health check before skipping it: the off switch is now checked first, and the one-line heads-up follows only when the check runs. A headless run no longer logs a line that it skipped that heads-up.
+issues: [226]

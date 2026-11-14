@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  A health-check finding that stays local is now written by `health_check_fp.py queue`, into the configured `health_check_queue_path` (created when missing), under a name taken from the UTC time that never overwrites another file. The queue file is now the finding's issue body exactly as it was drafted, with no YAML frontmatter: the printed `gh issue create --body-file` command used to post that frontmatter into the public issue, where GitHub rendered it as one large heading.
+issues: [226]

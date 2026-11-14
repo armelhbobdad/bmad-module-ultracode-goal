@@ -1,0 +1,4 @@
+type: docs
+summary: |
+  The Health Check page's command for recording a finding you submitted by hand now names your configured `health_check_seen_cache` instead of the default path, so a record made with an overridden seen-cache lands in the file the next run reads.
+issues: [226]
