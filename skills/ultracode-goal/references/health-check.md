@@ -1,6 +1,6 @@
 # Health Check: Workflow Self-Improvement
 
-Reflect on the ultracode-goal run that just completed and capture the friction, bugs and gaps you hit in this module's workflow instructions (not the user's code) as structured findings, for its maintainers to fix.
+Reflect on the ultracode-goal run that just completed and capture the friction, bugs and gaps you hit in this module's workflow instructions (not the user's code) as structured findings, for its maintainers to fix. A direct run, the one an operator asks for against a run folder, reports from the `friction:` entries of that folder's `.decision-log.md` alone (§2), since nothing of that run is in context, and routes by its run mode like any run (§4).
 
 ## Anti-fabrication rules
 
@@ -17,13 +17,13 @@ If `{workflow.health_check_repo}` is empty, the check is off: append `health-che
 
 ## 2. Find the findings
 
-First read the `friction:` entries no health check has reported yet: search `.decision-log.md` with the Grep tool, with line numbers, for the regex `^\s*([-*]\s+)?(friction:|health-check: (disabled|clean|discarded|done)\b)`, which finds an entry or a marker only at the start of its line (after a list bullet at most), never one quoted inside another entry. Take the `friction:` entries after the last marker (all of them when there is none). Use the Grep tool, not a shell grep: it reads a log too large to Read, and a shell grep is outside the headless allowlist. Each entry names the stage file and the section heading where an instruction was unclear, contradictory or silent on the case in hand. Drop an entry whose section heading or instruction the current stage file no longer carries: an upgrade may sit between the run that logged it and this check. Then, from the rest of the log and what is still in context, find each point where a stage instruction you were following was wrong or contradictory (`bug`), worked but left you guessing or going back and forth (`friction`), or was silent on a case you hit (`gap`). A finding's `stage` is whichever of `ingest-and-scope`, `preflight`, `define-done`, `execute`, `gate`, `finalize` was being followed when it bit. If there is none, append `health-check: clean` (§1), display "Health Check: clean run. No workflow issues to report." in an attended run, and return.
+First read the `friction:` entries no health check has reported yet: search `.decision-log.md` with the Grep tool, with line numbers, for the regex `^\s*([-*]\s+)?(friction:|health-check: (disabled|clean|discarded|done)\b)`, which finds an entry or a marker only at the start of its line (after a list bullet at most), never one quoted inside another entry. Take the `friction:` entries after the last marker (all of them when there is none). Use the Grep tool, not a shell grep: it reads a log too large to Read, and a shell grep is outside the headless allowlist. Each entry names the stage file and the section heading where an instruction was unclear, contradictory or silent on the case in hand. Drop an entry whose section heading or instruction the current stage file no longer carries: an upgrade may sit between the run that logged it and this check. Then find each point where a stage instruction you were following was wrong or contradictory (`bug`), worked but left you guessing or going back and forth (`friction`), or was silent on a case you hit (`gap`): in a direct run from those entries alone, in any other from them, the rest of the log and what is still in context. A finding's `stage` is whichever of `ingest-and-scope`, `preflight`, `define-done`, `execute`, `gate`, `finalize` was being followed when it bit. If there is none, append `health-check: clean` (§1), display "Health Check: clean run. No workflow issues to report." in an attended run, and return.
 
 ## 3. Fingerprint and draft each finding
 
 Every finding, whatever its route, gets its fingerprints and its issue body on disk before anyone reviews it: a gate left unanswered leaves the drafts in the run folder.
 
-**Name the section and the defect.** The section is the heading of the innermost section of `references/{stage}.md` whose instruction bit, copied exactly as that file writes it, numbering included. A bold run-in label (`**Foo.**`) is no heading: take the heading that encloses it. A defect in an instruction of `SKILL.md` or of a script takes the heading of the stage-file section that was running when it bit, or the file's H1 when none fits. The defect name is the thing the fix would change, in the stage reference's or the script's own words: a script by its file name, a subcommand, a function, a flag, a field, a verdict, a rule's term or a section's concept. Pick the most specific name the fix would edit, so two different defects in one section get two fingerprints while two reports of one defect that name the same thing get one. When the defect is a missing rule, there is no name to copy yet: name the case the rule should cover in two to four of the stage reference's own words, the noun the rule would be about, then what makes the case distinct (a missing rule for a story whose acceptance criteria moved, in a section whose rule covers a re-gated story, is `story moved criteria`). Never use a path, a line number, a severity or words from this run's own story: whoever reports the same defect next must reach the same name from the source alone. Never use the section's own subject alone either: every defect in the section shares it.
+**Name the section and the defect.** The section is the heading of the innermost section of `references/{stage}.md` whose instruction bit, copied exactly as that file writes it, numbering included. A bold run-in label (`**Foo.**`) is no heading: take the heading that encloses it. A defect in an instruction of `SKILL.md` or of a script takes the heading of the stage-file section that was running when it bit, or the file's H1 when none fits; one that bit before any stage file was running (On Activation, the resume routing) takes the stage `ingest-and-scope` and that file's H1. The defect name is the thing the fix would change, in the stage reference's or the script's own words: a script by its file name, a subcommand, a function, a flag, a field, a verdict, a rule's term or a section's concept. Pick the most specific name the fix would edit, so two different defects in one section get two fingerprints while two reports of one defect that name the same thing get one. When the defect is a missing rule, there is no name to copy yet: name the case the rule should cover in two to four of the stage reference's own words, the noun the rule would be about, then what makes the case distinct (a missing rule for a story whose acceptance criteria moved, in a section whose rule covers a re-gated story, is `story moved criteria`). Never use a path, a line number, a severity or words from this run's own story: whoever reports the same defect next must reach the same name from the source alone. Never use the section's own subject alone either: every defect in the section shares it.
 
 **Compute the fingerprints and the title with the script.** Give the finding a one-line short description of the defect for its issue title. Write the two names and the description with the Write tool to `hc-name-{n}.json` in this run's folder (beside `.decision-log.md`), `{n}` being the finding's number, as the JSON object `{"section_heading": "<the heading>", "defect_name": "<the name>", "short_description": "<the description>"}` with each value JSON-escaped, so no quote in a name meets the shell. Then run, `<run folder>` being that folder's full path:
 
@@ -103,10 +103,11 @@ For each finding routed to live-submit:
 **1. Check the seen-cache via the script:**
 
 ```
-uv run {skill-root}/scripts/health_check_fp.py seen --fp {fp} --legacy-fp {legacy_fp} --cache "{workflow.health_check_seen_cache}"
+uv run {skill-root}/scripts/health_check_fp.py seen --fp {fp} --legacy-fp {legacy_fp} \
+  --cache "{workflow.health_check_seen_cache}" --repo "{workflow.health_check_repo}"
 ```
 
-→ `{"seen", "status", "record", "matched_on", "opening_line"}`. Where the record names an issue, the script reads that issue's state itself: never run that check yourself, and never put a recorded URL into a shell command. If the call fails or prints no JSON, treat it as `unseen`. Act on `status`:
+→ `{"seen", "status", "record", "matched_on", "opening_line"}`. Where the record names an issue, the script reads that issue's state itself: never run that check yourself, and never put a recorded URL into a shell command. If the call fails or prints no JSON, log its error and treat it as `unseen`. Act on `status`:
 
 - `handled`, the only verdict that suppresses: skip the finding and log `"{fp}: already handled on {record.date}, {record.issue_url}, skipping"`.
 - `unseen` or `unrecognized`: report it as a first sighting. When `matched_on` is `legacy_fp`, log `"{fp}: legacy record {legacy_fp} may be another defect, reporting"`.
@@ -165,14 +166,14 @@ If the reaction or the comment call exits non-zero, log its error and make no fu
 
 **5a-ii. If no matching open issue exists** (or the user chose **[N]**), create one.
 
-**First, create the `{fp}` label.** It is per-fingerprint, so the first reporter of any defect creates a brand-new label when they have push access to {workflow.health_check_repo}, and `gh issue create --label {fp}` hard-fails if the label is missing:
+**First, create the `{fp}` label**, which `--label {fp}` needs:
 
 ```
 gh label create --repo {workflow.health_check_repo} "{fp}" --color "ededed" \
   --description "Health-check fingerprint dedup key"
 ```
 
-If it exits non-zero (the label exists already, or you have no push access), that is no error: go on to the create. The other labels (`health-check`, `workflow-improvement`, `bug`/`friction`/`gap`) are pre-created repo labels.
+If it exits non-zero (the label exists already, or you have no push access), that is no error: go on to the create.
 
 **Then create the issue** from the finding's draft:
 
@@ -185,11 +186,11 @@ gh issue create --repo {workflow.health_check_repo} \
 
 After a `regression` verdict, `{regression_title}` takes the place of `{title}` (§5a step 1).
 
-**If `gh issue create` exits non-zero, run it once more without the `--label` line**, with the same title and body file. A reporter without push access to {workflow.health_check_repo} can neither create the label nor set any label: the first run fails on the missing `{fp}` label. The dedup Action applies the labels from the title, so an issue filed without them is deduped like any other.
+**If `gh issue create` exits non-zero, run it once more without the `--label` line**, with the same title and body file: a reporter without push access can set no label, and the dedup Action labels the issue from its title.
 
 After the issue is created, by the first run or the retry, record it (§5b) so this user does not re-report it while that issue stays open. If `gh issue create` fails on its retry too, log its error and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
 
-After creating all issues, show "{N} issue(s) created on {workflow.health_check_repo}:" then each URL, then "Workflow complete." unless a finding of this run went to the local queue, whose §5c block ends with it: display these lines in an attended run, and log them in an unattended one.
+After creating all issues, keep for §6 the line "{N} issue(s) created on {workflow.health_check_repo}:" and each URL.
 
 ### 5b. Record the outcome
 
@@ -212,13 +213,13 @@ Write each such finding into `{workflow.health_check_queue_path}` with the scrip
 
 ```
 uv run {skill-root}/scripts/health_check_fp.py queue --queue-dir "{workflow.health_check_queue_path}" \
-  --stage {stage} --body-file "<run folder>/hc-body-{fp}.md" \
+  --body-file "<run folder>/hc-body-{fp}.md" \
   --title "{title}" --repo "{workflow.health_check_repo}"
 ```
 
-→ `{"path", "commands"}`: the file it wrote, and the three commands that submit it, each on one line with every argument quoted: the `gh label create` and the `gh issue create` to run in that order, and the `gh issue create` without labels for a reporter without push access. If the call fails or prints no JSON, log its error and list the draft itself in that file's place (it holds the same text), followed, in place of commands, by "Submit it as <https://armelhbobdad.github.io/bmad-module-ultracode-goal/health-check/#submitting-a-queued-finding-manually> says."
+→ `{"path", "commands"}`: the file it wrote and the three commands that submit it. If the call fails or prints no JSON, log its error and list the draft itself in that file's place (it holds the same text), followed, in place of commands, by "Submit it as <https://armelhbobdad.github.io/bmad-module-ultracode-goal/health-check/#submitting-a-queued-finding-manually> says."
 
-After writing the files, display this block, once per reason when findings stayed local for more than one, each block listing its own files:
+After writing the files, keep for §6 this block, once per reason when findings stayed local for more than one, each block listing its own files:
 
 "{N} finding(s) saved locally:" then each path, each followed by its three `commands`, exactly as printed.
 
@@ -226,10 +227,6 @@ then:
 
 "{reason sentence} Run a finding's first two commands to submit it as an issue (the first fails, harmlessly, when its label exists), or open one at <https://github.com/{workflow.health_check_repo}/issues/new/choose>. Without push access to {workflow.health_check_repo}, run its third command alone instead: you can neither create a label nor set one, and the dedup Action labels the issue from its title."
 
-Then display "Workflow complete." once, after the last block.
-
-In an unattended run, display nothing and wait for nothing: log the same lines.
-
 ## 6. Close
 
-Once every finding is routed, or none survived §3, append the one line `health-check: done, <n> filed, <n> upvoted, <n> queued, <n> already handled, <n> dropped` (§1), each count being the findings that took that route (an issue created; **R** or **C**; the local queue; a `handled` verdict; dropped in §3), and return.
+Once every finding is routed, or none survived §3, append the one line `health-check: done, <n> filed, <n> upvoted, <n> queued, <n> already handled, <n> dropped` (§1), each count being the findings that took that route (an issue created; **R** or **C**; the local queue; a `handled` verdict; dropped in §3). Only then show the lines §5a-ii and §5c kept, in that order, followed by "Workflow complete.": display them in an attended run; in an unattended one, display nothing and wait for nothing, and log the kept lines alone. Then return.

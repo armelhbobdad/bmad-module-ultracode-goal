@@ -1,0 +1,4 @@
+type: docs
+summary: |
+  The `health_check_repo` comment in `customize.toml` and the Health Check page now say what a repository you send findings to needs: the labels `health-check`, `workflow-improvement`, `bug`, `friction`, `gap`, `duplicate` and `possible-duplicate`, and copies of the issue template `.github/ISSUE_TEMPLATE/workflow-health-check.md` and the dedup Action `.github/workflows/health-check-dedup.yaml`. Without the labels the first create fails and the retry files the issue unlabeled; without the Action nothing labels it or closes a duplicate. They also say that a repository on a host other than github.com is given as `HOST/OWNER/REPO`, and that a project which files to another repository must set its own `health_check_seen_cache`: the cache keys each record by fingerprint alone, so two projects that share it and file to different repositories would block or overwrite each other's records.
+issues: [226]

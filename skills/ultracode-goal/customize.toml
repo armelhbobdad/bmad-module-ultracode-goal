@@ -63,11 +63,24 @@ on_escalation = ""
 # separate enabled toggle. (assets/module.yaml carries a test-pinned mirror of
 # this default for BMad-core readers of module.yaml; this file is what the live
 # run reads.)
+# A repository on a host other than github.com is given as HOST/OWNER/REPO.
+# To send findings to another repository, create these labels there:
+# health-check, workflow-improvement, bug, friction, gap, duplicate and
+# possible-duplicate, and copy two files into it unchanged: the issue template,
+# https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/.github/ISSUE_TEMPLATE/workflow-health-check.md
+# and the dedup Action, which reads its repository from the run,
+# https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/.github/workflows/health-check-dedup.yaml
+# Without the labels the first create fails and the retry files the issue
+# unlabeled; without the Action nothing labels it or closes a duplicate.
+# Such a project must also set its own health_check_seen_cache: the cache keys
+# each record by fingerprint alone, so two projects filing to different
+# repositories would block or overwrite each other's records. The check only
+# keeps another repository's record from suppressing or linking a finding.
 health_check_repo = "armelhbobdad/bmad-module-ultracode-goal"
 # Deliberately a home-relative `~` path (expanduser semantics, unlike the
 # {project-root} brace tokens above): the seen-cache is machine-global because
-# dedup must span projects: the same defect met in two repos is still one
-# report. Use `~`, not `$HOME`: health_check_fp.py normalises the path with
+# dedup must span the projects that file to one repository: the same defect
+# met in two of them is still one report. Use `~`, not `$HOME`: health_check_fp.py normalises the path with
 # Path.expanduser() only, so a literal `$HOME` survives unexpanded whenever the
 # shell does not expand it first and silently writes a `$HOME/` directory under
 # the current project, making the dedup per-cwd instead of machine-global.

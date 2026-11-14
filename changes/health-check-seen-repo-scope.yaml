@@ -1,0 +1,5 @@
+type: added
+scope: ultracode-goal
+summary: |
+  `health_check_fp.py seen` takes an optional `--repo [HOST/]OWNER/REPO`, and the health check passes it the configured `health_check_repo`. A seen-cache record whose issue URL is not under that repository then counts as no record, under the fingerprint and the section fingerprint alike: it no longer suppresses a finding as `handled` or opens its body with a "Regression of" line linking another tracker's issue, and `gh` is not asked about that issue. When the record under the fingerprint is another repository's, a record of this repository under the section fingerprint can still decide. A record with no issue URL counts as before, and `seen` without `--repo` reads every record as before; a `--repo` that is not `[HOST/]OWNER/REPO` exits `1`, and the health check logs that error. A project that files to another repository still needs its own `health_check_seen_cache`, since the cache keys each record by fingerprint alone.
+issues: [226]

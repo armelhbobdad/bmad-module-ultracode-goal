@@ -37,7 +37,10 @@ Subcommands:
       that object's `defect_name`, never both. Without --stdin both flags are
       required (an argparse usage error, exit 2); with it, a pair given twice
       or not at all, a key other than those two and `short_description`, or
-      a value that is not a non-empty string exits 1.
+      a value that is not a non-empty string exits 1. The two flags stay for
+      tests and old calls: --section-slug skips the check that the heading is
+      one of the stage file's own, and without --stdin the flags print a null
+      title, regression_title and body_header.
         section_heading: must equal, after its leading `#`s, the text of an
           ATX heading line of references/{T}.md beside this script (outside
           fenced code and the frontmatter). Its slug: drop the leading `#`s and
@@ -71,12 +74,20 @@ Subcommands:
           "Section fingerprint: `legacy_fp`") and `## Defect Key` sections,
           each value in backticks, ending in a newline.
       The JSON is printed in UTF-8, a non-ASCII character as itself.
-  seen --fp FP --legacy-fp FP --cache PATH
-      Validate both fingerprints. Emit {"seen": B, "status": S, "record": R,
-      "matched_on": M, "opening_line": L}. The record under --fp decides;
-      only when the cache has no --fp key does the record under --legacy-fp
-      decide (M is "fp", "legacy_fp", or null when neither is there). On the
-      record found, the first branch that matches gives the status:
+  seen --fp FP --legacy-fp FP --cache PATH [--repo REPO]
+      Validate both fingerprints, and REPO as [HOST/]OWNER/REPO (exit 1).
+      Emit {"seen": B, "status": S, "record": R, "matched_on": M,
+      "opening_line": L}. With --repo, a record with an empty or no
+      issue_url, or that is not an object, names no repository and counts as
+      without --repo; any other record whose issue_url is not a string under
+      https://github.com/OWNER/REPO/ (https://HOST/OWNER/REPO/ for a REPO that
+      names a host), compared in any letter case, counts as no record, under
+      either fingerprint: another repository's issue, a URL that is not
+      https:// or one that is not a string alike. The record under --fp
+      decides; only when the cache has no --fp key does the record under
+      --legacy-fp decide (M is "fp", "legacy_fp", or null when neither is
+      there). On the record found, the first branch that matches gives the
+      status:
         1. no record under either fingerprint: unseen
         2. action `resolved`: regression
         3. action created, reacted or commented with an issue_url: the
@@ -147,14 +158,14 @@ Subcommands:
         3. <project-root>/.claude-plugin/marketplace.json    JSON plugins[0].version
                                                             -> "marketplace.json"
         4. <project-root>/package.json         JSON version  -> "package.json"
-  queue --queue-dir DIR --stage T --body-file F --title TITLE --repo REPO
-      Validate T against the 6 stages and read F (a missing or unreadable F
-      exits 1 and creates nothing). F opens with the body_header `fingerprint`
-      prints (after a UTF-8 BOM and at most one opening line and a blank line,
-      its line endings LF or CRLF), from which the stage, the severity S and
-      the fingerprint FP are read. Each of these exits 1 and creates nothing:
-      F opening with no such header; a header whose stage is not T; a TITLE
-      that does not start with `[health-check][S][FP] ultracode-goal/T: `
+  queue --queue-dir DIR --body-file F --title TITLE --repo REPO
+      Read F (a missing or unreadable F exits 1 and creates nothing). F
+      opens with the body_header `fingerprint` prints (after a UTF-8 BOM and
+      at most one opening line and a blank line, its line endings LF or
+      CRLF), from which the stage T, the severity S and the fingerprint FP
+      are read. Each of these exits 1 and creates nothing: F opening with no
+      such header; a TITLE that does not start with
+      `[health-check][S][FP] ultracode-goal/T: `
       (the title `fingerprint` printed for another finding), is longer than
       TITLE_MAX or holds a character `fingerprint` refuses in a description;
       a REPO that is not [HOST/]OWNER/REPO. Create DIR when absent and write
@@ -312,6 +323,13 @@ class _LockBusy(Exception):
 def _fail(message: str) -> int:
     print(json.dumps({"error": message}))
     return 1
+
+
+def _repo_error(repo: str) -> str | None:
+    """The rule a --repo value breaks, or None: gh takes [HOST/]OWNER/REPO."""
+    if REPO_RE.fullmatch(repo):
+        return None
+    return "invalid repo %r; expected [HOST/]OWNER/REPO" % repo
 
 
 def _sha7(text: str) -> str:
@@ -735,13 +753,42 @@ def _verdict(record) -> tuple[str, str | None]:
     return "unrecognized", None
 
 
+def _issue_prefix(repo: str) -> str:
+    """The start of every issue URL of repo: github.com's, or the host's when repo names one."""
+    return f"{URL_PREFIX}{repo}/" if repo.count("/") == 2 else f"{URL_PREFIX}github.com/{repo}/"
+
+
+def _in_repo(record, repo: str | None) -> bool:
+    """Whether record may decide a verdict for repo.
+
+    A record that is not an object, or whose issue_url is empty or missing, names no repository, so it decides as it
+    always did. Any other issue_url must be a string under repo's issue prefix: another repository's record, or one
+    whose URL is not https:// or not a string, neither suppresses this one's finding nor gives its body a line
+    linking that issue.
+    """
+    if repo is None or not isinstance(record, dict):
+        return True
+    url = record.get("issue_url")
+    if url is None or url == "":
+        return True
+    return isinstance(url, str) and url.lower().startswith(_issue_prefix(repo).lower())
+
+
 def cmd_seen(args: argparse.Namespace) -> int:
     if not FP_RE.fullmatch(args.fp):
         return _fail("invalid fp %r; expected ^fp-[0-9a-f]{7}$" % args.fp)
     if not FP_RE.fullmatch(args.legacy_fp):
         return _fail("invalid legacy-fp %r; expected ^fp-[0-9a-f]{7}$" % args.legacy_fp)
+    if args.repo is not None:
+        problem = _repo_error(args.repo)
+        if problem:
+            return _fail(problem)
 
-    data = _load_cache(Path(args.cache).expanduser())
+    loaded = _load_cache(Path(args.cache).expanduser())
+    # A record of another repository's issue counts as no record, before anything reads it (gh included).
+    data = {
+        key: loaded[key] for key in (args.fp, args.legacy_fp) if key in loaded and _in_repo(loaded[key], args.repo)
+    }
     fixed = None
     if args.fp in data:
         record = data[args.fp]
@@ -1130,10 +1177,6 @@ def submit_commands(repo: str, title: str, severity: str, fp: str, path: str) ->
 
 
 def cmd_queue(args: argparse.Namespace) -> int:
-    if args.stage not in STAGES:
-        return _fail(
-            "invalid stage %r; expected one of %s" % (args.stage, ", ".join(STAGES))
-        )
     body_file = Path(args.body_file).expanduser()
     try:
         body = body_file.read_bytes()
@@ -1146,8 +1189,6 @@ def cmd_queue(args: argparse.Namespace) -> int:
             % body_file
         )
     stage, severity, fp = keys
-    if stage != args.stage:
-        return _fail("--stage %r is not this draft's: its body_header gives %r" % (args.stage, stage))
     prefix = f"[health-check][{severity}][{fp}] ultracode-goal/{stage}: "
     if not args.title.startswith(prefix):
         return _fail(
@@ -1161,8 +1202,9 @@ def cmd_queue(args: argparse.Namespace) -> int:
             "title %r holds a backtick, `$`, double quote, backslash, `!` or a character that is not printable "
             "(a tab or a line break included)" % args.title
         )
-    if not REPO_RE.fullmatch(args.repo):
-        return _fail("invalid repo %r; expected [HOST/]OWNER/REPO" % args.repo)
+    problem = _repo_error(args.repo)
+    if problem:
+        return _fail(problem)
 
     queue_dir = Path(args.queue_dir).expanduser()
     try:
@@ -1170,7 +1212,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
     except OSError as exc:
         return _fail("could not create %s: %s" % (queue_dir, exc))
     try:
-        fd, target = _create_new(queue_dir, f"hc-ultracode-goal-{args.stage}-{_queue_stamp()}")
+        fd, target = _create_new(queue_dir, f"hc-ultracode-goal-{stage}-{_queue_stamp()}")
     except OSError as exc:
         return _fail("could not create a queue file in %s: %s" % (queue_dir, exc))
     try:
@@ -1201,11 +1243,18 @@ def main(argv: list[str] | None = None) -> int:
     fp_parser = sub.add_parser("fingerprint", help="Compute the dedup fingerprints.")
     fp_parser.add_argument("--severity", required=True)
     fp_parser.add_argument("--stage", required=True)
-    fp_parser.add_argument("--section-slug", dest="section_slug", help="The section's kebab-case slug.")
+    fp_parser.add_argument(
+        "--section-slug",
+        dest="section_slug",
+        help="The section's kebab-case slug, in place of a --stdin section_heading: it skips the check that the "
+        "heading is one of the stage file's own. Without --stdin, title, regression_title and body_header print "
+        "null.",
+    )
     fp_parser.add_argument(
         "--defect-key",
         dest="defect_key",
-        help="One to four kebab-case words naming the thing the fix would change.",
+        help="One to four kebab-case words naming the thing the fix would change, in place of a --stdin "
+        "defect_name. Without --stdin, title, regression_title and body_header print null.",
     )
     fp_parser.add_argument(
         "--stdin",
@@ -1220,6 +1269,11 @@ def main(argv: list[str] | None = None) -> int:
     seen_parser.add_argument("--fp", required=True)
     seen_parser.add_argument("--legacy-fp", required=True, dest="legacy_fp")
     seen_parser.add_argument("--cache", required=True)
+    seen_parser.add_argument(
+        "--repo",
+        help="The repository findings are filed on, [HOST/]OWNER/REPO: a record of an issue on another one counts "
+        "as no record.",
+    )
     seen_parser.set_defaults(func=cmd_seen)
 
     rec_parser = sub.add_parser("record", help="Record a fingerprint outcome to the cache.")
@@ -1245,8 +1299,10 @@ def main(argv: list[str] | None = None) -> int:
         "queue", help="Write a drafted body into the local queue and print the commands that submit it."
     )
     queue_parser.add_argument("--queue-dir", required=True, dest="queue_dir")
-    queue_parser.add_argument("--stage", required=True)
-    queue_parser.add_argument("--body-file", required=True, dest="body_file")
+    queue_parser.add_argument(
+        "--body-file", required=True, dest="body_file",
+        help="The draft, opening with the body_header `fingerprint` printed: the queue file is named after its stage.",
+    )
     queue_parser.add_argument("--title", required=True, help="The issue title `fingerprint` printed for the draft.")
     queue_parser.add_argument("--repo", required=True, help="The repository the commands file the issue on.")
     queue_parser.set_defaults(func=cmd_queue)

@@ -134,8 +134,9 @@ def _live(action: str = "created", url: str | None = URL) -> dict:
 
 
 def _seen(cache: Path, fp: str = FP, legacy: str = LEGACY, env: dict | None = None,
-          cwd: Path | None = None) -> dict:
-    proc = _run("seen", "--fp", fp, "--legacy-fp", legacy, "--cache", str(cache), env=env, cwd=cwd)
+          cwd: Path | None = None, repo: str | None = None) -> dict:
+    scope = () if repo is None else (f"--repo={repo}",)
+    proc = _run("seen", "--fp", fp, "--legacy-fp", legacy, "--cache", str(cache), *scope, env=env, cwd=cwd)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     return json.loads(proc.stdout)
 
@@ -546,10 +547,9 @@ def _draft(path: Path, finding: dict, rest: bytes = b"\n## Finding\nOne sentence
     return path
 
 
-def _queue(mod, capsys, queue_dir: Path, body: Path, title: str, stage: str = "gate",
-           repo: str = "o/r") -> tuple[int, dict]:
+def _queue(mod, capsys, queue_dir: Path, body: Path, title: str, repo: str = "o/r") -> tuple[int, dict]:
     # The `=` forms, so a value that starts with a dash reaches the script's own check.
-    return _main(mod, capsys, "queue", "--queue-dir", str(queue_dir), "--stage", stage, "--body-file", str(body),
+    return _main(mod, capsys, "queue", "--queue-dir", str(queue_dir), "--body-file", str(body),
                  f"--title={title}", f"--repo={repo}")
 
 
@@ -578,7 +578,7 @@ def test_a_file_already_there_is_never_overwritten(tmp_path, mod, monkeypatch, c
     (tmp_path / "hc-ultracode-goal-execute-20261114-093012.md").write_text("earlier", encoding="utf-8")
     finding = _finding(stage="execute")
     body = _draft(tmp_path / "body.md", finding)
-    code, result = _queue(mod, capsys, tmp_path, body, finding["title"], stage="execute")
+    code, result = _queue(mod, capsys, tmp_path, body, finding["title"])
     assert code == 0
     assert Path(result["path"]).name == "hc-ultracode-goal-execute-20261114-093012-2.md"
     assert (tmp_path / "hc-ultracode-goal-execute-20261114-093012.md").read_text(encoding="utf-8") == "earlier"
@@ -603,7 +603,7 @@ def test_the_queue_name_is_the_utc_time(tmp_path, mod, monkeypatch):
     monkeypatch.undo()
     finding = _finding(stage="preflight")
     body = _draft(tmp_path / "body.md", finding)
-    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--stage", "preflight", "--body-file", str(body),
+    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--body-file", str(body),
                 "--title", finding["title"], "--repo", "o/r")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert re.fullmatch(r"hc-ultracode-goal-preflight-[0-9]{8}-[0-9]{6}\.md", Path(json.loads(proc.stdout)["path"]).name)
@@ -626,26 +626,34 @@ def test_a_failed_write_leaves_no_partial_queue_file(tmp_path, mod, monkeypatch,
 
 
 def test_a_missing_body_file_exits_one_and_creates_nothing(tmp_path):
-    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--stage", "gate", "--body-file", str(tmp_path / "nope.md"),
+    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--body-file", str(tmp_path / "nope.md"),
                 "--title", _finding()["title"], "--repo", "o/r")
     assert proc.returncode == 1
     assert "body file" in json.loads(proc.stdout)["error"]
     assert not (tmp_path / "q").exists()
 
 
-def test_queue_refuses_a_stage_outside_its_set(tmp_path):
+def test_queue_takes_no_stage_argument(tmp_path):
+    """The draft's header gives the stage, and the title check proves it, so --stage could only fail (leanness-4)."""
     finding = _finding()
     body = _draft(tmp_path / "body.md", finding)
-    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--stage", "health-check", "--body-file", str(body),
+    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--stage", "gate", "--body-file", str(body),
                 "--title", finding["title"], "--repo", "o/r")
-    assert proc.returncode == 1
-    assert "invalid stage" in json.loads(proc.stdout)["error"]
+    assert proc.returncode == 2 and "--stage" in proc.stderr
     assert not (tmp_path / "q").exists()
 
 
-def test_queue_needs_all_five_arguments(tmp_path):
-    full = {"--queue-dir": str(tmp_path), "--stage": "gate", "--body-file": str(tmp_path / "b.md"), "--title": "t",
-            "--repo": "o/r"}
+@pytest.mark.parametrize("stage", ["gate", "ingest-and-scope", "finalize"])
+def test_the_queue_file_is_named_after_the_drafts_own_stage(tmp_path, mod, monkeypatch, capsys, stage):
+    monkeypatch.setattr(mod, "_queue_stamp", lambda: "20261114-093012")
+    finding = _finding(stage=stage)
+    code, result = _queue(mod, capsys, tmp_path / "q", _draft(tmp_path / "hc-body.md", finding), finding["title"])
+    assert code == 0, result
+    assert Path(result["path"]).name == f"hc-ultracode-goal-{stage}-20261114-093012.md"
+
+
+def test_queue_needs_all_four_arguments(tmp_path):
+    full = {"--queue-dir": str(tmp_path), "--body-file": str(tmp_path / "b.md"), "--title": "t", "--repo": "o/r"}
     for missing in full:
         argv = [arg for flag, value in full.items() if flag != missing for arg in (flag, value)]
         assert _run("queue", *argv).returncode == 2, missing
@@ -692,7 +700,7 @@ def test_queue_reads_the_severity_and_fp_from_a_regression_draft_with_crlf(tmp_p
     body = tmp_path / "hc-body.md"
     body.write_bytes(("\ufeff" + opened + "\n## Finding\nx\n").replace("\n", "\r\n").encode("utf-8"))
     repo = "ghe.example.com/team/internal-repo"
-    code, result = _queue(mod, capsys, tmp_path / "q", body, finding["regression_title"], stage="execute", repo=repo)
+    code, result = _queue(mod, capsys, tmp_path / "q", body, finding["regression_title"], repo=repo)
     assert code == 0, result
     assert [shlex.split(c) for c in result["commands"]] == _expected_commands(
         finding, severity, repo, finding["regression_title"], result["path"])
@@ -714,7 +722,7 @@ def test_queue_prints_a_non_ascii_title_as_itself_in_utf8(tmp_path):
     finding = _finding("bug", "gate", "naïve défaut")
     body = _draft(tmp_path / "hc-body.md", finding)
     proc = subprocess.run(
-        [sys.executable, str(SCRIPT), "queue", "--queue-dir", str(tmp_path / "q"), "--stage", "gate",
+        [sys.executable, str(SCRIPT), "queue", "--queue-dir", str(tmp_path / "q"),
          "--body-file", str(body), "--title", finding["title"], "--repo", "o/r"],
         capture_output=True, env=_env(PYTHONIOENCODING="latin-1"), timeout=120,
     )
@@ -784,15 +792,6 @@ def test_a_title_that_is_not_the_drafts_exits_one_and_writes_no_file(tmp_path, m
     assert code == 1
     assert "is not this draft's" in result["error"]
     assert f"[health-check][bug][{finding['fp']}] ultracode-goal/gate: " in result["error"]
-    assert not (tmp_path / "q").exists()
-
-
-def test_a_stage_that_is_not_the_drafts_exits_one_and_writes_no_file(tmp_path, mod, capsys):
-    finding = _finding("bug", "gate")
-    code, result = _queue(mod, capsys, tmp_path / "q", _draft(tmp_path / "hc-body.md", finding), finding["title"],
-                          stage="execute")
-    assert code == 1
-    assert "--stage 'execute' is not this draft's" in result["error"]
     assert not (tmp_path / "q").exists()
 
 
@@ -1161,6 +1160,90 @@ def test_a_gh_planted_in_the_current_folder_never_runs(tmp_path, path_form):
     payload = _seen(cache, env=env, cwd=project)
     assert payload["status"] == "handled"
     assert not log.exists(), "the gh in the current folder ran"
+
+
+# --- seen: the repository scope -----------------------------------------------------
+# The cache serves every project on the machine, and a project may file to another repository (customization-1).
+
+ABSENT = {"seen": False, "status": "unseen", "record": None, "matched_on": None, "opening_line": None}
+OTHER_URL = "https://github.com/other/repo/issues/3"
+
+
+@needs_posix
+@pytest.mark.parametrize("under", [FP, LEGACY])
+@pytest.mark.parametrize("record", [_live("created", OTHER_URL), _live("commented", OTHER_URL),
+                                    {"action": "resolved", "issue_url": OTHER_URL, "date": "2026-07-19"}],
+                         ids=["created", "commented", "resolved"])
+def test_a_record_of_another_repositorys_issue_counts_as_none(tmp_path, fake_gh, under, record):
+    """Neither suppressed by another tracker's record nor linked to its issue, and gh is never asked about it."""
+    cache = _write_cache(tmp_path / "seen.json", {under: record})
+    assert _seen(cache, env=_gh_env(fake_gh, _answer("CLOSED", "COMPLETED")), repo="me/repo") == ABSENT
+    assert _gh_calls(fake_gh[1]) == []
+
+
+@needs_posix
+@pytest.mark.parametrize(
+    "mode, status, opening",
+    [(_answer("OPEN"), "handled", None),
+     (_answer("CLOSED", "COMPLETED"), "regression", "Regression of {url}, closed as completed since its report on "
+                                                    "2026-10-01.")],
+    ids=["open", "completed"],
+)
+@pytest.mark.parametrize("repo", ["me/repo", "Me/Repo"], ids=["same-case", "other-case"])
+def test_a_record_of_the_repositorys_own_issue_decides_as_before(tmp_path, fake_gh, mode, status, opening, repo):
+    url = "https://github.com/me/repo/issues/7"
+    cache = _write_cache(tmp_path / "seen.json", {FP: _live("created", url)})
+    payload = _seen(cache, env=_gh_env(fake_gh, mode), repo=repo)
+    assert payload == {"seen": status == "handled", "status": status, "record": _live("created", url),
+                       "matched_on": "fp", "opening_line": opening and opening.format(url=url)}
+    assert _gh_calls(fake_gh[1]) == [f"issue view {url} --json state,stateReason"]
+
+
+@pytest.mark.parametrize(
+    "record, status",
+    [(_live("created", ""), "handled"), (_live("reacted", None), "handled"),
+     ({"action": "resolved", "issue_url": "", "date": "2026-07-19"}, "regression"),
+     ({"action": "queued", "issue_url": "", "date": "2026-07-19"}, "unrecognized"), ("created", "unrecognized")],
+    ids=["created-empty-url", "reacted-no-url", "resolved-empty-url", "old-queued", "not-an-object"],
+)
+def test_a_record_that_names_no_repository_decides_as_without_repo(tmp_path, record, status):
+    cache = _write_cache(tmp_path / "seen.json", {FP: record})
+    assert _seen(cache, repo="me/repo") == _seen(cache)
+    assert _seen(cache, repo="me/repo")["status"] == status
+
+
+def test_without_repo_another_repositorys_record_still_decides(tmp_path):
+    cache = _write_cache(tmp_path / "seen.json", {FP: _live("created", OTHER_URL)})
+    assert _seen(cache)["status"] == "handled"
+
+
+def test_an_other_repository_record_under_fp_leaves_the_legacy_one_to_decide(tmp_path):
+    own = {"action": "resolved", "issue_url": "https://github.com/me/repo/issues/2", "date": "2026-07-19"}
+    cache = _write_cache(tmp_path / "seen.json", {FP: _live("created", OTHER_URL), LEGACY: own})
+    payload = _seen(cache, repo="me/repo")
+    assert (payload["status"], payload["record"], payload["matched_on"]) == ("possible-regression", own, "legacy_fp")
+
+
+@pytest.mark.parametrize(
+    "repo, url, counts",
+    [("me/repo", "https://github.com/me/repo-two/issues/1", False),
+     ("me/repo", "https://github.com/me/repo/pull/4", True),
+     ("me/repo", "http://github.com/me/repo/issues/1", False),
+     ("me/repo", "https://github.com/me/repo", False),
+     ("ghe.example.com/team/repo", "https://ghe.example.com/team/repo/issues/1", True),
+     ("ghe.example.com/team/repo", "https://github.com/team/repo/issues/1", False)],
+    ids=["longer-name", "pull-request", "http", "repository-page", "host-form", "host-form-on-github"],
+)
+def test_a_record_counts_only_under_the_repositorys_own_url(tmp_path, repo, url, counts):
+    cache = _write_cache(tmp_path / "seen.json", {FP: {"action": "resolved", "issue_url": url, "date": "2026-07-19"}})
+    assert _seen(cache, repo=repo)["status"] == ("regression" if counts else "unseen")
+
+
+@pytest.mark.parametrize("repo", ["", "o", "o/r/x/y", "o/r x", "-o/r", "https://github.com/o/r"])
+def test_seen_refuses_a_repo_that_is_not_owner_slash_repo(tmp_path, repo):
+    proc = _run("seen", "--fp", FP, "--legacy-fp", LEGACY, "--cache", str(tmp_path / "c.json"), f"--repo={repo}")
+    assert proc.returncode == 1
+    assert json.loads(proc.stdout) == {"error": f"invalid repo {repo!r}; expected [HOST/]OWNER/REPO"}
 
 
 HEARTBEAT = """
@@ -1635,7 +1718,8 @@ def test_the_script_not_the_prose_reads_the_issue_state():
     for status in ("`handled`, the only verdict that suppresses", "`unseen` or `unrecognized`",
                    "`regression` or `possible-regression`"):
         assert status in seen, status
-    assert "If the call fails or prints no JSON, treat it as `unseen`." in seen
+    # A failure is logged: a health_check_repo that `seen --repo` refuses would otherwise fail every call silently.
+    assert "If the call fails or prints no JSON, log its error and treat it as `unseen`." in seen
 
 
 def test_no_instruction_runs_timeout_or_puts_a_cached_url_into_a_shell_command():
@@ -1661,6 +1745,8 @@ def test_every_call_passes_the_new_arguments():
     assert '--stdin < "<run folder>/hc-name-{n}.json"' in fingerprint[0]
     assert "--section-slug" not in fingerprint[0] and "--defect-key" not in fingerprint[0]
     assert len(seen) == 1 and "--legacy-fp {legacy_fp}" in seen[0]
+    # A record of an issue on another repository counts as none (customization-1).
+    assert '--repo "{workflow.health_check_repo}"' in seen[0]
     body = _reference()
     assert ('`{"section_heading": "<the heading>", "defect_name": "<the name>", '
             '"short_description": "<the description>"}`') in body
@@ -1697,7 +1783,12 @@ def test_the_section_and_defect_naming_rule_is_stated():
     # Every finding has a heading the script accepts, and a refused one is retried once, never in a loop.
     assert "A bold run-in label (`**Foo.**`) is no heading: take the heading that encloses it." in body
     assert ("A defect in an instruction of `SKILL.md` or of a script takes the heading of the stage-file section that "
-            "was running when it bit, or the file's H1 when none fits.") in body
+            "was running when it bit, or the file's H1 when none fits; one that bit before any stage file was running "
+            "(On Activation, the resume routing) takes the stage `ingest-and-scope` and that file's H1.") in body
+    # The friction entry such a defect logs names the same file, so the check finds a heading there.
+    skill = _flow((Path(__file__).resolve().parents[2] / "SKILL.md").read_text(encoding="utf-8"))
+    assert ("An entry for a defect hit before any stage file was running (On Activation, the resume routing) names "
+            "`ingest-and-scope.md` and its H1.") in skill
     assert "when it refuses the heading, take the heading that encloses that one" in body
     assert ("Never loop: when that second call fails too, or a call prints no JSON at all (uv or Python could not "
             "run), log it, naming the finding, and drop that finding.") in body
@@ -1832,12 +1923,41 @@ def test_every_exit_appends_exactly_one_marker_line():
     assert close == (
         "## 6. Close Once every finding is routed, or none survived §3, append the one line `health-check: done, <n> "
         "filed, <n> upvoted, <n> queued, <n> already handled, <n> dropped` (§1), each count being the findings that "
-        "took that route (an issue created; **R** or **C**; the local queue; a `handled` verdict; dropped in §3), and "
+        "took that route (an issue created; **R** or **C**; the local queue; a `handled` verdict; dropped in §3). Only "
+        'then show the lines §5a-ii and §5c kept, in that order, followed by "Workflow complete.": display them in an '
+        "attended run; in an unattended one, display nothing and wait for nothing, and log the kept lines alone. Then "
         "return."
     )
     body = _flow(_reference())
     for stale in ("health-check disabled (", "clean run, no findings"):
         assert stale not in body, stale
+
+
+def test_the_done_marker_comes_before_anything_the_close_shows():
+    """A session that stops after any line the routed exits show must already hold its marker, or the next check
+    re-reports every entry this one filed or queued (architecture-2). So §5a-ii and §5c only keep their lines, and
+    §6 appends the marker before it shows or logs them, and "Workflow complete." after them."""
+    body = _flow(_reference())
+    # The closing line is shown by the [N] exit and by §6 alone, never by a route that §6 still follows.
+    assert body.count("Workflow complete.") == 2
+    created = _flow(_section("**5a-ii. If no matching open issue exists**", "### 5b."))
+    queued = _flow(_section(QUEUE, "## 6. Close"))
+    for route in (created, queued):
+        assert "Workflow complete." not in route
+        assert "keep for §6" in route
+        assert not re.search(r"\b(display|show|log) (these|this|the same) (lines|block)\b", route), route
+    assert ('After creating all issues, keep for §6 the line "{N} issue(s) created on {workflow.health_check_repo}:" '
+            "and each URL.") in created
+    assert "After writing the files, keep for §6 this block, once per reason" in queued
+    attended = _flow(_section("### 4a. Attended routing", "### 4-headless."))
+    assert attended.index("append `health-check: discarded`") < attended.index("Workflow complete.")
+    close = _flow(_section("## 6. Close"))
+    marker = close.index("append the one line `health-check: done")
+    # Nothing is shown or logged before the marker, and no "Workflow complete." follows a log instruction.
+    assert not re.search(r"\b(show|display|log)\b", close[:marker])
+    assert marker < close.index("Only then show the lines §5a-ii and §5c kept") < close.index('"Workflow complete."')
+    for log in re.finditer(r"\blog\b", close):
+        assert "Workflow complete." not in close[log.start():], close[log.start():]
 
 
 def test_the_stage_states_how_it_appends_to_the_log():
@@ -2033,7 +2153,8 @@ def test_the_queue_step_writes_into_the_configured_queue_path():
     assert "{workflow.health_check_queue_path}" in queue
     [block] = [b for b in _fenced_blocks(queue) if "health_check_fp.py queue" in b]
     assert 'queue --queue-dir "{workflow.health_check_queue_path}"' in _flow(block.replace("\\\n", " "))
-    assert "--stage {stage}" in block
+    # The script names the file after the stage the draft's header gives (leanness-4).
+    assert "--stage" not in block
     assert '--title "{title}" --repo "{workflow.health_check_repo}"' in block
 
 
@@ -2049,11 +2170,13 @@ def test_every_local_outcome_shows_its_paths_reason_and_the_printed_commands():
     assert '"{N} finding(s) saved locally:" then each path, each followed by its three `commands`, exactly as printed.' in queue
     assert ('"{reason sentence} Run a finding\'s first two commands to submit it as an issue (the first fails, '
             "harmlessly, when its label exists)") in queue
-    assert "In an unattended run, display nothing and wait for nothing: log the same lines." in queue
+    assert "In an unattended run" not in queue
+    assert "in an unattended one, display nothing and wait for nothing, and log the kept lines alone." in _flow(
+        _section("## 6. Close"))
     # The script prints the commands, quoted; the prose fills in none by hand (determinism-2).
-    assert ('→ `{"path", "commands"}`: the file it wrote, and the three commands that submit it, each on one line with '
-            "every argument quoted: the `gh label create` and the `gh issue create` to run in that order, and the "
-            "`gh issue create` without labels for a reporter without push access.") in queue
+    # The script quotes the commands and the display sentence names each one, so the result is not described twice.
+    assert '→ `{"path", "commands"}`: the file it wrote and the three commands that submit it.' in queue
+    assert "each on one line with every argument quoted" not in queue
     assert "{file-path}" not in _reference()
     assert not [b for b in _fenced_blocks(_section(QUEUE)) if "gh " in b], "no command template left in §5c"
     [block] = [b for b in _fenced_blocks(_section(QUEUE)) if "health_check_fp.py queue" in b]
@@ -2092,11 +2215,15 @@ def test_every_local_outcome_shows_its_paths_reason_and_the_printed_commands():
 
 
 def test_the_created_issues_are_logged_not_displayed_in_an_unattended_run():
-    """§5a-ii's lines follow §5c's rule: on screen when attended, in the log when not (architecture-6)."""
+    """§5a-ii's lines follow §5c's rule: on screen when attended, in the log when not (architecture-6), both shown
+    or logged by §6 once the marker is in."""
     create = _flow(_section("**5a-ii. If no matching open issue exists**", "### 5b. Record the outcome"))
-    assert ('After creating all issues, show "{N} issue(s) created on {workflow.health_check_repo}:" then each URL, '
-            'then "Workflow complete." unless a finding of this run went to the local queue, whose §5c block ends '
-            "with it: display these lines in an attended run, and log them in an unattended one.") in create
+    assert ('After creating all issues, keep for §6 the line "{N} issue(s) created on {workflow.health_check_repo}:" '
+            "and each URL.") in create
+    close = _flow(_section("## 6. Close"))
+    assert ("show the lines §5a-ii and §5c kept, in that order, followed by \"Workflow complete.\": display them in an "
+            "attended run; in an unattended one, display nothing and wait for nothing, and log the kept lines "
+            "alone.") in close
 
 
 def test_a_failed_create_is_retried_once_without_labels():
@@ -2115,9 +2242,12 @@ def test_a_failed_create_is_retried_once_without_labels():
     assert '--title "{title}"' in block
     assert "After a `regression` verdict, `{regression_title}` takes the place of `{title}` (§5a step 1)." in create
     assert ("**If `gh issue create` exits non-zero, run it once more without the `--label` line**, with the same "
-            "title and body file.") in create
-    assert "can neither create the label nor set any label: the first run fails on the missing `{fp}` label" in create
-    assert "The dedup Action applies the labels from the title" in create
+            "title and body file: a reporter without push access can set no label, and the dedup Action labels the "
+            "issue from its title.") in create
+    # One clause of why for each command, the label mechanics stated once (leanness-2).
+    assert "**First, create the `{fp}` label**, which `--label {fp}` needs:" in create
+    for gone in ("It is per-fingerprint", "pre-created repo labels", "the first run fails on the missing"):
+        assert gone not in create, gone
     # The outcome is recorded and queued as before: created after either run, queued after the second failure.
     assert "After the issue is created, by the first run or the retry, record it (§5b)" in create
     assert ('If `gh issue create` fails on its retry too, log its error and write the finding to the local queue '
@@ -2166,6 +2296,137 @@ def test_evidence_cites_only_module_files():
 
 
 # --- the contributor docs --------------------------------------------------------
+
+
+def test_the_flag_mode_says_it_skips_the_heading_check_and_prints_no_title():
+    """--section-slug and --defect-key stay for manual filers and old calls, but say what they skip (leanness-5)."""
+    proc = _run("fingerprint", "--help")
+    assert proc.returncode == 0
+    flowed = _flow(proc.stdout)
+    assert "it skips the check that the heading is one of the stage file's own" in flowed
+    assert flowed.count("Without --stdin, title, regression_title and body_header print null.") == 2
+    doc = _flow(_load().__doc__)
+    assert ("The two flags stay for tests and old calls: --section-slug skips the check that the heading is one of "
+            "the stage file's own, and without --stdin the flags print a null title, regression_title and "
+            "body_header.") in doc
+    # Under --repo, every issue_url but an empty or missing one must sit under the prefix.
+    assert ("any other record whose issue_url is not a string under https://github.com/OWNER/REPO/ "
+            "(https://HOST/OWNER/REPO/ for a REPO that names a host), compared in any letter case, counts as no "
+            "record") in doc
+    # And the docstring documents the commands as they are now.
+    assert "seen --fp FP --legacy-fp FP --cache PATH [--repo REPO]" in doc
+    assert "queue --queue-dir DIR --body-file F --title TITLE --repo REPO" in doc
+
+
+_DIRECT_RUN = ("To report a run's friction now, without waiting for a later run, ask the conductor to run the health "
+               "check for that run: it reads that run folder's `.decision-log.md`, with no other stage, and reports "
+               "from the log's `friction:` lines alone.")
+
+
+def test_an_operator_can_run_the_health_check_for_a_run_directly():
+    """CONTRIBUTING promised a direct run, and the run that completes an Epic has no later run to report its
+    friction (enhancement-4): SKILL.md routes the request, and the stage says how such a run differs."""
+    root = Path(__file__).resolve().parents[4]
+    skill = (root / "skills" / "ultracode-goal" / "SKILL.md").read_text(encoding="utf-8")
+    [row] = [line for line in skill.splitlines() if line.startswith("| 7 | Health Check |")]
+    assert ("Finalize's close-out loads it, and an operator's request to run the health check for a run loads it "
+            "against that run folder's `.decision-log.md`, with no other stage and no resume prompt") in row
+    assert "\u2014" not in row
+    opening = _flow(_section("# Health Check: Workflow Self-Improvement", "## Anti-fabrication rules"))
+    assert ("A direct run, the one an operator asks for against a run folder, reports from the `friction:` entries "
+            "of that folder's `.decision-log.md` alone (§2), since nothing of that run is in context, and routes by "
+            "its run mode like any run (§4).") in opening
+    assert "is attended" not in opening
+    find = _flow(_section("## 2. Find the findings", "## 3."))
+    assert ("Then find each point where a stage instruction you were following was wrong or contradictory (`bug`), "
+            "worked but left you guessing or going back and forth (`friction`), or was silent on a case you hit "
+            "(`gap`): in a direct run from those entries alone, in any other from them, the rest of the log and what "
+            "is still in context.") in find
+    # On Activation's Resume routes the request: no resume offer, and a named folder that holds a log.
+    resume = _flow(skill)
+    assert ("An operator's request to run the health check for a run skips the resume offer and creates nothing: the "
+            "operator names the Epic or its run folder (ask in an attended run when they name neither, and refuse in "
+            "a headless one), refuse a folder that holds no `.decision-log.md`, and otherwise load "
+            "`references/health-check.md` against that folder's log (Stages row 7).") in resume
+    assert resume.index("An operator's request to run the health check") < resume.index("If one exists for the Epic")
+    # The docs and CONTRIBUTING give the same sentence.
+    assert _DIRECT_RUN in _flow(_docs())
+    assert _DIRECT_RUN in _flow((root / "CONTRIBUTING.md").read_text(encoding="utf-8"))
+
+
+_REPO_LABELS = ("`health-check`, `workflow-improvement`, `bug`, `friction`, `gap`, `duplicate` and "
+                "`possible-duplicate`")
+
+
+def test_a_redirected_repository_is_told_what_it_needs():
+    """A project that points health_check_repo elsewhere needs the labels and the dedup Action there, and a shared
+    seen-cache reads only that repository's records (customization-2)."""
+    customize = (Path(__file__).resolve().parents[2] / "customize.toml").read_text(encoding="utf-8")
+    comment = customize[customize.index("# Set health_check_repo"):customize.index("\nhealth_check_repo =")]
+    comment = " ".join(re.sub(r"^#\s*", "", comment, flags=re.MULTILINE).split())
+    assert ("To send findings to another repository, create these labels there: health-check, workflow-improvement, "
+            "bug, friction, gap, duplicate and possible-duplicate, and copy two files into it unchanged: the issue "
+            "template,") in comment
+    # An install has no .github folder, so the comment names both files by their URL.
+    blob = "https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/"
+    for name in (".github/ISSUE_TEMPLATE/workflow-health-check.md", ".github/workflows/health-check-dedup.yaml"):
+        assert blob + name in comment, name
+    assert "A repository on a host other than github.com is given as HOST/OWNER/REPO." in comment
+    # `record` keys the cache by fingerprint alone, so a shared cache cannot serve two repositories.
+    assert ("Such a project must also set its own health_check_seen_cache: the cache keys each record by fingerprint "
+            "alone, so two projects filing to different repositories would block or overwrite each other's records. "
+            "The check only keeps another repository's record from suppressing or linking a finding.") in comment
+    cache = customize[customize.index("\nhealth_check_repo ="):customize.index("\nhealth_check_seen_cache =")]
+    cache = " ".join(re.sub(r"^#\s*", "", cache, flags=re.MULTILINE).split())
+    assert ("dedup must span the projects that file to one repository: the same defect met in two of them is still "
+            "one report.") in cache
+    docs = _flow(_docs())
+    assert ("**To send findings to another repository**, set `health_check_repo` to it under the same header "
+            "(`OWNER/REPO`, or `HOST/OWNER/REPO` on a host other than github.com), and set that repository up as the "
+            "default one is: create the labels " + _REPO_LABELS + " there, and copy two files into it unchanged, the "
+            "issue template [`.github/ISSUE_TEMPLATE/workflow-health-check.md`](" + blob + ".github/ISSUE_TEMPLATE/"
+            "workflow-health-check.md) and the dedup Action [`.github/workflows/health-check-dedup.yaml`](" + blob +
+            ".github/workflows/health-check-dedup.yaml), which reads its repository from the run.") in docs
+    assert ("Set the project's own `health_check_seen_cache` too: the cache keys each record by fingerprint alone, so "
+            "two projects that share it and file to different repositories would block or overwrite each other's "
+            "records.") in docs
+    assert ("`seen` is given the configured `health_check_repo` and reads a record of an issue on another repository "
+            "as no record, so that record neither suppresses a finding nor links its body to that issue; `record` "
+            "still keys the cache by fingerprint alone, so a project that files to another repository sets its own "
+            "`health_check_seen_cache`.") in docs
+    for gone in ("one cache serves", "gets in your way", "reads only its records"):
+        assert gone not in docs and gone not in comment, gone
+    # The labels named are the ones CONTRIBUTING has maintainers pre-create.
+    contributing = (Path(__file__).resolve().parents[4] / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    assert ("`health-check`, `workflow-improvement`, `bug`, `friction`, `gap`, `duplicate`, and `possible-duplicate`"
+            in contributing)
+
+
+def test_the_boundary_sentence_does_not_restate_what_is_sent():
+    """"Exactly what gets sent" owns that topic; a partial copy read as if only the table left the machine
+    (leanness-6)."""
+    docs = _flow(_docs())
+    assert ("The gate that admits anything to the right of the boundary is the `[Y]` or `[A]` approval on an attended "
+            "run, or the autosubmit opt-in restricted to `bug`-severity findings on a headless run.") in docs
+    assert "is all that travels with a filed issue" not in docs
+
+
+def test_the_issue_template_explains_only_what_the_filer_chooses():
+    """The first comment says to paste the body_header over the machine-read sections, so only the Severity and
+    Defect Key comments, which guide --severity and defect_name, stay (leanness-8)."""
+    template = (Path(__file__).resolve().parents[4] / ".github" / "ISSUE_TEMPLATE" / "workflow-health-check.md")
+    text = template.read_text(encoding="utf-8")
+    for heading, placeholder in (("## Step File", "`skills/ultracode-goal/references/{stage}.md`"),
+                                 ("## Section", ""),
+                                 ("## Fingerprint", "<!-- The `Section fingerprint:` line below is never a label. -->\n"
+                                                    "`fp-XXXXXXX`")):
+        assert f"{heading}\n{placeholder}\n" in text, heading
+    assert "`fp-XXXXXXX`\n\nSection fingerprint: `fp-XXXXXXX`\n" in text
+    comments = [" ".join(c.split()) for c in re.findall(r"<!--(.*?)-->", text, re.DOTALL)]
+    for gone in ("the body_header gives it", "sha1(", "the deterministic dedup key"):
+        assert not [c for c in comments if gone in c.lower()], gone
+    assert [c for c in comments if c.startswith("Pick one, and pass it to the command as --severity")]
+    assert [c for c in comments if c.startswith("Give as `defect_name` the most specific script")]
 
 
 def test_contributing_does_not_promise_a_bare_closed_counts_as_fixed():

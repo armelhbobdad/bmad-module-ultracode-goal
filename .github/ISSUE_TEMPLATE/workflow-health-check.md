@@ -24,11 +24,9 @@ assignees: ''
 
 
 ## Step File
-<!-- The stage reference where the issue occurred: the body_header gives it. -->
 `skills/ultracode-goal/references/{stage}.md`
 
 ## Section
-<!-- The section's slug: the body_header gives it, from the heading in names.json. Never a line number. -->
 
 
 ## Severity
@@ -39,21 +37,16 @@ assignees: ''
 
 
 ## Fingerprint
-<!-- The deterministic dedup key the body_header gives: the first 7 hex chars of
-     sha1("severity|ultracode-goal/{stage}|skills/ultracode-goal/references/{stage}.md|section-slug|defect-key").
-     The dedup Action adds the labels from this section and Severity, and links your report to any existing
-     canonical issue. The section fingerprint on the line below is the same hash without "|defect-key", never a
-     label; the dedup Action reads it to flag open issues that may report the same defect under another key. -->
+<!-- The `Section fingerprint:` line below is never a label. -->
 `fp-XXXXXXX`
 
 Section fingerprint: `fp-XXXXXXX`
 
 ## Defect Key
-<!-- The body_header gives it, from the name in names.json. Give as `defect_name` the most specific script (by its
-     file name), subcommand, function, flag, field or rule the fix would edit, in the stage reference's or the
-     script's own words (`gate_eval.py` gives `gate-eval`). For a missing rule, name the case it should cover in
-     two to four of the stage reference's words, never the section's subject alone. Never a path, a line number,
-     a severity or words from your run's story. -->
+<!-- Give as `defect_name` the most specific script (by its file name), subcommand, function, flag, field or rule
+     the fix would edit, in the stage reference's or the script's own words (`gate_eval.py` gives `gate-eval`). For
+     a missing rule, name the case it should cover in two to four of the stage reference's words, never the
+     section's subject alone. Never a path, a line number, a severity or words from your run's story. -->
 
 
 ## Finding
