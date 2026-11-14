@@ -7,7 +7,7 @@ Every UltraCode Goal run that reaches Finalize ends with a health check: a brief
 
 ## What it is, and when it runs
 
-The health check is a reflection step that runs **after every run that reaches Finalize**: a completed Epic, or one that ended in a story escalation. It does **not** run on an early block: a Stage 1 or Stage 2 stop never executed any of the module's run machinery, so there is nothing to audit. Findings are graded into three severities: `bug`, `friction`, and `gap`.
+The health check is a reflection step that runs **after every run that reaches Finalize**: a completed Epic, or one that ended in a story escalation. It does **not** run on an early block, a Stage 1 or Stage 2 stop: the next run of that Epic that reaches Finalize, if one does, reports the friction the blocked run logged. As it goes, a run logs each instruction that was unclear, contradictory or silent on its case as a `friction:` line in its decision log; every health check, however it ends, logs one `health-check:` line, and reports the `friction:` lines logged after the last one. So a health check that never finished has its friction reported by the next one too. Findings are graded into three severities: `bug`, `friction`, and `gap`.
 
 ## Exactly what gets sent
 
@@ -25,26 +25,28 @@ Explicitly **not** sent: no source code, no Epic content, no secrets. The eviden
 
 ## Privacy
 
-Issues are filed publicly on `armelhbobdad/bmad-module-ultracode-goal`. On an **attended** run nothing is sent silently: the health check first drafts each finding's issue body in the run folder, then always **HALTS at a `[Y]` / `[A]` / `[N]` / `[E]` / `[Q]` gate** that shows each finding's title and its full body. Yes files the `bug` findings and keeps the `friction` and `gap` ones on disk, all files every finding, no skips them, edit revises the drafts first, and queue keeps every finding on disk and sends nothing. What you approve is what is sent, except for these changes after the gate: when the defect was fixed before, a line linking to that fix opens the body, and a confirmed regression's title gains `REGRESSION: `; when you choose to file anyway at an open issue with the same fingerprint, the finding takes a more specific defect key, which rewrites its Fingerprint and Defect Key; and when you choose to comment on a matching issue, the comment is written then and shown to you before it is posted.
+Issues are filed on the configured `health_check_repo` with your own GitHub account, and on the default, `armelhbobdad/bmad-module-ultracode-goal`, they are public. On an **attended** run nothing is sent silently: the health check first drafts each finding's issue body in the run folder, then always **HALTS at a `[Y]` / `[A]` / `[N]` / `[E]` / `[Q]` gate** that shows each finding's title and its full body and asks "Submit these findings as issues on `<health_check_repo>`, filed with your GitHub account?", saying public issues on the default and, for any other repository, that they are public if it is. Yes files the `bug` findings and keeps the `friction` and `gap` ones on disk, all files every finding, no skips them, edit revises the drafts first, and queue keeps every finding on disk and sends nothing. What you approve is what is sent, except for these changes after the gate: when the defect was fixed before, a line linking to that fix opens the body, and a confirmed regression's title gains `REGRESSION: `; when you choose to file anyway at an open issue with the same fingerprint, the finding takes a more specific defect key, which rewrites its Fingerprint and Defect Key; and when you choose to comment on a matching issue, the comment is written then and shown to you before it is posted.
 
 The boundary below shows the disable path, everything computed on your machine, and the three points where anything crosses to GitHub, all behind a gate: the seen-cache check, which reads the state of an issue already recorded on this machine and sends only that issue's URL, the dedup search, and the issue itself:
 
 ```mermaid
 flowchart TD
     Start["Reaches Finalize"] --> Enabled{"health_check_repo set"}
-    Enabled -->|"empty"| Off["Log one line and exit. Nothing computed, nothing sent"]
-    Enabled -->|"set"| Reflect["Reflect on this run. Grade bug, friction, gap"]
+    Enabled -->|"empty"| Off["Log the disabled marker and exit. Nothing computed, nothing sent"]
+    Enabled -->|"set"| Reflect["Read the friction logged since the last marker, reflect on this run. Grade bug, friction, gap"]
     Reflect --> Clean{"Any findings"}
-    Clean -->|"no"| Done["Clean run. Exit in one line"]
+    Clean -->|"no"| Done["Clean run. Log the clean marker and exit"]
     Clean -->|"yes"| Draft["Fingerprint each finding and draft its issue body"]
     Draft --> Gate{"Your answer at the gate"}
-    Gate -->|"N"| Discard["Discard the findings"]
+    Gate -->|"N"| Discard["Discard the findings. Log the discarded marker"]
     Gate -->|"Q, or Y for friction and gap"| Queue["Write finding to local queue. Stays on disk"]
     Gate -->|"Y for bug, or A"| Fp["Check seen-cache"]
     Fp --> Search["Remote dedup search on GitHub"]
     Fp -->|"record holds an issue URL"| State["Read that issue's state on GitHub. Sends only its URL"]
     State --> Search
-    Search --> Create["Create or react on public issue"]
+    Search --> Create["Create or react on an issue on health_check_repo"]
+    Queue --> Close["Log the done marker with its counts"]
+    Create --> Close
 
     subgraph local["On your machine"]
         Enabled
@@ -57,6 +59,7 @@ flowchart TD
         Discard
         Queue
         Fp
+        Close
     end
     subgraph net["Leaves the machine"]
         State
@@ -76,7 +79,7 @@ The gate that admits anything to the right of the boundary is the `[Y]` or `[A]`
 
 Headless runs do not have a human at the gate, so by default they **queue findings locally and never live-submit**. Two config knobs (set in `{project-root}/_bmad/custom/ultracode-goal.toml`) change this:
 
-- `health_check_repo = ""`: disables the health check entirely (the target repo doubles as the on/off switch; no target, nothing to run).
+- `health_check_repo = ""`: disables the health check entirely (the target repo doubles as the on/off switch; no target, nothing to run). Each run it skips still logs its `disabled` marker, which closes the `friction:` entries logged so far: turning the check back on reports only friction logged after that.
 - `health_check_autosubmit = true`: opts **bug-severity** findings into live submission on unattended runs. `friction` and `gap` findings are **never** auto-submitted; they always queue regardless of this setting.
 
 The local queue lives at the configured `health_check_queue_path` (by default `{project-root}/_bmad-output/ultracode-goal/improvement-queue/`), which is created when it is missing. `health_check_fp.py queue` writes each finding there as one file, named `hc-ultracode-goal-{stage}-{YYYYMMDD-HHmmss}.md` from the UTC time, and holding the finding's issue body exactly as it was drafted, with no frontmatter. When two findings of one stage are written in the same second, the later names get `-2`, `-3` and so on before `.md`, so no file is overwritten. Whatever the reason a finding stays local (the `[Q]` choice, a headless run, a friction or gap finding, no GitHub CLI, a skipped or failed submission), the health check lists each file it wrote with one sentence giving the reason and the `gh issue create --body-file` command that submits it: on screen in an attended run, in the log in a headless one.
@@ -105,13 +108,13 @@ Dedup runs at three levels:
 
 ## Submitting a queued finding manually
 
-A queued finding is a file under the queue directory holding the finding's issue body, exactly as the health check drafted it and, on an attended run, as the gate showed it: its Workflow, Step File, Section, Severity, Fingerprint and `Section fingerprint:` line, Defect Key, the `file:line` evidence and the Environment table. Submit one when you are ready with the two commands the health check printed for it, which carry the run's short description in the title. Filled in by hand, they take their values from the file's sections, and the short description is yours to write. A queue file written by an earlier version opens with YAML frontmatter between two `---` lines: delete it before you pass the file to `--body-file`.
+A queued finding is a file under the queue directory holding the finding's issue body, exactly as the health check drafted it and, on an attended run, as the gate showed it: its Workflow, Step File, Section, Severity, Fingerprint and `Section fingerprint:` line, Defect Key, the `file:line` evidence and the Environment table. Submit one when you are ready with the two commands the health check printed for it, whose title `health_check_fp.py fingerprint` built from the finding's severity, fingerprint, stage and short description. Filled in by hand, they take their values from the file's sections, and the short description is yours to write, with no backtick, `$`, double quote, backslash, `!`, tab, line break or other character that is not printable, since the title goes on the command line, and with the whole title at most 256 characters long. A queue file written by an earlier version opens with YAML frontmatter between two `---` lines: delete it before you pass the file to `--body-file`.
 
 ```bash
 gh label create "<fingerprint>" --repo <health-check-repo> --color "ededed" \
   --description "Health-check fingerprint dedup key" 2>/dev/null || true
 gh issue create --repo <health-check-repo> \
-  --title "[health-check][<severity>][<fingerprint>] <workflow>: <short description>" \
+  --title "[health-check][<severity>][<fingerprint>] ultracode-goal/<stage>: <short description>" \
   --label "health-check,workflow-improvement,<severity>,<fingerprint>" \
   --body-file <path-to-queued-finding>
 ```

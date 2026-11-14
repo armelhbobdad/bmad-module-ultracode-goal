@@ -7,9 +7,10 @@
 
 Covers the fingerprint byte-format (fp and the keyless legacy_fp, locked against
 golden sha1s computed in the test), the fp regex contract and the severity,
-stage, slug and defect-key validation; the section heading and defect name read
-from --stdin, with the slug and key rules; `queue`'s naming, counter and
-byte-for-byte copy; the `seen` verdict table, including the
+stage, slug and defect-key validation; the section heading, defect name and
+short description read from --stdin, with the slug and key rules, the title
+and its character rule and the body header; `queue`'s naming, counter and
+byte-for-byte copy; the `seen` verdict table and its opening line, including the
 legacy-fingerprint demotions and the issue-state check it runs through `gh`
 (a fake gh on PATH that answers, fails, prints junk or hangs, and a gh planted
 in the current folder that must never run); and `record`'s validation, merge,
@@ -153,12 +154,16 @@ def test_fingerprint_matches_independent_golden():
     expected_fp, expected_legacy, expected_tuple = _expected_fp(
         "bug", "preflight", "missing-staging-path", "staging-path"
     )
+    # Without a short_description there is no title and no body header.
     assert payload == {
         "fp": expected_fp,
         "legacy_fp": expected_legacy,
         "tuple": expected_tuple,
         "section_slug": "missing-staging-path",
         "defect_key": "staging-path",
+        "title": None,
+        "regression_title": None,
+        "body_header": None,
     }
     # The exact tuple the script hashes: install-mode-invariant step_file form, then the defect key.
     assert payload["tuple"] == (
@@ -171,7 +176,8 @@ def test_the_keyed_fingerprint_and_its_legacy_twin():
     proc = _fingerprint("bug", "gate", "verdict-mapping", "gate-status")
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
-    assert set(payload) == {"fp", "legacy_fp", "tuple", "section_slug", "defect_key"}
+    assert set(payload) == {"fp", "legacy_fp", "tuple", "section_slug", "defect_key", "title", "regression_title",
+                            "body_header"}
     assert payload["tuple"].endswith("|verdict-mapping|gate-status")
     assert (payload["fp"], payload["legacy_fp"]) == _expected_fp("bug", "gate", "verdict-mapping", "gate-status")[:2]
     # Literal goldens. fp-3d74222 is what the keyless script (91f0e02) printed as the fingerprint
@@ -435,6 +441,92 @@ def test_the_flags_alone_still_need_both_without_stdin():
     assert proc.returncode == 2, "an argparse usage error exits 2"
 
 
+# --- Fingerprint: the title and the body header ---------------------------------
+
+GATE_NAMES = {"section_heading": "Route on the verdict", "defect_name": "gate_status"}
+
+
+def test_a_short_description_gives_the_title_and_its_regression_twin():
+    code, payload = _fingerprint_stdin("bug", "gate", {**GATE_NAMES, "short_description": "the gate reads a stale trace"})
+    assert code == 0, payload
+    fp = payload["fp"]
+    assert payload["title"] == f"[health-check][bug][{fp}] ultracode-goal/gate: the gate reads a stale trace"
+    assert payload["regression_title"] == (
+        f"[health-check][bug][{fp}] ultracode-goal/gate: REGRESSION: the gate reads a stale trace"
+    )
+    # The description changes no fingerprint.
+    _, bare = _fingerprint_stdin("bug", "gate", GATE_NAMES)
+    assert {k: payload[k] for k in ("fp", "legacy_fp", "tuple", "section_slug", "defect_key")} == {
+        k: bare[k] for k in ("fp", "legacy_fp", "tuple", "section_slug", "defect_key")
+    }
+
+
+def test_the_description_is_trimmed_and_works_beside_the_flags():
+    code, payload = _fingerprint_stdin("friction", "execute", {"short_description": "  a budget left unsaid  "},
+                                       "--section-slug=ambiguous-budget", "--defect-key=budget")
+    assert code == 0, payload
+    assert payload["title"] == f"[health-check][friction][{payload['fp']}] ultracode-goal/execute: a budget left unsaid"
+
+
+def test_the_body_header_carries_the_machine_read_sections():
+    code, payload = _fingerprint_stdin("gap", "gate", {**GATE_NAMES, "short_description": "x"})
+    assert code == 0, payload
+    assert payload["body_header"] == (
+        "## Workflow\n`ultracode-goal/gate`\n\n"
+        "## Step File\n`skills/ultracode-goal/references/gate.md`\n\n"
+        "## Section\n`route-on-the-verdict`\n\n"
+        "## Severity\n`gap`\n\n"
+        f"## Fingerprint\n`{payload['fp']}`\n\n"
+        f"Section fingerprint: `{payload['legacy_fp']}`\n\n"
+        "## Defect Key\n`gate-status`\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "description",
+    ["the `gate` reads", "costs $5", 'a "quoted" word', "a back\\slash", "two\nlines", "carriage\rreturn", "", "  ",
+     "it fails!", "a\ttab", "line\N{LINE SEPARATOR}separator", "paragraph\N{PARAGRAPH SEPARATOR}separator",
+     "next\N{NEL}line", "vertical\vtab", "form\ffeed", "nul\x00byte"],
+    ids=["backtick", "dollar", "double-quote", "backslash", "newline", "carriage-return", "empty", "blank", "bang",
+         "tab", "u2028", "u2029", "u0085", "vt", "ff", "nul"],
+)
+def test_a_description_the_command_line_cannot_carry_exits_one(description):
+    code, payload = _fingerprint_stdin("bug", "gate", {**GATE_NAMES, "short_description": description})
+    assert code == 1
+    assert "short_description" in payload["error"]
+    assert set(payload) == {"error"}, "nothing is printed but the error"
+
+
+@pytest.mark.parametrize("description", ["it's 'single' quoted", "50% of #3 (a & b) <c>", "naïve défaut"])
+def test_a_description_safe_inside_double_quotes_is_kept_as_written(description):
+    code, payload = _fingerprint_stdin("bug", "gate", {**GATE_NAMES, "short_description": description})
+    assert code == 0, payload
+    assert payload["title"].endswith(f"ultracode-goal/gate: {description}")
+
+
+def test_a_non_ascii_title_is_printed_as_itself_in_utf8():
+    """The title is used exactly as printed, so it must not reach the run as a \\uXXXX escape, whatever the locale."""
+    data = json.dumps({**GATE_NAMES, "short_description": "naïve défaut"}).encode("utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "fingerprint", "--severity", "bug", "--stage", "gate", "--stdin"],
+        capture_output=True, env=_env(PYTHONIOENCODING="latin-1"), input=data, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ultracode-goal/gate: naïve défaut".encode("utf-8") in proc.stdout
+    assert b"\\u00e9" not in proc.stdout
+
+
+def test_the_regression_title_is_capped_at_githubs_256_characters():
+    _, payload = _fingerprint_stdin("friction", "gate", {**GATE_NAMES, "short_description": "x"})
+    room = 256 - len(payload["regression_title"]) + 1
+    code, payload = _fingerprint_stdin("friction", "gate", {**GATE_NAMES, "short_description": "x" * room})
+    assert code == 0, payload
+    assert len(payload["regression_title"]) == 256
+    code, payload = _fingerprint_stdin("friction", "gate", {**GATE_NAMES, "short_description": "x" * (room + 1)})
+    assert code == 1
+    assert "257 characters long; GitHub takes at most 256" in payload["error"]
+
+
 # --- queue ---------------------------------------------------------------------------
 
 
@@ -542,6 +634,7 @@ def test_seen_missing_cache_is_unseen(tmp_path):
         "status": "unseen",
         "record": None,
         "matched_on": None,
+        "opening_line": None,
     }
 
 
@@ -567,7 +660,7 @@ def test_record_then_seen_round_trip(tmp_path):
     assert json.loads(rec.stdout) == {"written": True, "fp": FP, "record": new, "set_aside": None}
 
     # No gh on PATH: the issue-state check cannot run, so the record stays handled.
-    assert _seen(cache) == {"seen": True, "status": "handled", "record": new, "matched_on": "fp"}
+    assert _seen(cache) == {"seen": True, "status": "handled", "record": new, "matched_on": "fp", "opening_line": None}
 
 
 @pytest.mark.parametrize("action", ["created", "reacted", "commented"])
@@ -608,7 +701,8 @@ def test_a_record_this_version_does_not_write_is_unrecognized(tmp_path, record):
     # a silenced regression is caught by nothing.
     cache = _write_cache(tmp_path / "seen.json", {FP: record})
     payload = _seen(cache)
-    assert payload == {"seen": False, "status": "unrecognized", "record": record, "matched_on": "fp"}
+    assert payload == {"seen": False, "status": "unrecognized", "record": record, "matched_on": "fp",
+                       "opening_line": None}
 
 
 def test_a_queued_bug_never_suppresses_a_later_attended_report(tmp_path):
@@ -627,7 +721,8 @@ def test_a_queued_bug_never_suppresses_a_later_attended_report(tmp_path):
 def test_a_legacy_record_that_would_suppress_is_unseen(tmp_path, action):
     record = _live(action, "")
     cache = _write_cache(tmp_path / "seen.json", {LEGACY: record})
-    assert _seen(cache) == {"seen": False, "status": "unseen", "record": record, "matched_on": "legacy_fp"}
+    assert _seen(cache) == {"seen": False, "status": "unseen", "record": record, "matched_on": "legacy_fp",
+                            "opening_line": None}
 
 
 def test_a_resolved_legacy_record_is_a_possible_regression(tmp_path):
@@ -638,6 +733,8 @@ def test_a_resolved_legacy_record_is_a_possible_regression(tmp_path):
         "status": "possible-regression",
         "record": record,
         "matched_on": "legacy_fp",
+        "opening_line": f"Possibly a regression of {URL} (resolved 2026-07-19): that report's fingerprint has no "
+                        "defect key, so it may be another defect in this section.",
     }
 
 
@@ -656,6 +753,65 @@ def test_the_record_under_fp_decides_over_the_legacy_one(tmp_path):
     payload = _seen(cache)
     assert (payload["status"], payload["matched_on"]) == ("handled", "fp")
     assert payload["record"] == _live("created", "")
+
+
+# --- seen: the opening line ------------------------------------------------------
+
+LOCAL_REGRESSION = "Regression of a previously resolved local finding (resolved 2026-07-19)."
+LOCAL_POSSIBLE = "Possibly a regression of a previously resolved local finding in this section (resolved 2026-07-19)."
+
+
+@pytest.mark.parametrize(
+    "under, url, line",
+    [
+        (FP, URL, f"Regression of {URL} (resolved 2026-07-19)."),
+        (FP, "", LOCAL_REGRESSION),
+        (LEGACY, URL, f"Possibly a regression of {URL} (resolved 2026-07-19): that report's fingerprint has no defect "
+                      "key, so it may be another defect in this section."),
+        (LEGACY, "", LOCAL_POSSIBLE),
+    ],
+    ids=["fp-url", "fp-local", "legacy-url", "legacy-local"],
+)
+def test_a_resolved_record_gives_one_of_the_four_opening_lines(tmp_path, under, url, line):
+    cache = _write_cache(tmp_path / "seen.json", {under: {"action": "resolved", "issue_url": url, "date": "2026-07-19"}})
+    payload = _seen(cache)
+    assert payload["status"] == ("regression" if under == FP else "possible-regression")
+    assert payload["opening_line"] == line
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"action": "resolved", "date": "2026-07-19"},
+        {"action": "resolved", "issue_url": "http://example.invalid/1", "date": "2026-07-19"},
+        {"action": "resolved", "issue_url": "https://x/1\n## Fingerprint", "date": "2026-07-19"},
+        {"action": "resolved", "issue_url": 7, "date": "2026-07-19"},
+    ],
+    ids=["no-url", "not-https", "whitespace", "not-a-string"],
+)
+def test_a_url_a_body_should_not_carry_reads_as_a_local_finding(tmp_path, record):
+    """The line goes into a public issue body verbatim, so only a plain https:// URL is written into it."""
+    payload = _seen(_write_cache(tmp_path / "seen.json", {FP: record}))
+    assert payload["opening_line"] == LOCAL_REGRESSION
+
+
+@pytest.mark.parametrize("day", [None, "", "yesterday", "2026-07-19\n## Severity", 20260719])
+def test_a_date_that_is_not_yyyy_mm_dd_is_unrecorded(tmp_path, day):
+    record = {"action": "resolved", "issue_url": ""}
+    if day is not None:
+        record["date"] = day
+    payload = _seen(_write_cache(tmp_path / "seen.json", {FP: record}))
+    assert payload["opening_line"] == "Regression of a previously resolved local finding (resolved on an unrecorded date)."
+
+
+@pytest.mark.parametrize(
+    "cache_data",
+    [{}, {FP: _live("created", "")}, {FP: {"action": "queued", "issue_url": "", "date": "2026-07-19"}},
+     {LEGACY: _live("created", "")}],
+    ids=["unseen", "handled", "unrecognized", "legacy-unseen"],
+)
+def test_every_other_verdict_has_no_opening_line(tmp_path, cache_data):
+    assert _seen(_write_cache(tmp_path / "seen.json", cache_data))["opening_line"] is None
 
 
 # --- seen: the issue-state check through gh -------------------------------------
@@ -721,7 +877,13 @@ def _answer(state: str, reason: str = "") -> str:
 def test_the_issue_state_decides_a_keyed_record(tmp_path, fake_gh, mode, status):
     cache = _write_cache(tmp_path / "seen.json", {FP: _live("created")})
     payload = _seen(cache, env=_gh_env(fake_gh, mode))
-    assert payload == {"seen": status == "handled", "status": status, "record": _live("created"), "matched_on": "fp"}
+    # The record dates the report, not the fix: only the issue's own state says it was fixed.
+    opening = None
+    if status == "regression":
+        how = "merged" if mode == _answer("MERGED") else "closed as completed"
+        opening = f"Regression of {URL}, {how} since its report on 2026-10-01."
+    assert payload == {"seen": status == "handled", "status": status, "record": _live("created"), "matched_on": "fp",
+                       "opening_line": opening}
     assert _gh_calls(fake_gh[1]) == [f"issue view {URL} --json state,stateReason"]
 
 
@@ -730,6 +892,10 @@ def test_a_completed_close_under_the_legacy_fp_is_a_possible_regression(tmp_path
     cache = _write_cache(tmp_path / "seen.json", {LEGACY: _live("created")})
     payload = _seen(cache, env=_gh_env(fake_gh, _answer("CLOSED", "COMPLETED")))
     assert (payload["status"], payload["matched_on"]) == ("possible-regression", "legacy_fp")
+    assert payload["opening_line"] == (
+        f"Possibly a regression of {URL}, closed as completed since its report on 2026-10-01: that report's "
+        "fingerprint has no defect key, so it may be another defect in this section."
+    )
 
 
 def test_an_absent_gh_keeps_a_keyed_record_handled(tmp_path):
@@ -1249,10 +1415,10 @@ def test_the_script_not_the_prose_reads_the_issue_state():
     reference only acts on the verdict, so it no longer restates which issue states give which status.
     """
     assert '"state,stateReason"' in SCRIPT.read_text(encoding="utf-8")
-    seen = _flow(_section("**1. Check the seen-cache via the script:**", "**Regression treatment**"))
+    seen = _flow(_section("**1. Check the seen-cache via the script:**", "**Opening line**"))
     assert "the script reads that issue's state itself: never run that check yourself" in seen
-    for status in ("`handled`, the only verdict that suppresses", "`unseen` or `unrecognized`", "`regression`",
-                   "`possible-regression`"):
+    for status in ("`handled`, the only verdict that suppresses", "`unseen` or `unrecognized`",
+                   "`regression` or `possible-regression`"):
         assert status in seen, status
     assert "If the call fails or prints no JSON, treat it as `unseen`." in seen
 
@@ -1281,17 +1447,26 @@ def test_every_call_passes_the_new_arguments():
     assert "--section-slug" not in fingerprint[0] and "--defect-key" not in fingerprint[0]
     assert len(seen) == 1 and "--legacy-fp {legacy_fp}" in seen[0]
     body = _reference()
-    assert '`{"section_heading": "<the heading>", "defect_name": "<the name>"}`' in body
+    assert ('`{"section_heading": "<the heading>", "defect_name": "<the name>", '
+            '"short_description": "<the description>"}`') in body
     for retired in ("--queue-path", "--defect-slug", "--action queued", "defect_slug"):
         assert retired not in body, retired
 
 
 def test_the_regression_records_and_treatments_are_described():
+    """The opening line and the regression title come from the script: the prose only says where they go."""
     body = _flow(_reference())
     assert "add `--regression`" in body
-    assert "REGRESSION: {short description}" in body
-    assert "Possibly a regression of {record.issue_url}" in body
-    assert "`possible-regression`" in body
+    assert '→ `{"seen", "status", "record", "matched_on", "opening_line"}`' in body
+    opening = _flow(_section("**Opening line**", "**2. Check GitHub CLI**"))
+    assert ("Write `opening_line` exactly as printed at the top of the finding's draft, above `## Workflow`, with a "
+            "blank line after it.") in opening
+    assert "A `regression` takes `{regression_title}` in place of `{title}`" in opening
+    assert "A `possible-regression` keeps `{title}`" in opening
+    # The four sentences live in the script alone.
+    for sentence in ("Regression of {record.issue_url}", "Possibly a regression of {record.issue_url}",
+                     "a previously resolved local finding", "REGRESSION: {short description}"):
+        assert sentence not in body, sentence
 
 
 def test_the_section_and_defect_naming_rule_is_stated():
@@ -1316,7 +1491,7 @@ def test_the_section_and_defect_naming_rule_is_stated():
 def test_every_failure_after_drafting_has_a_route():
     body = _flow(_reference())
     assert "write `N/A` when it is `null`, or when the call fails or prints no JSON" in body
-    assert ('If adding either opening line to the draft fails, log its error and write the finding to the local '
+    assert ('If adding the opening line to the draft fails, log its error and write the finding to the local '
             'queue (§5c) with the reason "Posting these to GitHub failed."') in body
     # The comment is written at the dedup gate, so it is shown before it is posted.
     assert "show the user its text, and run `gh issue comment" in body
@@ -1329,12 +1504,12 @@ def test_every_failure_after_drafting_has_a_route():
 def test_the_second_search_offers_possible_matches_and_n_rekeys_an_exact_one():
     body = _flow(_reference())
     assert '"{legacy_fp} in:title,body"' in body
-    assert "Possible match: #{N}: {title}" in body
+    assert "Possible match: #{match_number}: {match_title}" in body
     assert "choose a more specific defect name" in body
     # A re-keyed finding gets a new draft and is checked again: the old verdict's treatment never carries over.
     assert "run §3's call again with it and write the draft anew under the new `{fp}`, without a line the old verdict added" in body
     assert "run steps 1 to 3 again for the new fingerprints" in body
-    assert "the new `seen` verdict alone decides the regression treatment and `--regression`" in body
+    assert "the new `seen` verdict alone decides the opening line, the title and `--regression`" in body
     # A failed search is not a search that found nothing.
     assert ('If either search exits non-zero, it has not shown that no issue matches: log its error and send the '
             'finding to the local queue (§5c) with the reason "Posting these to GitHub failed."') in body
@@ -1361,21 +1536,106 @@ def test_one_name_per_setting():
         assert name in body, name
 
 
-def test_reflection_reads_the_logged_friction_entries_first():
+def test_reflection_reads_the_friction_entries_no_health_check_reported():
+    """Every entry after the last marker, whichever invocation logged it: a run that blocked early, or whose health
+    check never finished, has its entries reported by the next one (architecture-2, determinism-3)."""
     find = _flow(_section("## 2. Find the findings", "## 3."))
-    # This invocation's entries only, as Finalize's audit scopes its walk, found with the Grep tool.
-    assert find.startswith("## 2. Find the findings Read the `friction:` entries this invocation wrote first, the "
-                           "scope Finalize's decision-log audit walks")
-    assert "Find them with the Grep tool, never a shell grep" in find
-    assert "grep -n" not in find
-    assert "Report only what a logged entry or the live context shows." in find
+    assert find.startswith(
+        "## 2. Find the findings First read the `friction:` entries no health check has reported yet: search "
+        "`.decision-log.md` with the Grep tool, with line numbers, for the regex `" + _READ_PATTERN + "`, which finds "
+        "an entry or a marker only at the start of its line (after a list bullet at most), never one quoted inside "
+        "another entry. Take the `friction:` entries after the last marker (all of them when there is none)."
+    )
+    # An upgrade between the run that logged an entry and this check can retire its instruction.
+    assert ("Drop an entry whose section heading or instruction the current stage file no longer carries: an upgrade "
+            "may sit between the run that logged it and this check.") in find
+    # The reason for the Grep tool holds: the default allowlist runs no shell grep (leanness-5).
+    assert ("Use the Grep tool, not a shell grep: it reads a log too large to Read, and a shell grep is outside the "
+            "headless allowlist.") in find
     skill_root = Path(__file__).resolve().parents[2]
+    allow = re.search(r"^allowlist_commands = \[(.*)\]$", (skill_root / "customize.toml").read_text(encoding="utf-8"),
+                      re.MULTILINE)
+    assert allow and not [c for c in re.findall(r'"([^"]+)"', allow.group(1)) if c.split()[0] in ("grep", "rg")]
+    for gone in ("this invocation", "dlog-slice", "grep -n"):
+        assert gone not in find, gone
+    assert "Report only what a logged entry or the live context shows." in find
     skill = _flow((skill_root / "SKILL.md").read_text(encoding="utf-8"))
     assert ('and, without stopping, a one-line `friction: <stage>.md "<section heading, exactly as the file writes it, '
             'numbering included>": <what was unclear, contradictory or missing>` entry whenever an instruction is '
-            "unclear, contradictory or silent on the case in hand") in skill
+            "unclear, contradictory or silent on the case in hand (the next health check to run reports every entry "
+            "logged after the last `health-check:` line, which each of its exits appends).") in skill
     finalize = _flow((skill_root / "references" / "finalize.md").read_text(encoding="utf-8"))
     assert "A `friction:` entry is left for the health check, which reports it." in finalize
+
+
+def _markers() -> list[str]:
+    """Every `health-check: ...` line the stage reference appends, in the order it names them."""
+    return re.findall(r"append (?:the one line )?`(health-check: [^`]+)`", _flow(_reference()))
+
+
+def test_every_exit_appends_exactly_one_marker_line():
+    """Each exit's marker, pinned where that exit is."""
+    assert [m.split(",")[0] for m in _markers()] == [
+        "health-check: disabled", "health-check: clean", "health-check: discarded", "health-check: done"
+    ]
+    gate = _flow(_section("## 1. Enabled gate", "## 2."))
+    assert "append `health-check: disabled` to `.decision-log.md` and return, touching nothing else" in gate
+    assert ("Every exit of this check appends exactly one `health-check: <outcome>` line to `.decision-log.md`, the "
+            "way SKILL.md appends any entry, in place of any other line about how it ended: `disabled` (above), "
+            "`clean` (§2), `discarded` (§4a **[N]**) or `done` with its counts (§6).") in gate
+    find = _flow(_section("## 2. Find the findings", "## 3."))
+    assert ('If there is none, append `health-check: clean` (§1), display "Health Check: clean run. No workflow '
+            'issues to report." in an attended run, and return.') in find
+    draft = _flow(_section("## 3. Fingerprint and draft each finding", "## 4."))
+    assert "When no finding survives this step, go straight to §6, with no gate." in draft
+    attended = _flow(_section("### 4a. Attended routing", "### 4-headless."))
+    assert ('**[N]** → append `health-check: discarded` (§1), display "Findings discarded. Workflow complete." and '
+            "STOP.") in attended
+    close = _flow(_section("## 6. Close"))
+    assert close == (
+        "## 6. Close Once every finding is routed, or none survived §3, append the one line `health-check: done, <n> "
+        "filed, <n> upvoted, <n> queued, <n> already handled, <n> dropped` (§1), each count being the findings that "
+        "took that route (an issue created; **R** or **C**; the local queue; a `handled` verdict; dropped in §3), and "
+        "return."
+    )
+    body = _flow(_reference())
+    for stale in ("health-check disabled (", "clean run, no findings"):
+        assert stale not in body, stale
+
+
+# §2's Grep pattern: an entry or a marker at the start of its line, after a list bullet at most.
+_READ_PATTERN = r"^\s*([-*]\s+)?(friction:|health-check: (disabled|clean|discarded|done)\b)"
+
+
+def _friction_read(log: str) -> list[str]:
+    """§2's read with the pattern the stage reference gives: the `friction:` entries after the last marker."""
+    [pattern] = re.findall(r"for the regex `([^`]+)`", _reference())
+    assert pattern == _READ_PATTERN
+    read = re.compile(pattern)
+    hits = [(n, line) for n, line in enumerate(log.splitlines(), 1) if read.search(line)]
+    last = max((n for n, line in hits if read.search(line).group(2).startswith("health-check:")), default=0)
+    return [line for n, line in hits if n > last and read.search(line).group(2) == "friction:"]
+
+
+def test_the_friction_read_takes_only_the_entries_after_the_last_marker():
+    def entry(k: int, bullet: str = "") -> str:
+        return f'{bullet}friction: gate.md "Route on the verdict": case {k}'
+
+    assert _friction_read("\n".join(["# Session 1", entry(1), entry(2)])) == [entry(1), entry(2)], "no marker yet"
+    for marker in _markers():
+        line = marker.replace("<n>", "1")
+        assert not re.search(r"\bfriction:", line), "a marker is never read as an entry"
+        log = "\n".join(["# Session 1", entry(1), line, "# Session 2", entry(2, "- "), "- gate: advance", entry(3)])
+        assert _friction_read(log) == [entry(2, "- "), entry(3)], marker
+        # A later marker closes those too, and an earlier one never reopens them.
+        assert _friction_read(log + "\n- " + line) == []
+
+
+def test_an_entry_that_quotes_a_marker_neither_closes_itself_nor_the_entries_before_it():
+    quoting = 'friction: finalize.md "Workflow health check (terminal)": it says to log health-check: done, then?'
+    earlier = 'friction: gate.md "Route on the verdict": silent on a reloop'
+    log = "\n".join(["- health-check: clean", earlier, quoting, "- gate: advance, see friction: above"])
+    assert _friction_read(log) == [earlier, quoting]
 
 
 def test_every_finding_is_drafted_before_the_gate_and_routed_unchanged():
@@ -1390,9 +1650,13 @@ def test_every_finding_is_drafted_before_the_gate_and_routed_unchanged():
     assert "Read a file of that name an earlier invocation left" in draft
     assert "If either Write fails, log its error, naming the finding, and drop that finding" in draft
     assert "Two findings that get one `{fp}` are one defect: merge them into one finding before drafting." in draft
-    # The dedup Action reads `## Fingerprint` and `## Severity`, so the body uses the template's headings.
-    assert "`## Fingerprint` with `` `{fp}` `` alone on the line below it" in draft
-    assert "`## Severity` (`{severity}`)" in draft
+    # The draft opens with the script's body header, which the dedup Action reads: no machine-read line by hand.
+    assert ("Write each finding's issue body with the Write tool to `hc-body-{fp}.md` in the run folder, opening with "
+            "the call's `body_header` exactly as printed.") in draft
+    assert ("**Issue body**: the `body_header` (its Workflow, Step File, Section, Severity, Fingerprint and Defect Key "
+            "sections, which the dedup Action reads), then these `## ` headings in order") in draft
+    for by_hand in ("`## Fingerprint` with", "`## Severity` (`{severity}`)", "Section fingerprint:"):
+        assert by_hand not in draft, by_hand
     # The live create and the queue both take that draft as their body file.
     create = [b for b in _fenced_blocks(_section("**5a-ii. If no matching open issue exists**", "### 5b."))
               if "gh issue create" in b]
@@ -1403,7 +1667,9 @@ def test_every_finding_is_drafted_before_the_gate_and_routed_unchanged():
 
 def test_the_gate_shows_each_title_and_body_and_y_submits_only_bugs():
     gate = _flow(_section("### 4a. Attended routing", "### 4-headless."))
-    assert "For each one show its title" in gate and "the path of its draft and the draft's full text" in gate
+    assert ("Show every finding: for each one, its `{title}` (§3), the path of its draft and the draft's full "
+            "text.") in gate
+    assert "then HALT" not in gate, "the gate halts once"
     assert "**[Y]** Yes: submit the bug findings; friction and gap findings stay local" in gate
     assert "**[A]** All: submit every finding, friction and gap included" in gate
     assert gate.index("the draft's full text") < gate.index("**HALT and wait for input.**")
@@ -1416,6 +1682,44 @@ def test_the_gate_shows_each_title_and_body_and_y_submits_only_bugs():
     assert "**[A]**: every finding live-submits (§5a)." in routing
     # One prompt, not two: no second friction/gap question after the gate.
     assert "[y/N]" not in _reference()
+
+
+def test_the_gate_names_where_the_issues_go():
+    """The only consent point says what [Y] does: issues on the configured repo, under the user's account (enhancement-4)."""
+    gate = _flow(_section("### 4a. Attended routing", "### 4-headless."))
+    # Public on the default whatever its letter case, and a note for any other repository, a public fork included.
+    assert ('Then ask, saying "public issues" for "issues" when `{workflow.health_check_repo}` is the default, '
+            '`armelhbobdad/bmad-module-ultracode-goal` in any letter case, and for any other repository adding '
+            '"(public if that repository is public)" after its name: "Submit these findings as issues on '
+            '{workflow.health_check_repo}, filed with your GitHub account?') in gate
+    skill_root = Path(__file__).resolve().parents[2]
+    assert 'health_check_repo = "armelhbobdad/bmad-module-ultracode-goal"' in (
+        skill_root / "customize.toml").read_text(encoding="utf-8"), "the default the gate names is the shipped one"
+    docs = _flow((Path(__file__).resolve().parents[4] / "docs" / "health-check.md").read_text(encoding="utf-8"))
+    assert ('asks "Submit these findings as issues on `<health_check_repo>`, filed with your GitHub account?", saying '
+            "public issues on the default and, for any other repository, that they are public if it is.") in docs
+
+
+def test_the_dedup_gate_names_the_matched_issue_apart_from_the_findings_title():
+    """`{title}` is the finding's script-built title alone, so a new issue after [N] never takes the match's title."""
+    menu = _section("**5a-i. If a matching open issue exists**", "**5a-ii.")
+    assert ("present, `{match_number}` and `{match_title}` being that issue's `number` and `title` from the "
+            "search:") in _flow(menu)
+    assert '"Matching report found: #{match_number}: {match_title}' in menu
+    assert "Possible match: #{match_number}: {match_title}" in menu
+    assert "/issues/{match_number}/reactions" in menu and "gh issue comment {match_number} " in menu
+    assert "{N}" not in menu and "{title}" not in menu
+    # Everywhere else `{title}` is the finding's own, and the commands that file it use it.
+    assert _reference().count('--title "{title}"') == 2
+
+
+def test_a_null_title_or_header_is_never_written():
+    draft = _flow(_section("## 3. Fingerprint and draft each finding", "## 4."))
+    assert ("A null `title` or `body_header` means the description was missing from the file: write it there and run "
+            "the call again, and never write `null` into a title or a draft.") in draft
+    assert ("the description may hold no backtick, `$`, double quote, backslash, `!`, tab, line break or other "
+            "character that is not printable, since the title goes on a command line, and may not make "
+            "`regression_title` longer than 256 characters") in draft
 
 
 def test_the_attended_gate_offers_queue_locally():
@@ -1444,10 +1748,15 @@ def test_the_never_block_rule_is_stated_once_with_its_reason():
 
 def test_an_unattended_match_takes_skip_and_posts_nothing():
     headless = _flow(_section("### 4-headless.", "## 5. Severity routing"))
-    assert "takes **[S]**" in headless and "nothing is posted" in headless
+    assert "A match takes **[S]** (§5a-i)." in headless
     menu = _flow(_section("**5a-i. If a matching open issue exists**", "**5a-ii."))
     assert "**Unattended default: [S].**" in menu
-    assert "nothing is posted on a guess" in menu
+    # Stated once, where it is decided, with the reason only it gives.
+    assert ('takes **[S]** at an exact or a possible match, so the finding goes to the local queue (§5c) with the '
+            'reason "These may match an open issue on {workflow.health_check_repo}; review them before submitting.", '
+            "and nothing is posted on a guess.") in menu
+    assert "(the Unattended default's reason when nobody was asked)" in menu
+    assert _flow(_reference()).count("nothing is posted") == 1
 
 
 def test_a_queued_finding_records_nothing():
@@ -1484,25 +1793,33 @@ def test_every_local_outcome_shows_its_paths_reason_and_body_file_command():
     command = _flow(block.replace("\\\n", " "))
     assert command.index('gh label create "{fp}"') < command.index("gh issue create")
     assert "2>/dev/null || true" in command
-    assert '--title "[health-check][{severity}][{fp}] {workflow}: {short description}"' in command
+    assert '--title "{title}"' in command
+    assert "`{title}` the title §5a-ii would use" in queue
     assert '--label "health-check,workflow-improvement,{severity},{fp}"' in command
     assert "--body-file {file-path}" in command
     # A reporter without push access drops the `--label` line, so the body file is on a line of its own.
     assert "\n  --body-file {file-path}\n" in block
     assert not any("--label" in line and "--body-file" in line for line in block.splitlines())
     assert "[title]" not in queue
-    # Every reason the routing names is one the §5c table lists.
-    body = _reference()
-    reasons = set(re.findall(r'with the reason "([^"]+)"', body))
-    assert reasons
-    for reason in reasons:
-        assert f'"{reason}"' in queue, reason
+    # Each routing step quotes its own reason, one of a fixed set, and §5c keeps no copy of them (leanness-2).
+    assert set(re.findall(r'with the reason "([^"]+)"', _flow(_reference()))) == {
+        "The review gate queued these locally.",
+        "Headless runs queue every finding while health_check_autosubmit is off.",
+        "Headless runs never submit friction or gap findings.",
+        "Friction and gap findings stay local unless you choose [A].",
+        "GitHub CLI is not available.",
+        "You skipped these at the dedup gate.",
+        "These may match an open issue on {workflow.health_check_repo}; review them before submitting.",
+        "Posting these to GitHub failed.",
+    }
+    assert "Each finding here carries the reason sentence its routing step gave it." in queue
+    assert not re.search(r"^\|", _section(QUEUE), re.MULTILINE), "no reason table"
 
 
 def test_a_failed_create_is_retried_once_without_labels():
     """A reporter without push access can create no label and set none (#227).
 
-    The guard's `|| true` hides the failed `gh label create`, so `gh issue create --label {fp}` fails on the
+    The label command's `|| true` hides the failed `gh label create`, so `gh issue create --label {fp}` fails on the
     missing label and the first report of every defect was only ever queued. The retry files it bare, and the
     dedup Action labels it from its title.
     """
@@ -1511,18 +1828,18 @@ def test_a_failed_create_is_retried_once_without_labels():
     # The first run still passes --label, so a collaborator's filing is unchanged.
     [block] = [b for b in _fenced_blocks(section) if "gh issue create" in b]
     assert '--label "health-check,workflow-improvement,{severity},{fp}"' in block
+    # The title is the script's, for the first run, the retry and a regression alike.
+    assert '--title "{title}"' in block
+    assert "After a `regression` verdict, `{regression_title}` takes the place of `{title}` (§5a step 1)." in create
     assert ("**If `gh issue create` exits non-zero, run it once more without the `--label` line**, with the same "
             "title and body file.") in create
-    assert "cannot create the label (the guard's `|| true` hides that) or set any label" in create
+    assert "cannot create the label (the label command's `|| true` hides that) or set any label" in create
     assert "The dedup Action applies the labels from the title" in create
     # The outcome is recorded and queued as before: created after either run, queued after the second failure.
     assert "After the issue is created, by the first run or the retry, record it (§5b)" in create
     assert "If `gh issue create` fails on its retry too, log its error and record nothing" in create
     record = _flow(_section("### 5b. Record the outcome", QUEUE))
     assert "`created` after `gh issue create` succeeded, on its first run or its retry without `--label`" in record
-    queue = _flow(_section(QUEUE))
-    assert ("| A search, a regression line's edit, the reaction or the comment failed, or `gh issue create` failed "
-            "twice") in queue
 
 
 def test_the_queue_tells_a_reporter_without_push_access_to_drop_the_guard_and_labels():
@@ -1556,7 +1873,49 @@ def test_the_issue_template_gives_the_stdin_fingerprint_command():
     [command] = [line.strip() for line in lines if "health_check_fp.py fingerprint" in line]
     assert re.search(r"health_check_fp\.py fingerprint .*--stdin < names\.json$", command), command
     [names] = [line.strip() for line in lines if line.strip().startswith('{"section_heading"')]
-    assert set(json.loads(names)) == {"section_heading", "defect_name"}
+    assert set(json.loads(names)) == {"section_heading", "defect_name", "short_description"}
+    assert "use its `title` as this issue's title" in " ".join(" ".join(lines).split())
+
+
+def test_a_run_blocked_at_stage_1_or_2_has_its_friction_reported_by_the_next_run():
+    """No health check at an early block, and no reason that says there is nothing to report (architecture-2).
+
+    Only a later run that reaches Finalize reports it, and an `already-complete` exit or an abandoned Epic has none.
+    """
+    root = Path(__file__).resolve().parents[4]
+    skill = _flow((root / "skills" / "ultracode-goal" / "SKILL.md").read_text(encoding="utf-8"))
+    assert ("Runs that block at Stage 1 or Stage 2 do not: the next run of the Epic that reaches Finalize, if one does, "
+            "reports the `friction:` entries they logged.") in skill
+    docs = _flow((root / "docs" / "health-check.md").read_text(encoding="utf-8"))
+    assert ("It does **not** run on an early block, a Stage 1 or Stage 2 stop: the next run of that Epic that reaches "
+            "Finalize, if one does, reports the friction the blocked run logged.") in docs
+    contributing = _flow((root / "CONTRIBUTING.md").read_text(encoding="utf-8"))
+    assert "so the next run of that Epic that reaches Finalize, if one does, reports what such a run logged" in contributing
+    for text in (skill, docs, contributing):
+        for gone in ("no executed workflow surface", "nothing to audit"):
+            assert gone not in text, gone
+
+
+def test_the_docs_say_the_off_switch_closes_pending_friction_and_draw_the_markers():
+    docs = (Path(__file__).resolve().parents[4] / "docs" / "health-check.md").read_text(encoding="utf-8")
+    assert ("Each run it skips still logs its `disabled` marker, which closes the `friction:` entries logged so far: "
+            "turning the check back on reports only friction logged after that.") in _flow(docs)
+    [chart] = re.findall(r"```mermaid\n(.*?)```", docs, re.DOTALL)
+    for node in ('Off["Log the disabled marker and exit.', 'Reflect["Read the friction logged since the last marker',
+                 'Done["Clean run. Log the clean marker and exit"]', 'Discard["Discard the findings. Log the discarded',
+                 'Create["Create or react on an issue on health_check_repo"]',
+                 'Close["Log the done marker with its counts"]', "Queue --> Close", "Create --> Close"):
+        assert node in chart, node
+    assert "public issue" not in chart and "Reflect on this run" not in chart
+
+
+def test_contributing_records_a_fix_in_the_configured_seen_cache():
+    """customization-1: an overridden health_check_seen_cache must get the `resolved` record the next run reads."""
+    contributing = (Path(__file__).resolve().parents[4] / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    [command] = [b for b in _fenced_blocks(contributing.replace("\n  ", "\n")) if "health_check_fp.py record" in b]
+    assert "--cache <health_check_seen_cache>" in command
+    assert "~/" not in command
+    assert "(the configured `health_check_seen_cache`, by default `~/.ultracode-goal/health-check-seen.json`)" in contributing
 
 
 # --- version: probe ladder --------------------------------------------------
