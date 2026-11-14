@@ -1,0 +1,5 @@
+type: added
+scope: ultracode-goal
+summary: |
+  The health check can now report a defect in its own instructions, or in a script or command it runs: `health_check_fp.py fingerprint` accepts the stage `health-check`, whose section headings come from the health check's own stage reference. Such a finding is never posted: on `[Y]`, `[A]`, `[Q]` or a headless run it goes to the local queue with the reason "Found in the health check's own instructions; review it before submitting.", and `[N]` discards it with the rest. When every finding is of this stage, the attended gate asks only whether to queue them. A defect that bites while the check runs is queued as one more such finding, at most one per check; a further one, or one after the check's closing marker, is logged as a `friction:` entry that the next health check reports.
+issues: [230]
