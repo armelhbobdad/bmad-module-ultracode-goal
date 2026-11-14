@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  A headless run with `health_check_autosubmit` on that finds an open issue matching a bug finding now queues the finding locally, with the match as its reason, and posts nothing. The choice had no default for a run with nobody to ask, so the run guessed between an upvote, an unreviewed comment, a new issue and a wait for an answer that never comes.
+issues: [226]

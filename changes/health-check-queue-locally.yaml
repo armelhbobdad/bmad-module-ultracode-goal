@@ -1,0 +1,5 @@
+type: added
+scope: ultracode-goal
+summary: |
+  The attended health-check gate now offers `[Q]`, which queues every finding locally and sends nothing to GitHub. Whenever findings stay in the local queue, for any reason, the health check lists each file it wrote with one sentence giving the reason and the `gh issue create --body-file` command that submits it, on screen in an attended run and in the log in a headless one; it used to say so only when the GitHub CLI was missing.
+issues: [226]

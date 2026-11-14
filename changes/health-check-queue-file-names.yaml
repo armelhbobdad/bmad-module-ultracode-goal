@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  Two health-check findings of one stage queued in the same second no longer share a file name, where the second overwrote the first: the later names get `-2`, `-3` and so on before `.md`.
+issues: [226]

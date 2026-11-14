@@ -2,13 +2,36 @@ name: Health-Check Dedup
 
 # Server-side dedup for workflow health-check issues.
 # When a new issue carrying the `health-check` label is opened, this Action:
-#   1. Extracts the fingerprint from any `fp-XXXXXXX` label on the issue.
-#   2. Searches for an earlier OPEN issue with the same fingerprint.
-#   3. If one exists (and has a lower issue number — tiebreak for races):
+#   1. Acts on the `opened` event, and on a `labeled` event only when the label
+#      added is `health-check` or an `fp-XXXXXXX` fingerprint: any other label
+#      (a maintainer's triage) never re-flags an issue a maintainer un-flagged
+#      or re-closes a reopened duplicate. It reads the issue as it is now (the
+#      event payload is a snapshot) and stops unless it is still open.
+#   2. Extracts the fingerprint from any `fp-XXXXXXX` label on the issue.
+#   3. Searches for an earlier OPEN issue with the same fingerprint: the canonical
+#      one is the lowest-numbered such issue numbered below this one, so two
+#      reports filed together never close each other. If one exists:
 #      - Posts a short "duplicate of #N" comment on the new issue.
-#      - Adds the `duplicate` label and closes the new issue.
-#      - Posts a 👍 reaction on the canonical issue to preserve the signal-count.
-#   4. If no prior open issue exists, does nothing — the new issue becomes canonical.
+#      - Adds the `duplicate` label and closes the new issue as not planned.
+#      - Posts a +1 reaction on the canonical issue to preserve the signal-count.
+#   4. If no earlier open issue exists, the new issue becomes canonical. Then,
+#      unless it already carries `possible-duplicate`, it reads the issue's section
+#      fingerprint (the `Section fingerprint:` line of its body; an issue with no
+#      such line was filed without a defect key, so its label is its section
+#      fingerprint) and looks for earlier open health-check issues, numbered
+#      below this one as the canonical issue is, that share it under a different
+#      defect key: one whose body records it, or one filed without a key whose
+#      label is it. If any exist, it adds the `possible-duplicate` label to the
+#      new issue and comments on it with a link to each. It
+#      closes nothing on that match: two reports of one defect can name it by
+#      different keys, and two different defects in one section share the
+#      section fingerprint, so a maintainer decides.
+#
+# GitHub sends `opened` and one `labeled` event per label for a new issue, so the
+# job runs several times for one issue: runs for one issue share a concurrency
+# group so they never overlap (a newer pending run may replace an older pending
+# one), and each reads the issue's current state and labels, so a later run sees
+# what an earlier one did and does nothing again.
 #
 # This is a safety net. The client-side dedup in
 # skills/ultracode-goal/references/health-check.md handles the common case;
@@ -25,14 +48,35 @@ jobs:
   dedup:
     if: contains(github.event.issue.labels.*.name, 'health-check')
     runs-on: ubuntu-latest
+    concurrency:
+      group: health-check-dedup-${{ github.event.issue.number }}
+      cancel-in-progress: false
     steps:
       - name: Dedup by fingerprint label
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const issue = context.payload.issue;
+            // Act on `opened`, and on `labeled` only for a label this Action reads: a maintainer's triage
+            // label must not re-flag an issue they un-flagged or re-close a duplicate they reopened.
+            const event = context.payload.action;
+            const added = context.payload.label ? context.payload.label.name : '';
+            if (event !== 'opened' && !(event === 'labeled' && (added === 'health-check' || /^fp-[0-9a-f]{7}$/.test(added)))) {
+              core.info(`Event ${event} (label ${added || 'none'}) is not one this Action acts on; skipping.`);
+              return;
+            }
+
+            // The payload is a snapshot from when the event fired: read the issue as it is now.
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+            });
+            if (issue.state !== 'open') {
+              core.info(`Issue #${issue.number} is ${issue.state}; skipping dedup.`);
+              return;
+            }
             const fpLabel = (issue.labels || [])
-              .map(l => l.name)
+              .map(l => (typeof l === 'string' ? l : l.name))
               .find(n => /^fp-[0-9a-f]{7}$/.test(n));
 
             if (!fpLabel) {
@@ -49,13 +93,16 @@ jobs:
               per_page: 100,
             });
 
-            // Canonical = lowest-numbered open issue with this fingerprint (excluding self).
+            // Canonical = lowest-numbered open issue with this fingerprint, numbered below this one: an
+            // issue is never closed in favour of a later one, so two reports filed together cannot each
+            // close the other.
             const canonical = matches
-              .filter(m => m.number !== issue.number)
+              .filter(m => m.number < issue.number)
               .sort((a, b) => a.number - b.number)[0];
 
             if (!canonical) {
-              core.info(`No prior open issue for ${fpLabel}; #${issue.number} is canonical.`);
+              core.info(`No earlier open issue for ${fpLabel}; #${issue.number} is canonical.`);
+              await flagPossibleDuplicates();
               return;
             }
 
@@ -89,3 +136,67 @@ jobs:
               issue_number: canonical.number,
               content: '+1',
             });
+
+            // Reports of one defect under different defect keys get different fingerprints, so the
+            // exact match above misses them. Flag, never close: the section fingerprint is shared by
+            // every defect of one severity in one section.
+            async function flagPossibleDuplicates() {
+              const labelsOf = i => (i.labels || []).map(l => (typeof l === 'string' ? l : l.name));
+              if (labelsOf(issue).includes('possible-duplicate')) {
+                core.info(`#${issue.number} is already flagged as a possible duplicate.`);
+                return;
+              }
+              const SECTION_RE = /^Section fingerprint: `(fp-[0-9a-f]{7})`/m;
+              const own = SECTION_RE.exec(issue.body || '');
+              // An issue filed without a defect key has no such line: its fingerprint is its section's.
+              const sectionFp = own ? own[1] : fpLabel;
+              const open = await github.paginate(github.rest.issues.listForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                labels: 'health-check',
+                per_page: 100,
+              });
+              // Earlier issues only, as for the canonical one: two reports filed together never flag each
+              // other, and an older issue relabeled later is never flagged against the reports after it.
+              const related = open
+                .filter(m => m.number < issue.number && !m.pull_request)
+                .filter(m => {
+                  const labels = labelsOf(m);
+                  if (labels.includes(fpLabel)) return false;
+                  if (labels.includes(sectionFp)) return true;
+                  const theirs = SECTION_RE.exec(m.body || '');
+                  return Boolean(theirs) && theirs[1] === sectionFp;
+                })
+                .sort((a, b) => a.number - b.number);
+              if (related.length === 0) {
+                core.info(`No other open issue shares section fingerprint ${sectionFp}.`);
+                return;
+              }
+              const refs = related.map(m => `#${m.number}`).join(', ');
+              core.info(`Flagging #${issue.number} as a possible duplicate of ${refs}`);
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'possible-duplicate',
+                  color: 'cfd3d7',
+                  description: 'Health-check issue that may report the same defect as another open one',
+                });
+              } catch (error) {
+                if (error.status !== 422) throw error; // 422: the label already exists
+              }
+              // The label first: it is what stops a later run, so a failed label call leaves no comment to repeat.
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['possible-duplicate'],
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Possible duplicate of ${refs}: same section fingerprint \`${sectionFp}\`, different defect key. Two reports of one defect can name it by different keys, and every defect of this severity in this section shares the section fingerprint, so this issue stays open until a maintainer decides.`,
+              });
+            }
