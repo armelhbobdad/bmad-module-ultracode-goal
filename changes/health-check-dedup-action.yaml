@@ -1,5 +1,5 @@
 type: fixed
 scope: ultracode-goal
 summary: |
-  The repository's health-check dedup Action now acts once per issue: its runs for one issue no longer overlap, each reads the issue as it is now and stops once it is closed, and it closes an issue only as a duplicate of an earlier open one, so two reports filed together can no longer close each other. When a new issue shares only its section fingerprint with another open one, under a different defect key, the Action comments with a link to each and adds the `possible-duplicate` label, and closes nothing.
+  The repository's health-check dedup Action now acts once per issue: its runs for one issue no longer overlap, each reads the issue as it is now and stops once it is closed, and it closes an issue only as a duplicate of an earlier open one, so two reports filed together can no longer close each other. When a new issue shares only its section fingerprint with an earlier open one, under a different defect key, the Action comments with a link to each and adds the `possible-duplicate` label, and closes nothing.
 issues: [226]

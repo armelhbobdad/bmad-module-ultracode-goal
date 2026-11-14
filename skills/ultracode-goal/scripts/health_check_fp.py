@@ -276,13 +276,16 @@ def _stop(proc: subprocess.Popen, windows: bool = _IS_WINDOWS) -> None:
         if windows:
             taskkill = _resolve_outside_cwd("taskkill")
             if taskkill:
-                subprocess.run(
-                    [taskkill, "/F", "/T", "/PID", str(proc.pid)],
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    timeout=KILL_WAIT_SEC,
-                    check=False,
-                )
+                try:
+                    subprocess.run(
+                        [taskkill, "/F", "/T", "/PID", str(proc.pid)],
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        timeout=KILL_WAIT_SEC,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass  # proc itself is still killed below
             proc.kill()
         else:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -537,7 +540,9 @@ def _atomic_write(cache: Path, content: str) -> None:
     fd, tmp_name = tempfile.mkstemp(dir=str(cache.parent), prefix=".hc-seen-", suffix=".tmp")
     try:
         try:
-            os.write(fd, content.encode("utf-8"))
+            data = memoryview(content.encode("utf-8"))
+            while data:
+                data = data[os.write(fd, data):]  # os.write may write fewer bytes than asked
             os.fsync(fd)
         finally:
             os.close(fd)

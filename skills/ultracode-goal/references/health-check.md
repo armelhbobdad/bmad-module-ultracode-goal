@@ -102,7 +102,7 @@ In headless (`-H`) there is no human to answer [Y]/[N]/[E]/[Q], so that gate is 
 - If `{workflow.health_check_autosubmit}` is **false** (the default): **queue EVERY finding locally** (§5c) with the reason "Headless runs queue every finding while health_check_autosubmit is off." Never live-submit in an unattended run with autosubmit off.
 - If `{workflow.health_check_autosubmit}` is **true**: **live-submit `bug` findings only** (§5a), still script-fingerprinted, remote-dedup-searched, and seen-cache-guarded. **Friction and gap always queue** (§5c) with the reason "Headless runs never submit friction or gap findings." At a matching or possibly matching issue (§5a-i) there is nobody to choose, so the run takes **[S]**: the finding is queued with the match reason, and nothing is posted.
 
-The health check must **never block or delay the final headless JSON emit** — a stall here strands the automator that is waiting on that JSON. It is fire-and-queue: do the routing above, then return so Finalize emits its JSON. If `gh` is unavailable at any live-submit step, fall through to §5c — never stall.
+The health check must **never block or delay the final headless JSON emit**: a stall here strands the automator that is waiting on that JSON. It is fire-and-queue: do the routing above, then return so Finalize emits its JSON. A `gh` call that fails at any live-submit step, either search included, sends the finding to §5c with that step's reason from the §5c table; never stall.
 
 ## 5. Severity routing (attended [Y] path)
 
@@ -119,12 +119,12 @@ For each finding routed to live-submit:
 
 ```
 uv run {skill-root}/scripts/health_check_fp.py fingerprint \
-  --severity {severity} --stage {stage} --section-slug {slug} --defect-key {defect-key}
+  --severity {severity} --stage {stage} --section-slug={slug} --defect-key={defect-key}
 ```
 
 → `{"fp": "fp-xxxxxxx", "legacy_fp": "fp-xxxxxxx", "tuple": "<exact hashed input of fp>"}`. `{fp}` hashes severity, stage, step file, section slug and defect key; `{legacy_fp}` is the same hash without the defect key. The `section-slug` is a kebab-case stable heading slug (e.g. `verdict-mapping`), **never line numbers**: they drift when files are edited.
 
-**The defect key** names the defect itself, so two different defects in one section get two fingerprints while two reports of one defect that name the same thing get the same one. It is one to four lower-case ASCII words joined by hyphens that name the thing the fix would change, in the stage reference's or the script's own words: a script, a subcommand, a function, a flag, a field, a verdict, a rule's term or a section's concept. Pick the most specific name the fix would edit. To turn a name into the key, drop its leading dashes and underscores, split it at spaces, underscores, hyphens, dots and each lower-case letter followed by an upper-case one, drop every character of each word that is not an ASCII letter or digit, lower-case each word and join them with hyphens (`gate_status` gives `gate-status`, `--cycle-profile` gives `cycle-profile`, `operator's own evidence` gives `operators-own-evidence`); a name of more than four words keeps its last four. When the defect is a missing rule, there is no name to copy yet: name the case the rule should cover in two to four of the stage reference's own words, the noun the rule would be about, then what makes the case distinct (a missing rule for a story whose acceptance criteria moved, in a section whose rule covers a re-gated story, gives `story-moved-criteria`). Never use a line number, a file name or path (the step file already says where), a severity, or words from this run's own story: whoever reports the same defect next must reach the same key from the source alone. Never use the section's own subject alone either: every defect in the section shares it.
+**The defect key** names the defect itself, so two different defects in one section get two fingerprints while two reports of one defect that name the same thing get the same one. It is one to four lower-case ASCII words joined by hyphens that name the thing the fix would change, in the stage reference's or the script's own words: a script (by its file name without the extension: `gate_eval.py` gives `gate-eval`), a subcommand, a function, a flag, a field, a verdict, a rule's term or a section's concept. Pick the most specific name the fix would edit. To turn a name into the key, drop its leading dashes and underscores, split it at spaces, underscores, hyphens, dots and each lower-case letter followed by an upper-case one, drop every character of each word that is not an ASCII letter or digit, lower-case each word and join them with hyphens (`gate_status` gives `gate-status`, `--cycle-profile` gives `cycle-profile`, `operator's own evidence` gives `operators-own-evidence`); a name of more than four words keeps its last four. When the defect is a missing rule, there is no name to copy yet: name the case the rule should cover in two to four of the stage reference's own words, the noun the rule would be about, then what makes the case distinct (a missing rule for a story whose acceptance criteria moved, in a section whose rule covers a re-gated story, gives `story-moved-criteria`). Never use a path, a file extension or a line number (the step file already says where), a severity, or words from this run's own story: whoever reports the same defect next must reach the same key from the source alone. Never use the section's own subject alone either: every defect in the section shares it.
 
 **`legacy_fp` is the section fingerprint**, which every defect of one severity in one section shares. Seen-cache records and issues made by a version of this module without the defect key carry it as their fingerprint, and every issue this step files records it in its body (§5a-ii), so a match on it is only ever a possible match (steps 2 and 4).
 
@@ -170,6 +170,8 @@ gh search issues --repo {healthCheckRepo} --state open "{legacy_fp} in:title,bod
 
 Each issue this second search finds is a **possible match**: it was filed by a version whose fingerprints carry no defect key, or it reports a defect of this severity in this section under another defect key. Every such defect shares that fingerprint, so only the user decides (§5a-i).
 
+If either search exits non-zero, it has not shown that no issue matches: log its error and send the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
+
 **5a-i. If a matching open issue exists**, present:
 
 > "Matching report found: #{N} — {title}
@@ -192,7 +194,7 @@ Execute the choice:
 
 - **R:** `gh api -X POST /repos/{healthCheckRepo}/issues/{N}/reactions -f content='+1'`, then record `reacted` (§5b).
 - **C:** the reaction call, then write the minimal env+delta body (the Environment table plus ONE sentence on what differs; no session narrative) to a body file as §5a-ii says, and run `gh issue comment {N} --repo {healthCheckRepo} --body-file {body-file}`; then record `commented` (§5b).
-- **N:** after an exact match, the open issue carries this same fingerprint, so a new issue under it would be closed as its duplicate: choose a more specific defect key that names what sets this defect apart (the more specific name the fix edits, or the case it covers, still in the source's words), recompute the fingerprints with it (step 1), then proceed to §5a-ii. After a possible match, proceed to §5a-ii as is: that issue's `fp-*` label differs from `{fp}`.
+- **N:** after an exact match, the open issue carries this same fingerprint, so a new issue under it would be closed as its duplicate: choose a more specific defect key that names what sets this defect apart (the more specific name the fix edits, or the case it covers, still in the source's words), recompute the fingerprints with it (step 1), then run steps 2 to 4 again for the new fingerprints and act on what they return as for any finding: the new `seen` verdict alone decides the regression treatment and `--regression`. After a possible match, proceed to §5a-ii as is: that issue's `fp-*` label differs from `{fp}`.
 - **S:** record nothing, and write the finding to the local queue (§5c) with the reason "You skipped these at the dedup gate." (the match reason when nobody was asked).
 
 If the reaction or the comment call exits non-zero, log its error and make no further call for this finding: **C** posts no comment after a failed reaction, and a reaction already added stays. Record nothing and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
@@ -286,7 +288,7 @@ A finding stays local for one of these reasons, each with the sentence its block
 | `gh auth status` failed (§5a step 3) | "GitHub CLI is not available." |
 | The user chose **[S]** at a matching issue (§5a-i) | "You skipped these at the dedup gate." |
 | A run with nobody to ask took **[S]** at a match (§5a-i), the match reason | "These may match an open issue on {healthCheckRepo}; review them before submitting." |
-| A body Write, reaction, comment or `gh issue create` failed (§5a-i, §5a-ii) | "Posting these to GitHub failed." |
+| A search, body Write, reaction, comment or `gh issue create` failed (§5a step 4, §5a-i, §5a-ii) | "Posting these to GitHub failed." |
 
 Every queued finding still gets its fingerprints from the script (§5a step 1), so its file carries the same `fp` a live report would. **Record nothing in the seen-cache for it** (§5b).
 
@@ -309,16 +311,23 @@ date: {ISO date}
 
 After writing the files, display this block, once per reason when findings stayed local for more than one, each block listing its own files:
 
-"{N} finding(s) saved locally:" then each path, then:
+"{N} finding(s) saved locally:" then each path, each followed by the two commands that submit it, filled in with that finding's values (after a `regression` verdict, `REGRESSION: ` goes before `{short description}`, as in §5a-ii):
 
-"{reason sentence} To submit one as an issue, run:
-`gh issue create --repo {healthCheckRepo} --title \"[title]\" --body-file {file-path}`
+```
+gh label create "{fp}" --repo {healthCheckRepo} --color "ededed" \
+  --description "Health-check fingerprint dedup key" 2>/dev/null || true
+gh issue create --repo {healthCheckRepo} \
+  --title "[health-check][{severity}][{fp}] {workflow}: {short description}" \
+  --label "health-check,workflow-improvement,{severity},{fp}" --body-file {file-path}
+```
 
-Or open one at <https://github.com/{healthCheckRepo}/issues/new/choose>"
+then:
+
+"{reason sentence} Run a finding's two commands to submit it as an issue, or open one at <https://github.com/{healthCheckRepo}/issues/new/choose>"
 
 Then display "Workflow complete." once, after the last block.
 
-In an unattended run, display nothing and wait for nothing: log the same lines (each path, the reason sentence and the `gh issue create --body-file` command), then return.
+In an unattended run, display nothing and wait for nothing: log the same lines (each path with its `gh label create` and `gh issue create --body-file` commands, and the reason sentence), then return.
 
 ## Terminal step
 

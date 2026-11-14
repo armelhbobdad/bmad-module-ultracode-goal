@@ -40,10 +40,13 @@ Section fingerprint: `fp-XXXXXXX`
 
 ## Defect Key
 <!-- One to four lower-case ASCII words joined by hyphens that name the thing the fix would change, in the stage
-     reference's or the script's own words: the most specific script, subcommand, function, flag, field or rule the
-     fix would edit, split at underscores, dots and case changes, leading dashes dropped (`gate_status` gives
-     `gate-status`). For a missing rule, name the case it should cover in two to four of the stage reference's words,
-     never the section's subject alone. Never a line number, file name, severity or words from your run's story. -->
+     reference's or the script's own words: the most specific script (by its file name without the extension),
+     subcommand, function, flag, field or rule the fix would edit. To turn a name into the key, drop its leading
+     dashes and underscores, split it at spaces, underscores, hyphens, dots and each lower-case letter followed by an
+     upper-case one, drop every character that is not an ASCII letter or digit, lower-case each word, join them with
+     hyphens and keep the last four (`gate_eval.py` gives `gate-eval`, `gate_status` gives `gate-status`). For a
+     missing rule, name the case it should cover in two to four of the stage reference's words, never the section's
+     subject alone. Never a path, a file extension, a line number, a severity or words from your run's story. -->
 
 
 ## Finding

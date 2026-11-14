@@ -14,11 +14,15 @@ Covers:
     is for (two reports filed together never close each other)
   - A run for an issue that is no longer open makes no call, and the run reads
     the issue's current state instead of the event's snapshot
+  - A `labeled` event acts only for `health-check` or an `fp-*` label: a
+    maintainer's triage label never re-flags or re-closes an issue
   - A shared section fingerprint under another defect key (a body line, or a
-    keyless issue's label) gets one "Possible duplicate" comment and the
-    `possible-duplicate` label, and is never closed or upvoted; an issue
-    already flagged, or one sharing nothing, gets no call
-  - Runs for one issue share a concurrency group and never cancel each other
+    keyless issue's label) with an earlier open issue gets the
+    `possible-duplicate` label, then one "Possible duplicate" comment, and is
+    never closed or upvoted; the earlier issue's own run, an issue already
+    flagged, and one sharing nothing get no call
+  - Runs for one issue share a concurrency group, so they never overlap; a
+    newer pending run may replace an older pending one
   - The `Section fingerprint:` line the stage reference tells the health
     check to write, and the one the issue template carries, is the one the
     Action's SECTION_RE reads
@@ -80,8 +84,9 @@ const github = {
   },
 };
 // The payload is the snapshot the event carried: open, with no labels. The Action must read the issue itself.
-const context = { payload: { issue: { number: current.number, state: 'open', labels: [] } },
-                  repo: { owner: 'o', repo: 'r' } };
+const payload = { action: scenario.event || 'opened', issue: { number: current.number, state: 'open', labels: [] } };
+if (scenario.label) payload.label = { name: scenario.label };
+const context = { payload, repo: { owner: 'o', repo: 'r' } };
 const core = { info: () => {} };
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 new AsyncFunction('github', 'context', 'core', script)(github, context, core)
@@ -113,10 +118,11 @@ def _issue(number: int, fp: str, section_fp: str | None, *extra: str, state: str
             "body": _body(section_fp) if body is None else body}
 
 
-def _run(tmp_path: Path, issue: dict, others: list[dict], label_exists: bool = False) -> list:
+def _run(tmp_path: Path, issue: dict, others: list[dict], label_exists: bool = False, event: str = "opened",
+         label: str | None = None) -> list:
     (tmp_path / "script.js").write_text(_script(), encoding="utf-8")
     (tmp_path / "runner.js").write_text(_NODE_RUNNER, encoding="utf-8")
-    scenario = {"issue": issue, "open": others, "labelExists": label_exists}
+    scenario = {"issue": issue, "open": others, "labelExists": label_exists, "event": event, "label": label}
     (tmp_path / "scenario.json").write_text(json.dumps(scenario), encoding="utf-8")
     done = subprocess.run(
         ["node", str(tmp_path / "runner.js"), str(tmp_path / "script.js"), str(tmp_path / "scenario.json")],
@@ -162,6 +168,27 @@ def test_a_run_for_an_issue_no_longer_open_makes_no_call(tmp_path):
 
 
 @needs_node
+@pytest.mark.parametrize("label", ["confirmed", "possible-duplicate", "duplicate", "bug", "fp-123"])
+def test_a_labeled_event_for_any_other_label_makes_no_call(tmp_path, label):
+    # A maintainer reopened the duplicate, or removed `possible-duplicate`, then triaged it with another label.
+    assert _run(tmp_path, _issue(12, FP_A, FP_S), [_issue(10, FP_A, FP_S)], event="labeled", label=label) == []
+    assert _run(tmp_path, _issue(12, FP_B, FP_S), [_issue(9, FP_S, None)], event="labeled", label=label) == []
+
+
+@needs_node
+@pytest.mark.parametrize("label", ["health-check", FP_A])
+def test_a_labeled_event_for_health_check_or_a_fingerprint_acts(tmp_path, label):
+    calls = _run(tmp_path, _issue(12, FP_A, FP_S), [_issue(10, FP_A, FP_S)], event="labeled", label=label)
+    assert ["update", 12, "closed", "not_planned"] in calls
+    assert ["react", 10, "+1"] in calls
+
+
+@needs_node
+def test_another_event_makes_no_call(tmp_path):
+    assert _run(tmp_path, _issue(12, FP_A, FP_S), [_issue(10, FP_A, FP_S)], event="edited") == []
+
+
+@needs_node
 def test_an_issue_without_a_fingerprint_label_makes_no_call(tmp_path):
     issue = {"number": 12, "labels": ["health-check"], "body": _body(FP_S)}
     assert _run(tmp_path, issue, [_issue(10, FP_A, FP_S)]) == []
@@ -174,8 +201,10 @@ def _assert_flagged(calls: list, number: int, refs: str, section_fp: str) -> Non
     comments = [c for c in calls if c[0] == "comment"]
     assert len(comments) == 1 and comments[0][1] == number
     assert comments[0][2].startswith(f"Possible duplicate of {refs}: same section fingerprint `{section_fp}`")
-    assert ["label", number, ["possible-duplicate"]] in calls
     assert not any(c[0] in ("update", "react") for c in calls), "a section match closes and upvotes nothing"
+    # The label that stops a later run goes on before the comment, after the label is created.
+    assert [c[0] for c in calls] == ["createLabel", "label", "comment"]
+    assert calls[1] == ["label", number, ["possible-duplicate"]]
 
 
 @needs_node
@@ -198,6 +227,22 @@ def test_a_new_keyless_issue_is_flagged_against_a_keyed_one(tmp_path):
     # Filed by hand without the key: its label is its section fingerprint, which a keyed issue records.
     calls = _run(tmp_path, _issue(12, FP_S, None), [_issue(9, FP_C, FP_S)])
     _assert_flagged(calls, 12, "#9", FP_S)
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "older, newer",
+    [
+        (_issue(9, FP_S, None), _issue(12, FP_B, FP_S)),  # a keyless report, then a keyed one
+        (_issue(9, FP_C, FP_S), _issue(12, FP_S, None)),  # a keyed report, then a keyless one
+        (_issue(9, FP_C, FP_S), _issue(12, FP_B, FP_S)),  # two keys in one section
+    ],
+    ids=["keyless-then-keyed", "keyed-then-keyless", "two-keys"],
+)
+def test_only_the_later_of_two_reports_is_flagged(tmp_path, older, newer):
+    # Filed together, or the older one relabeled later: the earlier issue's own run flags nothing.
+    assert _run(tmp_path, older, [newer]) == []
+    _assert_flagged(_run(tmp_path, newer, [older]), 12, "#9", FP_S)
 
 
 @needs_node
@@ -226,7 +271,8 @@ def test_a_pull_request_is_never_flagged_against(tmp_path):
 # --- the job ------------------------------------------------------------------
 
 
-def test_runs_for_one_issue_share_a_group_and_never_cancel_each_other():
+def test_runs_for_one_issue_never_overlap_and_a_pending_one_may_be_replaced():
+    # cancel-in-progress false: a running job finishes, while GitHub keeps only the newest pending run.
     job = _workflow()["jobs"]["dedup"]
     assert job["concurrency"] == {
         "group": "health-check-dedup-${{ github.event.issue.number }}",

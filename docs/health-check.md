@@ -27,7 +27,7 @@ Explicitly **not** sent: no source code, no Epic content, no secrets. The eviden
 
 Issues are filed publicly on `armelhbobdad/bmad-module-ultracode-goal`. On an **attended** run nothing is sent silently: the health check always **HALTS at a `[Y]` / `[N]` / `[E]` / `[Q]` gate** before submitting: yes to file, no to skip, edit to adjust first, or queue to keep every finding on disk and send nothing. You see the finding and approve it before it leaves your machine.
 
-The boundary below shows the disable path, everything computed on your machine, and the two points where anything crosses to GitHub, both behind a gate:
+The boundary below shows the disable path, everything computed on your machine, and the three points where anything crosses to GitHub, all behind a gate: the seen-cache check, which reads the state of an issue already recorded on this machine and sends only that issue's URL, the dedup search, and the issue itself:
 
 ```mermaid
 flowchart TD
@@ -40,6 +40,8 @@ flowchart TD
     Gate -->|"no, queue or skip"| Queue["Write finding to local queue. Stays on disk"]
     Gate -->|"yes"| Fp["Compute fingerprint and check seen-cache"]
     Fp --> Search["Remote dedup search on GitHub"]
+    Fp -->|"record holds an issue URL"| State["Read that issue's state on GitHub. Sends only its URL"]
+    State --> Search
     Search --> Create["Create or react on public issue"]
 
     subgraph local["On your machine"]
@@ -53,6 +55,7 @@ flowchart TD
         Fp
     end
     subgraph net["Leaves the machine"]
+        State
         Search
         Create
     end
@@ -92,16 +95,31 @@ The same hash without `|{defect-key}` is the **section fingerprint**, which ever
 
 Dedup runs at three levels:
 
-1. **Machine-global seen-cache** at the configured `health_check_seen_cache` (by default `~/.ultracode-goal/health-check-seen.json`). The `seen` subcommand reads it into a verdict, and `record` merge-writes one record under a lock on `health-check-seen.json.lock`, through a synced temporary file renamed over the cache, so parallel runs keep each other's records. A missing or empty cache is an empty one; a cache that does not parse is renamed to `health-check-seen.json.corrupt-<UTC time>` rather than erased, so its records can be repaired by hand. Each record carries the issue URL, the action taken (`created` / `reacted` / `commented` / `resolved`), and the date. Only a record tied to a real issue is written: a finding that stays in the local queue records nothing, so a bug a headless run queued is still filed when a later attended run approves it. `created`, `reacted` and `commented` suppress a later sighting of the same fingerprint. `resolved` records that a finding was fixed, and deliberately does **not** suppress: a fresh sighting of a fixed defect is a regression rather than a duplicate, so it is reported and linked back to the original, and `record` never replaces a `resolved` record unless the issue it records tracks that regression. An unrecognized action (an old `queued` record included) does not suppress either, on the same reasoning: a duplicate report is closed automatically, whereas a silenced regression is caught by nothing. A record found only under the section fingerprint never suppresses, and a fix it records is reported as a *possible* regression. The cache is machine-local, so where a record carries a real issue URL the shared source of truth is that issue's own state, which `seen` reads itself (with `gh`, never one found in your project folder, stopped after 10 seconds) in preference to the local record. Only a *completed* close, or a merged pull request, counts as a fix there: an issue closed as *not planned* keeps the local verdict, because that is how the dedup Action closes a duplicate and how a wontfix is closed, and neither is a fix.
+1. **Machine-global seen-cache** at the configured `health_check_seen_cache` (by default `~/.ultracode-goal/health-check-seen.json`). The `seen` subcommand reads it into a verdict, and `record` merge-writes one record under a lock on `health-check-seen.json.lock`, through a synced temporary file renamed over the cache, so parallel runs keep each other's records. A missing or empty cache is an empty one; a cache that does not parse is renamed to `health-check-seen.json.corrupt-<UTC time>` rather than erased, so its records can be repaired by hand. Each record carries the issue URL, the action taken (`created` / `reacted` / `commented` / `resolved`), and the date. Only a record tied to a real issue is written: a finding that stays in the local queue records nothing, so a bug a headless run queued is still filed when a later attended run approves it. `created`, `reacted` and `commented` suppress a later sighting of the same fingerprint. `resolved` records that a finding was fixed, and deliberately does **not** suppress: a fresh sighting of a fixed defect is a regression rather than a duplicate, so it is reported and linked back to the original, and `record` never replaces a `resolved` record unless the issue it records tracks that regression. An unrecognized action (an old `queued` record included) does not suppress either, on the same reasoning: a duplicate report is closed automatically, whereas a silenced regression is caught by nothing. A record found only under the section fingerprint never suppresses, and a fix it records is reported as a *possible* regression. The cache is machine-local, so where a record carries a real issue URL the shared source of truth is that issue's own state, which `seen` reads itself (with `gh`, never one found in the current folder, stopped after 10 seconds) in preference to the local record. Only a *completed* close, or a merged pull request, counts as a fix there: an issue closed as *not planned* keeps the local verdict, because that is how the dedup Action closes a duplicate and how a wontfix is closed, and neither is a fix.
 2. **Remote search**: before filing, the open issues are searched for the fingerprint, so a finding already filed by another machine is not duplicated. When none carries it, a second search for the section fingerprint offers each issue it finds as a possible match, which only you can confirm.
-3. **Server-side**: a repository Action closes duplicates and upvotes the canonical issue, so even a race between two machines converges on one issue. It reads each issue as it is now and runs once at a time per issue, and it closes an issue only in favour of an earlier open one, so two reports filed together never close each other. When a new issue shares only its section fingerprint with another open one, under a different defect key, the Action comments with a link to each and adds the `possible-duplicate` label, and leaves the issue open for a maintainer to decide.
+3. **Server-side**: a repository Action closes duplicates and upvotes the canonical issue, so even a race between two machines converges on one issue. It reads each issue as it is now and runs once at a time per issue, and it closes an issue only in favour of an earlier open one, so two reports filed together never close each other. When a new issue shares only its section fingerprint with an earlier open one, under a different defect key, the Action comments with a link to each and adds the `possible-duplicate` label, and leaves the issue open for a maintainer to decide.
 
 ## Submitting a queued finding manually
 
-A queued finding sits as a body file under the queue directory. It carries YAML frontmatter (workflow, step_file, severity, fingerprint, section_fingerprint, defect_key, date) followed by the same structured body the attended gate would have shown you, including the Environment table and the `file:line` evidence. Submit one when you are ready with:
+A queued finding sits as a body file under the queue directory. It carries YAML frontmatter (workflow, step_file, severity, fingerprint, section_fingerprint, defect_key, date) followed by the same structured body the attended gate would have shown you, including the Environment table and the `file:line` evidence. Submit one when you are ready with the two commands the health check printed for it, filled in from its frontmatter:
 
 ```bash
-gh issue create --repo <health-check-repo> --title "<title>" --body-file <path-to-queued-finding>
+gh label create "<fingerprint>" --repo <health-check-repo> --color "ededed" \
+  --description "Health-check fingerprint dedup key" 2>/dev/null || true
+gh issue create --repo <health-check-repo> \
+  --title "[health-check][<severity>][<fingerprint>] <workflow>: <short description>" \
+  --label "health-check,workflow-improvement,<severity>,<fingerprint>" \
+  --body-file <path-to-queued-finding>
 ```
 
-Nothing is sent until you run this command. You can also open one through the repository's issue chooser at <https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose>.
+Keep the full title and both labels: the dedup Action acts only on an issue labeled `health-check`, it matches duplicates by the `fp-*` label, and the next reporter's search looks for the fingerprint in titles. Nothing is sent until you run these commands. Afterwards, record the new issue with the URL `gh issue create` printed, so this machine does not report the finding again while that issue stays open (`<skill-root>` is the installed `ultracode-goal` skill folder):
+
+```bash
+uv run <skill-root>/scripts/health_check_fp.py record \
+  --fp <fingerprint> --cache ~/.ultracode-goal/health-check-seen.json \
+  --issue-url "<the new issue URL>" --action created --date YYYY-MM-DD
+```
+
+Then retire the queue file: delete it, or move it into a `resolved/` subfolder of the queue directory.
+
+You can also open one through the repository's issue chooser at <https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose>; an issue filed that way carries the `health-check` label but no `fp-*` one, so add it.

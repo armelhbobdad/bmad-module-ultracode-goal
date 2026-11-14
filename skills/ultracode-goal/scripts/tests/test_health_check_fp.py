@@ -499,6 +499,57 @@ def test_a_gh_planted_in_the_current_folder_never_runs(tmp_path, path_form):
     assert not log.exists(), "the gh in the current folder ran"
 
 
+HEARTBEAT = """
+import pathlib, subprocess, sys
+beat = pathlib.Path(sys.argv[1])
+child = (
+    "import pathlib, sys, time\\n"
+    "beat = pathlib.Path(sys.argv[1])\\n"
+    "while True:\\n"
+    "    beat.write_text(str(time.monotonic()))\\n"
+    "    time.sleep(0.1)\\n"
+)
+subprocess.Popen([sys.executable, "-c", child, str(beat)])
+import time
+time.sleep(60)
+"""
+
+
+def test_run_stops_a_call_and_everything_it_started_at_the_limit(tmp_path, mod):
+    """Runs on every platform: killpg on POSIX, taskkill /T on Windows. The child's heartbeat stops."""
+    beat = tmp_path / "beat"
+    start = time.monotonic()
+    returncode, _out, _err = mod._run([sys.executable, "-c", HEARTBEAT, str(beat)], 1.0)
+    assert returncode is None, "a call stopped at the limit has no exit code"
+    assert time.monotonic() - start < 1.0 + 3 * mod.KILL_WAIT_SEC + 5
+    assert beat.exists(), "the child never started"
+    time.sleep(0.5)
+    settled = beat.read_text()
+    time.sleep(1.0)
+    assert beat.read_text() == settled, "the process the call started outlived the time limit"
+
+
+def test_replace_is_retried_while_windows_holds_the_target_open(tmp_path, mod, monkeypatch):
+    """Windows refuses a rename over a file another process has open; the write lands once it is let go."""
+    target = tmp_path / "seen.json"
+    target.write_text("{}\n", encoding="utf-8")
+    real_replace = os.replace
+    refusals = []
+
+    def busy_twice(src, dst):
+        if len(refusals) < 2:
+            refusals.append(dst)
+            raise PermissionError(13, "The process cannot access the file")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(mod, "_IS_WINDOWS", True)
+    monkeypatch.setattr(mod.os, "replace", busy_twice)
+    mod._atomic_write(target, '{"fp-abc1234": {}}\n')
+    assert len(refusals) == 2
+    assert target.read_text(encoding="utf-8") == '{"fp-abc1234": {}}\n'
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["seen.json"], "no temp file is left"
+
+
 def test_the_time_limit_is_ten_seconds(mod):
     assert mod.GH_TIMEOUT_SEC == 10.0
 
@@ -916,8 +967,10 @@ def test_issue_state_check_reads_state_reason_not_state_alone():
     assert "--json state,stateReason" in body
     assert "CLOSED/COMPLETED" in body, "only a completed close counts as a fix"
     assert "CLOSED/NOT_PLANNED" in body, "the stage must say an auto-closed duplicate is NOT a fix"
-    # A PR link is what CONTRIBUTING invites when recording `resolved`, and
-    # `gh issue view` reports MERGED for one, never CLOSED.
+    # A `resolved` record is a regression without any gh call, so MERGED is
+    # reachable only when a created/reacted/commented record holds a pull
+    # request URL, as a hand edit can make it: `gh issue view` reports MERGED
+    # for a pull request, never CLOSED.
     assert "MERGED" in body, "a merged PR link must also trigger the regression path"
     # The script, not the prose, runs the check.
     assert '"state,stateReason"' in SCRIPT.read_text(encoding="utf-8")
@@ -941,7 +994,9 @@ def test_every_call_passes_the_new_arguments():
     blocks = _fenced_blocks(_reference())
     fingerprint = [b for b in blocks if "health_check_fp.py fingerprint" in b]
     seen = [b for b in blocks if "health_check_fp.py seen" in b]
-    assert len(fingerprint) == 1 and "--defect-key {defect-key}" in fingerprint[0]
+    # The `=` form: a value that starts with a dash would otherwise read as an option and exit 2 with no JSON.
+    assert len(fingerprint) == 1
+    assert "--section-slug={slug} --defect-key={defect-key}" in fingerprint[0]
     assert len(seen) == 1 and "--legacy-fp {legacy_fp}" in seen[0]
     body = _reference()
     for retired in ("--queue-path", "--defect-slug", "--action queued", "defect_slug"):
@@ -961,6 +1016,9 @@ def test_the_defect_key_rule_is_stated():
     assert "**The defect key** names the defect itself" in body
     assert "one to four lower-case ASCII words joined by hyphens" in body
     assert "Never use the section's own subject alone" in body
+    # A script is named by its stem, so `gate_eval.py` never gives both `gate-eval` and `gate-eval-py`.
+    assert "`gate_eval.py` gives `gate-eval`" in body
+    assert "Never use a path, a file extension or a line number" in body
 
 
 def test_the_second_search_offers_possible_matches_and_n_rekeys_an_exact_one():
@@ -968,6 +1026,12 @@ def test_the_second_search_offers_possible_matches_and_n_rekeys_an_exact_one():
     assert '"{legacy_fp} in:title,body"' in body
     assert "Possible match: #{N}: {title}" in body
     assert "choose a more specific defect key" in body
+    # A re-keyed finding is checked again: the old verdict's regression treatment never carries over.
+    assert "run steps 2 to 4 again for the new fingerprints" in body
+    assert "the new `seen` verdict alone decides the regression treatment and `--regression`" in body
+    # A failed search is not a search that found nothing.
+    assert ('If either search exits non-zero, it has not shown that no issue matches: log its error and send the '
+            'finding to the local queue (§5c) with the reason "Posting these to GitHub failed."') in body
 
 
 def test_the_attended_gate_offers_queue_locally():
@@ -1005,10 +1069,20 @@ def test_the_queue_frontmatter_carries_the_section_fingerprint_and_defect_key():
 
 def test_every_local_outcome_shows_its_paths_reason_and_body_file_command():
     queue = _flow(_section("### 5c. Local queue", "## Terminal step"))
-    assert '"{N} finding(s) saved locally:" then each path' in queue
-    assert "{reason sentence} To submit one as an issue, run:" in queue
-    assert "--body-file {file-path}" in queue
-    assert "log the same lines (each path, the reason sentence and the `gh issue create --body-file` command)" in queue
+    assert '"{N} finding(s) saved locally:" then each path, each followed by the two commands that submit it' in queue
+    assert '"{reason sentence} Run a finding\'s two commands to submit it as an issue' in queue
+    assert ("log the same lines (each path with its `gh label create` and `gh issue create --body-file` commands, "
+            "and the reason sentence)") in queue
+    # The printed commands file an issue the dedup Action and the title search can find: the full title, the
+    # health-check and fp-* labels, and the label guard first.
+    [block] = [b for b in _fenced_blocks(_section("### 5c. Local queue", "## Terminal step")) if "gh issue create" in b]
+    command = _flow(block.replace("\\\n", " "))
+    assert command.index('gh label create "{fp}"') < command.index("gh issue create")
+    assert "2>/dev/null || true" in command
+    assert '--title "[health-check][{severity}][{fp}] {workflow}: {short description}"' in command
+    assert '--label "health-check,workflow-improvement,{severity},{fp}"' in command
+    assert "--body-file {file-path}" in command
+    assert "[title]" not in queue
     # Every reason the routing names is one the §5c table lists.
     body = _reference()
     reasons = set(re.findall(r'with the reason "([^"]+)"', body))
