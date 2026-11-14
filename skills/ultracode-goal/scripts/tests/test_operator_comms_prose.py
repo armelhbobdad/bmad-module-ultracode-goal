@@ -9,8 +9,9 @@ assertion here is a static read of shipped markdown (plus one adapter source):
     cadence, without displacing the durable record.
   - `references/preflight.md`, "Launch briefing (interactive only)" - the screen
     an operator reads before crossing the autonomy line. It now says what the
-    terminal health check does, honestly in both run modes, and it does that
-    WITHOUT disturbing the five bullets already there, except the one a later
+    terminal health check does in the attended run the operator is in (only an
+    attended operator reads the briefing, so it describes no headless routing),
+    and it does that WITHOUT disturbing the five bullets already there, except the one a later
     edit replaced on purpose (`_REPLACED_BULLETS`), whose replacement is pinned.
   - `references/finalize.md`, gate trail - the detection-gated viewer affordance.
 
@@ -371,22 +372,25 @@ def test_pre_edit_gate_fixture_differs_only_by_print():
 
 
 def _states_health_check_dispositions(block: str) -> bool:
-    """True only for a briefing bullet naming the check AND both run modes."""
+    """True only for a briefing bullet naming the check AND its attended disposition.
+
+    Headless skips the briefing, so the bullet describes no headless routing: the reader is never in that mode.
+    """
     hits = [b for b in _bullets(block) if re.search(r"health check", b, re.I)]
     if len(hits) != 1:
         return False
     bullet = hits[0]
     terminal = re.search(r"terminal self-audit|terminal self-improvement", bullet, re.I)
     attended = re.search(r"attended[^.]{0,120}halt", bullet, re.I)
-    headless = re.search(r"headless[^.]{0,140}queue[^.]{0,140}never block", bullet, re.I)
-    return bool(terminal and attended and headless)
+    headless = re.search(r"headless", bullet, re.I)
+    return bool(terminal and attended and not headless)
 
 
 def test_briefing_gains_health_check_line_kill_switch_intact():
     live = _briefing_block()
     pre_edit = _briefing_block(_BRIEFING_PRE_EDIT.read_text(encoding="utf-8"))
 
-    # (a) the health check is named, with both dispositions stated honestly.
+    # (a) the health check is named, with the attended disposition its reader meets.
     assert _states_health_check_dispositions(live)
 
     # (b) nothing was displaced: every pre-edit bullet survives byte-for-byte,

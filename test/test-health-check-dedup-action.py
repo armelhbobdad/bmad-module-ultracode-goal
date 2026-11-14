@@ -30,9 +30,11 @@ Covers:
     flagged, and one sharing nothing get no call
   - Runs for one issue share a concurrency group, so they never overlap; a
     newer pending run may replace an older pending one
-  - The `Section fingerprint:` line the stage reference tells the health
-    check to write, and the one the issue template carries, is the one the
-    Action's SECTION_RE reads
+  - The title and the body header `health_check_fp.py fingerprint` prints
+    for a finding are read by the Action: the title's prefix by its title
+    regex, the body header's `## Fingerprint` and `## Severity` sections by
+    its body reader and its `Section fingerprint:` line by SECTION_RE; the
+    issue template's section line is read by SECTION_RE once filled in
 
 The behaviour tests need node and are skipped without it.
 """
@@ -43,6 +45,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -52,6 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "health-check-dedup.yaml"
 HEALTH_CHECK_MD = REPO_ROOT / "skills" / "ultracode-goal" / "references" / "health-check.md"
 ISSUE_TEMPLATE = REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "workflow-health-check.md"
+FP_SCRIPT = REPO_ROOT / "skills" / "ultracode-goal" / "scripts" / "health_check_fp.py"
 GITHUB_SCRIPT_PIN = "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0"
 
 # Runs the Action's script with a stubbed `github` client. Every write call is recorded in order.
@@ -245,26 +249,64 @@ def test_the_title_is_read_whatever_its_case(tmp_path):
     assert calls == [["createLabel", FP_B], _labeled(12, "health-check", "workflow-improvement", "bug", FP_B)]
 
 
-def _filed_titles() -> list[str]:
-    """Every issue title the stage reference tells the health check to write, as a template."""
+def _fingerprint(severity: str, stage: str = "gate", description: str = "the gate reads a stale trace") -> dict:
+    """What `health_check_fp.py fingerprint --stdin` prints for a finding, as the stage reference runs it."""
+    names = {"section_heading": "Route on the verdict", "defect_name": "gate_status", "short_description": description}
+    done = subprocess.run(
+        [sys.executable, str(FP_SCRIPT), "fingerprint", "--severity", severity, "--stage", stage, "--stdin"],
+        input=json.dumps(names), capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    return json.loads(done.stdout)
+
+
+def _title_re() -> re.Pattern:
+    """The Action's title regex, as a Python pattern (the JS literal uses only syntax both share)."""
+    match = re.search(r"const title = /(.+)/i\.exec", _script())
+    assert match, "the Action reads the title with a case-blind regex literal"
+    return re.compile(match.group(1), re.IGNORECASE)
+
+
+@pytest.mark.parametrize("severity", ["bug", "friction", "gap"])
+def test_the_scripts_titles_match_the_actions_title_regex(severity):
+    payload = _fingerprint(severity)
+    for key in ("title", "regression_title"):
+        match = _title_re().match(payload[key])
+        assert match and match.groups() == (severity, payload["fp"]), payload[key]
+        # The job's own filter lets it through.
+        assert payload[key].startswith("[health-check]")
+
+
+def test_the_stage_reference_files_the_scripts_title_and_opens_the_draft_with_its_header():
+    """No title and no machine-read body line is built by hand any more (determinism-1, determinism-2)."""
     text = HEALTH_CHECK_MD.read_text(encoding="utf-8")
-    titles = re.findall(r"(\[health-check\](?:\[[^\]\s]*\])* \{workflow\}: [^\"`\n]*)", text)
-    # The first run's `--title` (§5a-ii), the §5c submit command's, and the regression treatment's.
-    assert len(titles) == 3, titles
-    assert sum(f'--title "{title}"' in text for title in titles) == 2
-    assert sum("REGRESSION: " in title for title in titles) == 1
-    return titles
+    flowed = " ".join(text.split())
+    # The live create takes the title, and so does the queue call that prints a queued finding's create.
+    assert text.count('--title "{title}"') == 2
+    assert not re.search(r"\[health-check\]\[\{severity\}\]", text), "no title template left in the prose"
+    assert "opening with the call's `body_header` exactly as printed" in flowed
+    assert "Section fingerprint:" not in text
 
 
 @needs_node
 @pytest.mark.parametrize("severity", ["bug", "friction", "gap"])
 def test_every_title_the_health_check_writes_is_read_by_the_action(tmp_path, severity):
-    fp = "fp-0a1b2c3"
-    for template in _filed_titles():
-        title = (template.replace("{severity}", severity).replace("{fp}", fp)
-                 .replace("{workflow}", "ultracode-goal/gate").replace("{short description}", "x"))
+    payload = _fingerprint(severity)
+    fp = payload["fp"]
+    for title in (payload["title"], payload["regression_title"]):
         calls = _run(tmp_path, _bare(12, title, ""), [])
         assert calls == [["createLabel", fp], _labeled(12, "health-check", "workflow-improvement", severity, fp)], title
+
+
+@needs_node
+@pytest.mark.parametrize("severity", ["bug", "friction", "gap"])
+def test_a_drafted_body_alone_is_read_by_the_action(tmp_path, severity):
+    """Under a title the Action cannot read, the body header still gives the fingerprint and the severity."""
+    payload = _fingerprint(severity)
+    body = payload["body_header"] + "\n## Finding\nOne sentence.\n"
+    calls = _run(tmp_path, _bare(12, "[health-check] x", body), [])
+    assert calls == [["createLabel", payload["fp"]],
+                     _labeled(12, "health-check", "workflow-improvement", severity, payload["fp"])]
 
 
 @needs_node
@@ -498,24 +540,15 @@ def _section_re() -> re.Pattern:
     return re.compile(match.group(1), re.MULTILINE)
 
 
-def _filed_line() -> str:
-    """The Section fingerprint line the stage reference writes into an issue body, filled in."""
-    text = HEALTH_CHECK_MD.read_text(encoding="utf-8")
-    lines = re.findall(r"`` (Section fingerprint: `\{legacy_fp\}`) ``", text)
-    assert lines, "the stage reference names the Section fingerprint body line"
-    assert len(set(lines)) == 1
-    return lines[0].replace("{legacy_fp}", FP_S)
-
-
 def test_the_section_line_of_a_filed_body_matches_the_actions_section_re():
-    body = f"## Fingerprint\n`{FP_B}`\n{_filed_line()}\n\n## Defect Key\n`gate-status`\n"
-    match = _section_re().search(body)
-    assert match and match.group(1) == FP_S
-
-
-def test_the_stage_reference_puts_the_section_line_at_the_start_of_its_own_line():
-    flowed = " ".join(HEALTH_CHECK_MD.read_text(encoding="utf-8").split())
-    assert "`` Section fingerprint: `{legacy_fp}` ``, exactly so and at the start of a line of its own" in flowed
+    payload = _fingerprint("bug")
+    match = _section_re().search(payload["body_header"])
+    assert match and match.group(1) == payload["legacy_fp"]
+    # The keyed fingerprint is never read as the section's.
+    assert payload["fp"] != payload["legacy_fp"]
+    # A regression's opening line above the header leaves the line where SECTION_RE reads it.
+    opened = f"Regression of https://github.com/o/r/issues/1 (resolved 2026-07-19).\n\n{payload['body_header']}"
+    assert _section_re().search(opened).group(1) == payload["legacy_fp"]
 
 
 def test_the_issue_templates_section_line_matches_once_filled_in():
@@ -528,6 +561,8 @@ def test_the_issue_templates_section_line_matches_once_filled_in():
 
 @needs_node
 def test_the_action_reads_the_section_line_of_a_filed_body(tmp_path):
-    body = f"## Fingerprint\n`{FP_B}`\n{_filed_line()}\n\n## Finding\nOne sentence.\n"
-    calls = _run(tmp_path, _issue(12, FP_B, None, body=body), [_issue(9, FP_S, None)])
-    _assert_flagged(calls, 12, "#9", FP_S)
+    payload = _fingerprint("bug")
+    fp, section_fp = payload["fp"], payload["legacy_fp"]
+    body = payload["body_header"] + "\n## Finding\nOne sentence.\n"
+    calls = _run(tmp_path, _issue(12, fp, None, body=body), [_issue(9, section_fp, None)])
+    _assert_flagged(calls, 12, "#9", section_fp)

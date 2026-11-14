@@ -1,0 +1,5 @@
+type: added
+scope: ultracode-goal
+summary: |
+  You can now ask the conductor to run the health check for a run that has ended, naming its Epic or its run folder: it skips the resume offer, loads the health check against that run folder's `.decision-log.md` with no other stage, reports from the log's `friction:` lines alone, and routes its findings by the run mode like any health check. A folder with no `.decision-log.md` is refused. The run that completes an Epic has no later run to report the friction it logged, for instance when its health check was left unanswered at the gate, and invoking the skill again only offered to re-run the Epic.
+issues: [226]

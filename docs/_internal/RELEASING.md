@@ -338,7 +338,7 @@ Both are set (checked 2026-10-17: `allow_auto_merge: true`, `default_workflow_pe
 
 ## Health-check labels
 
-The health-check loop's `gh issue create` hard-fails on missing labels (only the per-fingerprint `fp-*` label is guarded with `|| true`). Pre-create the fixed set:
+The health-check loop's `gh issue create` hard-fails on missing labels (only the per-fingerprint `fp-*` label is created first, and its failure ignored). Pre-create the fixed set:
 
 ```bash
 for L in "health-check:0E8A16" "workflow-improvement:1D76DB" "bug:D73A4A" "friction:FBCA04" "gap:C5DEF5" "duplicate:CFD3D7"; do

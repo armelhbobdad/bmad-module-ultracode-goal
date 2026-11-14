@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  The attended health-check gate now says where approved findings go. It asks "Submit these findings as issues on `<health_check_repo>`, filed with your GitHub account?", naming the configured `health_check_repo` and saying public issues when that is the default, `armelhbobdad/bmad-module-ultracode-goal`, where it used to ask only "Submit these findings?".
+issues: [226]

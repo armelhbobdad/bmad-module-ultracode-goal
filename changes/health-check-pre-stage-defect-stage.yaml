@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  A health-check finding about a defect hit before any stage was running, in the skill's activation or its resume routing, is now filed under the stage `ingest-and-scope` and that stage file's top heading, so two reports of one such defect get one fingerprint. No rule covered such a defect, so two reporters could pick different stages and get fingerprints that neither the dedup search nor the dedup Action could connect.
+issues: [226]

@@ -7,9 +7,11 @@
 
 Plumbing ONLY. This script computes the dedup fingerprints of a health-check
 finding (turning a section heading into its slug and a defect name into its
-key), reads the machine-local seen-cache into a verdict (asking GitHub for a
-recorded issue's state through `gh`, bounded), merge-writes a record under a
-lock, and writes a drafted body into the local queue under a free name. It
+key) with the issue title and the machine-read top of the issue body, reads
+the machine-local seen-cache into a verdict (asking GitHub for a recorded
+issue's state through `gh`, bounded) with the line a regression's body opens
+with, merge-writes a record under a lock, and writes a drafted body into the
+local queue under a free name with the commands that submit it. It
 makes NO submit/queue/route decision: that judgment lives in
 references/health-check.md (the LLM), as do the severity, the section and the
 defect name it is given.
@@ -34,8 +36,11 @@ Subcommands:
       object --stdin reads, never both; the defect from --defect-key or from
       that object's `defect_name`, never both. Without --stdin both flags are
       required (an argparse usage error, exit 2); with it, a pair given twice
-      or not at all, a key other than those two, or a value that is not a
-      non-empty string exits 1.
+      or not at all, a key other than those two and `short_description`, or
+      a value that is not a non-empty string exits 1. The two flags stay for
+      tests and old calls: --section-slug skips the check that the heading is
+      one of the stage file's own, and without --stdin the flags print a null
+      title, regression_title and body_header.
         section_heading: must equal, after its leading `#`s, the text of an
           ATX heading line of references/{T}.md beside this script (outside
           fenced code and the frontmatter). Its slug: drop the leading `#`s and
@@ -48,16 +53,41 @@ Subcommands:
           and each lower-case letter followed by an upper-case one; drop each
           character that is not an ASCII letter or digit; lower-case; keep the
           last four words, joined by `-`. A name that yields no word exits 1.
+        short_description: optional; the issue title's description. It
+          exits 1 when it holds a backtick, `$`, a double quote, a backslash,
+          `!` or a character that is not printable (a tab, a line break, NUL,
+          U+2028 and the like), since the title goes on a command line inside
+          double quotes, or when it makes regression_title longer than 256
+          characters (TITLE_MAX, GitHub's limit); surrounding whitespace is
+          dropped.
       A given SLUG must be kebab-case (^[a-z0-9]+(-[a-z0-9]+)*$) and a given
       KEY one to four kebab-case words (^[a-z0-9]+(-[a-z0-9]+){0,3}$). Emit
-      {"fp", "legacy_fp", "tuple", "section_slug", "defect_key"}, where
-      `tuple` is the exact sha1 input of `fp`.
-  seen --fp FP --legacy-fp FP --cache PATH
-      Validate both fingerprints. Emit {"seen": B, "status": S, "record": R,
-      "matched_on": M}. The record under --fp decides; only when the cache has
-      no --fp key does the record under --legacy-fp decide (M is "fp",
-      "legacy_fp", or null when neither is there). On the record found, the
-      first branch that matches gives the status:
+      {"fp", "legacy_fp", "tuple", "section_slug", "defect_key", "title",
+      "regression_title", "body_header"}, where `tuple` is the exact sha1
+      input of `fp` and, with a short_description D (all three null
+      without one):
+        title:            [health-check][S][fp] ultracode-goal/T: D
+        regression_title: [health-check][S][fp] ultracode-goal/T: REGRESSION: D
+        body_header:      the machine-read top of the issue body, the
+          `## Workflow`, `## Step File`, `## Section`, `## Severity`,
+          `## Fingerprint` (`fp` alone on its line, then the line
+          "Section fingerprint: `legacy_fp`") and `## Defect Key` sections,
+          each value in backticks, ending in a newline.
+      The JSON is printed in UTF-8, a non-ASCII character as itself.
+  seen --fp FP --legacy-fp FP --cache PATH [--repo REPO]
+      Validate both fingerprints, and REPO as [HOST/]OWNER/REPO (exit 1).
+      Emit {"seen": B, "status": S, "record": R, "matched_on": M,
+      "opening_line": L}. With --repo, a record with an empty or no
+      issue_url, or that is not an object, names no repository and counts as
+      without --repo; any other record whose issue_url is not a string under
+      https://github.com/OWNER/REPO/ (https://HOST/OWNER/REPO/ for a REPO that
+      names a host), compared in any letter case, counts as no record, under
+      either fingerprint: another repository's issue, a URL that is not
+      https:// or one that is not a string alike. The record under --fp
+      decides; only when the cache has no --fp key does the record under
+      --legacy-fp decide (M is "fp", "legacy_fp", or null when neither is
+      there). On the record found, the first branch that matches gives the
+      status:
         1. no record under either fingerprint: unseen
         2. action `resolved`: regression
         3. action created, reacted or commented with an issue_url: the
@@ -79,6 +109,26 @@ Subcommands:
       regression becomes possible-regression; unrecognized stays.
       `seen` is the SUPPRESSION verdict, true for handled alone: every
       uncertain verdict reports. Missing/empty/corrupt cache -> unseen.
+      L is the line that opens the issue body, null for unseen, handled and
+      unrecognized; U is the record's issue_url when it starts with https://
+      and holds no whitespace, D its date when that has the YYYY-MM-DD shape
+      (else "on an unrecorded date"), and P, after a possible-regression,
+      ": that report's fingerprint has no defect key, so it may be another
+      defect in this section". From a `resolved` record, whose date is the
+      fix's:
+        regression, with U:           Regression of U (resolved D).
+        regression, without:          Regression of a previously resolved
+                                      local finding (resolved D).
+        possible-regression, with U:  Possibly a regression of U (resolved D)P.
+        possible-regression, without: Possibly a regression of a previously
+                                      resolved local finding in this section
+                                      (resolved D).
+      From branch 3, whose record dates the report, not the fix:
+        a completed close:            Regression of U, closed as completed
+                                      since its report on D. (Possibly a
+                                      regression ... D P. after a legacy record)
+        a merge:                      the same with "merged" for "closed as
+                                      completed".
   record --fp FP --cache PATH --issue-url URL --action A --date YYYY-MM-DD
          [--regression]
       Validate FP; A is created, reacted or commented with an https:// URL
@@ -108,13 +158,35 @@ Subcommands:
         3. <project-root>/.claude-plugin/marketplace.json    JSON plugins[0].version
                                                             -> "marketplace.json"
         4. <project-root>/package.json         JSON version  -> "package.json"
-  queue --queue-dir DIR --stage T --body-file F
-      Validate T against the 6 stages and read F (a missing or unreadable F
-      exits 1 and creates nothing). Create DIR when absent and write F's bytes,
-      unchanged and with no frontmatter, to
+  queue --queue-dir DIR --body-file F --title TITLE --repo REPO
+      Read F (a missing or unreadable F exits 1 and creates nothing). F
+      opens with the body_header `fingerprint` prints (after a UTF-8 BOM and
+      at most one opening line and a blank line, its line endings LF or
+      CRLF), from which the stage T, the severity S and the fingerprint FP
+      are read. Each of these exits 1 and creates nothing: F opening with no
+      such header; a TITLE that does not start with
+      `[health-check][S][FP] ultracode-goal/T: `
+      (the title `fingerprint` printed for another finding), is longer than
+      TITLE_MAX or holds a character `fingerprint` refuses in a description;
+      a REPO that is not [HOST/]OWNER/REPO. Create DIR when absent and write
+      F's bytes, unchanged and with no frontmatter, to
       DIR/hc-ultracode-goal-{T}-{UTC YYYYMMDD-HHmmss}.md, opened with
       O_CREAT|O_EXCL so no file is ever overwritten: a taken name gets -2, -3
-      and so on before `.md`. Emit {"path": <the absolute path written>}.
+      and so on before `.md`. Emit {"path": P, "commands": [L, C, B]}, P
+      being the absolute path written and L, C and B the commands that submit
+      it: the label create and the create, run in that order (a failed L, the
+      label there already or no push access, is no error), and B, the create
+      without labels, for a reporter without push access to run alone:
+        L: gh label create --repo REPO FP --color ededed
+             --description 'Health-check fingerprint dedup key'
+        C: gh issue create --repo REPO --title TITLE
+             --label health-check,workflow-improvement,S,FP --body-file P
+        B: gh issue create --repo REPO --title TITLE --body-file P
+      each on one line, every argument quoted for a POSIX shell
+      (shlex.quote), so a space or a quote in TITLE or P reaches gh as
+      written, and `--repo` right after the subcommand, so an allow rule
+      scoped to the repository matches. The JSON is printed in UTF-8, a
+      non-ASCII character as itself.
 
 Output: JSON to stdout. Errors are JSON to stdout with exit code 1 (operational
 failure, a value that breaks its rule, or a record that could not take the lock,
@@ -130,6 +202,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -196,9 +269,35 @@ _NAME_SPLIT_RE = re.compile(r"[\s_.-]+")
 _CASE_BOUNDARY_RE = re.compile(r"(?<=[a-z])(?=[A-Z])")
 _NOT_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
 DEFECT_KEY_WORDS = 4
-STDIN_KEYS = ("section_heading", "defect_name")
+STDIN_KEYS = ("section_heading", "defect_name", "short_description")
+# What a title may not hold besides a character that is not printable (a tab, a line break, NUL, U+2028): it goes
+# on a command line inside double quotes, where each of these is special (`!` to an interactive shell's history).
+TITLE_UNSAFE = "`$\"\\!"
+# GitHub refuses an issue title longer than this many characters.
+TITLE_MAX = 256
+# The record date an opening line names when the record holds no YYYY-MM-DD date.
+UNRECORDED_DATE = "on an unrecorded date"
 
 QUEUE_STAMP_FORMAT = "%Y%m%d-%H%M%S"
+# What every health-check issue is filed with besides its severity and fingerprint labels, and the fp-* label's
+# look as the health check creates it (the dedup Action creates it the same way).
+ISSUE_LABELS = ("health-check", "workflow-improvement")
+FP_LABEL_COLOR = "ededed"
+FP_LABEL_DESCRIPTION = "Health-check fingerprint dedup key"
+# The start of a draft: at most one opening line (a regression's) and a blank line, then the body_header
+# `fingerprint` prints, its line endings LF or CRLF.
+_DRAFT_HEADER_RE = re.compile(
+    r"(?:[^\r\n]+\r?\n\r?\n)?"
+    r"## Workflow\r?\n`ultracode-goal/(?P<stage>" + "|".join(STAGES) + r")`\r?\n\r?\n"
+    r"## Step File\r?\n`skills/ultracode-goal/references/(?P=stage)\.md`\r?\n\r?\n"
+    r"## Section\r?\n`[^`\r\n]+`\r?\n\r?\n"
+    r"## Severity\r?\n`(?P<severity>" + "|".join(SEVERITIES) + r")`\r?\n\r?\n"
+    r"## Fingerprint\r?\n`(?P<fp>fp-[0-9a-f]{7})`\r?\n\r?\n"
+    r"Section fingerprint: `fp-[0-9a-f]{7}`\r?\n\r?\n"
+    r"## Defect Key\r?\n`[^`\r\n]+`(?:\r?\n|\Z)"
+)
+# A repository as gh takes it: [HOST/]OWNER/REPO.
+REPO_RE = re.compile(r"(?:[A-Za-z0-9][A-Za-z0-9.-]*/)?[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+")
 
 GH_TIMEOUT_SEC = 10.0
 KILL_WAIT_SEC = 2.0  # each wait once the time limit stops gh: SIGTERM or taskkill, then the child
@@ -224,6 +323,13 @@ class _LockBusy(Exception):
 def _fail(message: str) -> int:
     print(json.dumps({"error": message}))
     return 1
+
+
+def _repo_error(repo: str) -> str | None:
+    """The rule a --repo value breaks, or None: gh takes [HOST/]OWNER/REPO."""
+    if REPO_RE.fullmatch(repo):
+        return None
+    return "invalid repo %r; expected [HOST/]OWNER/REPO" % repo
 
 
 def _sha7(text: str) -> str:
@@ -301,6 +407,11 @@ def defect_key(name: str) -> str:
     return "-".join(words[-DEFECT_KEY_WORDS:])
 
 
+def _title_unsafe(text: str) -> bool:
+    """True when text holds a character a title on a command line may not: TITLE_UNSAFE, or one not printable."""
+    return any(ch in TITLE_UNSAFE or not ch.isprintable() for ch in text)
+
+
 def _read_stdin_names() -> tuple[dict | None, str | None]:
     """The JSON object --stdin reads, or the rule it breaks.
 
@@ -317,13 +428,20 @@ def _read_stdin_names() -> tuple[dict | None, str | None]:
         return None, "--stdin did not read a JSON object"
     unknown = sorted(set(data) - set(STDIN_KEYS))
     if unknown:
-        return None, "unknown --stdin key(s) %s; expected only %s" % (
+        return None, "unknown --stdin key(s) %s; expected only %s and %s" % (
             ", ".join(map(repr, unknown)),
-            " and ".join(STDIN_KEYS),
+            ", ".join(STDIN_KEYS[:-1]),
+            STDIN_KEYS[-1],
         )
     for key, value in data.items():
         if not isinstance(value, str) or not value.strip():
             return None, "--stdin %s must be a non-empty string" % key
+    if _title_unsafe(data.get("short_description", "")):
+        return None, (
+            "--stdin short_description %r holds a backtick, `$`, double quote, backslash, `!` or a character that is "
+            "not printable (a tab or a line break included); the title goes on a command line, so it may hold none"
+            % data["short_description"]
+        )
     return data, None
 
 
@@ -391,18 +509,57 @@ def cmd_fingerprint(args: argparse.Namespace) -> int:
         )
 
     fp, legacy_fp, tuple_str = _compute_fp(args.severity, args.stage, slug, key)
-    print(
-        json.dumps(
-            {
-                "fp": fp,
-                "legacy_fp": legacy_fp,
-                "tuple": tuple_str,
-                "section_slug": slug,
-                "defect_key": key,
-            }
-        )
+    title = regression_title = header = None
+    if "short_description" in names:
+        description = names["short_description"].strip()
+        prefix = f"[health-check][{args.severity}][{fp}] ultracode-goal/{args.stage}: "
+        title = prefix + description
+        regression_title = prefix + "REGRESSION: " + description
+        if len(regression_title) > TITLE_MAX:
+            return _fail(
+                "short_description makes the regression title %d characters long; GitHub takes at most %d, so "
+                "shorten it by %d" % (len(regression_title), TITLE_MAX, len(regression_title) - TITLE_MAX)
+            )
+        header = body_header(args.severity, args.stage, slug, key, fp, legacy_fp)
+    _print_utf8(
+        {
+            "fp": fp,
+            "legacy_fp": legacy_fp,
+            "tuple": tuple_str,
+            "section_slug": slug,
+            "defect_key": key,
+            "title": title,
+            "regression_title": regression_title,
+            "body_header": header,
+        }
     )
     return 0
+
+
+def _print_utf8(payload: dict) -> None:
+    """Print payload as JSON in UTF-8 whatever the locale, non-ASCII as itself: the title is used as printed."""
+    text = json.dumps(payload, ensure_ascii=False) + "\n"
+    out = getattr(sys.stdout, "buffer", None)
+    if out is None:
+        sys.stdout.write(text)
+        return
+    sys.stdout.flush()
+    out.write(text.encode("utf-8"))
+    out.flush()
+
+
+def body_header(severity: str, stage: str, slug: str, key: str, fp: str, legacy_fp: str) -> str:
+    """The machine-read top of an issue body: the sections the dedup Action and a maintainer's triage read."""
+    return (
+        f"## Workflow\n`ultracode-goal/{stage}`\n\n"
+        f"## Step File\n`skills/ultracode-goal/references/{stage}.md`\n\n"
+        f"## Section\n`{slug}`\n\n"
+        f"## Severity\n`{severity}`\n\n"
+        f"## Fingerprint\n`{fp}`\n\n"
+        # At the start of a line of its own: the dedup Action's SECTION_RE reads it there.
+        f"Section fingerprint: `{legacy_fp}`\n\n"
+        f"## Defect Key\n`{key}`\n"
+    )
 
 
 # --- the cache ---------------------------------------------------------------
@@ -562,36 +719,59 @@ def _gh_url(value) -> bool:
     )
 
 
-def _issue_verdict(issue_url) -> str:
-    """Branch 3: regression for a completed close or a merge, handled for anything else."""
+def _issue_verdict(issue_url) -> tuple[str, str | None]:
+    """Branch 3: regression for a completed close ("closed") or a merge ("merged"), handled for anything else."""
     if not _gh_url(issue_url):
-        return "handled"
+        return "handled", None
     answer = gh_issue_state(issue_url)
     if answer is None:
-        return "handled"
+        return "handled", None
     state = answer["state"].upper()
     reason = answer.get("stateReason")
     reason = reason.upper() if isinstance(reason, str) else ""
-    if (state == "CLOSED" and reason == "COMPLETED") or state == "MERGED":
-        return "regression"
-    return "handled"
+    if state == "CLOSED" and reason == "COMPLETED":
+        return "regression", "closed"
+    if state == "MERGED":
+        return "regression", "merged"
+    return "handled", None
 
 
-def _verdict(record) -> str:
-    """Branches 2 to 5 on a record that exists."""
+def _verdict(record) -> tuple[str, str | None]:
+    """Branches 2 to 5 on a record that exists: the status, and for a regression how the fix is known."""
     if not isinstance(record, dict):
-        return "unrecognized"
+        return "unrecognized", None
     action = record.get("action")
     if action == RESOLVED:
         # Fixed and closed out, so a fresh sighting is a REGRESSION, not a
         # duplicate. The record rides along so the caller can link the original.
-        return "regression"
+        return "regression", RESOLVED
     if action in SUPPRESSING_ACTIONS:
         if record.get("issue_url") in (None, ""):
-            return "handled"
+            return "handled", None
         return _issue_verdict(record.get("issue_url"))
     # Absent or unrecognized: we cannot confirm this was handled, so report.
-    return "unrecognized"
+    return "unrecognized", None
+
+
+def _issue_prefix(repo: str) -> str:
+    """The start of every issue URL of repo: github.com's, or the host's when repo names one."""
+    return f"{URL_PREFIX}{repo}/" if repo.count("/") == 2 else f"{URL_PREFIX}github.com/{repo}/"
+
+
+def _in_repo(record, repo: str | None) -> bool:
+    """Whether record may decide a verdict for repo.
+
+    A record that is not an object, or whose issue_url is empty or missing, names no repository, so it decides as it
+    always did. Any other issue_url must be a string under repo's issue prefix: another repository's record, or one
+    whose URL is not https:// or not a string, neither suppresses this one's finding nor gives its body a line
+    linking that issue.
+    """
+    if repo is None or not isinstance(record, dict):
+        return True
+    url = record.get("issue_url")
+    if url is None or url == "":
+        return True
+    return isinstance(url, str) and url.lower().startswith(_issue_prefix(repo).lower())
 
 
 def cmd_seen(args: argparse.Namespace) -> int:
@@ -599,17 +779,26 @@ def cmd_seen(args: argparse.Namespace) -> int:
         return _fail("invalid fp %r; expected ^fp-[0-9a-f]{7}$" % args.fp)
     if not FP_RE.fullmatch(args.legacy_fp):
         return _fail("invalid legacy-fp %r; expected ^fp-[0-9a-f]{7}$" % args.legacy_fp)
+    if args.repo is not None:
+        problem = _repo_error(args.repo)
+        if problem:
+            return _fail(problem)
 
-    data = _load_cache(Path(args.cache).expanduser())
+    loaded = _load_cache(Path(args.cache).expanduser())
+    # A record of another repository's issue counts as no record, before anything reads it (gh included).
+    data = {
+        key: loaded[key] for key in (args.fp, args.legacy_fp) if key in loaded and _in_repo(loaded[key], args.repo)
+    }
+    fixed = None
     if args.fp in data:
         record = data[args.fp]
-        status = _verdict(record)
+        status, fixed = _verdict(record)
         matched_on = "fp"
     elif args.legacy_fp in data:
         record = data[args.legacy_fp]
         # A section fingerprint may be another defect's: it never suppresses,
         # and a fix it records is only possibly this defect's.
-        status = _verdict(record)
+        status, fixed = _verdict(record)
         status = {"handled": "unseen", "regression": "possible-regression"}.get(status, status)
         matched_on = "legacy_fp"
     else:
@@ -624,10 +813,38 @@ def cmd_seen(args: argparse.Namespace) -> int:
                 "status": status,
                 "record": record,
                 "matched_on": matched_on,
+                "opening_line": opening_line(status, record, fixed),
             }
         )
     )
     return 0
+
+
+def opening_line(status: str, record, fixed: str | None) -> str | None:
+    """The line a regression's or a possible regression's issue body opens with; None for any other verdict.
+
+    `fixed` is how the fix is known: RESOLVED (the record says so, and its date is the fix's), or "closed" or
+    "merged" (the recorded issue's own state, and the record's date is only the day this machine reported it).
+    """
+    if status not in ("regression", "possible-regression") or not isinstance(record, dict):
+        return None
+    url = record.get("issue_url")
+    day = record.get("date")
+    dated = isinstance(day, str) and DATE_RE.fullmatch(day)
+    possible = status == "possible-regression"
+    lead = "Possibly a regression" if possible else "Regression"
+    if fixed in ("closed", "merged"):
+        how = "closed as completed" if fixed == "closed" else "merged"
+        line = f"{lead} of {url}, {how} since its report " + (f"on {day}" if dated else UNRECORDED_DATE)
+    else:
+        resolved = f"(resolved {day if dated else UNRECORDED_DATE})"
+        if not _gh_url(url):
+            where = " in this section" if possible else ""
+            return f"{lead} of a previously resolved local finding{where} {resolved}."
+        line = f"{lead} of {url} {resolved}"
+    if possible:
+        return line + ": that report's fingerprint has no defect key, so it may be another defect in this section."
+    return line + "."
 
 
 # --- record --------------------------------------------------------------------
@@ -935,16 +1152,59 @@ def _create_new(queue_dir: Path, stem: str) -> tuple[int, Path]:
             n += 1
 
 
+def _draft_keys(body: bytes) -> tuple[str, str, str] | None:
+    """The (stage, severity, fp) of the body_header a draft opens with, or None when it opens with none."""
+    match = _DRAFT_HEADER_RE.match(body.decode("utf-8-sig", errors="replace"))
+    return (match.group("stage"), match.group("severity"), match.group("fp")) if match else None
+
+
+def submit_commands(repo: str, title: str, severity: str, fp: str, path: str) -> list[str]:
+    """The label create, the create, and the create without labels that file a queued draft.
+
+    Each argument is quoted for a POSIX shell, and `--repo` follows the subcommand, so an allow rule scoped to the
+    repository (`gh issue create --repo OWNER/REPO`) matches.
+    """
+
+    def line(*argv: str) -> str:
+        return " ".join(shlex.quote(arg) for arg in argv)
+
+    label = line("gh", "label", "create", "--repo", repo, fp, "--color", FP_LABEL_COLOR,
+                 "--description", FP_LABEL_DESCRIPTION)
+    create = line("gh", "issue", "create", "--repo", repo, "--title", title,
+                  "--label", ",".join((*ISSUE_LABELS, severity, fp)), "--body-file", path)
+    bare = line("gh", "issue", "create", "--repo", repo, "--title", title, "--body-file", path)
+    return [label, create, bare]
+
+
 def cmd_queue(args: argparse.Namespace) -> int:
-    if args.stage not in STAGES:
-        return _fail(
-            "invalid stage %r; expected one of %s" % (args.stage, ", ".join(STAGES))
-        )
     body_file = Path(args.body_file).expanduser()
     try:
         body = body_file.read_bytes()
     except OSError as exc:
         return _fail("could not read body file %s: %s" % (body_file, exc))
+    keys = _draft_keys(body)
+    if keys is None:
+        return _fail(
+            "body file %s holds no body_header; open the draft with the body_header `fingerprint` printed"
+            % body_file
+        )
+    stage, severity, fp = keys
+    prefix = f"[health-check][{severity}][{fp}] ultracode-goal/{stage}: "
+    if not args.title.startswith(prefix):
+        return _fail(
+            "title %r is not this draft's: the draft's body_header gives %s, %s and %s, so its title starts with %r"
+            % (args.title, stage, severity, fp, prefix)
+        )
+    if len(args.title) > TITLE_MAX:
+        return _fail("title is %d characters long; GitHub takes at most %d" % (len(args.title), TITLE_MAX))
+    if _title_unsafe(args.title):
+        return _fail(
+            "title %r holds a backtick, `$`, double quote, backslash, `!` or a character that is not printable "
+            "(a tab or a line break included)" % args.title
+        )
+    problem = _repo_error(args.repo)
+    if problem:
+        return _fail(problem)
 
     queue_dir = Path(args.queue_dir).expanduser()
     try:
@@ -952,7 +1212,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
     except OSError as exc:
         return _fail("could not create %s: %s" % (queue_dir, exc))
     try:
-        fd, target = _create_new(queue_dir, f"hc-ultracode-goal-{args.stage}-{_queue_stamp()}")
+        fd, target = _create_new(queue_dir, f"hc-ultracode-goal-{stage}-{_queue_stamp()}")
     except OSError as exc:
         return _fail("could not create a queue file in %s: %s" % (queue_dir, exc))
     try:
@@ -969,7 +1229,8 @@ def cmd_queue(args: argparse.Namespace) -> int:
             pass
         return _fail("could not write %s: %s" % (target, exc))
 
-    print(json.dumps({"path": os.path.abspath(target)}))
+    path = os.path.abspath(target)
+    _print_utf8({"path": path, "commands": submit_commands(args.repo, args.title, severity, fp, path)})
     return 0
 
 
@@ -982,17 +1243,25 @@ def main(argv: list[str] | None = None) -> int:
     fp_parser = sub.add_parser("fingerprint", help="Compute the dedup fingerprints.")
     fp_parser.add_argument("--severity", required=True)
     fp_parser.add_argument("--stage", required=True)
-    fp_parser.add_argument("--section-slug", dest="section_slug", help="The section's kebab-case slug.")
+    fp_parser.add_argument(
+        "--section-slug",
+        dest="section_slug",
+        help="The section's kebab-case slug, in place of a --stdin section_heading: it skips the check that the "
+        "heading is one of the stage file's own. Without --stdin, title, regression_title and body_header print "
+        "null.",
+    )
     fp_parser.add_argument(
         "--defect-key",
         dest="defect_key",
-        help="One to four kebab-case words naming the thing the fix would change.",
+        help="One to four kebab-case words naming the thing the fix would change, in place of a --stdin "
+        "defect_name. Without --stdin, title, regression_title and body_header print null.",
     )
     fp_parser.add_argument(
         "--stdin",
         action="store_true",
-        help='Read {"section_heading": ..., "defect_name": ...} from stdin, in place of '
-        "--section-slug and --defect-key respectively.",
+        help='Read {"section_heading": ..., "defect_name": ..., "short_description": ...} from stdin: the '
+        "first two in place of --section-slug and --defect-key respectively, the optional third for the "
+        "issue title and body header.",
     )
     fp_parser.set_defaults(func=cmd_fingerprint)
 
@@ -1000,6 +1269,11 @@ def main(argv: list[str] | None = None) -> int:
     seen_parser.add_argument("--fp", required=True)
     seen_parser.add_argument("--legacy-fp", required=True, dest="legacy_fp")
     seen_parser.add_argument("--cache", required=True)
+    seen_parser.add_argument(
+        "--repo",
+        help="The repository findings are filed on, [HOST/]OWNER/REPO: a record of an issue on another one counts "
+        "as no record.",
+    )
     seen_parser.set_defaults(func=cmd_seen)
 
     rec_parser = sub.add_parser("record", help="Record a fingerprint outcome to the cache.")
@@ -1021,10 +1295,16 @@ def main(argv: list[str] | None = None) -> int:
     ver_parser.add_argument("--skill-root", required=True, dest="skill_root")
     ver_parser.set_defaults(func=cmd_version)
 
-    queue_parser = sub.add_parser("queue", help="Write a drafted body into the local queue.")
+    queue_parser = sub.add_parser(
+        "queue", help="Write a drafted body into the local queue and print the commands that submit it."
+    )
     queue_parser.add_argument("--queue-dir", required=True, dest="queue_dir")
-    queue_parser.add_argument("--stage", required=True)
-    queue_parser.add_argument("--body-file", required=True, dest="body_file")
+    queue_parser.add_argument(
+        "--body-file", required=True, dest="body_file",
+        help="The draft, opening with the body_header `fingerprint` printed: the queue file is named after its stage.",
+    )
+    queue_parser.add_argument("--title", required=True, help="The issue title `fingerprint` printed for the draft.")
+    queue_parser.add_argument("--repo", required=True, help="The repository the commands file the issue on.")
     queue_parser.set_defaults(func=cmd_queue)
 
     args = parser.parse_args(argv)
