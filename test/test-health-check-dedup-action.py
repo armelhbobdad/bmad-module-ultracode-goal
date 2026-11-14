@@ -281,7 +281,7 @@ def test_the_stage_reference_files_the_scripts_title_and_opens_the_draft_with_it
     """No title and no machine-read body line is built by hand any more (determinism-1, determinism-2)."""
     text = HEALTH_CHECK_MD.read_text(encoding="utf-8")
     flowed = " ".join(text.split())
-    # Both commands that file an issue, the live create and the one printed for a queued finding, take the title.
+    # The live create takes the title, and so does the queue call that prints a queued finding's create.
     assert text.count('--title "{title}"') == 2
     assert not re.search(r"\[health-check\]\[\{severity\}\]", text), "no title template left in the prose"
     assert "opening with the call's `body_header` exactly as printed" in flowed

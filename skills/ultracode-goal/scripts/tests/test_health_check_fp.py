@@ -9,8 +9,9 @@ Covers the fingerprint byte-format (fp and the keyless legacy_fp, locked against
 golden sha1s computed in the test), the fp regex contract and the severity,
 stage, slug and defect-key validation; the section heading, defect name and
 short description read from --stdin, with the slug and key rules, the title
-and its character rule and the body header; `queue`'s naming, counter and
-byte-for-byte copy; the `seen` verdict table and its opening line, including the
+and its character rule and the body header; `queue`'s naming, counter,
+byte-for-byte copy and the submit commands it prints, read from the draft's body
+header and quoted for a shell; the `seen` verdict table and its opening line, including the
 legacy-fingerprint demotions and the issue-state check it runs through `gh`
 (a fake gh on PATH that answers, fails, prints junk or hangs, and a gh planted
 in the current folder that must never run); and `record`'s validation, merge,
@@ -35,9 +36,11 @@ import io
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -530,18 +533,34 @@ def test_the_regression_title_is_capped_at_githubs_256_characters():
 # --- queue ---------------------------------------------------------------------------
 
 
-def _queue(mod, capsys, queue_dir: Path, body: Path, stage: str = "gate") -> tuple[int, dict]:
-    return _main(mod, capsys, "queue", "--queue-dir", str(queue_dir), "--stage", stage, "--body-file", str(body))
+def _finding(severity: str = "bug", stage: str = "gate", description: str = "a defect") -> dict:
+    """A real fingerprint payload: the title a queued draft is filed under and the body_header it opens with."""
+    code, payload = _fingerprint_stdin(severity, stage, {"short_description": description},
+                                       "--section-slug=route-on-the-verdict", "--defect-key=gate-status")
+    assert code == 0, payload
+    return payload
+
+
+def _draft(path: Path, finding: dict, rest: bytes = b"\n## Finding\nOne sentence.\n") -> Path:
+    path.write_bytes(finding["body_header"].encode("utf-8") + rest)
+    return path
+
+
+def _queue(mod, capsys, queue_dir: Path, body: Path, title: str, stage: str = "gate",
+           repo: str = "o/r") -> tuple[int, dict]:
+    # The `=` forms, so a value that starts with a dash reaches the script's own check.
+    return _main(mod, capsys, "queue", "--queue-dir", str(queue_dir), "--stage", stage, "--body-file", str(body),
+                 f"--title={title}", f"--repo={repo}")
 
 
 def test_two_queued_findings_in_the_same_second_get_a_counter(tmp_path, mod, monkeypatch, capsys):
     monkeypatch.setattr(mod, "_queue_stamp", lambda: "20261114-093012")
-    body = tmp_path / "hc-body-fp-abc1234.md"
-    body.write_bytes(b"## Workflow\n`ultracode-goal/gate`\r\n\nSection fingerprint: `fp-1234abc`\n\xe2\x9c\x93\n")
+    finding = _finding()
+    body = _draft(tmp_path / "hc-body-fp-abc1234.md", finding, b"\r\n## Finding\r\n\xe2\x9c\x93\n")
     queue_dir = tmp_path / "out" / "improvement-queue"
     paths = []
     for _ in range(3):
-        code, result = _queue(mod, capsys, queue_dir, body)
+        code, result = _queue(mod, capsys, queue_dir, body, finding["title"])
         assert code == 0, result
         paths.append(Path(result["path"]))
     assert [p.name for p in paths] == [
@@ -557,9 +576,9 @@ def test_two_queued_findings_in_the_same_second_get_a_counter(tmp_path, mod, mon
 def test_a_file_already_there_is_never_overwritten(tmp_path, mod, monkeypatch, capsys):
     monkeypatch.setattr(mod, "_queue_stamp", lambda: "20261114-093012")
     (tmp_path / "hc-ultracode-goal-execute-20261114-093012.md").write_text("earlier", encoding="utf-8")
-    body = tmp_path / "body.md"
-    body.write_text("later", encoding="utf-8")
-    code, result = _queue(mod, capsys, tmp_path, body, stage="execute")
+    finding = _finding(stage="execute")
+    body = _draft(tmp_path / "body.md", finding)
+    code, result = _queue(mod, capsys, tmp_path, body, finding["title"], stage="execute")
     assert code == 0
     assert Path(result["path"]).name == "hc-ultracode-goal-execute-20261114-093012-2.md"
     assert (tmp_path / "hc-ultracode-goal-execute-20261114-093012.md").read_text(encoding="utf-8") == "earlier"
@@ -582,23 +601,24 @@ def test_the_queue_name_is_the_utc_time(tmp_path, mod, monkeypatch):
     monkeypatch.setattr(mod, "datetime", Clock)
     assert mod._queue_stamp() == "20261114-093012"
     monkeypatch.undo()
-    body = tmp_path / "body.md"
-    body.write_text("x", encoding="utf-8")
-    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--stage", "preflight", "--body-file", str(body))
+    finding = _finding(stage="preflight")
+    body = _draft(tmp_path / "body.md", finding)
+    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--stage", "preflight", "--body-file", str(body),
+                "--title", finding["title"], "--repo", "o/r")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert re.fullmatch(r"hc-ultracode-goal-preflight-[0-9]{8}-[0-9]{6}\.md", Path(json.loads(proc.stdout)["path"]).name)
 
 
 def test_a_failed_write_leaves_no_partial_queue_file(tmp_path, mod, monkeypatch, capsys):
-    body = tmp_path / "body.md"
-    body.write_text("x" * 4096, encoding="utf-8")
+    finding = _finding()
+    body = _draft(tmp_path / "body.md", finding, b"x" * 4096)
     queue_dir = tmp_path / "q"
 
     def disk_full(fd, data):
         raise OSError(errno.ENOSPC, "No space left on device")
 
     monkeypatch.setattr(mod.os, "write", disk_full)
-    code, result = _queue(mod, capsys, queue_dir, body)
+    code, result = _queue(mod, capsys, queue_dir, body, finding["title"])
     monkeypatch.undo()
     assert code == 1
     assert "could not write" in result["error"]
@@ -606,23 +626,218 @@ def test_a_failed_write_leaves_no_partial_queue_file(tmp_path, mod, monkeypatch,
 
 
 def test_a_missing_body_file_exits_one_and_creates_nothing(tmp_path):
-    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--stage", "gate", "--body-file", str(tmp_path / "nope.md"))
+    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--stage", "gate", "--body-file", str(tmp_path / "nope.md"),
+                "--title", _finding()["title"], "--repo", "o/r")
     assert proc.returncode == 1
     assert "body file" in json.loads(proc.stdout)["error"]
     assert not (tmp_path / "q").exists()
 
 
 def test_queue_refuses_a_stage_outside_its_set(tmp_path):
-    body = tmp_path / "body.md"
-    body.write_text("x", encoding="utf-8")
-    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--stage", "health-check", "--body-file", str(body))
+    finding = _finding()
+    body = _draft(tmp_path / "body.md", finding)
+    proc = _run("queue", "--queue-dir", str(tmp_path / "q"), "--stage", "health-check", "--body-file", str(body),
+                "--title", finding["title"], "--repo", "o/r")
     assert proc.returncode == 1
     assert "invalid stage" in json.loads(proc.stdout)["error"]
     assert not (tmp_path / "q").exists()
 
 
-def test_queue_needs_all_three_arguments(tmp_path):
-    assert _run("queue", "--queue-dir", str(tmp_path), "--stage", "gate").returncode == 2
+def test_queue_needs_all_five_arguments(tmp_path):
+    full = {"--queue-dir": str(tmp_path), "--stage": "gate", "--body-file": str(tmp_path / "b.md"), "--title": "t",
+            "--repo": "o/r"}
+    for missing in full:
+        argv = [arg for flag, value in full.items() if flag != missing for arg in (flag, value)]
+        assert _run("queue", *argv).returncode == 2, missing
+
+
+def _expected_commands(finding: dict, severity: str, repo: str, title: str, path: str) -> list[list[str]]:
+    """The argv of the label create, the create and the create without labels, as the shell must read them."""
+    fp = finding["fp"]
+    return [
+        ["gh", "label", "create", "--repo", repo, fp, "--color", "ededed",
+         "--description", "Health-check fingerprint dedup key"],
+        ["gh", "issue", "create", "--repo", repo, "--title", title,
+         "--label", f"health-check,workflow-improvement,{severity},{fp}", "--body-file", path],
+        ["gh", "issue", "create", "--repo", repo, "--title", title, "--body-file", path],
+    ]
+
+
+def test_queue_prints_the_three_submit_commands_every_argument_quoted(tmp_path, mod, capsys):
+    """The model no longer fills in the commands: the script prints them, quoted for a shell (determinism-2)."""
+    finding = _finding("bug", "gate", "it's a 'quoted' title (50% & more) <here> naïve")
+    queue_dir = tmp_path / "My Projects" / "improvement queue"
+    body = _draft(tmp_path / "hc-body.md", finding)
+    code, result = _queue(mod, capsys, queue_dir, body, finding["title"], repo="o/r")
+    assert code == 0, result
+    assert set(result) == {"path", "commands"}
+    path = result["path"]
+    assert " " in path and Path(path).parent == queue_dir.resolve()
+    assert all("\n" not in command for command in result["commands"]), "each command is one line"
+    # The shell gets every argument back exactly as given, the path with its spaces and the title with its quotes;
+    # no redirect or `||` that a POSIX-only shell or an allow rule would trip on.
+    assert [shlex.split(c) for c in result["commands"]] == _expected_commands(finding, "bug", "o/r", finding["title"], path)
+    assert not [c for c in result["commands"] if "2>" in c or "||" in c]
+    assert f"--body-file {shlex.quote(path)}" in result["commands"][1] and shlex.quote(path) != path
+    # `--repo` follows the subcommand, so an allow rule scoped to the repository matches each of them.
+    for command, prefix in zip(result["commands"], ("gh label create --repo o/r ", "gh issue create --repo o/r ",
+                                                     "gh issue create --repo o/r ")):
+        assert command.startswith(prefix), command
+
+
+@pytest.mark.parametrize("severity", ["bug", "friction", "gap"])
+def test_queue_reads_the_severity_and_fp_from_a_regression_draft_with_crlf(tmp_path, mod, capsys, severity):
+    finding = _finding(severity, "execute")
+    opened = "Regression of https://github.com/o/r/issues/1 (resolved 2026-07-19).\n\n" + finding["body_header"]
+    body = tmp_path / "hc-body.md"
+    body.write_bytes(("\ufeff" + opened + "\n## Finding\nx\n").replace("\n", "\r\n").encode("utf-8"))
+    repo = "ghe.example.com/team/internal-repo"
+    code, result = _queue(mod, capsys, tmp_path / "q", body, finding["regression_title"], stage="execute", repo=repo)
+    assert code == 0, result
+    assert [shlex.split(c) for c in result["commands"]] == _expected_commands(
+        finding, severity, repo, finding["regression_title"], result["path"])
+
+
+def test_a_draft_that_is_a_bom_then_the_body_header_is_read(tmp_path, mod, capsys):
+    finding = _finding("friction")
+    raw = b"\xef\xbb\xbf" + finding["body_header"].encode("utf-8") + b"\n## Finding\nx\n"
+    assert mod._draft_keys(raw) == ("gate", "friction", finding["fp"])
+    body = tmp_path / "hc-body.md"
+    body.write_bytes(raw)
+    code, result = _queue(mod, capsys, tmp_path / "q", body, finding["title"])
+    assert code == 0, result
+    assert Path(result["path"]).read_bytes() == raw
+
+
+def test_queue_prints_a_non_ascii_title_as_itself_in_utf8(tmp_path):
+    """The commands are shown as printed, so a title must not reach the run as a \\uXXXX escape, whatever the locale."""
+    finding = _finding("bug", "gate", "naïve défaut")
+    body = _draft(tmp_path / "hc-body.md", finding)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "queue", "--queue-dir", str(tmp_path / "q"), "--stage", "gate",
+         "--body-file", str(body), "--title", finding["title"], "--repo", "o/r"],
+        capture_output=True, env=_env(PYTHONIOENCODING="latin-1"), timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ultracode-goal/gate: naïve défaut".encode("utf-8") in proc.stdout
+    assert b"\\u00" not in proc.stdout
+
+
+@needs_posix
+def test_the_printed_commands_run_in_a_shell_as_printed(tmp_path, mod, capsys):
+    """The matrix row run for real: a shell reads each command and gh receives each argument unchanged."""
+    folder = tmp_path / "fake-bin"
+    folder.mkdir()
+    gh = folder / "gh"
+    gh.write_text('#!/bin/sh\nfor arg in "$@"; do printf \'%s\\0\' "$arg"; done >> "$ARGV_LOG"\n'
+                  'printf \'\\n\' >> "$ARGV_LOG"\nexit 1\n', encoding="utf-8")
+    gh.chmod(0o755)
+    finding = _finding("gap", "gate", "it's 'here' & (there)")
+    body = _draft(tmp_path / "hc-body.md", finding)
+    code, result = _queue(mod, capsys, tmp_path / "a queue dir", body, finding["title"])
+    assert code == 0, result
+    log = tmp_path / "argv.log"
+    proc = subprocess.run(["sh", "-c", "\n".join(result["commands"])], capture_output=True, text=True, timeout=60,
+                          env=_env(f"{folder}{os.pathsep}/usr/bin{os.pathsep}/bin", ARGV_LOG=str(log)))
+    # A failed label create does not stop the create that follows it.
+    assert proc.returncode == 1 and proc.stderr == ""
+    calls = [line.split("\0")[:-1] for line in log.read_text(encoding="utf-8").splitlines()]
+    assert calls == [argv[1:] for argv in _expected_commands(finding, "gap", "o/r", finding["title"], result["path"])]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"",
+        b"## Finding\nno header at all\n",
+        # The template's placeholders, or a header cut short, are no body_header.
+        b"## Workflow\n`ultracode-goal/gate`\n\n## Severity\n`bug`\n\n## Fingerprint\n`fp-abc1234`\n",
+        None,
+        # The header must open the draft, under one opening line at most.
+        b"Regression of x.\n\nA second line.\n\n",
+        b"## Finding\nx\n\n",
+    ],
+    ids=["empty", "no-header", "partial-header", "template-placeholder", "two-opening-lines", "header-not-first"],
+)
+def test_a_draft_with_no_body_header_exits_one_and_writes_no_file(tmp_path, mod, capsys, body):
+    finding = _finding()
+    if body is None:
+        body = finding["body_header"].replace(finding["fp"], "fp-XXXXXXX").encode("utf-8")
+    elif body.endswith(b"\n\n"):
+        body += finding["body_header"].encode("utf-8")
+    path = tmp_path / "hc-body.md"
+    path.write_bytes(body)
+    code, result = _queue(mod, capsys, tmp_path / "q", path, finding["title"])
+    assert code == 1
+    assert set(result) == {"error"} and "holds no body_header" in result["error"]
+    assert not (tmp_path / "q").exists()
+
+
+@pytest.mark.parametrize("which", ["fp", "severity", "stage", "bare"])
+def test_a_title_that_is_not_the_drafts_exits_one_and_writes_no_file(tmp_path, mod, capsys, which):
+    finding = _finding("bug")
+    other = {"fp": finding["title"].replace(finding["fp"], "fp-0000000"),
+             "severity": _finding("friction")["title"],
+             "stage": finding["title"].replace("ultracode-goal/gate:", "ultracode-goal/execute:"),
+             "bare": "a defect"}[which]
+    code, result = _queue(mod, capsys, tmp_path / "q", _draft(tmp_path / "hc-body.md", finding), other)
+    assert code == 1
+    assert "is not this draft's" in result["error"]
+    assert f"[health-check][bug][{finding['fp']}] ultracode-goal/gate: " in result["error"]
+    assert not (tmp_path / "q").exists()
+
+
+def test_a_stage_that_is_not_the_drafts_exits_one_and_writes_no_file(tmp_path, mod, capsys):
+    finding = _finding("bug", "gate")
+    code, result = _queue(mod, capsys, tmp_path / "q", _draft(tmp_path / "hc-body.md", finding), finding["title"],
+                          stage="execute")
+    assert code == 1
+    assert "--stage 'execute' is not this draft's" in result["error"]
+    assert not (tmp_path / "q").exists()
+
+
+@pytest.mark.parametrize(
+    "tail",
+    ["x" * 256, "two\nlines", "a\ttab", "costs $5", "the `gate`", 'a "quoted" word', "it fails!", "back\\slash"],
+    ids=["too-long", "newline", "tab", "dollar", "backtick", "double-quote", "bang", "backslash"],
+)
+def test_a_title_fingerprint_would_refuse_exits_one_and_writes_no_file(tmp_path, mod, capsys, tail):
+    finding = _finding("bug")
+    code, result = _queue(mod, capsys, tmp_path / "q", _draft(tmp_path / "hc-body.md", finding),
+                          finding["title"] + tail)
+    assert code == 1
+    assert ("GitHub takes at most 256" if tail.startswith("x") else "not printable") in result["error"]
+    assert not (tmp_path / "q").exists()
+
+
+@pytest.mark.parametrize("repo", ["", "o", "o/r/x/y", "o/r x", "-o/r", "o/r;rm", "https://github.com/o/r", "o//r"])
+def test_a_repo_that_is_not_owner_slash_repo_exits_one_and_writes_no_file(tmp_path, mod, capsys, repo):
+    finding = _finding("bug")
+    code, result = _queue(mod, capsys, tmp_path / "q", _draft(tmp_path / "hc-body.md", finding), finding["title"],
+                          repo=repo)
+    assert code == 1
+    assert "invalid repo" in result["error"] and "[HOST/]OWNER/REPO" in result["error"]
+    assert not (tmp_path / "q").exists()
+
+
+@pytest.mark.parametrize("repo", ["armelhbobdad/bmad-module-ultracode-goal", "o/r.js", "ghe.example.com/team/repo_1"])
+def test_a_repo_of_owner_slash_repo_with_an_optional_host_is_taken(tmp_path, mod, capsys, repo):
+    finding = _finding("bug")
+    code, result = _queue(mod, capsys, tmp_path / "q", _draft(tmp_path / "hc-body.md", finding), finding["title"],
+                          repo=repo)
+    assert code == 0, result
+    assert shlex.split(result["commands"][1])[4] == repo
+
+
+@pytest.mark.parametrize("severity", ["bug", "friction", "gap"])
+@pytest.mark.parametrize("stage", ["ingest-and-scope", "define-done", "finalize"])
+def test_every_body_header_the_script_prints_is_read_back(mod, severity, stage):
+    fp, legacy_fp, _ = mod._compute_fp(severity, stage, "a-section", "a-key")
+    header = mod.body_header(severity, stage, "a-section", "a-key", fp, legacy_fp)
+    assert mod._draft_keys(header.encode("utf-8")) == (stage, severity, fp)
+    assert mod._draft_keys(header.replace("\n", "\r\n").encode("utf-8")) == (stage, severity, fp)
+    # The section fingerprint is never read as the defect's own.
+    assert mod._draft_keys(header.replace(f"`{fp}`", "`fp-XXXXXXX`").encode("utf-8")) is None
 
 
 # --- seen: the verdict table -------------------------------------------------
@@ -1522,7 +1737,7 @@ def test_the_enabled_gate_comes_first_and_headless_announces_nothing():
     assert first and body[first.start():].startswith("## 1. Enabled gate")
     gate = _flow(_section("## 1. Enabled gate", "## 2."))
     assert gate.index("If `{workflow.health_check_repo}` is empty, the check is off") < gate.index("in an attended run")
-    assert "touching nothing else" in gate
+    assert "touching nothing but that marker line" in gate
     assert "arrival announcement" not in body
 
 
@@ -1558,14 +1773,34 @@ def test_reflection_reads_the_friction_entries_no_health_check_reported():
     assert allow and not [c for c in re.findall(r'"([^"]+)"', allow.group(1)) if c.split()[0] in ("grep", "rg")]
     for gone in ("this invocation", "dlog-slice", "grep -n"):
         assert gone not in find, gone
-    assert "Report only what a logged entry or the live context shows." in find
+    # Only what was actually hit is reported: stated once, in the anti-fabrication rules (leanness-2).
+    assert "Report only what a logged entry or the live context shows." not in find
+    assert "Report only friction that was **actually hit**" in _section("## Anti-fabrication rules", "## 1.")
     skill = _flow((skill_root / "SKILL.md").read_text(encoding="utf-8"))
     assert ('and, without stopping, a one-line `friction: <stage>.md "<section heading, exactly as the file writes it, '
             'numbering included>": <what was unclear, contradictory or missing>` entry whenever an instruction is '
-            "unclear, contradictory or silent on the case in hand (the next health check to run reports every entry "
-            "logged after the last `health-check:` line, which each of its exits appends).") in skill
+            "unclear, contradictory or silent on the case in hand") in skill
+    # SKILL.md names no marker mechanics: the stage that appends and reads the markers states them (leanness-1).
+    assert "`health-check:` line" not in skill
+
+
+def test_finalize_hands_friction_to_the_health_check_only_when_it_is_on():
+    """An entry left for a check that is off would reach no report: the audit lists it instead (architecture-4).
+
+    The `disabled` marker closes every entry after the last marker, whichever invocation logged it, so the audit
+    lists all of those, found the way §2 finds them, not only this invocation's.
+    """
+    skill_root = Path(__file__).resolve().parents[2]
     finalize = _flow((skill_root / "references" / "finalize.md").read_text(encoding="utf-8"))
-    assert "A `friction:` entry is left for the health check, which reports it." in finalize
+    assert ("A `friction:` entry is left for the health check when `{workflow.health_check_repo}` is set, since the "
+            "check reports it. When that is empty, the check is off, and the `disabled` marker it appends closes every "
+            "`friction:` entry after the log's last `health-check:` marker unreported, so list each of those in the "
+            "addendum: search `.decision-log.md` with the Grep tool for the regex `" + _READ_PATTERN + "` and take the "
+            "`friction:` entries after the last marker it finds (all of them when there is none).") in finalize
+    assert "A `friction:` entry is left for the health check, which reports it." not in finalize
+    skill = _flow((skill_root / "SKILL.md").read_text(encoding="utf-8"))
+    assert "(the next health check reports it, or Finalize lists it in the run's addendum when the check is off)" in skill
+    assert "closes it unreported" not in skill
 
 
 def _markers() -> list[str]:
@@ -1579,18 +1814,20 @@ def test_every_exit_appends_exactly_one_marker_line():
         "health-check: disabled", "health-check: clean", "health-check: discarded", "health-check: done"
     ]
     gate = _flow(_section("## 1. Enabled gate", "## 2."))
-    assert "append `health-check: disabled` to `.decision-log.md` and return, touching nothing else" in gate
-    assert ("Every exit of this check appends exactly one `health-check: <outcome>` line to `.decision-log.md`, the "
-            "way SKILL.md appends any entry, in place of any other line about how it ended: `disabled` (above), "
-            "`clean` (§2), `discarded` (§4a **[N]**) or `done` with its counts (§6).") in gate
+    assert "append `health-check: disabled` to `.decision-log.md` and return, touching nothing but that marker line" in gate
+    assert ("Every exit of this check appends exactly one `health-check: <outcome>` line to `.decision-log.md`, in "
+            "place of any other line about how it ended: `disabled` (above), `clean` (§2), `discarded` (§4a **[N]**) "
+            "or `done` with its counts (§6).") in gate
     find = _flow(_section("## 2. Find the findings", "## 3."))
     assert ('If there is none, append `health-check: clean` (§1), display "Health Check: clean run. No workflow '
             'issues to report." in an attended run, and return.') in find
     draft = _flow(_section("## 3. Fingerprint and draft each finding", "## 4."))
     assert "When no finding survives this step, go straight to §6, with no gate." in draft
     attended = _flow(_section("### 4a. Attended routing", "### 4-headless."))
+    # Every exit returns: the check is the run's last step, so no exit shouts a harder stop (leanness-6).
     assert ('**[N]** → append `health-check: discarded` (§1), display "Findings discarded. Workflow complete." and '
-            "STOP.") in attended
+            "return.") in attended
+    assert "STOP" not in _reference()
     close = _flow(_section("## 6. Close"))
     assert close == (
         "## 6. Close Once every finding is routed, or none survived §3, append the one line `health-check: done, <n> "
@@ -1601,6 +1838,23 @@ def test_every_exit_appends_exactly_one_marker_line():
     body = _flow(_reference())
     for stale in ("health-check disabled (", "clean run, no findings"):
         assert stale not in body, stale
+
+
+def test_the_stage_states_how_it_appends_to_the_log():
+    """The check runs last, when compaction has most likely dropped SKILL.md, so it carries the append rule itself
+    (architecture-3), with a slice named for Stage 7 that Finalize's `dlog-slice-*.md` audit glob covers."""
+    gate = _flow(_section("## 1. Enabled gate", "## 2."))
+    assert ("**Appending to the log.** The marker, and every line this file says to log, is appended to "
+            "`.decision-log.md` with Write or Edit, never a Bash heredoc.") in gate
+    assert ("Once the log is too large to Read affordably, do not Read it: Write the line to a new file beside the "
+            "log, `<log folder>/dlog-slice-stage7-<n>.md`, where `<log folder>` is the run folder's full path and "
+            "`<n>` is one past the highest number a `dlog-slice-stage7-*.md` there already carries, then append it in "
+            'one Bash call, `cat "<log folder>/dlog-slice-stage7-<n>.md" >> "<log folder>/.decision-log.md"`, and keep '
+            "the slice.") in gate
+    assert "the way SKILL.md appends" not in _reference()
+    [command] = re.findall(r"`(cat [^`]+)`", gate)
+    words = shlex.split(command.replace("<log folder>", "/my project/run"))
+    assert words == ["cat", "/my project/run/dlog-slice-stage7-<n>.md", ">>", "/my project/run/.decision-log.md"]
 
 
 # §2's Grep pattern: an entry or a marker at the start of its line, after a list bullet at most.
@@ -1653,8 +1907,9 @@ def test_every_finding_is_drafted_before_the_gate_and_routed_unchanged():
     # The draft opens with the script's body header, which the dedup Action reads: no machine-read line by hand.
     assert ("Write each finding's issue body with the Write tool to `hc-body-{fp}.md` in the run folder, opening with "
             "the call's `body_header` exactly as printed.") in draft
-    assert ("**Issue body**: the `body_header` (its Workflow, Step File, Section, Severity, Fingerprint and Defect Key "
-            "sections, which the dedup Action reads), then these `## ` headings in order") in draft
+    # The draft copies the header as printed, so the prose lists none of its sections (leanness-4).
+    assert "**Issue body**: the `body_header`, then these `## ` headings in order" in draft
+    assert "which the dedup Action reads" not in draft
     for by_hand in ("`## Fingerprint` with", "`## Severity` (`{severity}`)", "Section fingerprint:"):
         assert by_hand not in draft, by_hand
     # The live create and the queue both take that draft as their body file.
@@ -1725,7 +1980,8 @@ def test_a_null_title_or_header_is_never_written():
 def test_the_attended_gate_offers_queue_locally():
     gate = _flow(_section("### 4a. Attended routing", "### 4-headless."))
     assert "**[Q]** Queue locally" in gate
-    assert "Make no GitHub call" in gate
+    # [Q] routes to the queue alone, which makes no GitHub call, so nothing restates that (leanness-2).
+    assert "Make no GitHub call" not in gate
     assert '"The review gate queued these locally."' in gate
 
 
@@ -1743,7 +1999,10 @@ def test_the_never_block_rule_is_stated_once_with_its_reason():
             assert stale not in text, (path.name, stale)
     finalize = _flow((skill_root / "references" / "finalize.md").read_text(encoding="utf-8"))
     assert "It routes its own headless mode and **never blocks the emit**." in finalize
-    assert "Do not perform any other action between this section and executing the health check." in finalize
+    # The rule keeps its place, with the failure it guards against in place of a bare order (leanness-6).
+    assert ("Take no other action between this section and the health check: a turn that ends on the run report "
+            "skips the check.") in finalize
+    assert "Do not perform any other action" not in finalize
 
 
 def test_an_unattended_match_takes_skip_and_posts_nothing():
@@ -1760,9 +2019,12 @@ def test_an_unattended_match_takes_skip_and_posts_nothing():
 
 
 def test_a_queued_finding_records_nothing():
-    queue = _section(QUEUE)
-    assert "health_check_fp.py record" not in queue
-    assert "**Record nothing in the seen-cache for it**" in queue
+    """Stated once, in §5b, with the reason only it gives; each route names the record it makes (leanness-2)."""
+    assert "health_check_fp.py record" not in _section(QUEUE)
+    record = _flow(_section("### 5b. Record the outcome", QUEUE))
+    assert ("Nothing else is recorded: not a queued finding, not **[S]**, not a failed call. A queued finding is not "
+            "an issue, and a record for it would suppress the same defect when a later attended run approves it.") in record
+    assert "record nothing" not in _reference().lower()
 
 
 def test_the_queue_step_writes_into_the_configured_queue_path():
@@ -1772,34 +2034,40 @@ def test_the_queue_step_writes_into_the_configured_queue_path():
     [block] = [b for b in _fenced_blocks(queue) if "health_check_fp.py queue" in b]
     assert 'queue --queue-dir "{workflow.health_check_queue_path}"' in _flow(block.replace("\\\n", " "))
     assert "--stage {stage}" in block
+    assert '--title "{title}" --repo "{workflow.health_check_repo}"' in block
 
 
 def test_a_queued_file_is_the_draft_with_no_frontmatter():
-    queue = _flow(_section(QUEUE))
-    assert "copies the draft unchanged" in queue
+    # The script copies the draft byte for byte (the queue tests above), so the prose does not describe it.
+    assert "copies the draft unchanged" not in _section(QUEUE)
     for gone in ("section_fingerprint:", "type: workflow-health-finding", "```yaml"):
         assert gone not in _section(QUEUE), gone
 
 
-def test_every_local_outcome_shows_its_paths_reason_and_body_file_command():
+def test_every_local_outcome_shows_its_paths_reason_and_the_printed_commands():
     queue = _flow(_section(QUEUE))
-    assert '"{N} finding(s) saved locally:" then each path, each followed by the two commands that submit it' in queue
-    assert '"{reason sentence} Run a finding\'s two commands to submit it as an issue' in queue
-    assert ("log the same lines (each path with its `gh label create` and `gh issue create --body-file` commands, "
-            "and the reason sentence with its note for a reporter without push access)") in queue
-    # The printed commands file an issue the dedup Action and the title search can find: the full title, the
-    # health-check and fp-* labels, and the label guard first.
-    [block] = [b for b in _fenced_blocks(_section(QUEUE)) if "gh issue create" in b]
-    command = _flow(block.replace("\\\n", " "))
-    assert command.index('gh label create "{fp}"') < command.index("gh issue create")
-    assert "2>/dev/null || true" in command
-    assert '--title "{title}"' in command
-    assert "`{title}` the title §5a-ii would use" in queue
-    assert '--label "health-check,workflow-improvement,{severity},{fp}"' in command
-    assert "--body-file {file-path}" in command
-    # A reporter without push access drops the `--label` line, so the body file is on a line of its own.
-    assert "\n  --body-file {file-path}\n" in block
-    assert not any("--label" in line and "--body-file" in line for line in block.splitlines())
+    assert '"{N} finding(s) saved locally:" then each path, each followed by its three `commands`, exactly as printed.' in queue
+    assert ('"{reason sentence} Run a finding\'s first two commands to submit it as an issue (the first fails, '
+            "harmlessly, when its label exists)") in queue
+    assert "In an unattended run, display nothing and wait for nothing: log the same lines." in queue
+    # The script prints the commands, quoted; the prose fills in none by hand (determinism-2).
+    assert ('→ `{"path", "commands"}`: the file it wrote, and the three commands that submit it, each on one line with '
+            "every argument quoted: the `gh label create` and the `gh issue create` to run in that order, and the "
+            "`gh issue create` without labels for a reporter without push access.") in queue
+    assert "{file-path}" not in _reference()
+    assert not [b for b in _fenced_blocks(_section(QUEUE)) if "gh " in b], "no command template left in §5c"
+    [block] = [b for b in _fenced_blocks(_section(QUEUE)) if "health_check_fp.py queue" in b]
+    # {title} is defined for every finding, one that never reached §5a included.
+    assert '--title "{title}"' in block
+    assert ("`{title}` being the finding's `title`, or its `regression_title` only after a `regression` verdict whose "
+            "opening line was added") in queue
+    assert "the title §5a-ii would use" not in queue
+    # A failed call leaves the draft to list, pointed at the manual route rather than at commands it lacks.
+    assert ("If the call fails or prints no JSON, log its error and list the draft itself in that file's place (it "
+            'holds the same text), followed, in place of commands, by "Submit it as '
+            "<https://armelhbobdad.github.io/bmad-module-ultracode-goal/health-check/#submitting-a-queued-finding-manually> "
+            'says."') in queue
+    assert "## Submitting a queued finding manually" in _docs()
     assert "[title]" not in queue
     # Each routing step quotes its own reason, one of a fixed set, and §5c keeps no copy of them (leanness-2).
     assert set(re.findall(r'with the reason "([^"]+)"', _flow(_reference()))) == {
@@ -1807,20 +2075,35 @@ def test_every_local_outcome_shows_its_paths_reason_and_body_file_command():
         "Headless runs queue every finding while health_check_autosubmit is off.",
         "Headless runs never submit friction or gap findings.",
         "Friction and gap findings stay local unless you choose [A].",
+        "You declined a gh call; nothing was posted.",
         "GitHub CLI is not available.",
         "You skipped these at the dedup gate.",
         "These may match an open issue on {workflow.health_check_repo}; review them before submitting.",
         "Posting these to GitHub failed.",
     }
+    # A refused gh call gives one of two reasons, by run mode: the unattended one tells how to allow the calls.
+    assert set(re.findall(r'with the reason "([^"]+)" in an attended run', _flow(_reference()))) == {
+        "You declined a gh call; nothing was posted."}
+    assert set(re.findall(r'and "([^"]+)" in an unattended one', _flow(_reference()))) == {
+        "A gh call was refused in this session; allow the health check's gh commands (see health_check_autosubmit) "
+        "to submit unattended."}
     assert "Each finding here carries the reason sentence its routing step gave it." in queue
     assert not re.search(r"^\|", _section(QUEUE), re.MULTILINE), "no reason table"
+
+
+def test_the_created_issues_are_logged_not_displayed_in_an_unattended_run():
+    """§5a-ii's lines follow §5c's rule: on screen when attended, in the log when not (architecture-6)."""
+    create = _flow(_section("**5a-ii. If no matching open issue exists**", "### 5b. Record the outcome"))
+    assert ('After creating all issues, show "{N} issue(s) created on {workflow.health_check_repo}:" then each URL, '
+            'then "Workflow complete." unless a finding of this run went to the local queue, whose §5c block ends '
+            "with it: display these lines in an attended run, and log them in an unattended one.") in create
 
 
 def test_a_failed_create_is_retried_once_without_labels():
     """A reporter without push access can create no label and set none (#227).
 
-    The label command's `|| true` hides the failed `gh label create`, so `gh issue create --label {fp}` fails on the
-    missing label and the first report of every defect was only ever queued. The retry files it bare, and the
+    A failed `gh label create` is no error, so `gh issue create --label {fp}` runs and fails on the missing label,
+    and the first report of every defect was only ever queued. The retry files it bare, and the
     dedup Action labels it from its title.
     """
     section = _section("**5a-ii. If no matching open issue exists**", "### 5b. Record the outcome")
@@ -1833,20 +2116,49 @@ def test_a_failed_create_is_retried_once_without_labels():
     assert "After a `regression` verdict, `{regression_title}` takes the place of `{title}` (§5a step 1)." in create
     assert ("**If `gh issue create` exits non-zero, run it once more without the `--label` line**, with the same "
             "title and body file.") in create
-    assert "cannot create the label (the label command's `|| true` hides that) or set any label" in create
+    assert "can neither create the label nor set any label: the first run fails on the missing `{fp}` label" in create
     assert "The dedup Action applies the labels from the title" in create
     # The outcome is recorded and queued as before: created after either run, queued after the second failure.
     assert "After the issue is created, by the first run or the retry, record it (§5b)" in create
-    assert "If `gh issue create` fails on its retry too, log its error and record nothing" in create
+    assert ('If `gh issue create` fails on its retry too, log its error and write the finding to the local queue '
+            '(§5c) with the reason "Posting these to GitHub failed."') in create
     record = _flow(_section("### 5b. Record the outcome", QUEUE))
     assert "`created` after `gh issue create` succeeded, on its first run or its retry without `--label`" in record
 
 
-def test_the_queue_tells_a_reporter_without_push_access_to_drop_the_guard_and_labels():
+def test_the_queue_tells_a_reporter_without_push_access_to_run_the_create_without_labels():
     queue = _flow(_section(QUEUE))
-    assert ("Without push access to {workflow.health_check_repo}, drop the `gh label create` command and the "
-            "`--label` line: you can neither create a label nor set one, and the dedup Action labels the issue from "
-            "its title.") in queue
+    # The script prints that create, so nobody cuts `--label` out of a quoted line by hand.
+    assert ("Without push access to {workflow.health_check_repo}, run its third command alone instead: you can "
+            "neither create a label nor set one, and the dedup Action labels the issue from its title.") in queue
+
+
+def test_a_failed_label_create_is_no_error_and_no_command_is_compound():
+    """`2>/dev/null || true` is a compound an allow rule may not cover, and its redirect breaks on Windows."""
+    body = _reference()
+    assert "|| true" not in body and "2>/dev/null" not in body
+    create = _flow(_section("**5a-ii. If no matching open issue exists**", "### 5b. Record the outcome"))
+    assert ("If it exits non-zero (the label exists already, or you have no push access), that is no error: go on to "
+            "the create.") in create
+    # `--repo` right after the subcommand, so an allow rule scoped to the repository matches each live call.
+    for block in _fenced_blocks(body):
+        flowed = _flow(block.replace("\\\n", " "))
+        for sub in ("gh label create", "gh search issues", "gh issue create"):
+            if sub in flowed:
+                assert f"{sub} --repo {{workflow.health_check_repo}} " in flowed, block
+    docs = _docs()
+    assert "|| true" not in docs and "2>/dev/null" not in docs
+
+
+def test_a_refused_gh_call_stops_every_gh_call_of_the_check():
+    """Each refusal is a blocked call (under Auto Mode, consecutive blocks count against the session), and an
+    attended user who declined a prompt is not told to configure unattended allow rules."""
+    refused = _flow(_section("**A refused `gh` call.**", "**3. Remote dedup search**"))
+    assert ("When the session refuses `gh auth status` or any later `gh` call of §5a, so that the command never ran, "
+            "make no further `gh` call in this check: write this finding and every live-submit finding not yet "
+            'submitted to the local queue (§5c), with the reason "You declined a gh call; nothing was posted." in an '
+            "attended run, and \"A gh call was refused in this session; allow the health check's gh commands (see "
+            'health_check_autosubmit) to submit unattended." in an unattended one.') in refused
 
 
 def test_evidence_cites_only_module_files():
@@ -1874,7 +2186,22 @@ def test_the_issue_template_gives_the_stdin_fingerprint_command():
     assert re.search(r"health_check_fp\.py fingerprint .*--stdin < names\.json$", command), command
     [names] = [line.strip() for line in lines if line.strip().startswith('{"section_heading"')]
     assert set(json.loads(names)) == {"section_heading", "defect_name", "short_description"}
-    assert "use its `title` as this issue's title" in " ".join(" ".join(lines).split())
+    flowed = " ".join(" ".join(lines).split())
+    assert "use its `title` as this issue's title" in flowed
+    # The filer's first instruction is to paste the printed header whole, never field by field, so fp and
+    # legacy_fp cannot swap (determinism-3).
+    comments = re.findall(r"<!--(.*?)-->", template.read_text(encoding="utf-8"), re.DOTALL)
+    assert " ".join(comments[0].split()).startswith(
+        "Filing by hand: replace everything from this `## Workflow` line through the end of the Defect Key section "
+        "with the `body_header` the health check's script prints for your finding, and use its `title` as this "
+        "issue's title.")
+    # Printing it as text: jq is named as needed, with a python3 alternative, and a null is caught.
+    assert "add `| jq -r .body_header` to the command (jq needed)" in flowed
+    assert """`| python3 -c "import json, sys; print(json.load(sys.stdin)['body_header'])"`""" in flowed
+    assert "Neither may print `null`: that means names.json had no short_description." in flowed
+    for gone in ("Paste its `fp` here", "its `legacy_fp` on the Section fingerprint line", "paste the `defect_key`",
+                 "through the Defect Key value"):
+        assert gone not in flowed, gone
 
 
 def test_a_run_blocked_at_stage_1_or_2_has_its_friction_reported_by_the_next_run():
@@ -1884,8 +2211,8 @@ def test_a_run_blocked_at_stage_1_or_2_has_its_friction_reported_by_the_next_run
     """
     root = Path(__file__).resolve().parents[4]
     skill = _flow((root / "skills" / "ultracode-goal" / "SKILL.md").read_text(encoding="utf-8"))
-    assert ("Runs that block at Stage 1 or Stage 2 do not: the next run of the Epic that reaches Finalize, if one does, "
-            "reports the `friction:` entries they logged.") in skill
+    # SKILL.md no longer restates when the check runs: Finalize and the Stages table carry it (leanness-1).
+    assert "Runs that reach Stage 6" not in skill and "Runs that block at Stage 1 or Stage 2" not in skill
     docs = _flow((root / "docs" / "health-check.md").read_text(encoding="utf-8"))
     assert ("It does **not** run on an early block, a Stage 1 or Stage 2 stop: the next run of that Epic that reaches "
             "Finalize, if one does, reports the friction the blocked run logged.") in docs
@@ -1899,7 +2226,8 @@ def test_a_run_blocked_at_stage_1_or_2_has_its_friction_reported_by_the_next_run
 def test_the_docs_say_the_off_switch_closes_pending_friction_and_draw_the_markers():
     docs = (Path(__file__).resolve().parents[4] / "docs" / "health-check.md").read_text(encoding="utf-8")
     assert ("Each run it skips still logs its `disabled` marker, which closes the `friction:` entries logged so far: "
-            "turning the check back on reports only friction logged after that.") in _flow(docs)
+            "turning the check back on reports only friction logged after that. Finalize lists those entries in the "
+            "run's addendum first, so they are still on record.") in _flow(docs)
     [chart] = re.findall(r"```mermaid\n(.*?)```", docs, re.DOTALL)
     for node in ('Off["Log the disabled marker and exit.', 'Reflect["Read the friction logged since the last marker',
                  'Done["Clean run. Log the clean marker and exit"]', 'Discard["Discard the findings. Log the discarded',
@@ -1907,6 +2235,105 @@ def test_the_docs_say_the_off_switch_closes_pending_friction_and_draw_the_marker
                  'Close["Log the done marker with its counts"]', "Queue --> Close", "Create --> Close"):
         assert node in chart, node
     assert "public issue" not in chart and "Reflect on this run" not in chart
+
+
+_AUTOSUBMIT_ALLOW = 'allowlist_commands = ["gh auth status", "gh search issues", "gh label create", "gh issue create"]'
+
+
+def _docs() -> str:
+    return (Path(__file__).resolve().parents[4] / "docs" / "health-check.md").read_text(encoding="utf-8")
+
+
+def test_autosubmit_names_the_gh_calls_to_allow_and_a_refusal_has_its_own_reason():
+    """Unattended, a gh call no allow rule covers is refused, so the opt-in says which to allow (architecture-1,
+    customization-1); none is shipped, and a refusal is not reported as a missing CLI."""
+    skill_root = Path(__file__).resolve().parents[2]
+    customize = (skill_root / "customize.toml").read_text(encoding="utf-8")
+    comment = customize[customize.index("# In unattended/headless runs"):customize.index("health_check_autosubmit =")]
+    assert _AUTOSUBMIT_ALLOW in comment
+    assert "under [workflow] in" in comment and "{project-root}/_bmad/custom/ultracode-goal.toml (or .user.toml)" in comment
+    assert "Arrays append" in comment
+    shipped = tomllib.loads(customize)["workflow"]["allowlist_commands"]
+    assert not [c for c in shipped if c.split()[0] == "gh"], "no gh allow rule is shipped"
+    # Each of the four is a gh call a headless submit makes, and a headless match never reacts or comments.
+    body = _reference()
+    for command in json.loads(_AUTOSUBMIT_ALLOW.split(" = ", 1)[1]):
+        assert command in body, command
+    step = _flow(_section("**2. Check GitHub CLI**", "**A refused `gh` call.**"))
+    assert ('If it runs and fails, fall through to §5c with the reason "GitHub CLI is not available."') in step
+    docs = _flow(_docs())
+    assert "**To let autosubmit post unattended**, allow the four `gh` commands a submission runs." in docs
+    assert "Arrays append to the shipped list" in docs
+    assert _AUTOSUBMIT_ALLOW in _docs()
+
+
+def test_the_gh_allow_rules_say_they_persist_how_to_scope_them_and_how_to_remove_them():
+    """The rules outlast the run and cover every repository, so the opt-in says so and how to narrow and undo them."""
+    customize = (Path(__file__).resolve().parents[2] / "customize.toml").read_text(encoding="utf-8")
+    comment = " ".join(re.sub(r"^#\s*", "", customize[customize.index("# In unattended/headless runs"):
+                                                       customize.index("health_check_autosubmit =")],
+                              flags=re.MULTILINE).split())
+    assert ".claude/settings.local.json, where it stays for every later session in the project" in comment
+    assert ('"gh search issues --repo <repo>", "gh label create --repo <repo>" and "gh issue create --repo <repo>", '
+            "<repo> being health_check_repo") in comment
+    assert "When you turn autosubmit off, drop the entries and delete their Bash(gh ...) rules" in comment
+    docs = _flow(_docs())
+    assert ("These rules outlast the run: they stay in `.claude/settings.local.json` and apply to every later session "
+            "in the project, so any agent working there can then create issues and labels on any repository without "
+            "asking.") in docs
+    assert ('allowlist_commands = ["gh auth status", "gh search issues --repo <health_check_repo>", '
+            '"gh label create --repo <health_check_repo>", "gh issue create --repo <health_check_repo>"]') in _docs()
+    assert ("When you turn autosubmit off, remove the entries, then delete the rules preflight wrote for them, such as "
+            "`Bash(gh issue create:*)`, from `.claude/settings.local.json` yourself: preflight only adds rules.") in docs
+    assert "POSIX shell (bash, zsh, Git Bash or WSL)" in docs
+
+
+def test_every_override_the_docs_show_sits_under_workflow():
+    """A bare top-level key is discarded by the resolver, so a copied block must carry its table (architecture-5)."""
+    docs = _docs()
+    blocks = re.findall(r"```toml\n(.*?)```", docs, re.DOTALL)
+    assert len(blocks) == 3
+    keys = set()
+    for block in blocks:
+        parsed = tomllib.loads(block)
+        assert list(parsed) == ["workflow"], block
+        keys |= set(parsed["workflow"])
+    assert keys == {"health_check_repo", "health_check_autosubmit", "allowlist_commands"}
+    assert ("The `[workflow]` table header matters: the resolver extracts the `workflow` block from the merged "
+            "files, so a bare top-level line is silently discarded and the knob keeps its default.") in _flow(docs)
+    assert "(set in `{project-root}/_bmad/custom/ultracode-goal.toml`) change this" not in docs
+
+
+def test_the_docs_name_the_configured_repositorys_chooser():
+    """An override that keeps findings off the public default must not be undone by the docs' link (customization-2)."""
+    docs = _flow(_docs())
+    assert ("You can also open one through the issue chooser of `<health-check-repo>`, "
+            "`https://github.com/<health-check-repo>/issues/new/choose` (on the default, "
+            "<https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose>).") in docs
+    assert "through the repository's issue chooser at" not in docs
+    # A filing through the chooser pastes the body_header too, never fills in its sections one by one.
+    assert ("so replace its sections from Workflow through Defect Key with the `body_header` that the "
+            "`health_check_fp.py fingerprint` command in the template's comments prints") in docs
+    assert "fill in its Fingerprint and Severity sections" not in docs
+
+
+def test_the_interactive_briefing_does_not_describe_headless_routing():
+    """Only an attended operator reads the briefing (leanness-5)."""
+    preflight = (Path(__file__).resolve().parents[2] / "references" / "preflight.md").read_text(encoding="utf-8")
+    [line] = [ln for ln in preflight.splitlines() if ln.startswith("- **How the run ends:**")]
+    assert line.endswith('so "unattended" ends there rather than at the last story.')
+    assert "Headless" not in line
+
+
+def test_contributing_points_at_the_actions_header_for_the_dedup_rules():
+    """One maintainer-facing statement of the Action's rules, its header; CONTRIBUTING keeps what a maintainer
+    acts on (leanness-7)."""
+    contributing = (Path(__file__).resolve().parents[4] / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    [bullet] = [ln for ln in contributing.splitlines() if ln.startswith("- **Deduplication is automatic.**")]
+    assert "its header comment gives the rules. **Re-reporting is safe.**" in bullet
+    assert "[dedup Action](.github/workflows/health-check-dedup.yaml)" in bullet
+    for gone in ("lowest-numbered", "runs once at a time per issue", "One limit:"):
+        assert gone not in bullet, gone
 
 
 def test_contributing_records_a_fix_in_the_configured_seen_cache():

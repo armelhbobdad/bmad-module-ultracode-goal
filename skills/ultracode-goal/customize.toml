@@ -79,6 +79,21 @@ health_check_queue_path = "{project-root}/_bmad-output/ultracode-goal/improvemen
 # false (default) = queue findings locally, NEVER live-submit without a human.
 # true = additionally live-submit `bug`-severity findings unattended (still
 #        deduped + seen-cache-guarded). friction/gap never auto-submit.
+#        It posts only when the four gh calls a submit makes are allowed:
+#        an unattended run has nobody to approve them, so each is refused
+#        and the finding queued. Allow them under [workflow] in
+#        {project-root}/_bmad/custom/ultracode-goal.toml (or .user.toml):
+#          allowlist_commands = ["gh auth status", "gh search issues", "gh label create", "gh issue create"]
+#        Arrays append: the list above keeps every command it holds.
+#        Preflight writes each entry as an allow rule in
+#        .claude/settings.local.json, where it stays for every later session
+#        in the project: any agent there can then create issues and labels on
+#        any repository without asking. To keep them to the health-check
+#        repository, write "gh search issues --repo <repo>",
+#        "gh label create --repo <repo>" and "gh issue create --repo <repo>",
+#        <repo> being health_check_repo. When you turn autosubmit off, drop the
+#        entries and delete their Bash(gh ...) rules from
+#        .claude/settings.local.json yourself: preflight only adds rules.
 health_check_autosubmit = false
 
 # --- Cross-Session Recall (optional; consults this repo's prior runs) ---

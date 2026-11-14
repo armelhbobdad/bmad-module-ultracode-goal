@@ -9,13 +9,15 @@ Reflect on the ultracode-goal run that just completed and capture the friction, 
 
 ## 1. Enabled gate
 
-If `{workflow.health_check_repo}` is empty, the check is off: append `health-check: disabled` to `.decision-log.md` and return, touching nothing else. Otherwise, in an attended run, tell the user in `{communication_language}` that you are running a quick self-improvement check that closes at once if nothing rough came up.
+If `{workflow.health_check_repo}` is empty, the check is off: append `health-check: disabled` to `.decision-log.md` and return, touching nothing but that marker line. Otherwise, in an attended run, tell the user in `{communication_language}` that you are running a quick self-improvement check that closes at once if nothing rough came up.
 
-**The marker.** Every exit of this check appends exactly one `health-check: <outcome>` line to `.decision-log.md`, the way SKILL.md appends any entry, in place of any other line about how it ended: `disabled` (above), `clean` (§2), `discarded` (§4a **[N]**) or `done` with its counts (§6). §2 reads only the `friction:` entries after the last such line, so the next health check reports again the entries of a check that ended without one, at an unanswered gate say.
+**The marker.** Every exit of this check appends exactly one `health-check: <outcome>` line to `.decision-log.md`, in place of any other line about how it ended: `disabled` (above), `clean` (§2), `discarded` (§4a **[N]**) or `done` with its counts (§6). §2 reads only the `friction:` entries after the last such line, so the next health check reports again the entries of a check that ended without one, at an unanswered gate say.
+
+**Appending to the log.** The marker, and every line this file says to log, is appended to `.decision-log.md` with Write or Edit, never a Bash heredoc. Once the log is too large to Read affordably, do not Read it: Write the line to a new file beside the log, `<log folder>/dlog-slice-stage7-<n>.md`, where `<log folder>` is the run folder's full path and `<n>` is one past the highest number a `dlog-slice-stage7-*.md` there already carries, then append it in one Bash call, `cat "<log folder>/dlog-slice-stage7-<n>.md" >> "<log folder>/.decision-log.md"`, and keep the slice.
 
 ## 2. Find the findings
 
-First read the `friction:` entries no health check has reported yet: search `.decision-log.md` with the Grep tool, with line numbers, for the regex `^\s*([-*]\s+)?(friction:|health-check: (disabled|clean|discarded|done)\b)`, which finds an entry or a marker only at the start of its line (after a list bullet at most), never one quoted inside another entry. Take the `friction:` entries after the last marker (all of them when there is none). Use the Grep tool, not a shell grep: it reads a log too large to Read, and a shell grep is outside the headless allowlist. Each entry names the stage file and the section heading where an instruction was unclear, contradictory or silent on the case in hand. Drop an entry whose section heading or instruction the current stage file no longer carries: an upgrade may sit between the run that logged it and this check. Then, from the rest of the log and what is still in context, find each point where a stage instruction you were following was wrong or contradictory (`bug`), worked but left you guessing or going back and forth (`friction`), or was silent on a case you hit (`gap`). Report only what a logged entry or the live context shows. A finding's `stage` is whichever of `ingest-and-scope`, `preflight`, `define-done`, `execute`, `gate`, `finalize` was being followed when it bit. If there is none, append `health-check: clean` (§1), display "Health Check: clean run. No workflow issues to report." in an attended run, and return.
+First read the `friction:` entries no health check has reported yet: search `.decision-log.md` with the Grep tool, with line numbers, for the regex `^\s*([-*]\s+)?(friction:|health-check: (disabled|clean|discarded|done)\b)`, which finds an entry or a marker only at the start of its line (after a list bullet at most), never one quoted inside another entry. Take the `friction:` entries after the last marker (all of them when there is none). Use the Grep tool, not a shell grep: it reads a log too large to Read, and a shell grep is outside the headless allowlist. Each entry names the stage file and the section heading where an instruction was unclear, contradictory or silent on the case in hand. Drop an entry whose section heading or instruction the current stage file no longer carries: an upgrade may sit between the run that logged it and this check. Then, from the rest of the log and what is still in context, find each point where a stage instruction you were following was wrong or contradictory (`bug`), worked but left you guessing or going back and forth (`friction`), or was silent on a case you hit (`gap`). A finding's `stage` is whichever of `ingest-and-scope`, `preflight`, `define-done`, `execute`, `gate`, `finalize` was being followed when it bit. If there is none, append `health-check: clean` (§1), display "Health Check: clean run. No workflow issues to report." in an attended run, and return.
 
 ## 3. Fingerprint and draft each finding
 
@@ -42,12 +44,10 @@ uv run {skill-root}/scripts/health_check_fp.py fingerprint --severity {severity}
 - **Cite only this module's files.** Evidence quotes `SKILL.md`, the stage references and the scripts under `skills/ultracode-goal/`, never the user's project code, the Epic's content or a secret.
 - **Never narrate the session.** The reader wants the defect, not the story. If a sentence starts with "During my run…", delete it.
 
-**Issue body**: the `body_header` (its Workflow, Step File, Section, Severity, Fingerprint and
-Defect Key sections, which the dedup Action reads), then these `## ` headings in order, as the
-issue template writes them: `## Finding`, `## Expected`, `## Actual`, `## Evidence`,
-`## Impact`, `## Suggested Fix`, and `## Environment`, a table carrying: Date (ISO), OS, AI
-Editor, Model, Profile (`production | light`), Run mode (`attended | headless`), and Module
-Version.
+**Issue body**: the `body_header`, then these `## ` headings in order, as the issue template
+writes them: `## Finding`, `## Expected`, `## Actual`, `## Evidence`, `## Impact`,
+`## Suggested Fix`, and `## Environment`, a table carrying: Date (ISO), OS, AI Editor, Model,
+Profile (`production | light`), Run mode (`attended | headless`), and Module Version.
 
 **Module Version comes from the script:**
 
@@ -78,9 +78,9 @@ You are the final filter. Reject any finding that does not reflect a real issue 
 **HALT and wait for input.**
 
 - **[Y]** or **[A]** → proceed to §5 (severity routing).
-- **[N]** → append `health-check: discarded` (§1), display "Findings discarded. Workflow complete." and STOP.
+- **[N]** → append `health-check: discarded` (§1), display "Findings discarded. Workflow complete." and return.
 - **[E]** → let the user keep, modify or remove findings, and make each change in that finding's draft. A change to a finding's severity, stage, section, defect name or short description changes its fingerprints or its title: run §3's call again, and when `{fp}` changed, write the draft anew as `hc-body-{fp}.md` under the new `{fp}`. Then show the revised findings and ask again.
-- **[Q]** → write every finding, whatever its severity, to the local queue (§5c) with the reason "The review gate queued these locally." Make no GitHub call: no `gh auth status`, no search, no issue.
+- **[Q]** → write every finding, whatever its severity, to the local queue (§5c) with the reason "The review gate queued these locally."
 
 ### 4-headless. Unattended routing (no human at the gate)
 
@@ -112,11 +112,13 @@ uv run {skill-root}/scripts/health_check_fp.py seen --fp {fp} --legacy-fp {legac
 - `unseen` or `unrecognized`: report it as a first sighting. When `matched_on` is `legacy_fp`, log `"{fp}: legacy record {legacy_fp} may be another defect, reporting"`.
 - `regression` or `possible-regression`: report it, opened by the line below.
 
-**Opening line** (`regression` and `possible-regression`). Write `opening_line` exactly as printed at the top of the finding's draft, above `## Workflow`, with a blank line after it. A `regression` takes `{regression_title}` in place of `{title}` and records its outcome with `--regression` (§5b). A `possible-regression` keeps `{title}`, since its record cannot prove a recurrence, and records without `--regression`: the `resolved` record sits under `{legacy_fp}`, and the script writes under `{fp}` alone.
+**Opening line** (`regression` and `possible-regression`). Write `opening_line` exactly as printed at the top of the finding's draft, above `## Workflow`, with a blank line after it. A `regression` takes `{regression_title}` in place of `{title}` and records its outcome with `--regression` (§5b). A `possible-regression` keeps `{title}`, since its record cannot prove a recurrence, and records without `--regression`.
 
 If adding the opening line to the draft fails, log its error and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
 
-**2. Check GitHub CLI** with `gh auth status`. If it fails, fall through to §5c with the reason "GitHub CLI is not available."
+**2. Check GitHub CLI** with `gh auth status`. If it runs and fails, fall through to §5c with the reason "GitHub CLI is not available."
+
+**A refused `gh` call.** When the session refuses `gh auth status` or any later `gh` call of §5a, so that the command never ran, make no further `gh` call in this check: write this finding and every live-submit finding not yet submitted to the local queue (§5c), with the reason "You declined a gh call; nothing was posted." in an attended run, and "A gh call was refused in this session; allow the health check's gh commands (see health_check_autosubmit) to submit unattended." in an unattended one.
 
 **3. Remote dedup search**: one deterministic call, and a second only when the first finds nothing:
 
@@ -157,20 +159,20 @@ Execute the choice:
 - **R:** `gh api -X POST /repos/{workflow.health_check_repo}/issues/{match_number}/reactions -f content='+1'`, then record `reacted` (§5b).
 - **C:** the reaction call, then write the minimal env+delta body (the Environment table plus one sentence on what differs; no session narrative) with the Write tool to `hc-comment-{fp}.md` in the run folder, show the user its text, and run `gh issue comment {match_number} --repo {workflow.health_check_repo} --body-file "<run folder>/hc-comment-{fp}.md"`; then record `commented` (§5b).
 - **N:** after an exact match, the open issue carries this same fingerprint, so a new issue under it would be closed as its duplicate: choose a more specific defect name that sets this defect apart (the more specific name the fix edits, or the case it covers, still in the source's words), run §3's call again with it and write the draft anew under the new `{fp}`, without a line the old verdict added. Then run steps 1 to 3 again for the new fingerprints and act on what they return as for any finding: the new `seen` verdict alone decides the opening line, the title and `--regression`. After a possible match, proceed to §5a-ii as is: that issue's `fp-*` label differs from `{fp}`.
-- **S:** record nothing, and write the finding to the local queue (§5c) with the reason "You skipped these at the dedup gate." (the Unattended default's reason when nobody was asked).
+- **S:** write the finding to the local queue (§5c) with the reason "You skipped these at the dedup gate." (the Unattended default's reason when nobody was asked).
 
-If the reaction or the comment call exits non-zero, log its error and make no further call for this finding: **C** posts no comment after a failed reaction, and a reaction already added stays. Record nothing and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
+If the reaction or the comment call exits non-zero, log its error and make no further call for this finding: **C** posts no comment after a failed reaction, and a reaction already added stays. Write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
 
 **5a-ii. If no matching open issue exists** (or the user chose **[N]**), create one.
 
-**First, ensure the `{fp}` label exists.** It is per-fingerprint, so the first reporter of any defect creates a brand-new label when they have push access to {workflow.health_check_repo}, and `gh issue create --label {fp}` hard-fails if the label is missing. Guard it idempotently:
+**First, create the `{fp}` label.** It is per-fingerprint, so the first reporter of any defect creates a brand-new label when they have push access to {workflow.health_check_repo}, and `gh issue create --label {fp}` hard-fails if the label is missing:
 
 ```
-gh label create "{fp}" --repo {workflow.health_check_repo} --color "ededed" \
-  --description "Health-check fingerprint dedup key" 2>/dev/null || true
+gh label create --repo {workflow.health_check_repo} "{fp}" --color "ededed" \
+  --description "Health-check fingerprint dedup key"
 ```
 
-The other labels (`health-check`, `workflow-improvement`, `bug`/`friction`/`gap`) are pre-created repo labels and need no guard.
+If it exits non-zero (the label exists already, or you have no push access), that is no error: go on to the create. The other labels (`health-check`, `workflow-improvement`, `bug`/`friction`/`gap`) are pre-created repo labels.
 
 **Then create the issue** from the finding's draft:
 
@@ -183,11 +185,11 @@ gh issue create --repo {workflow.health_check_repo} \
 
 After a `regression` verdict, `{regression_title}` takes the place of `{title}` (§5a step 1).
 
-**If `gh issue create` exits non-zero, run it once more without the `--label` line**, with the same title and body file. A reporter without push access to {workflow.health_check_repo} cannot create the label (the label command's `|| true` hides that) or set any label: the first run fails on the missing `{fp}` label. The dedup Action applies the labels from the title, so an issue filed without them is deduped like any other.
+**If `gh issue create` exits non-zero, run it once more without the `--label` line**, with the same title and body file. A reporter without push access to {workflow.health_check_repo} can neither create the label nor set any label: the first run fails on the missing `{fp}` label. The dedup Action applies the labels from the title, so an issue filed without them is deduped like any other.
 
-After the issue is created, by the first run or the retry, record it (§5b) so this user does not re-report it while that issue stays open. If `gh issue create` fails on its retry too, log its error and record nothing (so after a `regression` verdict the `resolved` record stays), and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
+After the issue is created, by the first run or the retry, record it (§5b) so this user does not re-report it while that issue stays open. If `gh issue create` fails on its retry too, log its error and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
 
-After creating all issues, display "{N} issue(s) created on {workflow.health_check_repo}:" then each URL. Then display "Workflow complete." unless a finding of this run went to the local queue, whose §5c block ends with it.
+After creating all issues, show "{N} issue(s) created on {workflow.health_check_repo}:" then each URL, then "Workflow complete." unless a finding of this run went to the local queue, whose §5c block ends with it: display these lines in an attended run, and log them in an unattended one.
 
 ### 5b. Record the outcome
 
@@ -206,35 +208,27 @@ The call prints `{"written", "fp", "record", "set_aside"}`. `"written": false` i
 
 Each finding here carries the reason sentence its routing step gave it.
 
-Write each such finding into `{workflow.health_check_queue_path}` with the script. It creates the folder when absent, names the file so that no other file is overwritten, and copies the draft unchanged:
+Write each such finding into `{workflow.health_check_queue_path}` with the script, `{title}` being the finding's `title`, or its `regression_title` only after a `regression` verdict whose opening line was added:
 
 ```
 uv run {skill-root}/scripts/health_check_fp.py queue --queue-dir "{workflow.health_check_queue_path}" \
-  --stage {stage} --body-file "<run folder>/hc-body-{fp}.md"
+  --stage {stage} --body-file "<run folder>/hc-body-{fp}.md" \
+  --title "{title}" --repo "{workflow.health_check_repo}"
 ```
 
-→ `{"path": "<the file it wrote>"}`. If the call fails, log its error and list the draft itself in that file's place: it holds the same text. A queued finding carries the same `fp` a live report would. **Record nothing in the seen-cache for it** (§5b).
+→ `{"path", "commands"}`: the file it wrote, and the three commands that submit it, each on one line with every argument quoted: the `gh label create` and the `gh issue create` to run in that order, and the `gh issue create` without labels for a reporter without push access. If the call fails or prints no JSON, log its error and list the draft itself in that file's place (it holds the same text), followed, in place of commands, by "Submit it as <https://armelhbobdad.github.io/bmad-module-ultracode-goal/health-check/#submitting-a-queued-finding-manually> says."
 
 After writing the files, display this block, once per reason when findings stayed local for more than one, each block listing its own files:
 
-"{N} finding(s) saved locally:" then each path, each followed by the two commands that submit it, filled in with that finding's values (`{file-path}` being that path, and `{title}` the title §5a-ii would use):
-
-```
-gh label create "{fp}" --repo {workflow.health_check_repo} --color "ededed" \
-  --description "Health-check fingerprint dedup key" 2>/dev/null || true
-gh issue create --repo {workflow.health_check_repo} \
-  --title "{title}" \
-  --label "health-check,workflow-improvement,{severity},{fp}" \
-  --body-file {file-path}
-```
+"{N} finding(s) saved locally:" then each path, each followed by its three `commands`, exactly as printed.
 
 then:
 
-"{reason sentence} Run a finding's two commands to submit it as an issue, or open one at <https://github.com/{workflow.health_check_repo}/issues/new/choose>. Without push access to {workflow.health_check_repo}, drop the `gh label create` command and the `--label` line: you can neither create a label nor set one, and the dedup Action labels the issue from its title."
+"{reason sentence} Run a finding's first two commands to submit it as an issue (the first fails, harmlessly, when its label exists), or open one at <https://github.com/{workflow.health_check_repo}/issues/new/choose>. Without push access to {workflow.health_check_repo}, run its third command alone instead: you can neither create a label nor set one, and the dedup Action labels the issue from its title."
 
 Then display "Workflow complete." once, after the last block.
 
-In an unattended run, display nothing and wait for nothing: log the same lines (each path with its `gh label create` and `gh issue create --body-file` commands, and the reason sentence with its note for a reporter without push access).
+In an unattended run, display nothing and wait for nothing: log the same lines.
 
 ## 6. Close
 

@@ -1,0 +1,4 @@
+type: docs
+summary: |
+  The Health Check page now shows its overrides in a `[workflow]` table, as `_bmad/custom/ultracode-goal.toml` needs them, and warns that a bare top-level line is silently discarded: the lines it showed before, copied as they were, left the check on and autosubmit off. Its link to the issue chooser now names your configured `health_check_repo`, with the default's chooser as the example. The Workflow Health Check issue template now opens with one instruction for a manual filer: replace its sections from Workflow through Defect Key with the `body_header` the fingerprint command prints (with `jq`, or a `python3` line without it), instead of copying each value into its section, and the page says the same for an issue filed through the chooser.
+issues: [226]

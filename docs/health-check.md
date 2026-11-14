@@ -77,12 +77,40 @@ The gate that admits anything to the right of the boundary is the `[Y]` or `[A]`
 
 ## Unattended behavior
 
-Headless runs do not have a human at the gate, so by default they **queue findings locally and never live-submit**. Two config knobs (set in `{project-root}/_bmad/custom/ultracode-goal.toml`) change this:
+Headless runs do not have a human at the gate, so by default they **queue findings locally and never live-submit**. Two config knobs change this:
 
-- `health_check_repo = ""`: disables the health check entirely (the target repo doubles as the on/off switch; no target, nothing to run). Each run it skips still logs its `disabled` marker, which closes the `friction:` entries logged so far: turning the check back on reports only friction logged after that.
+- `health_check_repo = ""`: disables the health check entirely (the target repo doubles as the on/off switch; no target, nothing to run). Each run it skips still logs its `disabled` marker, which closes the `friction:` entries logged so far: turning the check back on reports only friction logged after that. Finalize lists those entries in the run's addendum first, so they are still on record.
 - `health_check_autosubmit = true`: opts **bug-severity** findings into live submission on unattended runs. `friction` and `gap` findings are **never** auto-submitted; they always queue regardless of this setting.
 
-The local queue lives at the configured `health_check_queue_path` (by default `{project-root}/_bmad-output/ultracode-goal/improvement-queue/`), which is created when it is missing. `health_check_fp.py queue` writes each finding there as one file, named `hc-ultracode-goal-{stage}-{YYYYMMDD-HHmmss}.md` from the UTC time, and holding the finding's issue body exactly as it was drafted, with no frontmatter. When two findings of one stage are written in the same second, the later names get `-2`, `-3` and so on before `.md`, so no file is overwritten. Whatever the reason a finding stays local (the `[Q]` choice, a headless run, a friction or gap finding, no GitHub CLI, a skipped or failed submission), the health check lists each file it wrote with one sentence giving the reason and the `gh issue create --body-file` command that submits it: on screen in an attended run, in the log in a headless one.
+Set them in your project's `_bmad/custom/ultracode-goal.toml`, or for yourself alone in `ultracode-goal.user.toml` beside it, under the `[workflow]` table header. To turn the health check off:
+
+```toml
+[workflow]
+# Health check off: no target repository, nothing to run.
+health_check_repo = ""
+```
+
+The `[workflow]` table header matters: the resolver extracts the `workflow` block from the merged files, so a bare top-level line is silently discarded and the knob keeps its default.
+
+**To let autosubmit post unattended**, allow the four `gh` commands a submission runs. Without an allow rule, each is left to Claude Code's permission check: under Auto Mode the classifier decides whether it runs, and in a mode that asks first, such as `drive_epic.py`'s default `acceptEdits`, nobody is there to answer, so the call is refused and the finding is queued with a reason that says a `gh` call was refused. Add them to `allowlist_commands` under the same `[workflow]` header, not a second one: TOML refuses a table declared twice, and the resolver then rejects the whole file. Arrays append to the shipped list, and preflight writes each entry as an allow rule in `.claude/settings.local.json`. The whole file then reads:
+
+```toml
+[workflow]
+health_check_autosubmit = true
+allowlist_commands = ["gh auth status", "gh search issues", "gh label create", "gh issue create"]
+```
+
+These rules outlast the run: they stay in `.claude/settings.local.json` and apply to every later session in the project, so any agent working there can then create issues and labels on any repository without asking. To keep the three that take a repository to the health-check repository, scope them with it. Every `gh` command the health check runs puts `--repo` right after its subcommand, so the narrower rules still match:
+
+```toml
+[workflow]
+health_check_autosubmit = true
+allowlist_commands = ["gh auth status", "gh search issues --repo <health_check_repo>", "gh label create --repo <health_check_repo>", "gh issue create --repo <health_check_repo>"]
+```
+
+When you turn autosubmit off, remove the entries, then delete the rules preflight wrote for them, such as `Bash(gh issue create:*)`, from `.claude/settings.local.json` yourself: preflight only adds rules.
+
+The local queue lives at the configured `health_check_queue_path` (by default `{project-root}/_bmad-output/ultracode-goal/improvement-queue/`), which is created when it is missing. `health_check_fp.py queue` writes each finding there as one file, named `hc-ultracode-goal-{stage}-{YYYYMMDD-HHmmss}.md` from the UTC time, and holding the finding's issue body exactly as it was drafted, with no frontmatter. When two findings of one stage are written in the same second, the later names get `-2`, `-3` and so on before `.md`, so no file is overwritten. Whatever the reason a finding stays local (the `[Q]` choice, a headless run, a friction or gap finding, no GitHub CLI, a refused `gh` call, a skipped or failed submission), the health check lists each file it wrote with one sentence giving the reason and the commands that submit it, which `health_check_fp.py queue` prints with every argument quoted: on screen in an attended run, in the log in a headless one.
 
 A headless run with `health_check_autosubmit = true` that finds an open issue matching a bug finding has nobody to choose between upvoting, commenting and filing anyway, so it takes the skip choice: the finding is queued with the match as its reason, and nothing is posted.
 
@@ -108,18 +136,18 @@ Dedup runs at three levels:
 
 ## Submitting a queued finding manually
 
-A queued finding is a file under the queue directory holding the finding's issue body, exactly as the health check drafted it and, on an attended run, as the gate showed it: its Workflow, Step File, Section, Severity, Fingerprint and `Section fingerprint:` line, Defect Key, the `file:line` evidence and the Environment table. Submit one when you are ready with the two commands the health check printed for it, whose title `health_check_fp.py fingerprint` built from the finding's severity, fingerprint, stage and short description. Filled in by hand, they take their values from the file's sections, and the short description is yours to write, with no backtick, `$`, double quote, backslash, `!`, tab, line break or other character that is not printable, since the title goes on the command line, and with the whole title at most 256 characters long. A queue file written by an earlier version opens with YAML frontmatter between two `---` lines: delete it before you pass the file to `--body-file`.
+A queued finding is a file under the queue directory holding the finding's issue body, exactly as the health check drafted it and, on an attended run, as the gate showed it: its Workflow, Step File, Section, Severity, Fingerprint and `Section fingerprint:` line, Defect Key, the `file:line` evidence and the Environment table. Submit one when you are ready with the commands the health check printed for it, whose title `health_check_fp.py fingerprint` built from the finding's severity, fingerprint, stage and short description: the first two, the label create and the issue create, or, without push access to the repository, the third alone, the issue create without labels. `health_check_fp.py queue` quotes every argument for a POSIX shell (bash, zsh, Git Bash or WSL), so they paste there as printed, a path with a space included. Filled in by hand, they take their values from the file's sections, and the short description is yours to write, with no backtick, `$`, double quote, backslash, `!`, tab, line break or other character that is not printable, since the title goes on the command line, and with the whole title at most 256 characters long. A queue file written by an earlier version opens with YAML frontmatter between two `---` lines: delete it before you pass the file to `--body-file`.
 
 ```bash
-gh label create "<fingerprint>" --repo <health-check-repo> --color "ededed" \
-  --description "Health-check fingerprint dedup key" 2>/dev/null || true
+gh label create --repo <health-check-repo> "<fingerprint>" --color "ededed" \
+  --description "Health-check fingerprint dedup key"
 gh issue create --repo <health-check-repo> \
   --title "[health-check][<severity>][<fingerprint>] ultracode-goal/<stage>: <short description>" \
   --label "health-check,workflow-improvement,<severity>,<fingerprint>" \
   --body-file <path-to-queued-finding>
 ```
 
-Keep the full title: the dedup Action reads the fingerprint and severity from it when the issue has no `fp-*` label, and the next reporter's search looks for the fingerprint in titles. Without push access to the repository you can neither create a label nor set one (`gh label create` fails, and its `|| true` hides that), so drop the `gh label create` command and the `--label` line: the dedup Action adds the labels from the title. Nothing is sent until you run these commands. Afterwards, record the new issue with the URL `gh issue create` printed, so this machine does not report the finding again while that issue stays open (`<skill-root>` is the installed `ultracode-goal` skill folder, and `<health_check_seen_cache>` the configured `health_check_seen_cache`, by default `~/.ultracode-goal/health-check-seen.json`):
+Keep the full title: the dedup Action reads the fingerprint and severity from it when the issue has no `fp-*` label, and the next reporter's search looks for the fingerprint in titles. A failed `gh label create`, when the label exists already, is no error: run the create anyway. Without push access to the repository you can neither create a label nor set one, so drop the `gh label create` command and the `--label` line: the dedup Action adds the labels from the title. Nothing is sent until you run these commands. Afterwards, record the new issue with the URL `gh issue create` printed, so this machine does not report the finding again while that issue stays open (`<skill-root>` is the installed `ultracode-goal` skill folder, and `<health_check_seen_cache>` the configured `health_check_seen_cache`, by default `~/.ultracode-goal/health-check-seen.json`):
 
 ```bash
 uv run <skill-root>/scripts/health_check_fp.py record \
@@ -131,4 +159,4 @@ When the body opens with "Regression of", add `--regression`: the new issue trac
 
 Then retire the queue file: delete it, or move it into a `resolved/` subfolder of the queue directory.
 
-You can also open one through the repository's issue chooser at <https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose>. An issue filed that way keeps the template's `health-check` and `workflow-improvement` labels and lacks only the `fp-*` and severity ones, so fill in its Fingerprint and Severity sections (the template's comments give the `health_check_fp.py fingerprint` command that prints the fingerprints, the section slug and the defect key): the dedup Action adds those two from them, and leaves an issue whose Fingerprint still holds the `fp-XXXXXXX` placeholder as it is.
+You can also open one through the issue chooser of `<health-check-repo>`, `https://github.com/<health-check-repo>/issues/new/choose` (on the default, <https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose>). An issue filed that way keeps the template's `health-check` and `workflow-improvement` labels and lacks only the `fp-*` and severity ones, so replace its sections from Workflow through Defect Key with the `body_header` that the `health_check_fp.py fingerprint` command in the template's comments prints: the dedup Action adds those two labels from its Fingerprint and Severity, and leaves an issue whose Fingerprint still holds the `fp-XXXXXXX` placeholder as it is.

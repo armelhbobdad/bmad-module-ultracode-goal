@@ -11,7 +11,7 @@ key) with the issue title and the machine-read top of the issue body, reads
 the machine-local seen-cache into a verdict (asking GitHub for a recorded
 issue's state through `gh`, bounded) with the line a regression's body opens
 with, merge-writes a record under a lock, and writes a drafted body into the
-local queue under a free name. It
+local queue under a free name with the commands that submit it. It
 makes NO submit/queue/route decision: that judgment lives in
 references/health-check.md (the LLM), as do the severity, the section and the
 defect name it is given.
@@ -147,13 +147,35 @@ Subcommands:
         3. <project-root>/.claude-plugin/marketplace.json    JSON plugins[0].version
                                                             -> "marketplace.json"
         4. <project-root>/package.json         JSON version  -> "package.json"
-  queue --queue-dir DIR --stage T --body-file F
+  queue --queue-dir DIR --stage T --body-file F --title TITLE --repo REPO
       Validate T against the 6 stages and read F (a missing or unreadable F
-      exits 1 and creates nothing). Create DIR when absent and write F's bytes,
-      unchanged and with no frontmatter, to
+      exits 1 and creates nothing). F opens with the body_header `fingerprint`
+      prints (after a UTF-8 BOM and at most one opening line and a blank line,
+      its line endings LF or CRLF), from which the stage, the severity S and
+      the fingerprint FP are read. Each of these exits 1 and creates nothing:
+      F opening with no such header; a header whose stage is not T; a TITLE
+      that does not start with `[health-check][S][FP] ultracode-goal/T: `
+      (the title `fingerprint` printed for another finding), is longer than
+      TITLE_MAX or holds a character `fingerprint` refuses in a description;
+      a REPO that is not [HOST/]OWNER/REPO. Create DIR when absent and write
+      F's bytes, unchanged and with no frontmatter, to
       DIR/hc-ultracode-goal-{T}-{UTC YYYYMMDD-HHmmss}.md, opened with
       O_CREAT|O_EXCL so no file is ever overwritten: a taken name gets -2, -3
-      and so on before `.md`. Emit {"path": <the absolute path written>}.
+      and so on before `.md`. Emit {"path": P, "commands": [L, C, B]}, P
+      being the absolute path written and L, C and B the commands that submit
+      it: the label create and the create, run in that order (a failed L, the
+      label there already or no push access, is no error), and B, the create
+      without labels, for a reporter without push access to run alone:
+        L: gh label create --repo REPO FP --color ededed
+             --description 'Health-check fingerprint dedup key'
+        C: gh issue create --repo REPO --title TITLE
+             --label health-check,workflow-improvement,S,FP --body-file P
+        B: gh issue create --repo REPO --title TITLE --body-file P
+      each on one line, every argument quoted for a POSIX shell
+      (shlex.quote), so a space or a quote in TITLE or P reaches gh as
+      written, and `--repo` right after the subcommand, so an allow rule
+      scoped to the repository matches. The JSON is printed in UTF-8, a
+      non-ASCII character as itself.
 
 Output: JSON to stdout. Errors are JSON to stdout with exit code 1 (operational
 failure, a value that breaks its rule, or a record that could not take the lock,
@@ -169,6 +191,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -245,6 +268,25 @@ TITLE_MAX = 256
 UNRECORDED_DATE = "on an unrecorded date"
 
 QUEUE_STAMP_FORMAT = "%Y%m%d-%H%M%S"
+# What every health-check issue is filed with besides its severity and fingerprint labels, and the fp-* label's
+# look as the health check creates it (the dedup Action creates it the same way).
+ISSUE_LABELS = ("health-check", "workflow-improvement")
+FP_LABEL_COLOR = "ededed"
+FP_LABEL_DESCRIPTION = "Health-check fingerprint dedup key"
+# The start of a draft: at most one opening line (a regression's) and a blank line, then the body_header
+# `fingerprint` prints, its line endings LF or CRLF.
+_DRAFT_HEADER_RE = re.compile(
+    r"(?:[^\r\n]+\r?\n\r?\n)?"
+    r"## Workflow\r?\n`ultracode-goal/(?P<stage>" + "|".join(STAGES) + r")`\r?\n\r?\n"
+    r"## Step File\r?\n`skills/ultracode-goal/references/(?P=stage)\.md`\r?\n\r?\n"
+    r"## Section\r?\n`[^`\r\n]+`\r?\n\r?\n"
+    r"## Severity\r?\n`(?P<severity>" + "|".join(SEVERITIES) + r")`\r?\n\r?\n"
+    r"## Fingerprint\r?\n`(?P<fp>fp-[0-9a-f]{7})`\r?\n\r?\n"
+    r"Section fingerprint: `fp-[0-9a-f]{7}`\r?\n\r?\n"
+    r"## Defect Key\r?\n`[^`\r\n]+`(?:\r?\n|\Z)"
+)
+# A repository as gh takes it: [HOST/]OWNER/REPO.
+REPO_RE = re.compile(r"(?:[A-Za-z0-9][A-Za-z0-9.-]*/)?[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+")
 
 GH_TIMEOUT_SEC = 10.0
 KILL_WAIT_SEC = 2.0  # each wait once the time limit stops gh: SIGTERM or taskkill, then the child
@@ -347,6 +389,11 @@ def defect_key(name: str) -> str:
     return "-".join(words[-DEFECT_KEY_WORDS:])
 
 
+def _title_unsafe(text: str) -> bool:
+    """True when text holds a character a title on a command line may not: TITLE_UNSAFE, or one not printable."""
+    return any(ch in TITLE_UNSAFE or not ch.isprintable() for ch in text)
+
+
 def _read_stdin_names() -> tuple[dict | None, str | None]:
     """The JSON object --stdin reads, or the rule it breaks.
 
@@ -371,7 +418,7 @@ def _read_stdin_names() -> tuple[dict | None, str | None]:
     for key, value in data.items():
         if not isinstance(value, str) or not value.strip():
             return None, "--stdin %s must be a non-empty string" % key
-    if any(ch in TITLE_UNSAFE or not ch.isprintable() for ch in data.get("short_description", "")):
+    if _title_unsafe(data.get("short_description", "")):
         return None, (
             "--stdin short_description %r holds a backtick, `$`, double quote, backslash, `!` or a character that is "
             "not printable (a tab or a line break included); the title goes on a command line, so it may hold none"
@@ -1058,6 +1105,30 @@ def _create_new(queue_dir: Path, stem: str) -> tuple[int, Path]:
             n += 1
 
 
+def _draft_keys(body: bytes) -> tuple[str, str, str] | None:
+    """The (stage, severity, fp) of the body_header a draft opens with, or None when it opens with none."""
+    match = _DRAFT_HEADER_RE.match(body.decode("utf-8-sig", errors="replace"))
+    return (match.group("stage"), match.group("severity"), match.group("fp")) if match else None
+
+
+def submit_commands(repo: str, title: str, severity: str, fp: str, path: str) -> list[str]:
+    """The label create, the create, and the create without labels that file a queued draft.
+
+    Each argument is quoted for a POSIX shell, and `--repo` follows the subcommand, so an allow rule scoped to the
+    repository (`gh issue create --repo OWNER/REPO`) matches.
+    """
+
+    def line(*argv: str) -> str:
+        return " ".join(shlex.quote(arg) for arg in argv)
+
+    label = line("gh", "label", "create", "--repo", repo, fp, "--color", FP_LABEL_COLOR,
+                 "--description", FP_LABEL_DESCRIPTION)
+    create = line("gh", "issue", "create", "--repo", repo, "--title", title,
+                  "--label", ",".join((*ISSUE_LABELS, severity, fp)), "--body-file", path)
+    bare = line("gh", "issue", "create", "--repo", repo, "--title", title, "--body-file", path)
+    return [label, create, bare]
+
+
 def cmd_queue(args: argparse.Namespace) -> int:
     if args.stage not in STAGES:
         return _fail(
@@ -1068,6 +1139,30 @@ def cmd_queue(args: argparse.Namespace) -> int:
         body = body_file.read_bytes()
     except OSError as exc:
         return _fail("could not read body file %s: %s" % (body_file, exc))
+    keys = _draft_keys(body)
+    if keys is None:
+        return _fail(
+            "body file %s holds no body_header; open the draft with the body_header `fingerprint` printed"
+            % body_file
+        )
+    stage, severity, fp = keys
+    if stage != args.stage:
+        return _fail("--stage %r is not this draft's: its body_header gives %r" % (args.stage, stage))
+    prefix = f"[health-check][{severity}][{fp}] ultracode-goal/{stage}: "
+    if not args.title.startswith(prefix):
+        return _fail(
+            "title %r is not this draft's: the draft's body_header gives %s, %s and %s, so its title starts with %r"
+            % (args.title, stage, severity, fp, prefix)
+        )
+    if len(args.title) > TITLE_MAX:
+        return _fail("title is %d characters long; GitHub takes at most %d" % (len(args.title), TITLE_MAX))
+    if _title_unsafe(args.title):
+        return _fail(
+            "title %r holds a backtick, `$`, double quote, backslash, `!` or a character that is not printable "
+            "(a tab or a line break included)" % args.title
+        )
+    if not REPO_RE.fullmatch(args.repo):
+        return _fail("invalid repo %r; expected [HOST/]OWNER/REPO" % args.repo)
 
     queue_dir = Path(args.queue_dir).expanduser()
     try:
@@ -1092,7 +1187,8 @@ def cmd_queue(args: argparse.Namespace) -> int:
             pass
         return _fail("could not write %s: %s" % (target, exc))
 
-    print(json.dumps({"path": os.path.abspath(target)}))
+    path = os.path.abspath(target)
+    _print_utf8({"path": path, "commands": submit_commands(args.repo, args.title, severity, fp, path)})
     return 0
 
 
@@ -1145,10 +1241,14 @@ def main(argv: list[str] | None = None) -> int:
     ver_parser.add_argument("--skill-root", required=True, dest="skill_root")
     ver_parser.set_defaults(func=cmd_version)
 
-    queue_parser = sub.add_parser("queue", help="Write a drafted body into the local queue.")
+    queue_parser = sub.add_parser(
+        "queue", help="Write a drafted body into the local queue and print the commands that submit it."
+    )
     queue_parser.add_argument("--queue-dir", required=True, dest="queue_dir")
     queue_parser.add_argument("--stage", required=True)
     queue_parser.add_argument("--body-file", required=True, dest="body_file")
+    queue_parser.add_argument("--title", required=True, help="The issue title `fingerprint` printed for the draft.")
+    queue_parser.add_argument("--repo", required=True, help="The repository the commands file the issue on.")
     queue_parser.set_defaults(func=cmd_queue)
 
     args = parser.parse_args(argv)

@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  With the health check turned off (`health_check_repo = ""`), Finalize's decision-log audit now lists in the run's addendum every `friction:` entry logged after the decision log's last `health-check:` line, which the check's `disabled` line then closes. It used to leave them for the health check, which reports nothing when it is off, so they reached no report.
+issues: [226]
