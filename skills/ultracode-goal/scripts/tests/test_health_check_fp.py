@@ -1072,7 +1072,7 @@ def test_every_local_outcome_shows_its_paths_reason_and_body_file_command():
     assert '"{N} finding(s) saved locally:" then each path, each followed by the two commands that submit it' in queue
     assert '"{reason sentence} Run a finding\'s two commands to submit it as an issue' in queue
     assert ("log the same lines (each path with its `gh label create` and `gh issue create --body-file` commands, "
-            "and the reason sentence)") in queue
+            "and the reason sentence with its note for a reporter without push access)") in queue
     # The printed commands file an issue the dedup Action and the title search can find: the full title, the
     # health-check and fp-* labels, and the label guard first.
     [block] = [b for b in _fenced_blocks(_section("### 5c. Local queue", "## Terminal step")) if "gh issue create" in b]
@@ -1082,6 +1082,9 @@ def test_every_local_outcome_shows_its_paths_reason_and_body_file_command():
     assert '--title "[health-check][{severity}][{fp}] {workflow}: {short description}"' in command
     assert '--label "health-check,workflow-improvement,{severity},{fp}"' in command
     assert "--body-file {file-path}" in command
+    # A reporter without push access drops the `--label` line, so the body file is on a line of its own.
+    assert "\n  --body-file {file-path}\n" in block
+    assert not any("--label" in line and "--body-file" in line for line in block.splitlines())
     assert "[title]" not in queue
     # Every reason the routing names is one the §5c table lists.
     body = _reference()
@@ -1089,6 +1092,38 @@ def test_every_local_outcome_shows_its_paths_reason_and_body_file_command():
     assert reasons
     for reason in reasons:
         assert f'"{reason}"' in queue, reason
+
+
+def test_a_failed_create_is_retried_once_without_labels():
+    """A reporter without push access can create no label and set none (#227).
+
+    The guard's `|| true` hides the failed `gh label create`, so `gh issue create --label {fp}` fails on the
+    missing label and the first report of every defect was only ever queued. The retry files it bare, and the
+    dedup Action labels it from its title.
+    """
+    section = _section("**5a-ii. If no matching open issue exists**", "**Writing rules")
+    create = _flow(section)
+    # The first run still passes --label, so a collaborator's filing is unchanged.
+    [block] = [b for b in _fenced_blocks(section) if "gh issue create" in b]
+    assert '--label "health-check,workflow-improvement,{severity},{fp}"' in block
+    assert ("**If `gh issue create` exits non-zero, run it once more without the `--label` line**, with the same "
+            "title and body file.") in create
+    assert "cannot create the label (the guard's `|| true` hides that) or set any label" in create
+    assert "The dedup Action applies the labels from the title" in create
+    # The outcome is recorded and queued as before: created after either run, queued after the second failure.
+    assert "After the issue is created, by the first run or the retry, record it (§5b)" in create
+    assert ("If the body Write fails, or `gh issue create` fails on its retry too, log its error and record nothing"
+            in create)
+    record = _flow(_section("### 5b. Record the outcome", "### 5c. Local queue"))
+    assert "`created` after `gh issue create` succeeded, on its first run or its retry without `--label`" in record
+    queue = _flow(_section("### 5c. Local queue", "## Terminal step"))
+    assert '| A search, body Write, reaction or comment failed, or `gh issue create` failed twice' in queue
+
+
+def test_the_queue_tells_a_reporter_without_push_access_to_drop_the_guard_and_labels():
+    queue = _flow(_section("### 5c. Local queue", "## Terminal step"))
+    assert ("Without push access to {healthCheckRepo}, drop the `gh label create` command and the `--label` line: "
+            "you can neither create a label nor set one, and the dedup Action labels the issue from its title.") in queue
 
 
 def test_evidence_cites_only_module_files():

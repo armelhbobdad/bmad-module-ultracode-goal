@@ -201,14 +201,14 @@ If the reaction or the comment call exits non-zero, log its error and make no fu
 
 **5a-ii. If no matching open issue exists** (or the user chose **[N]**), create one.
 
-**First, ensure the `{fp}` label exists** — it is per-fingerprint, so the first reporter of any defect creates a brand-new label, and `gh issue create --label {fp}` hard-fails if the label is missing. Guard it idempotently:
+**First, ensure the `{fp}` label exists.** It is per-fingerprint, so the first reporter of any defect creates a brand-new label when they have push access to {healthCheckRepo}, and `gh issue create --label {fp}` hard-fails if the label is missing. Guard it idempotently:
 
 ```
 gh label create "{fp}" --repo {healthCheckRepo} --color "ededed" \
   --description "Health-check fingerprint dedup key" 2>/dev/null || true
 ```
 
-The `2>/dev/null || true` keeps it idempotent — a pre-existing label is not an error. The other labels (`health-check`, `workflow-improvement`, `bug`/`friction`/`gap`) are pre-created repo labels and need no guard.
+The `2>/dev/null || true` keeps it idempotent: a pre-existing label is not an error. It also hides the failure of a reporter without push access, who cannot create the label: the retry below files their issue without labels. The other labels (`health-check`, `workflow-improvement`, `bug`/`friction`/`gap`) are pre-created repo labels and need no guard.
 
 **Then create the issue:**
 
@@ -221,13 +221,15 @@ gh issue create --repo {healthCheckRepo} \
 
 After a `regression` verdict, the `--title` value is the regression treatment's title instead, with `REGRESSION: ` before `{short description}`.
 
+**If `gh issue create` exits non-zero, run it once more without the `--label` line**, with the same title and body file. A reporter without push access to {healthCheckRepo} cannot create the label (the guard's `|| true` hides that) or set any label: the first run fails on the missing `{fp}` label, and where the label exists GitHub drops the labels without a word. The dedup Action applies the labels from the title, so an issue filed without them is deduped like any other.
+
 **Pass every body as a file, never inline.** Write the structured body below with the Write tool to `hc-body-{fp}.md` in this run's folder (beside `.decision-log.md`), then name that file with `--body-file`. A body often quotes paths, and an inline `--body "..."` puts them in the command itself: while a recall latch is still present (Finalize's unlatch failed, so the report names the latch path), the guard denies any Bash command that names the latch, and quotes, backticks and `$` in a body break shell quoting. The guard reads the paths a Write names, not what it writes, so a body file passes, and it stays in the run folder as the record of what was sent.
 
-The `{workflow}` in the title is `ultracode-goal/{stage}`. The `{fp}` appears in both title (human-readable) and label (server-side filterable) so maintainers can query all reports for a defect via the `fp-*` label without parsing title text. The title stays on the command line, so write `{short description}` with no backtick, `$`, double quote or backslash.
+The `{workflow}` in the title is `ultracode-goal/{stage}`. The `{fp}` appears in both title and label: maintainers query all reports for a defect via the `fp-*` label, and the dedup Action reads the title's `[health-check][{severity}][{fp}]` prefix to label an issue filed without labels, so keep that prefix exactly as written. The title stays on the command line, so write `{short description}` with no backtick, `$`, double quote or backslash.
 
 The dedup Action also reads the body's `Section fingerprint:` line. When the new issue matches no open issue's fingerprint but another open health-check issue records the same section fingerprint under a different defect key, or was filed without a key and carries it as its label, the Action comments with a link to each and adds the `possible-duplicate` label. It closes nothing on that match: two reports of one defect can name it by different keys, and every defect of one severity in one section shares the section fingerprint, so a maintainer decides.
 
-After the issue is created, record it (§5b) so this user does not re-report it while that issue stays open. If the body Write or `gh issue create` fails, log its error and record nothing (so after a `regression` verdict the `resolved` record stays), and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
+After the issue is created, by the first run or the retry, record it (§5b) so this user does not re-report it while that issue stays open. If the body Write fails, or `gh issue create` fails on its retry too, log its error and record nothing (so after a `regression` verdict the `resolved` record stays), and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
 
 **Writing rules — non-negotiable:**
 
@@ -269,7 +271,7 @@ uv run {skill-root}/scripts/health_check_fp.py record --fp {fp} --cache {seenCac
   --issue-url "{url}" --action created|reacted|commented --date {YYYY-MM-DD}
 ```
 
-`created` after `gh issue create` succeeded, `{url}` being the URL it printed; `reacted` after **R** and `commented` after **C**, `{url}` being the matched issue's `url` from the search, also when the match came from the `{legacy_fp}` search. After a `regression` verdict, add `--regression`: the issue now tracks the recurrence, so it replaces the `resolved` record the fix left under `{fp}`. Nothing else is recorded: not a queued finding, not **[S]**, not a failed call. A queued finding is not an issue, and a record for it would suppress the same defect when a later attended run approves it with **[Y]**.
+`created` after `gh issue create` succeeded, on its first run or its retry without `--label`, `{url}` being the URL it printed; `reacted` after **R** and `commented` after **C**, `{url}` being the matched issue's `url` from the search, also when the match came from the `{legacy_fp}` search. After a `regression` verdict, add `--regression`: the issue now tracks the recurrence, so it replaces the `resolved` record the fix left under `{fp}`. Nothing else is recorded: not a queued finding, not **[S]**, not a failed call. A queued finding is not an issue, and a record for it would suppress the same defect when a later attended run approves it with **[Y]**.
 
 The call prints `{"written": ..., "fp": ..., "record": ..., "set_aside": ...}`, `record` being what the cache now holds under `{fp}`. `"written": false` means a `resolved` record was left as it is: the script never downgrades a fix without `--regression`. When `set_aside` is not null, tell the user (log it in headless) that `{seenCachePath}` did not parse, so it was renamed to that path and a new cache was started, and that they keep its records by repairing that file and copying its entries into `{seenCachePath}`. If the call fails, log its error and go on: a lost record costs at most a duplicate report, which the dedup Action closes.
 
@@ -288,7 +290,7 @@ A finding stays local for one of these reasons, each with the sentence its block
 | `gh auth status` failed (§5a step 3) | "GitHub CLI is not available." |
 | The user chose **[S]** at a matching issue (§5a-i) | "You skipped these at the dedup gate." |
 | A run with nobody to ask took **[S]** at a match (§5a-i), the match reason | "These may match an open issue on {healthCheckRepo}; review them before submitting." |
-| A search, body Write, reaction, comment or `gh issue create` failed (§5a step 4, §5a-i, §5a-ii) | "Posting these to GitHub failed." |
+| A search, body Write, reaction or comment failed, or `gh issue create` failed twice (§5a step 4, §5a-i, §5a-ii) | "Posting these to GitHub failed." |
 
 Every queued finding still gets its fingerprints from the script (§5a step 1), so its file carries the same `fp` a live report would. **Record nothing in the seen-cache for it** (§5b).
 
@@ -318,16 +320,17 @@ gh label create "{fp}" --repo {healthCheckRepo} --color "ededed" \
   --description "Health-check fingerprint dedup key" 2>/dev/null || true
 gh issue create --repo {healthCheckRepo} \
   --title "[health-check][{severity}][{fp}] {workflow}: {short description}" \
-  --label "health-check,workflow-improvement,{severity},{fp}" --body-file {file-path}
+  --label "health-check,workflow-improvement,{severity},{fp}" \
+  --body-file {file-path}
 ```
 
 then:
 
-"{reason sentence} Run a finding's two commands to submit it as an issue, or open one at <https://github.com/{healthCheckRepo}/issues/new/choose>"
+"{reason sentence} Run a finding's two commands to submit it as an issue, or open one at <https://github.com/{healthCheckRepo}/issues/new/choose>. Without push access to {healthCheckRepo}, drop the `gh label create` command and the `--label` line: you can neither create a label nor set one, and the dedup Action labels the issue from its title."
 
 Then display "Workflow complete." once, after the last block.
 
-In an unattended run, display nothing and wait for nothing: log the same lines (each path with its `gh label create` and `gh issue create --body-file` commands, and the reason sentence), then return.
+In an unattended run, display nothing and wait for nothing: log the same lines (each path with its `gh label create` and `gh issue create --body-file` commands, and the reason sentence with its note for a reporter without push access), then return.
 
 ## Terminal step
 
