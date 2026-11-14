@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  A bug that a headless run queued locally is now filed when a later attended run approves it with `[Y]`. The health check used to record every queued finding in its seen-cache as `queued`, which suppressed that later report, so the bug reached GitHub only if someone filed the queue file by hand. A queued finding now records nothing, and a `queued` record left by an earlier version no longer suppresses anything.
+issues: [226]

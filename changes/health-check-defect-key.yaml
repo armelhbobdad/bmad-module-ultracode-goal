@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  The health-check fingerprint now hashes a defect key after the section slug: one to four kebab-case words naming the thing the fix would change. Two different defects of one severity in one section now get two fingerprints, where the dedup Action used to close the second as a duplicate of the first. The keyless hash stays as the section fingerprint: each issue records it in a `Section fingerprint:` line of its body, the health check searches for it when no open issue carries the new fingerprint and offers what it finds as a possible match for you to confirm, and a seen-cache record under it never suppresses a finding (a fix it records is reported as a possible regression). `health_check_fp.py seen` no longer takes `--queue-path`, and `record` no longer takes `--defect-slug`.
+issues: [226]

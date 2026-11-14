@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The health check's issue-state check now runs inside `health_check_fp.py seen`, which reads a recorded issue's state with `gh issue view --json state,stateReason`, stops it after 10 seconds with everything it started, never runs a `gh` found in the project folder and never passes the URL through a shell. It used to be a `timeout 10 gh issue view` command the model ran by hand: stock macOS has no `timeout`, so the call failed, the record stayed handled, and the regression of a defect whose issue was closed as completed was suppressed.
+issues: [226]

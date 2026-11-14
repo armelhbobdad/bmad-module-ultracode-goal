@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `health_check_fp.py record` no longer erases every seen-cache record when the cache holds a bad byte: it renames a cache that does not parse to `health-check-seen.json.corrupt-<UTC time>`, starts a new one and names the renamed file as `set_aside`. It also holds a lock while it writes, so parallel runs keep each other's records, syncs the new file to disk before renaming it over the cache, never replaces a `resolved` record unless the issue it records tracks the regression (`--regression`), and refuses an issue URL that is not `https://` and a date that does not exist.
+issues: [226]

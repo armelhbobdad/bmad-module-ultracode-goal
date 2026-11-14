@@ -75,14 +75,16 @@ Present each finding:
 | Stage | one of the six |
 | Step File | `skills/ultracode-goal/references/{stage}.md` |
 | Section | the stable section-heading slug (never line numbers) |
+| Defect Key | one to four kebab-case words naming the thing the fix would change (§5a step 1) |
 
 Then ask:
 
 "Submit these findings?
 
-- **[Y]** Yes — submit all findings
-- **[N]** No — discard all findings
-- **[E]** Edit — let me revise before submitting
+- **[Y]** Yes: submit all findings
+- **[N]** No: discard all findings
+- **[E]** Edit: let me revise before submitting
+- **[Q]** Queue locally: save every finding to `{workflow.health_check_queue_path}/`, submit nothing
 
 You are the final filter. Reject any finding that does not reflect a real issue you observed."
 
@@ -91,13 +93,14 @@ You are the final filter. Reject any finding that does not reflect a real issue 
 - **[Y]** → proceed to §5 (severity routing).
 - **[N]** → display "Findings discarded. Workflow complete." and STOP.
 - **[E]** → let the user keep, modify, or remove findings; re-present the revised list and ask again.
+- **[Q]** → compute each finding's fingerprints with the script (§5a step 1), then write every finding, whatever its severity, to the local queue (§5c) with the reason "The review gate queued these locally." Make no GitHub call: no `gh auth status`, no search, no issue.
 
 ### 4-headless. Unattended routing (no human at the gate)
 
-In headless (`-H`) there is no human to answer [Y]/[N]/[E], so that gate is **bypassed deterministically** — never block waiting for input:
+In headless (`-H`) there is no human to answer [Y]/[N]/[E]/[Q], so that gate is **bypassed deterministically**, never blocking for input:
 
-- If `{workflow.health_check_autosubmit}` is **false** (the default): **queue EVERY finding locally** (§5c). Never live-submit in an unattended run with autosubmit off.
-- If `{workflow.health_check_autosubmit}` is **true**: **live-submit `bug` findings only** (§5a) — still script-fingerprinted, remote-dedup-searched, and seen-cache-guarded; **friction and gap always queue** (§5c).
+- If `{workflow.health_check_autosubmit}` is **false** (the default): **queue EVERY finding locally** (§5c) with the reason "Headless runs queue every finding while health_check_autosubmit is off." Never live-submit in an unattended run with autosubmit off.
+- If `{workflow.health_check_autosubmit}` is **true**: **live-submit `bug` findings only** (§5a), still script-fingerprinted, remote-dedup-searched, and seen-cache-guarded. **Friction and gap always queue** (§5c) with the reason "Headless runs never submit friction or gap findings." At a matching or possibly matching issue (§5a-i) there is nobody to choose, so the run takes **[S]**: the finding is queued with the match reason, and nothing is posted.
 
 The health check must **never block or delay the final headless JSON emit** — a stall here strands the automator that is waiting on that JSON. It is fire-and-queue: do the routing above, then return so Finalize emits its JSON. If `gh` is unavailable at any live-submit step, fall through to §5c — never stall.
 
@@ -106,56 +109,66 @@ The health check must **never block or delay the final headless JSON emit** — 
 Route each confirmed finding:
 
 - **`bug`** → live-submit (§5a). High signal, priority for maintainers.
-- **`friction` / `gap`** → local queue by default (§5c). These are the most subjective categories and produce the most near-duplicates. Ask **once per session**: "Also submit the {N} friction/gap finding(s) as GitHub issues? [y/N]" — only on explicit affirm do they route through §5a.
+- **`friction` / `gap`** → local queue by default (§5c). These are the most subjective categories and produce the most near-duplicates. Ask **once per session**: "Also submit the {N} friction/gap finding(s) as GitHub issues? [y/N]"; only on explicit affirm do they route through §5a. Those that stay local still get their fingerprints (§5a step 1) and go to §5c with the reason "Friction and gap findings stay local unless you opt in."
 
 ### 5a. Live-submit: fingerprint, dedup, create
 
 For each finding routed to live-submit:
 
-**1. Compute the fingerprint via the script** — never inline shell. The fingerprint and seen-cache are computed and managed deterministically by `health_check_fp.py`:
+**1. Compute the fingerprints via the script**, never inline shell. The fingerprints and the seen-cache are computed and managed deterministically by `health_check_fp.py`:
 
 ```
 uv run {skill-root}/scripts/health_check_fp.py fingerprint \
-  --severity {severity} --stage {stage} --section-slug {slug}
+  --severity {severity} --stage {stage} --section-slug {slug} --defect-key {defect-key}
 ```
 
-→ `{"fp": "fp-xxxxxxx", "tuple": "<exact hashed input>"}`. The `section-slug` is a kebab-case stable heading slug (e.g. `verdict-mapping`), **never line numbers** — they drift when files are edited.
+→ `{"fp": "fp-xxxxxxx", "legacy_fp": "fp-xxxxxxx", "tuple": "<exact hashed input of fp>"}`. `{fp}` hashes severity, stage, step file, section slug and defect key; `{legacy_fp}` is the same hash without the defect key. The `section-slug` is a kebab-case stable heading slug (e.g. `verdict-mapping`), **never line numbers**: they drift when files are edited.
+
+**The defect key** names the defect itself, so two different defects in one section get two fingerprints while two reports of one defect that name the same thing get the same one. It is one to four lower-case ASCII words joined by hyphens that name the thing the fix would change, in the stage reference's or the script's own words: a script, a subcommand, a function, a flag, a field, a verdict, a rule's term or a section's concept. Pick the most specific name the fix would edit. To turn a name into the key, drop its leading dashes and underscores, split it at spaces, underscores, hyphens, dots and each lower-case letter followed by an upper-case one, drop every character of each word that is not an ASCII letter or digit, lower-case each word and join them with hyphens (`gate_status` gives `gate-status`, `--cycle-profile` gives `cycle-profile`, `operator's own evidence` gives `operators-own-evidence`); a name of more than four words keeps its last four. When the defect is a missing rule, there is no name to copy yet: name the case the rule should cover in two to four of the stage reference's own words, the noun the rule would be about, then what makes the case distinct (a missing rule for a story whose acceptance criteria moved, in a section whose rule covers a re-gated story, gives `story-moved-criteria`). Never use a line number, a file name or path (the step file already says where), a severity, or words from this run's own story: whoever reports the same defect next must reach the same key from the source alone. Never use the section's own subject alone either: every defect in the section shares it.
+
+**`legacy_fp` is the section fingerprint**, which every defect of one severity in one section shares. Seen-cache records and issues made by a version of this module without the defect key carry it as their fingerprint, and every issue this step files records it in its body (§5a-ii), so a match on it is only ever a possible match (steps 2 and 4).
+
+A value that breaks its rule (a severity, stage or slug outside its set, a defect key that is not one to four kebab-case words) makes the call exit 1 with a JSON `error` naming the rule: fix that value and run the call again.
 
 **Install-mode-invariant dedup (explicit rule):** the script's `workflow` component is `ultracode-goal/{stage}` and its `step_file` component is ALWAYS the source-repo form `skills/ultracode-goal/references/{stage}.md`, regardless of where the skill is installed (the `{project-root}/_bmad/` tree vs. a dev checkout). The same defect therefore dedups to the same `fp` across every install. Do not substitute the installed path.
 
 **2. Check the seen-cache via the script:**
 
 ```
-uv run {skill-root}/scripts/health_check_fp.py seen --fp {fp} --cache {seenCachePath} --queue-path {workflow.health_check_queue_path}
+uv run {skill-root}/scripts/health_check_fp.py seen --fp {fp} --legacy-fp {legacy_fp} --cache {seenCachePath}
 ```
 
-→ **`seen` is the suppression verdict, not mere cache presence.** Read `status`:
+→ `{"seen": ..., "status": ..., "record": ..., "matched_on": ...}`. **`seen` is the suppression verdict, not mere cache presence.** The script reads the record under `{fp}`, and only when the cache has none, the record under `{legacy_fp}`; `matched_on` names which (`null` when neither exists). For a `created`, `reacted` or `commented` record with an `https://` issue URL, the script asks the issue itself, `gh issue view --json state,stateReason`, with `gh` found outside the current folder, run without a shell and stopped after 10 seconds: the cache is machine-local and records only what *this* user did on *this* machine, while an issue's state is shared, so it is the better authority. Never run that check yourself, and never put a recorded URL into a shell command. If the call fails or prints no JSON, continue as `unseen`: this check never halts a run. Read `status`:
 
-- **`unseen`** (`seen: false`, `record: null`) — proceed.
-- **`handled`** (`seen: true`) — this user already handled this fingerprint on this machine. Before suppressing, if `record.issue_url` is non-empty you **must** run the issue-state check below; it can override this verdict to `regression`. **`handled` suppresses a defect, not a section**: the fingerprint hashes only severity + stage + section slug, so a second, *distinct* defect in an already-reported section computes to the same `fp` — and suppressing it on the fingerprint alone silences a live defect forever. So before suppressing, compare **defects, not wording**, starting from the `prior` object the `seen` call above already returned (the recorded filing's path, title and `defect_slug`, located from the queue dir and its `resolved/` subfolder — read that file for the Finding text). When `prior` is null, retrieve the prior finding another way: the issue at `record.issue_url`, or a manual search of `{workflow.health_check_queue_path}`. Same defect → suppress and log `"fp-xxxxxxx: already handled on {record.date}, {record.issue_url} — skipping"`. A different defect → proceed as an ordinary submission, opening the body with a one-line collision note naming the `fp` and the prior finding it is not, so a maintainer does not merge the two. Prior text unretrievable → proceed rather than suppress: reporting a duplicate is self-healing (the dedup Action closes it); silencing a live defect is not.
-- **`regression`** (`seen: false`, `record` present, `record.action` is `resolved`) — this fingerprint was fixed and closed out, so a fresh sighting is a **regression, not a duplicate**. Do NOT suppress. Proceed, and mark it so it can never be filed as a first sighting: title it `[health-check][{severity}][{fp}] {workflow}: REGRESSION — {short description}` (when `record.defect_slug` is present, name it: `REGRESSION of {defect_slug} — {short description}`, so a colliding fp's regression names WHICH defect regressed) and open the body with `Regression of {record.issue_url} (resolved {record.date}).` When `record.issue_url` is empty (the prior sighting only ever queued, so no issue exists), write `Regression of a previously resolved local finding (resolved {record.date}).` instead — the `{fp}` label still ties the two together server-side.
-- **`unrecognized`** (`seen: false`, `record` present) — the record carries an action this version does not know, so it cannot be confirmed handled. Proceed as an ordinary submission. Reporting a duplicate is self-healing (the dedup Action closes it); silencing a live defect is not.
+- **`unseen`** (`seen: false`): no record under either fingerprint, or a record found only under `{legacy_fp}` (`matched_on: legacy_fp`) that would have suppressed. That record was written by a version without the defect key, and every defect of this severity in this section shares its fingerprint, so it may be another defect's: log `"{fp}: legacy record {legacy_fp} may be another defect, reporting"`; step 4 still offers its issue while that issue is open. Proceed.
+- **`handled`** (`seen: true`): a record under `{fp}` with no issue URL, or whose issue is `OPEN`, reads `CLOSED/NOT_PLANNED`, or could not be checked (offline, no `gh`, the time limit, a deleted issue). **The only verdict that suppresses**: skip the finding and log `"{fp}: already handled on {record.date}, {record.issue_url}, skipping"`. `CLOSED/NOT_PLANNED` is **not a fix**: it is how the dedup Action closes a duplicate (`state_reason: 'not_planned'`) and how a maintainer closes a wontfix, and treating it as one would file a `REGRESSION` issue against a live defect nobody fixed, every session. `stateReason` is load-bearing: `state` alone cannot tell a fix from an auto-closed duplicate.
+- **`regression`** (`seen: false`, `matched_on: fp`): the record is `resolved` (written when the defect was fixed), or its issue reads `CLOSED/COMPLETED`, or `MERGED` (the record points at the resolving PR). A fresh sighting of a fixed defect is a **regression, not a duplicate**. Proceed with the regression treatment below.
+- **`possible-regression`** (`seen: false`, `matched_on: legacy_fp`): the same, found only under `{legacy_fp}`, so what was fixed may be another defect in this section. Proceed with the possible-regression treatment below.
+- **`unrecognized`** (`seen: false`): the record carries no action or one this version does not write (an old `queued` record included), so it cannot be confirmed handled. Proceed as an ordinary submission.
 
-**The issue-state check (required whenever `handled` carries an `issue_url`).** The cache is machine-local: it records what *this* user did on *this* machine, so a `resolved` written by whoever fixed the defect is invisible to everyone else. An issue's state is shared, so it is the better authority. Bound the call, because this is finalize's terminal step and a hung network must not stall it:
+**Why anything uncertain reports.** A duplicate report is self-healing: the dedup Action closes it and moves the upvote to the canonical issue. A silenced regression is caught by nothing. When the verdict is in doubt, report.
 
-```
-timeout 10 gh issue view {record.issue_url} --json state,stateReason --jq '.state + "/" + (.stateReason // "")'
-```
+**Regression treatment** (`regression` only). Title the issue `[health-check][{severity}][{fp}] {workflow}: REGRESSION: {short description}` and open the body with `Regression of {record.issue_url} (resolved {record.date}).` When `record.issue_url` is empty (the prior sighting was only ever local), write `Regression of a previously resolved local finding (resolved {record.date}).` instead: the `{fp}` label still ties the two together server-side. Record the outcome with `--regression` (§5b).
 
-- `CLOSED/COMPLETED`, or `MERGED` (the record points at the resolving PR) — override to `regression`, even though the local record says `created`/`reacted`/`commented`.
-- `CLOSED/NOT_PLANNED` — keep `handled`. **This is not a fix.** It is how the dedup Action closes a duplicate (`state_reason: 'not_planned'`) and how a maintainer closes a wontfix. Treating it as a fix would file a `REGRESSION` issue against a live defect that nobody ever fixed, every session, forever: the Action closes it as a duplicate, the cache re-records `created` against that newly closed duplicate, and the loop is stable.
-- `OPEN` — keep `handled`.
-- Any failure at all (timeout, offline, no auth, deleted issue, unparseable output) — keep `handled`. This refinement never blocks a run and never halts on error.
+**Possible-regression treatment** (`possible-regression` only). Leave the title unmarked, since this record cannot prove a recurrence, and open the body with `Possibly a regression of {record.issue_url} (resolved {record.date}): that report's fingerprint has no defect key, so it may be another defect in this section.` When `record.issue_url` is empty, write `Possibly a regression of a previously resolved local finding in this section (resolved {record.date}).` Record the outcome without `--regression`: the `resolved` record sits under `{legacy_fp}`, and the script writes under `{fp}` alone.
 
-`stateReason` is load-bearing, not decoration: `state` alone cannot tell a fix from an auto-closed duplicate.
+**What this does and does not catch.** A fix that renames the section it touches, or renames the thing the defect key names, changes `{fp}`, and so does a report that names one defect by another thing than an earlier report did. Such a report arrives as `unseen` and is filed as a first sighting, which is safe: once filed, the dedup Action flags it as a possible duplicate (§5a-ii). These branches catch the regressions that recur under the same section, in the same stage, under the same key.
 
-**3. Check GitHub CLI** with `gh auth status`. If it fails, fall through to §5c (offline fallback).
+**3. Check GitHub CLI** with `gh auth status`. If it fails, fall through to §5c with the reason "GitHub CLI is not available."
 
-**4. Remote dedup search** — one deterministic call:
+**4. Remote dedup search**: one deterministic call, and a second only when the first finds nothing:
 
 ```
 gh search issues --repo {healthCheckRepo} --state open "{fp} in:title" --json number,url,title --limit 1
 ```
+
+An issue it finds reports this defect. When it finds none, search once more, for the section fingerprint in titles and bodies:
+
+```
+gh search issues --repo {healthCheckRepo} --state open "{legacy_fp} in:title,body" --json number,url,title --limit 5
+```
+
+Each issue this second search finds is a **possible match**: it was filed by a version whose fingerprints carry no defect key, or it reports a defect of this severity in this section under another defect key. Every such defect shares that fingerprint, so only the user decides (§5a-i).
 
 **5a-i. If a matching open issue exists**, present:
 
@@ -167,21 +180,24 @@ gh search issues --repo {healthCheckRepo} --state open "{fp} in:title" --json nu
 > - **[N]** Create a new issue anyway — only if you are certain this is a distinct defect
 > - **[S]** Skip — do not submit this finding"
 
+**Possible matches.** When the issues came from the `{legacy_fp}` search, list each one and present the same options under this opening instead:
+
+> "Possible match: #{N}: {title} (one line for each issue found)
+>
+> It carries this section's fingerprint `{legacy_fp}`, which every `{severity}` finding in this section shares: it was filed by a version whose fingerprints carry no defect key, or it reports another defect in this section under another key, so it may report another defect. Pick **[R]** or **[C]** only if it reports this one, naming it when more than one is listed, and **[N]** if none does. Options:"
+
+**Unattended default: [S].** Only the user decides a match. A run with nobody to ask (headless with `{workflow.health_check_autosubmit}` true) takes **[S]** at an exact or a possible match, so the finding goes to the local queue (§5c) with the match reason, and nothing is posted on a guess.
+
 Execute the choice:
 
-- **R:** `gh api -X POST /repos/{healthCheckRepo}/issues/{N}/reactions -f content='+1'`, then record `reacted`.
-- **C:** the reaction call, then write the minimal env+delta body (the Environment table plus ONE sentence on what differs; no session narrative) to a body file as §5a-ii says, and run `gh issue comment {N} --repo {healthCheckRepo} --body-file {body-file}`; then record `commented`.
-- **N:** proceed to §5a-ii.
-- **S:** record nothing.
+- **R:** `gh api -X POST /repos/{healthCheckRepo}/issues/{N}/reactions -f content='+1'`, then record `reacted` (§5b).
+- **C:** the reaction call, then write the minimal env+delta body (the Environment table plus ONE sentence on what differs; no session narrative) to a body file as §5a-ii says, and run `gh issue comment {N} --repo {healthCheckRepo} --body-file {body-file}`; then record `commented` (§5b).
+- **N:** after an exact match, the open issue carries this same fingerprint, so a new issue under it would be closed as its duplicate: choose a more specific defect key that names what sets this defect apart (the more specific name the fix edits, or the case it covers, still in the source's words), recompute the fingerprints with it (step 1), then proceed to §5a-ii. After a possible match, proceed to §5a-ii as is: that issue's `fp-*` label differs from `{fp}`.
+- **S:** record nothing, and write the finding to the local queue (§5c) with the reason "You skipped these at the dedup gate." (the match reason when nobody was asked).
 
-Record the outcome via the script:
+If the reaction or the comment call exits non-zero, log its error and make no further call for this finding: **C** posts no comment after a failed reaction, and a reaction already added stays. Record nothing and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
 
-```
-uv run {skill-root}/scripts/health_check_fp.py record --fp {fp} --cache {seenCachePath} \
-  --issue-url {url} --action reacted|commented --date {YYYY-MM-DD}
-```
-
-**5a-ii. If no matching open issue exists** — create one.
+**5a-ii. If no matching open issue exists** (or the user chose **[N]**), create one.
 
 **First, ensure the `{fp}` label exists** — it is per-fingerprint, so the first reporter of any defect creates a brand-new label, and `gh issue create --label {fp}` hard-fails if the label is missing. Guard it idempotently:
 
@@ -201,32 +217,36 @@ gh issue create --repo {healthCheckRepo} \
   --body-file {body-file}
 ```
 
+After a `regression` verdict, the `--title` value is the regression treatment's title instead, with `REGRESSION: ` before `{short description}`.
+
 **Pass every body as a file, never inline.** Write the structured body below with the Write tool to `hc-body-{fp}.md` in this run's folder (beside `.decision-log.md`), then name that file with `--body-file`. A body often quotes paths, and an inline `--body "..."` puts them in the command itself: while a recall latch is still present (Finalize's unlatch failed, so the report names the latch path), the guard denies any Bash command that names the latch, and quotes, backticks and `$` in a body break shell quoting. The guard reads the paths a Write names, not what it writes, so a body file passes, and it stays in the run folder as the record of what was sent.
 
-The `{workflow}` in the title is `ultracode-goal/{stage}`. The `{fp}` appears in both title (human-readable) and label (server-side filterable) so maintainers can query all reports for a defect via the `fp-*` label without parsing title text.
+The `{workflow}` in the title is `ultracode-goal/{stage}`. The `{fp}` appears in both title (human-readable) and label (server-side filterable) so maintainers can query all reports for a defect via the `fp-*` label without parsing title text. The title stays on the command line, so write `{short description}` with no backtick, `$`, double quote or backslash.
 
-After creation, record the mapping via the script so this user never re-reports the fingerprint:
+The dedup Action also reads the body's `Section fingerprint:` line. When the new issue matches no open issue's fingerprint but another open health-check issue records the same section fingerprint under a different defect key, or was filed without a key and carries it as its label, the Action comments with a link to each and adds the `possible-duplicate` label. It closes nothing on that match: two reports of one defect can name it by different keys, and every defect of one severity in one section shares the section fingerprint, so a maintainer decides.
 
-```
-uv run {skill-root}/scripts/health_check_fp.py record --fp {fp} --cache {seenCachePath} \
-  --issue-url {created-url} --action created --date {YYYY-MM-DD}
-```
+After the issue is created, record it (§5b) so this user does not re-report it while that issue stays open. If the body Write or `gh issue create` fails, log its error and record nothing (so after a `regression` verdict the `resolved` record stays), and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
 
 **Writing rules — non-negotiable:**
 
 - **One issue per finding.** Two independent problems → two issues.
 - **Respect length budgets.** Finding, Expected, Actual, Impact, Suggested Fix are **each ONE sentence**. Evidence is 2-5 bullets, not prose.
 - **Quote, do not paraphrase.** In Evidence, cite the exact `file:line` with the quoted text in quotes.
+- **Cite only this module's files.** Evidence quotes `SKILL.md`, the stage references and the scripts under `skills/ultracode-goal/`, never the user's project code, the Epic's content or a secret.
 - **Never narrate the session.** The reader wants the defect, not the story. If a sentence starts with "During my run…", delete it.
 
 **Issue body** — a markdown report with these sections in order: **Workflow**
 (`ultracode-goal/{stage}`), **Step File** (`skills/ultracode-goal/references/{stage}.md`),
-**Severity** (`bug | friction | gap`), **Fingerprint** (`{fp}`), **Finding**, **Expected**,
-**Actual**, **Evidence**, **Impact**, **Suggested Fix**, and an **Environment** table. Per
-the writing rules above, Finding / Expected / Actual / Impact / Suggested Fix are each one
-sentence, and Evidence is 2-5 quoted `file:line` bullets with no narrative. The Environment
-table carries: Date (ISO), OS, AI Editor, Model, Profile (`production | light`), Run mode
-(`attended | headless`), and Module Version (from the script below, else `N/A`).
+**Section** (`{slug}`), **Severity** (`bug | friction | gap`), **Fingerprint** (`{fp}`)
+followed by the line `` Section fingerprint: `{legacy_fp}` ``, exactly so and at the start of
+a line of its own (the dedup Action reads it; never a label), **Defect Key** (`{defect-key}`),
+**Finding**, **Expected**, **Actual**, **Evidence**, **Impact**, **Suggested Fix**, and an
+**Environment** table. A regression's or possible regression's line (step 2) opens the body,
+above **Workflow**. Per the writing rules above, Finding / Expected / Actual / Impact /
+Suggested Fix are each one sentence, and Evidence is 2-5 quoted `file:line` bullets with no
+narrative. The Environment table carries: Date (ISO), OS, AI Editor, Model, Profile
+(`production | light`), Run mode (`attended | headless`), and Module Version (from the script
+below, else `N/A`).
 
 **Module Version comes from the script** — never walk the file ladder in-prompt:
 
@@ -236,24 +256,43 @@ uv run {skill-root}/scripts/health_check_fp.py version --project-root {project-r
 
 → `{"version": "<resolved>", "source": "<which probe hit>"}`. Write `version` into the Environment table; when it is `null` (`source: "N/A"`), write `N/A`. The script probes the same first-hit-wins ladder deterministically: `{project-root}/_bmad/ucg/VERSION` → `{skill-root}/VERSION` → `.claude-plugin/marketplace.json` `plugins[0].version` → `package.json` `version`.
 
-After creating all issues, display: "{N} issue(s) created on {healthCheckRepo}:" then each URL, then "Workflow complete."
+After creating all issues, display "{N} issue(s) created on {healthCheckRepo}:" then each URL. Then display "Workflow complete." unless a finding of this run went to the local queue, whose §5c block ends with it.
 
-### 5c. Local queue (gh unavailable, autosubmit-off headless, friction/gap default, or [S])
+### 5b. Record the outcome
 
-Findings that did not go live — `gh` unavailable, an unattended run with autosubmit off, the user declined the friction/gap opt-in, or the user chose **[S]** — are written one file per finding to `{workflow.health_check_queue_path}/`.
-
-Even when queuing, **still compute the fingerprint via the script** (so the queue file carries the same `fp`) and **record it** with `--action queued` so a later live submission of the same defect dedups against it:
+Record each outcome that ties a finding to an open issue, via the script, with that issue's URL and today's date:
 
 ```
 uv run {skill-root}/scripts/health_check_fp.py record --fp {fp} --cache {seenCachePath} \
-  --issue-url "" --action queued --date {YYYY-MM-DD} [--defect-slug {the frontmatter's defect_slug}]
+  --issue-url "{url}" --action created|reacted|commented --date {YYYY-MM-DD}
 ```
 
-**Never overwrite a `resolved` record with `queued`.** `record` is a flat overwrite, and this path runs on the documented default (`autosubmit` off, and friction/gap always queue), so a single unattended run between a fix and the next attended report would otherwise downgrade `resolved` back to `queued` and silently re-arm the suppression the fix just removed. Read the cache first (`seen --fp {fp}`) and **skip this record entirely when `status` is `regression`** — the queue file is still written, and the `resolved` record stays intact so the next §5a run still sees the regression. Log the skip: `"fp-xxxxxxx: resolved on {record.date}, leaving the record intact — queued file written"`.
+`created` after `gh issue create` succeeded, `{url}` being the URL it printed; `reacted` after **R** and `commented` after **C**, `{url}` being the matched issue's `url` from the search, also when the match came from the `{legacy_fp}` search. After a `regression` verdict, add `--regression`: the issue now tracks the recurrence, so it replaces the `resolved` record the fix left under `{fp}`. Nothing else is recorded: not a queued finding, not **[S]**, not a failed call. A queued finding is not an issue, and a record for it would suppress the same defect when a later attended run approves it with **[Y]**.
 
-**Filename:** `hc-ultracode-goal-{stage}-{YYYYMMDD-HHmmss}.md`.
+The call prints `{"written": ..., "fp": ..., "record": ..., "set_aside": ...}`, `record` being what the cache now holds under `{fp}`. `"written": false` means a `resolved` record was left as it is: the script never downgrades a fix without `--regression`. When `set_aside` is not null, tell the user (log it in headless) that `{seenCachePath}` did not parse, so it was renamed to that path and a new cache was started, and that they keep its records by repairing that file and copying its entries into `{seenCachePath}`. If the call fails, log its error and go on: a lost record costs at most a duplicate report, which the dedup Action closes.
 
-**File content:** the same structured body as §5a, prefixed with YAML frontmatter:
+**What the script guarantees.** It sets the `{fp}` key alone and keeps every other record, those under `{legacy_fp}` included. It holds `{seenCachePath}.lock` while it reads and writes, so parallel runs keep each other's records. It accepts `created`, `reacted` and `commented` only with an `https://` URL, and `resolved` with such a URL or an empty one. `resolved` is written by hand when a defect is fixed (see the health-check section of `CONTRIBUTING.md`), and it is the only action that does not suppress.
+
+### 5c. Local queue (every finding that stays local)
+
+A finding stays local for one of these reasons, each with the sentence its block shows:
+
+| Why it stays local | Reason sentence |
+|--------------------|-----------------|
+| The review gate resolved to **[Q]** (§4a) | "The review gate queued these locally." |
+| A headless run with autosubmit off (§4-headless) | "Headless runs queue every finding while health_check_autosubmit is off." |
+| A friction or gap finding in a headless run (§4-headless) | "Headless runs never submit friction or gap findings." |
+| The user declined the friction/gap opt-in (§5) | "Friction and gap findings stay local unless you opt in." |
+| `gh auth status` failed (§5a step 3) | "GitHub CLI is not available." |
+| The user chose **[S]** at a matching issue (§5a-i) | "You skipped these at the dedup gate." |
+| A run with nobody to ask took **[S]** at a match (§5a-i), the match reason | "These may match an open issue on {healthCheckRepo}; review them before submitting." |
+| A body Write, reaction, comment or `gh issue create` failed (§5a-i, §5a-ii) | "Posting these to GitHub failed." |
+
+Every queued finding still gets its fingerprints from the script (§5a step 1), so its file carries the same `fp` a live report would. **Record nothing in the seen-cache for it** (§5b).
+
+**Filename:** `hc-ultracode-goal-{stage}-{YYYYMMDD-HHmmss}.md`, one file per finding. When that name is already taken (two findings of one stage written in the same second), append `-2`, `-3` and so on before `.md` (`hc-ultracode-goal-gate-20261114-093012-2.md`), so no file is ever overwritten.
+
+**File content:** the same structured body as §5a-ii (for a submission that failed, the text of its body file, unchanged), prefixed with YAML frontmatter:
 
 ```yaml
 ---
@@ -262,25 +301,24 @@ workflow: ultracode-goal/{stage}
 step_file: skills/ultracode-goal/references/{stage}.md
 severity: {bug | friction | gap}
 fingerprint: {fp-xxxxxxx}
-defect_slug: {optional-short-kebab-name-for-this-defect}
+section_fingerprint: {legacy_fp}
+defect_key: {defect-key}
 date: {ISO date}
 ---
 ```
 
-`defect_slug` is optional and informational: a short kebab-case name for THIS defect (not the section), so a colliding fingerprint's later sightings and regressions can name which defect they mean. It never keys suppression — the handled branch's prior-text comparison stays mandatory.
-
-When `gh auth status` failed, after writing the files display:
+After writing the files, display this block, once per reason when findings stayed local for more than one, each block listing its own files:
 
 "{N} finding(s) saved locally:" then each path, then:
 
-"GitHub CLI is not available. To submit these as issues, run:
+"{reason sentence} To submit one as an issue, run:
 `gh issue create --repo {healthCheckRepo} --title \"[title]\" --body-file {file-path}`
 
-Or open one at <https://github.com/{healthCheckRepo}/issues/new/choose>
+Or open one at <https://github.com/{healthCheckRepo}/issues/new/choose>"
 
-Workflow complete."
+Then display "Workflow complete." once, after the last block.
 
-In an unattended run, do not display prompts — just write the files, log the count and paths, and return.
+In an unattended run, display nothing and wait for nothing: log the same lines (each path, the reason sentence and the `gh issue create --body-file` command), then return.
 
 ## Terminal step
 
