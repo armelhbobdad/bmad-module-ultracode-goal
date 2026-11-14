@@ -160,7 +160,7 @@ CI re-runs everything on the PR. A green local run and a red CI run usually mean
 
 ## Workflow Health Check
 
-Every UCG run that reaches Finalize ends with a health-check reflection step that can file a GitHub issue on your behalf when it finds a defect in its own stage references.
+Every UCG run that reaches Finalize ends with a health-check reflection step that can file a GitHub issue on your behalf when it finds a defect in its own stage references (a defect in the health check itself is only ever queued locally).
 
 - **Deduplication is automatic.** Each report carries a deterministic `fp-XXXXXXX` fingerprint in its title and as its label, which `health_check_fp.py fingerprint` derives from the severity, the stage, the section's heading and the name of the thing the fix would change; the section fingerprint (the same hash without the defect key) goes only in the body's `` Section fingerprint: `fp-XXXXXXX` `` line. The [dedup Action](.github/workflows/health-check-dedup.yaml) labels a report filed without labels, closes a later open report of a fingerprint as a duplicate of the earliest and upvotes that one, and flags, never closes, one that shares only the section fingerprint; its header comment gives the rules. **Re-reporting is safe.**
 - **Triage** by the `health-check` plus `fp-*` labels. The `fp-*` label is the dedup key; the `health-check` label scopes the queue; `possible-duplicate` marks an issue to compare with the ones its comment links.

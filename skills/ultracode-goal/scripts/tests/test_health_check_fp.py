@@ -334,7 +334,8 @@ def test_the_slug_rule(mod, heading, slug):
     assert mod.section_slug(heading) == slug
 
 
-@pytest.mark.parametrize("stage", ["ingest-and-scope", "preflight", "define-done", "execute", "gate", "finalize"])
+@pytest.mark.parametrize("stage", ["ingest-and-scope", "preflight", "define-done", "execute", "gate", "finalize",
+                                   "health-check"])
 def test_every_heading_of_every_stage_file_gives_a_slug(mod, stage):
     headings = mod._stage_headings(mod.REFERENCES_DIR / f"{stage}.md")
     assert headings, stage
@@ -2054,7 +2055,7 @@ def test_the_gate_shows_each_title_and_body_and_y_submits_only_bugs():
     assert ("Each `friction` and `gap` finding, the most subjective kinds and the ones that draw the most "
             "near-duplicates, goes to the local queue (§5c) with the reason "
             '"Friction and gap findings stay local unless you choose [A]."') in routing
-    assert "**[A]**: every finding live-submits (§5a)." in routing
+    assert "**[A]**: every finding but a `health-check` one live-submits (§5a)." in routing
     # One prompt, not two: no second friction/gap question after the gate.
     assert "[y/N]" not in _reference()
 
@@ -2203,6 +2204,7 @@ def test_every_local_outcome_shows_its_paths_reason_and_the_printed_commands():
         "You skipped these at the dedup gate.",
         "These may match an open issue on {workflow.health_check_repo}; review them before submitting.",
         "Posting these to GitHub failed.",
+        "Found in the health check's own instructions; review it before submitting.",
     }
     # A refused gh call gives one of two reasons, by run mode: the unattended one tells how to allow the calls.
     assert set(re.findall(r'with the reason "([^"]+)" in an attended run', _flow(_reference()))) == {
@@ -2770,6 +2772,100 @@ def test_version_malformed_package_json_with_nothing_else_is_null(tmp_path):
     proc = _version(proj, skill)
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout) == {"version": None, "source": "N/A"}
+
+
+# --- the health check's own stage -----------------------------------------------
+
+
+def _own_stage_finding(heading: str = "5c. Local queue (every finding that stays local)") -> dict:
+    code, payload = _fingerprint_stdin("bug", "health-check", {
+        "section_heading": heading,
+        "defect_name": "queue",
+        "short_description": "the queue step names no folder",
+    })
+    assert code == 0, payload
+    return payload
+
+
+def test_health_check_is_a_stage_of_its_own():
+    """A defect in the health check's own instructions is fingerprinted under its own stage file."""
+    payload = _own_stage_finding()
+    assert payload["section_slug"] == "local-queue-every-finding-that-stays-local"
+    assert payload["tuple"].startswith(
+        "bug|ultracode-goal/health-check|skills/ultracode-goal/references/health-check.md|"
+        "local-queue-every-finding-that-stays-local|")
+    assert payload["title"].startswith(f"[health-check][bug][{payload['fp']}] ultracode-goal/health-check: ")
+    assert "`ultracode-goal/health-check`" in payload["body_header"]
+
+
+def test_a_heading_the_health_check_file_lacks_is_refused_under_its_stage():
+    code, payload = _fingerprint_stdin("bug", "health-check", {
+        "section_heading": "Route on the verdict",
+        "defect_name": "queue",
+        "short_description": "a defect",
+    })
+    assert code == 1
+    assert "no heading of references/health-check.md" in payload["error"]
+
+
+def test_a_health_check_finding_is_queued_under_its_own_stage(tmp_path, mod, monkeypatch, capsys):
+    """A real heading of health-check.md, through fingerprint and then queue."""
+    monkeypatch.setattr(mod, "_queue_stamp", lambda: "20261114-093012")
+    finding = _own_stage_finding("6. Close")
+    body = _draft(tmp_path / "hc-body.md", finding)
+    code, result = _queue(mod, capsys, tmp_path / "q", body, finding["title"])
+    assert code == 0, result
+    assert Path(result["path"]).name == "hc-ultracode-goal-health-check-20261114-093012.md"
+
+
+def test_a_finding_about_the_health_check_itself_is_never_posted():
+    """#230: every submitting or queueing route queues it with its own reason; [N] discards it."""
+    route = _flow(_section("## 4. Route by run mode", "### 4a. Attended routing"))
+    assert "A finding whose stage is `health-check` is never posted." in route
+    assert ("Every route that submits or queues (**[Y]**, **[A]**, **[Q]** and headless) writes it to the local "
+            "queue (§5c) with the reason \"Found in the health check's own instructions; review it before "
+            "submitting.\", which replaces any reason its route would give; **[N]** discards it with the rest.") in route
+    # The routing bullets an agent follows carry the exception themselves.
+    headless = _flow(_section("### 4-headless.", "## 5. Severity routing"))
+    assert "(a `health-check` finding takes §4's)" in headless
+    assert "live-submit the `bug` findings but a `health-check` one (§5a)" in headless
+    severity = _flow(_section("## 5. Severity routing", "### 5a. Live-submit"))
+    assert "each `bug` finding but a `health-check` one live-submits (§5a)" in severity
+    assert "every finding but a `health-check` one live-submits (§5a)" in severity
+    assert "A `health-check` finding, under either, goes to the local queue with §4's reason." in severity
+    gate = _flow(_section("### 4a. Attended routing", "### 4-headless."))
+    assert ("a finding about the health check itself (stage `health-check`) is queued, never posted, whatever you "
+            "choose but **[N]** (§4)") in gate
+    assert ("When every finding's stage is `health-check`, ask instead \"Queue these findings locally?\" with "
+            "**[Q]**, **[N]** and **[E]** only.") in gate
+    assert "a stage moved into or out of `health-check` changes its route (§4)" in gate
+    find = _flow(_section("## 2. Find the findings", "## 3. Fingerprint"))
+    assert "or `health-check` when the instruction is this file's own or belongs to a script or command it runs" in find
+
+
+def test_a_defect_in_the_check_itself_is_queued_once_or_logged_for_the_next_check():
+    """#230: the rule sits before §3, so §3's jump to §6 cannot skip it, and covers §6 through the friction read."""
+    enabled = _flow(_section("## 1. Enabled gate", "## 2. Find the findings"))
+    assert ("A defect in this file's instructions, or in a script or command it runs, that bites while the check "
+            "runs §3 to §6 is a finding of the stage `health-check` (§4).") in enabled
+    assert ("Until §6 appends its marker, fingerprint and draft it (§3) and queue it as §4 says. Take at most one "
+            "per check: append any further one, and one that bites once the marker is in, as a "
+            "`friction: health-check.md \"<section heading>\": <what bit>` line after the marker, which the next "
+            "health check reads.") in enabled
+    # A friction line after the marker is exactly what the next check's read takes.
+    log = ("- health-check: done, 0 filed, 0 upvoted, 1 queued, 0 already handled, 0 dropped\n"
+           "- friction: health-check.md \"6. Close\": the counts left out a merged finding\n")
+    assert _friction_read(log) == ["- friction: health-check.md \"6. Close\": the counts left out a merged finding"]
+
+
+def test_the_docs_say_a_finding_about_the_health_check_is_never_posted():
+    docs = _flow(_docs())
+    assert ("or `health-check` for a defect in the health check's own instructions or in a script or command it "
+            "runs, which is never posted: it goes to the local queue unless you discard it") in docs
+    assert ("A finding about the health check itself (stage `health-check`) is queued, never posted, whatever you "
+            "choose but no.") in docs
+    assert "they always queue regardless of this setting, as does a finding about the health check itself." in docs
+    assert "a finding about the health check itself, no GitHub CLI" in docs
 
 
 if __name__ == "__main__":

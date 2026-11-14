@@ -15,9 +15,11 @@ If `{workflow.health_check_repo}` is empty, the check is off: append `health-che
 
 **Appending to the log.** The marker, and every line this file says to log, is appended to `.decision-log.md` with Write or Edit, never a Bash heredoc. Once the log is too large to Read affordably, do not Read it: Write the line to a new file beside the log, `<log folder>/dlog-slice-stage7-<n>.md`, where `<log folder>` is the run folder's full path and `<n>` is one past the highest number a `dlog-slice-stage7-*.md` there already carries, then append it in one Bash call, `cat "<log folder>/dlog-slice-stage7-<n>.md" >> "<log folder>/.decision-log.md"`, and keep the slice.
 
+**A defect in this check.** A defect in this file's instructions, or in a script or command it runs, that bites while the check runs §3 to §6 is a finding of the stage `health-check` (§4). Until §6 appends its marker, fingerprint and draft it (§3) and queue it as §4 says. Take at most one per check: append any further one, and one that bites once the marker is in, as a `friction: health-check.md "<section heading>": <what bit>` line after the marker, which the next health check reads.
+
 ## 2. Find the findings
 
-First read the `friction:` entries no health check has reported yet: search `.decision-log.md` with the Grep tool, with line numbers, for the regex `^\s*([-*]\s+)?(friction:|health-check: (disabled|clean|discarded|done)\b)`, which finds an entry or a marker only at the start of its line (after a list bullet at most), never one quoted inside another entry. Take the `friction:` entries after the last marker (all of them when there is none). Use the Grep tool, not a shell grep: it reads a log too large to Read, and a shell grep is outside the headless allowlist. Each entry names the stage file and the section heading where an instruction was unclear, contradictory or silent on the case in hand. Drop an entry whose section heading or instruction the current stage file no longer carries: an upgrade may sit between the run that logged it and this check. Then find each point where a stage instruction you were following was wrong or contradictory (`bug`), worked but left you guessing or going back and forth (`friction`), or was silent on a case you hit (`gap`): in a direct run from those entries alone, in any other from them, the rest of the log and what is still in context. A finding's `stage` is whichever of `ingest-and-scope`, `preflight`, `define-done`, `execute`, `gate`, `finalize` was being followed when it bit. If there is none, append `health-check: clean` (§1), display "Health Check: clean run. No workflow issues to report." in an attended run, and return.
+First read the `friction:` entries no health check has reported yet: search `.decision-log.md` with the Grep tool, with line numbers, for the regex `^\s*([-*]\s+)?(friction:|health-check: (disabled|clean|discarded|done)\b)`, which finds an entry or a marker only at the start of its line (after a list bullet at most), never one quoted inside another entry. Take the `friction:` entries after the last marker (all of them when there is none). Use the Grep tool, not a shell grep: it reads a log too large to Read, and a shell grep is outside the headless allowlist. Each entry names the stage file and the section heading where an instruction was unclear, contradictory or silent on the case in hand. Drop an entry whose section heading or instruction the current stage file no longer carries: an upgrade may sit between the run that logged it and this check. Then find each point where a stage instruction you were following was wrong or contradictory (`bug`), worked but left you guessing or going back and forth (`friction`), or was silent on a case you hit (`gap`): in a direct run from those entries alone, in any other from them, the rest of the log and what is still in context. A finding's `stage` is whichever of `ingest-and-scope`, `preflight`, `define-done`, `execute`, `gate`, `finalize` was being followed when it bit, or `health-check` when the instruction is this file's own or belongs to a script or command it runs. If there is none, append `health-check: clean` (§1), display "Health Check: clean run. No workflow issues to report." in an attended run, and return.
 
 ## 3. Fingerprint and draft each finding
 
@@ -59,9 +61,11 @@ uv run {skill-root}/scripts/health_check_fp.py version --project-root {project-r
 
 ## 4. Route by run mode
 
+**A finding about the health check itself.** A finding whose stage is `health-check` is never posted. Every route that submits or queues (**[Y]**, **[A]**, **[Q]** and headless) writes it to the local queue (§5c) with the reason "Found in the health check's own instructions; review it before submitting.", which replaces any reason its route would give; **[N]** discards it with the rest. Filing it would have the run's last step post a report about itself, and a defect in that filing would call for another.
+
 ### 4a. Attended routing (HALT gate)
 
-Show every finding: for each one, its `{title}` (§3), the path of its draft and the draft's full text. Say that when the seen-cache check finds the defect was fixed before, one line naming that fix opens the body, and a confirmed regression's title gains `REGRESSION: ` before its short description (§5a step 1).
+Show every finding: for each one, its `{title}` (§3), the path of its draft and the draft's full text. Say that when the seen-cache check finds the defect was fixed before, one line naming that fix opens the body, and a confirmed regression's title gains `REGRESSION: ` before its short description (§5a step 1). Say too that a finding about the health check itself (stage `health-check`) is queued, never posted, whatever you choose but **[N]** (§4). When every finding's stage is `health-check`, ask instead "Queue these findings locally?" with **[Q]**, **[N]** and **[E]** only.
 
 Then ask, saying "public issues" for "issues" when `{workflow.health_check_repo}` is the default, `armelhbobdad/bmad-module-ultracode-goal` in any letter case, and for any other repository adding "(public if that repository is public)" after its name:
 
@@ -79,22 +83,23 @@ You are the final filter. Reject any finding that does not reflect a real issue 
 
 - **[Y]** or **[A]** → proceed to §5 (severity routing).
 - **[N]** → append `health-check: discarded` (§1), display "Findings discarded. Workflow complete." and return.
-- **[E]** → let the user keep, modify or remove findings, and make each change in that finding's draft. A change to a finding's severity, stage, section, defect name or short description changes its fingerprints or its title: run §3's call again, and when `{fp}` changed, write the draft anew as `hc-body-{fp}.md` under the new `{fp}`. Then show the revised findings and ask again.
+- **[E]** → let the user keep, modify or remove findings, and make each change in that finding's draft. A change to a finding's severity, stage, section, defect name or short description changes its fingerprints or its title, and a stage moved into or out of `health-check` changes its route (§4): run §3's call again, and when `{fp}` changed, write the draft anew as `hc-body-{fp}.md` under the new `{fp}`. Then show the revised findings and ask again.
 - **[Q]** → write every finding, whatever its severity, to the local queue (§5c) with the reason "The review gate queued these locally."
 
 ### 4-headless. Unattended routing (no human at the gate)
 
 In headless (`-H`) nobody answers the gate, so this routing takes its place:
 
-- If `{workflow.health_check_autosubmit}` is **false** (the default): queue every finding locally (§5c), since nobody approved a public post, with the reason "Headless runs queue every finding while health_check_autosubmit is off."
-- If `{workflow.health_check_autosubmit}` is **true**: live-submit the `bug` findings (§5a) and queue the friction and gap findings (§5c) with the reason "Headless runs never submit friction or gap findings." A match takes **[S]** (§5a-i).
+- If `{workflow.health_check_autosubmit}` is **false** (the default): queue every finding locally (§5c), since nobody approved a public post, with the reason "Headless runs queue every finding while health_check_autosubmit is off." (a `health-check` finding takes §4's)
+- If `{workflow.health_check_autosubmit}` is **true**: live-submit the `bug` findings but a `health-check` one (§5a) and queue the friction and gap findings (§5c) with the reason "Headless runs never submit friction or gap findings." (a `health-check` finding of any severity is queued with §4's) A match takes **[S]** (§5a-i).
 
 Never block or delay the final headless JSON emit: Finalize emits it only after this step returns, and an automator is waiting on it.
 
 ## 5. Severity routing (attended [Y] and [A])
 
-- **[Y]**: each `bug` finding live-submits (§5a). Each `friction` and `gap` finding, the most subjective kinds and the ones that draw the most near-duplicates, goes to the local queue (§5c) with the reason "Friction and gap findings stay local unless you choose [A]."
-- **[A]**: every finding live-submits (§5a).
+- **[Y]**: each `bug` finding but a `health-check` one live-submits (§5a). Each `friction` and `gap` finding, the most subjective kinds and the ones that draw the most near-duplicates, goes to the local queue (§5c) with the reason "Friction and gap findings stay local unless you choose [A]."
+- **[A]**: every finding but a `health-check` one live-submits (§5a).
+- A `health-check` finding, under either, goes to the local queue with §4's reason.
 
 ### 5a. Live-submit: dedup, create
 

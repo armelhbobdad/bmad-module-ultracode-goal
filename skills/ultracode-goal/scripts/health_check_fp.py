@@ -31,7 +31,8 @@ dev checkout and an installed `_bmad/` tree.
 Subcommands:
   fingerprint --severity S --stage T
               (--section-slug SLUG | --stdin) (--defect-key KEY | --stdin)
-      Validate S against the 3 severities and T against the 6 stages. The
+      Validate S against the 3 severities and T against the 7 stages (the six
+      run stages and `health-check`, the health check's own). The
       section comes from --section-slug or from `section_heading` in the JSON
       object --stdin reads, never both; the defect from --defect-key or from
       that object's `defect_name`, never both. Without --stdin both flags are
@@ -225,6 +226,9 @@ STAGES = (
     "execute",
     "gate",
     "finalize",
+    # The health check's own stage reference, for a defect in its own
+    # instructions (references/health-check.md routes it to the local queue only).
+    "health-check",
 )
 ACTIONS = ("created", "reacted", "commented", "resolved")
 
