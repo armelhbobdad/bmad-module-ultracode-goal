@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  A run now writes a one-line `friction:` entry to its `.decision-log.md`, without stopping, whenever a stage instruction is unclear, contradictory or silent on the case in hand, naming the stage file and the section heading. The health check reads those entries first, so friction met early in a long run is still reported after the session was compacted, and a health check run later for that run reports from what the log recorded.
+issues: [226]

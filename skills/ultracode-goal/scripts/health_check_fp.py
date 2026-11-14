@@ -3,14 +3,16 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Deterministic fingerprint + seen-cache plumbing for the ultracode-goal health check.
+"""Deterministic fingerprint, seen-cache and queue plumbing for the ultracode-goal health check.
 
 Plumbing ONLY. This script computes the dedup fingerprints of a health-check
-finding, reads the machine-local seen-cache into a verdict (asking GitHub for
-a recorded issue's state through `gh`, bounded), and merge-writes a record
-under a lock. It makes NO submit/queue/route decisions: that judgment lives in
-references/health-check.md (the LLM), as do the severity, the section slug and
-the defect key it hashes.
+finding (turning a section heading into its slug and a defect name into its
+key), reads the machine-local seen-cache into a verdict (asking GitHub for a
+recorded issue's state through `gh`, bounded), merge-writes a record under a
+lock, and writes a drafted body into the local queue under a free name. It
+makes NO submit/queue/route decision: that judgment lives in
+references/health-check.md (the LLM), as do the severity, the section and the
+defect name it is given.
 
 The fingerprint is install-mode-invariant: the `step_file` component is ALWAYS
 the source-repo form `skills/ultracode-goal/references/{stage}.md` regardless of
@@ -25,11 +27,31 @@ dev checkout and an installed `_bmad/` tree.
                 the fingerprint versions without the defect key filed under
 
 Subcommands:
-  fingerprint --severity S --stage T --section-slug SLUG --defect-key KEY
-      Validate S against the 3 severities and T against the 6 stages, SLUG as
-      kebab-case (^[a-z0-9]+(-[a-z0-9]+)*$) and KEY as one to four kebab-case
-      words (^[a-z0-9]+(-[a-z0-9]+){0,3}$). Emit {"fp", "legacy_fp", "tuple"},
-      where `tuple` is the exact sha1 input of `fp`.
+  fingerprint --severity S --stage T
+              (--section-slug SLUG | --stdin) (--defect-key KEY | --stdin)
+      Validate S against the 3 severities and T against the 6 stages. The
+      section comes from --section-slug or from `section_heading` in the JSON
+      object --stdin reads, never both; the defect from --defect-key or from
+      that object's `defect_name`, never both. Without --stdin both flags are
+      required (an argparse usage error, exit 2); with it, a pair given twice
+      or not at all, a key other than those two, or a value that is not a
+      non-empty string exits 1.
+        section_heading: must equal, after its leading `#`s, the text of an
+          ATX heading line of references/{T}.md beside this script (outside
+          fenced code and the frontmatter). Its slug: drop the leading `#`s and
+          a leading numbering token (`1b.`, `5a-ii.`, `4-headless.`),
+          lower-case, turn each run of characters that are not ASCII letters or
+          digits into `-`, and trim hyphens.
+        defect_name: keep its last path component (after `/` or `\\`), drop a
+          trailing `:N` or `:N-M` line suffix, a known file extension
+          (KNOWN_EXTENSIONS) and then leading dashes and underscores; split at whitespace, `_`, `-`, `.`
+          and each lower-case letter followed by an upper-case one; drop each
+          character that is not an ASCII letter or digit; lower-case; keep the
+          last four words, joined by `-`. A name that yields no word exits 1.
+      A given SLUG must be kebab-case (^[a-z0-9]+(-[a-z0-9]+)*$) and a given
+      KEY one to four kebab-case words (^[a-z0-9]+(-[a-z0-9]+){0,3}$). Emit
+      {"fp", "legacy_fp", "tuple", "section_slug", "defect_key"}, where
+      `tuple` is the exact sha1 input of `fp`.
   seen --fp FP --legacy-fp FP --cache PATH
       Validate both fingerprints. Emit {"seen": B, "status": S, "record": R,
       "matched_on": M}. The record under --fp decides; only when the cache has
@@ -86,6 +108,13 @@ Subcommands:
         3. <project-root>/.claude-plugin/marketplace.json    JSON plugins[0].version
                                                             -> "marketplace.json"
         4. <project-root>/package.json         JSON version  -> "package.json"
+  queue --queue-dir DIR --stage T --body-file F
+      Validate T against the 6 stages and read F (a missing or unreadable F
+      exits 1 and creates nothing). Create DIR when absent and write F's bytes,
+      unchanged and with no frontmatter, to
+      DIR/hc-ultracode-goal-{T}-{UTC YYYYMMDD-HHmmss}.md, opened with
+      O_CREAT|O_EXCL so no file is ever overwritten: a taken name gets -2, -3
+      and so on before `.md`. Emit {"path": <the absolute path written>}.
 
 Output: JSON to stdout. Errors are JSON to stdout with exit code 1 (operational
 failure, a value that breaks its rule, or a record that could not take the lock,
@@ -144,6 +173,33 @@ FP_RE = re.compile(r"fp-[0-9a-f]{7}")
 DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 URL_PREFIX = "https://"
 
+# The stage references a section_heading is looked up in: the skill's own
+# references/ folder, beside scripts/, wherever the skill is installed.
+REFERENCES_DIR = Path(__file__).resolve().parent.parent / "references"
+# An ATX heading line: up to three spaces, one to six `#`, then its text.
+_HEADING_LINE_RE = re.compile(r" {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*")
+# The optional closing sequence of an ATX heading (`## Title ##`).
+_HEADING_CLOSE_RE = re.compile(r"(?:^|[ \t]+)#+$")
+# A fence line opens or closes a fenced code block, whose `#` lines are no headings.
+_FENCE_RE = re.compile(r" {0,3}(`{3,}|~{3,})")
+# A leading numbering token: `1.`, `1b.`, `0.5.`, `5a-ii.`, `4-headless.`.
+_NUMBERING_RE = re.compile(r"[0-9][0-9A-Za-z]*(?:[.-][0-9A-Za-z]+)*\.\s+")
+_NOT_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# The file extensions a defect name drops: `gate_eval.py` names the script `gate-eval`.
+KNOWN_EXTENSIONS = (
+    ".py", ".md", ".json", ".yaml", ".yml", ".toml", ".js", ".cjs", ".mjs", ".ts", ".sh", ".csv", ".txt",
+)
+_PATH_SEP_RE = re.compile(r"[/\\]")
+_LINE_SUFFIX_RE = re.compile(r":[0-9]+(?:-[0-9]+)?$")
+_NAME_SPLIT_RE = re.compile(r"[\s_.-]+")
+_CASE_BOUNDARY_RE = re.compile(r"(?<=[a-z])(?=[A-Z])")
+_NOT_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
+DEFECT_KEY_WORDS = 4
+STDIN_KEYS = ("section_heading", "defect_name")
+
+QUEUE_STAMP_FORMAT = "%Y%m%d-%H%M%S"
+
 GH_TIMEOUT_SEC = 10.0
 KILL_WAIT_SEC = 2.0  # each wait once the time limit stops gh: SIGTERM or taskkill, then the child
 LOCK_WAIT_SEC = 10.0
@@ -182,6 +238,104 @@ def _compute_fp(severity: str, stage: str, slug: str, defect_key: str) -> tuple[
     return f"fp-{_sha7(keyed)}", f"fp-{_sha7(legacy)}", keyed
 
 
+def _heading_text(text: str) -> str:
+    """A heading's text: no leading `#`s, no ATX closing sequence, single spaces."""
+    text = text.strip().lstrip("#")
+    text = _HEADING_CLOSE_RE.sub("", text.strip())
+    return " ".join(text.split())
+
+
+def _stage_headings(stage_file: Path) -> list[str]:
+    """The text of every ATX heading line of stage_file, outside its frontmatter and fenced code.
+
+    Raises OSError when the file cannot be read.
+    """
+    lines = stage_file.read_text(encoding="utf-8-sig").splitlines()
+    start = 0
+    if lines and lines[0].strip() == "---":
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                start = i + 1
+                break
+    headings = []
+    fence = None
+    for line in lines[start:]:
+        run = _FENCE_RE.match(line)
+        if fence is not None:
+            # Only a run of the same character, at least as long and alone on its line, closes it.
+            closes = run and run.group(1)[0] == fence[0] and len(run.group(1)) >= len(fence)
+            if closes and not line.strip().strip(fence[0]):
+                fence = None
+            continue
+        if run:
+            fence = run.group(1)
+        elif _HEADING_LINE_RE.fullmatch(line):
+            headings.append(_heading_text(line))
+    return headings
+
+
+def section_slug(heading: str) -> str:
+    """The slug rule: no leading `#`s or numbering token, lower-case, one `-` per run of other characters."""
+    text = _heading_text(heading)
+    numbering = _NUMBERING_RE.match(text)
+    if numbering:
+        text = text[numbering.end():]
+    return _NOT_SLUG_RE.sub("-", text.lower()).strip("-")
+
+
+def defect_key(name: str) -> str:
+    """The defect-key rule; an empty string when the name yields no word."""
+    text = _PATH_SEP_RE.split(name.strip())[-1]  # `scripts/gate_eval.py` names `gate_eval.py`
+    text = _LINE_SUFFIX_RE.sub("", text)  # `gate_eval.py:42` and `:42-50` name it too
+    for ext in KNOWN_EXTENSIONS:
+        if text.lower().endswith(ext) and len(text) > len(ext):
+            text = text[: -len(ext)]
+            break
+    text = text.lstrip("-_")
+    words = []
+    for part in _NAME_SPLIT_RE.split(text):
+        for piece in _CASE_BOUNDARY_RE.split(part):
+            word = _NOT_ALNUM_RE.sub("", piece).lower()
+            if word:
+                words.append(word)
+    return "-".join(words[-DEFECT_KEY_WORDS:])
+
+
+def _read_stdin_names() -> tuple[dict | None, str | None]:
+    """The JSON object --stdin reads, or the rule it breaks.
+
+    Read as UTF-8 bytes, so a heading's non-ASCII character survives whatever
+    the locale is.
+    """
+    raw = getattr(sys.stdin, "buffer", None)
+    try:
+        text = raw.read().decode("utf-8-sig") if raw is not None else sys.stdin.read()
+        data = json.loads(text)
+    except (OSError, ValueError, RecursionError):  # UnicodeDecodeError is a ValueError
+        return None, "--stdin did not read a JSON object"
+    if not isinstance(data, dict):
+        return None, "--stdin did not read a JSON object"
+    unknown = sorted(set(data) - set(STDIN_KEYS))
+    if unknown:
+        return None, "unknown --stdin key(s) %s; expected only %s" % (
+            ", ".join(map(repr, unknown)),
+            " and ".join(STDIN_KEYS),
+        )
+    for key, value in data.items():
+        if not isinstance(value, str) or not value.strip():
+            return None, "--stdin %s must be a non-empty string" % key
+    return data, None
+
+
+def _one_of(flag: str, flag_value: str | None, key: str, names: dict) -> str | None:
+    """The rule a section or defect pair breaks: given twice, or not at all."""
+    if flag_value is not None and key in names:
+        return "give %s or a --stdin %s, not both" % (flag, key)
+    if flag_value is None and key not in names:
+        return "give %s or a --stdin %s" % (flag, key)
+    return None
+
+
 def cmd_fingerprint(args: argparse.Namespace) -> int:
     if args.severity not in SEVERITIES:
         return _fail(
@@ -192,21 +346,62 @@ def cmd_fingerprint(args: argparse.Namespace) -> int:
         return _fail(
             "invalid stage %r; expected one of %s" % (args.stage, ", ".join(STAGES))
         )
-    if not SLUG_RE.fullmatch(args.section_slug):
-        return _fail(
-            "invalid section-slug %r; expected kebab-case ^[a-z0-9]+(-[a-z0-9]+)*$"
-            % args.section_slug
+
+    names: dict = {}
+    if args.stdin:
+        names, problem = _read_stdin_names()
+        if problem:
+            return _fail(problem)
+        problem = _one_of("--section-slug", args.section_slug, "section_heading", names) or _one_of(
+            "--defect-key", args.defect_key, "defect_name", names
         )
-    if not DEFECT_KEY_RE.fullmatch(args.defect_key):
+        if problem:
+            return _fail(problem)
+
+    slug = args.section_slug
+    if "section_heading" in names:
+        heading = names["section_heading"]
+        stage_file = REFERENCES_DIR / f"{args.stage}.md"
+        try:
+            headings = _stage_headings(stage_file)
+        except (OSError, UnicodeDecodeError) as exc:
+            return _fail("could not read %s: %s" % (stage_file, exc))
+        if _heading_text(heading) not in headings:
+            return _fail(
+                "section_heading %r is no heading of references/%s.md; copy a heading line of that file"
+                % (heading, args.stage)
+            )
+        slug = section_slug(heading)
+        if not slug:
+            return _fail("section_heading %r yields no slug" % heading)
+    elif not SLUG_RE.fullmatch(slug):
         return _fail(
-            "invalid defect-key %r; expected one to four kebab-case words "
-            "^[a-z0-9]+(-[a-z0-9]+){0,3}$" % args.defect_key
+            "invalid section-slug %r; expected kebab-case ^[a-z0-9]+(-[a-z0-9]+)*$" % slug
         )
 
-    fp, legacy_fp, tuple_str = _compute_fp(
-        args.severity, args.stage, args.section_slug, args.defect_key
+    key = args.defect_key
+    if "defect_name" in names:
+        key = defect_key(names["defect_name"])
+        if not key:
+            return _fail("defect_name %r yields no word" % names["defect_name"])
+    elif not DEFECT_KEY_RE.fullmatch(key):
+        return _fail(
+            "invalid defect-key %r; expected one to four kebab-case words "
+            "^[a-z0-9]+(-[a-z0-9]+){0,3}$" % key
+        )
+
+    fp, legacy_fp, tuple_str = _compute_fp(args.severity, args.stage, slug, key)
+    print(
+        json.dumps(
+            {
+                "fp": fp,
+                "legacy_fp": legacy_fp,
+                "tuple": tuple_str,
+                "section_slug": slug,
+                "defect_key": key,
+            }
+        )
     )
-    print(json.dumps({"fp": fp, "legacy_fp": legacy_fp, "tuple": tuple_str}))
     return 0
 
 
@@ -717,21 +912,87 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- queue ---------------------------------------------------------------------
+
+
+def _queue_stamp() -> str:
+    return datetime.now(timezone.utc).strftime(QUEUE_STAMP_FORMAT)
+
+
+def _create_new(queue_dir: Path, stem: str) -> tuple[int, Path]:
+    """Open queue_dir/<stem>.md for writing, never over a file: <stem>-2.md, -3 and so on when taken.
+
+    Raises OSError when a free name cannot be opened.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    target = queue_dir / f"{stem}.md"
+    n = 2
+    while True:
+        try:
+            return os.open(target, flags, 0o644), target
+        except FileExistsError:
+            target = queue_dir / f"{stem}-{n}.md"
+            n += 1
+
+
+def cmd_queue(args: argparse.Namespace) -> int:
+    if args.stage not in STAGES:
+        return _fail(
+            "invalid stage %r; expected one of %s" % (args.stage, ", ".join(STAGES))
+        )
+    body_file = Path(args.body_file).expanduser()
+    try:
+        body = body_file.read_bytes()
+    except OSError as exc:
+        return _fail("could not read body file %s: %s" % (body_file, exc))
+
+    queue_dir = Path(args.queue_dir).expanduser()
+    try:
+        queue_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return _fail("could not create %s: %s" % (queue_dir, exc))
+    try:
+        fd, target = _create_new(queue_dir, f"hc-ultracode-goal-{args.stage}-{_queue_stamp()}")
+    except OSError as exc:
+        return _fail("could not create a queue file in %s: %s" % (queue_dir, exc))
+    try:
+        try:
+            data = memoryview(body)
+            while data:
+                data = data[os.write(fd, data):]  # os.write may write fewer bytes than asked
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        try:
+            os.unlink(target)
+        except OSError:
+            pass
+        return _fail("could not write %s: %s" % (target, exc))
+
+    print(json.dumps({"path": os.path.abspath(target)}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fingerprint + seen-cache plumbing for the ultracode-goal health check."
+        description="Fingerprint, seen-cache and queue plumbing for the ultracode-goal health check."
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     fp_parser = sub.add_parser("fingerprint", help="Compute the dedup fingerprints.")
     fp_parser.add_argument("--severity", required=True)
     fp_parser.add_argument("--stage", required=True)
-    fp_parser.add_argument("--section-slug", required=True, dest="section_slug")
+    fp_parser.add_argument("--section-slug", dest="section_slug", help="The section's kebab-case slug.")
     fp_parser.add_argument(
         "--defect-key",
-        required=True,
         dest="defect_key",
         help="One to four kebab-case words naming the thing the fix would change.",
+    )
+    fp_parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help='Read {"section_heading": ..., "defect_name": ...} from stdin, in place of '
+        "--section-slug and --defect-key respectively.",
     )
     fp_parser.set_defaults(func=cmd_fingerprint)
 
@@ -760,7 +1021,24 @@ def main(argv: list[str] | None = None) -> int:
     ver_parser.add_argument("--skill-root", required=True, dest="skill_root")
     ver_parser.set_defaults(func=cmd_version)
 
+    queue_parser = sub.add_parser("queue", help="Write a drafted body into the local queue.")
+    queue_parser.add_argument("--queue-dir", required=True, dest="queue_dir")
+    queue_parser.add_argument("--stage", required=True)
+    queue_parser.add_argument("--body-file", required=True, dest="body_file")
+    queue_parser.set_defaults(func=cmd_queue)
+
     args = parser.parse_args(argv)
+    if args.command == "fingerprint" and not args.stdin:
+        # Without --stdin both flags stay required, as before --stdin existed.
+        missing = [
+            flag
+            for flag, value in (("--section-slug", args.section_slug), ("--defect-key", args.defect_key))
+            if value is None
+        ]
+        if missing:
+            fp_parser.error(
+                "the following arguments are required without --stdin: %s" % ", ".join(missing)
+            )
     return args.func(args)
 
 

@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  Finalize no longer tells a headless run that its health check only queues findings locally. With `health_check_autosubmit = true` the health check files the `bug` findings on GitHub as documented, where a run that followed Finalize's wording queued them too; it still never delays the final JSON.
+issues: [226]

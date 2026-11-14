@@ -69,7 +69,7 @@ skills/ultracode-goal/
 │   ├── claim_check.py             #   pre-commit: paths a message names that the staged diff skips
 │   ├── drive_epic.py              #   one `claude -p` per story (--max-stories work bound)
 │   ├── headless_envelope.py       #   the one five-key headless-envelope adapter
-│   ├── health_check_fp.py         #   health-check fingerprint + seen-cache plumbing
+│   ├── health_check_fp.py         #   health-check fingerprint, seen-cache and queue plumbing
 │   ├── mem_observation.py         #   Cross-Session Recall write path (write/drain)
 │   ├── mem_recall.py              #   Cross-Session Recall latch and read path (latch/filter/unlatch)
 │   ├── merge_config.py            #   install-time config merge into shared _bmad

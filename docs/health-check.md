@@ -25,7 +25,7 @@ Explicitly **not** sent: no source code, no Epic content, no secrets. The eviden
 
 ## Privacy
 
-Issues are filed publicly on `armelhbobdad/bmad-module-ultracode-goal`. On an **attended** run nothing is sent silently: the health check always **HALTS at a `[Y]` / `[N]` / `[E]` / `[Q]` gate** before submitting: yes to file, no to skip, edit to adjust first, or queue to keep every finding on disk and send nothing. You see the finding and approve it before it leaves your machine.
+Issues are filed publicly on `armelhbobdad/bmad-module-ultracode-goal`. On an **attended** run nothing is sent silently: the health check first drafts each finding's issue body in the run folder, then always **HALTS at a `[Y]` / `[A]` / `[N]` / `[E]` / `[Q]` gate** that shows each finding's title and its full body. Yes files the `bug` findings and keeps the `friction` and `gap` ones on disk, all files every finding, no skips them, edit revises the drafts first, and queue keeps every finding on disk and sends nothing. What you approve is what is sent, except for these changes after the gate: when the defect was fixed before, a line linking to that fix opens the body, and a confirmed regression's title gains `REGRESSION: `; when you choose to file anyway at an open issue with the same fingerprint, the finding takes a more specific defect key, which rewrites its Fingerprint and Defect Key; and when you choose to comment on a matching issue, the comment is written then and shown to you before it is posted.
 
 The boundary below shows the disable path, everything computed on your machine, and the three points where anything crosses to GitHub, all behind a gate: the seen-cache check, which reads the state of an issue already recorded on this machine and sends only that issue's URL, the dedup search, and the issue itself:
 
@@ -36,9 +36,11 @@ flowchart TD
     Enabled -->|"set"| Reflect["Reflect on this run. Grade bug, friction, gap"]
     Reflect --> Clean{"Any findings"}
     Clean -->|"no"| Done["Clean run. Exit in one line"]
-    Clean -->|"yes"| Gate{"Approved to submit"}
-    Gate -->|"no, queue or skip"| Queue["Write finding to local queue. Stays on disk"]
-    Gate -->|"yes"| Fp["Compute fingerprint and check seen-cache"]
+    Clean -->|"yes"| Draft["Fingerprint each finding and draft its issue body"]
+    Draft --> Gate{"Your answer at the gate"}
+    Gate -->|"N"| Discard["Discard the findings"]
+    Gate -->|"Q, or Y for friction and gap"| Queue["Write finding to local queue. Stays on disk"]
+    Gate -->|"Y for bug, or A"| Fp["Check seen-cache"]
     Fp --> Search["Remote dedup search on GitHub"]
     Fp -->|"record holds an issue URL"| State["Read that issue's state on GitHub. Sends only its URL"]
     State --> Search
@@ -50,7 +52,9 @@ flowchart TD
         Reflect
         Clean
         Done
+        Draft
         Gate
+        Discard
         Queue
         Fp
     end
@@ -66,7 +70,7 @@ flowchart TD
     class Create verdict
 ```
 
-The gate that admits anything to the right of the boundary is the `[Y]` approval on an attended run, or the autosubmit opt-in restricted to `bug`-severity findings on a headless run; the Environment table (never source code, Epic content, or secrets) is all that travels with a filed issue.
+The gate that admits anything to the right of the boundary is the `[Y]` or `[A]` approval on an attended run, or the autosubmit opt-in restricted to `bug`-severity findings on a headless run; the Environment table (never source code, Epic content, or secrets) is all that travels with a filed issue.
 
 ## Unattended behavior
 
@@ -75,7 +79,7 @@ Headless runs do not have a human at the gate, so by default they **queue findin
 - `health_check_repo = ""`: disables the health check entirely (the target repo doubles as the on/off switch; no target, nothing to run).
 - `health_check_autosubmit = true`: opts **bug-severity** findings into live submission on unattended runs. `friction` and `gap` findings are **never** auto-submitted; they always queue regardless of this setting.
 
-The local queue lives at the configured `health_check_queue_path` (by default `{project-root}/_bmad-output/ultracode-goal/improvement-queue/`); each finding is written one file per finding, named `hc-ultracode-goal-{stage}-{YYYYMMDD-HHmmss}.md`. When two findings of one stage are written in the same second, the later names get `-2`, `-3` and so on before `.md`, so no file is overwritten. Whatever the reason a finding stays local (the `[Q]` choice, a headless run, a friction or gap finding, no GitHub CLI, a skipped or failed submission), the health check lists each file it wrote with one sentence giving the reason and the `gh issue create --body-file` command that submits it: on screen in an attended run, in the log in a headless one.
+The local queue lives at the configured `health_check_queue_path` (by default `{project-root}/_bmad-output/ultracode-goal/improvement-queue/`), which is created when it is missing. `health_check_fp.py queue` writes each finding there as one file, named `hc-ultracode-goal-{stage}-{YYYYMMDD-HHmmss}.md` from the UTC time, and holding the finding's issue body exactly as it was drafted, with no frontmatter. When two findings of one stage are written in the same second, the later names get `-2`, `-3` and so on before `.md`, so no file is overwritten. Whatever the reason a finding stays local (the `[Q]` choice, a headless run, a friction or gap finding, no GitHub CLI, a skipped or failed submission), the health check lists each file it wrote with one sentence giving the reason and the `gh issue create --body-file` command that submits it: on screen in an attended run, in the log in a headless one.
 
 A headless run with `health_check_autosubmit = true` that finds an open issue matching a bug finding has nobody to choose between upvoting, commenting and filing anyway, so it takes the skip choice: the finding is queued with the match as its reason, and nothing is posted.
 
@@ -89,9 +93,9 @@ fp-XXXXXXX = "fp-" + sha1("{severity}|ultracode-goal/{stage}|"
                           "{section-slug}|{defect-key}")[:7]
 ```
 
-The `step_file` component is always the source-repo form `skills/ultracode-goal/references/{stage}.md` regardless of where the skill is installed, so the same defect dedups to the same key across a dev checkout and an installed `_bmad/` tree. `severity` is one of `bug`/`friction`/`gap`; `stage` is one of the six stage names (`ingest-and-scope`, `preflight`, `define-done`, `execute`, `gate`, `finalize`); `section-slug` is validated kebab-case. The `defect-key` is one to four kebab-case words naming the thing the fix would change, in the stage reference's or the script's own words (a `gate_status` field gives `gate-status`), so two different defects in one section get two fingerprints, while two reports of one defect that name the same thing get one.
+The `step_file` component is always the source-repo form `skills/ultracode-goal/references/{stage}.md` regardless of where the skill is installed, so the same defect dedups to the same key across a dev checkout and an installed `_bmad/` tree. `severity` is one of `bug`/`friction`/`gap`; `stage` is one of the six stage names (`ingest-and-scope`, `preflight`, `define-done`, `execute`, `gate`, `finalize`); `section-slug` comes from the heading of the section where the issue occurred: the script checks that the heading is one of that stage file's own, drops its leading `#`s and its numbering (`1b.`, `5a-ii.`, `4-headless.`), lower-cases it and turns each run of other characters into a hyphen, so `1b. Run the formalize readiness check` gives `run-the-formalize-readiness-check`. The `defect-key` is one to four kebab-case words naming the thing the fix would change, in the stage reference's or the script's own words. The script derives it from that name: it drops a file extension and leading dashes, splits the name into words (`gate_status` gives `gate-status`, `gate_eval.py` gives `gate-eval`, `composeStories` gives `compose-stories`) and keeps the last four. So two different defects in one section get two fingerprints, while two reports of one defect that name the same thing get one.
 
-The same hash without `|{defect-key}` is the **section fingerprint**, which every defect of one severity in one section shares. Versions before the defect key used it as the fingerprint, so issues and seen-cache records made by them carry it, and every issue filed now records it in a `` Section fingerprint: `fp-XXXXXXX` `` line of its body. A match on it is only ever a possible match: it never suppresses a finding, and it never closes an issue.
+The same hash without `|{defect-key}` is the **section fingerprint**, which every defect of one severity in one section shares. Versions before the defect key used it as the fingerprint, so issues and seen-cache records made by them carry it, and every issue filed now records it in a `` Section fingerprint: `fp-XXXXXXX` `` line of its body. A match on it is only ever a possible match: it never suppresses a finding, and it never closes an issue. Since the script derives the section slug from the heading, the section fingerprint of a defect differs from the fingerprint an issue or a seen-cache record made by version 7.1.0 or earlier carries wherever the slug chosen then differed from the real heading's, as it mostly did. Such an issue then no longer turns up in the section-fingerprint search or the dedup Action's possible-duplicate flag, and a recurrence of its defect is filed without its "Possibly a regression of" line; nothing is silenced, since such a record never suppresses a finding.
 
 Dedup runs at three levels:
 
@@ -101,7 +105,7 @@ Dedup runs at three levels:
 
 ## Submitting a queued finding manually
 
-A queued finding sits as a body file under the queue directory. It carries YAML frontmatter (workflow, step_file, severity, fingerprint, section_fingerprint, defect_key, date) followed by the same structured body the attended gate would have shown you, including the Environment table and the `file:line` evidence. Submit one when you are ready with the two commands the health check printed for it, filled in from its frontmatter:
+A queued finding is a file under the queue directory holding the finding's issue body, exactly as the health check drafted it and, on an attended run, as the gate showed it: its Workflow, Step File, Section, Severity, Fingerprint and `Section fingerprint:` line, Defect Key, the `file:line` evidence and the Environment table. Submit one when you are ready with the two commands the health check printed for it, which carry the run's short description in the title. Filled in by hand, they take their values from the file's sections, and the short description is yours to write. A queue file written by an earlier version opens with YAML frontmatter between two `---` lines: delete it before you pass the file to `--body-file`.
 
 ```bash
 gh label create "<fingerprint>" --repo <health-check-repo> --color "ededed" \
@@ -112,14 +116,16 @@ gh issue create --repo <health-check-repo> \
   --body-file <path-to-queued-finding>
 ```
 
-Keep the full title: the dedup Action reads the fingerprint and severity from it when the issue has no `fp-*` label, and the next reporter's search looks for the fingerprint in titles. Without push access to the repository you can neither create a label nor set one (`gh label create` fails, and its `|| true` hides that), so drop the `gh label create` command and the `--label` line: the dedup Action adds the labels from the title. Nothing is sent until you run these commands. Afterwards, record the new issue with the URL `gh issue create` printed, so this machine does not report the finding again while that issue stays open (`<skill-root>` is the installed `ultracode-goal` skill folder):
+Keep the full title: the dedup Action reads the fingerprint and severity from it when the issue has no `fp-*` label, and the next reporter's search looks for the fingerprint in titles. Without push access to the repository you can neither create a label nor set one (`gh label create` fails, and its `|| true` hides that), so drop the `gh label create` command and the `--label` line: the dedup Action adds the labels from the title. Nothing is sent until you run these commands. Afterwards, record the new issue with the URL `gh issue create` printed, so this machine does not report the finding again while that issue stays open (`<skill-root>` is the installed `ultracode-goal` skill folder, and `<health_check_seen_cache>` the configured `health_check_seen_cache`, by default `~/.ultracode-goal/health-check-seen.json`):
 
 ```bash
 uv run <skill-root>/scripts/health_check_fp.py record \
-  --fp <fingerprint> --cache ~/.ultracode-goal/health-check-seen.json \
+  --fp <fingerprint> --cache <health_check_seen_cache> \
   --issue-url "<the new issue URL>" --action created --date YYYY-MM-DD
 ```
 
+When the body opens with "Regression of", add `--regression`: the new issue tracks the recurrence, so it replaces the `resolved` record the fix left.
+
 Then retire the queue file: delete it, or move it into a `resolved/` subfolder of the queue directory.
 
-You can also open one through the repository's issue chooser at <https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose>. An issue filed that way keeps the template's `health-check` and `workflow-improvement` labels and lacks only the `fp-*` and severity ones, so fill in its Fingerprint and Severity sections: the dedup Action adds those two from them, and leaves an issue whose Fingerprint still holds the `fp-XXXXXXX` placeholder as it is.
+You can also open one through the repository's issue chooser at <https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose>. An issue filed that way keeps the template's `health-check` and `workflow-improvement` labels and lacks only the `fp-*` and severity ones, so fill in its Fingerprint and Severity sections (the template's comments give the `health_check_fp.py fingerprint` command that prints the fingerprints, the section slug and the defect key): the dedup Action adds those two from them, and leaves an issue whose Fingerprint still holds the `fp-XXXXXXX` placeholder as it is.
