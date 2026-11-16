@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The health check's Module Version is now the version of the UltraCode Goal that runs it, never your project's. `health_check_fp.py version` used to read `.claude-plugin/marketplace.json` and `package.json` in your project, so a report filed from a plugin install could name your own package's version as UltraCode Goal's. It now reads UltraCode Goal's own root first (its `.claude-plugin/marketplace.json` entry named `bmad-module-ultracode-goal`, then its `package.json` when that is its name), then the `_bmad/ucg/VERSION` the CLI installer writes, and prints a null version when neither gives one. A stale `_bmad/ucg/VERSION` in a checkout no longer masks the checkout's own version, and `version` no longer takes `--skill-root`.
+issues: [234]

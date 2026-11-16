@@ -14,8 +14,11 @@ byte-for-byte copy and the submit commands it prints, read from the draft's body
 header and quoted for a shell; the `seen` verdict table and its opening line, including the
 legacy-fingerprint demotions and the issue-state check it runs through `gh`
 (a fake gh on PATH that answers, fails, prints junk or hangs, and a gh planted
-in the current folder that must never run); and `record`'s validation, merge,
-resolved guard, lock, fsync-and-rename write and corrupt-cache set-aside.
+in the current folder that must never run); `record`'s validation, merge,
+resolved guard, lock, fsync-and-rename write and corrupt-cache set-aside; and
+`version`, read from UCG's own root (the script copied into a checkout's, a
+plugin's and a CLI install's layout) and then the CLI install's VERSION, never
+from the user's project's package.json or marketplace.json.
 
 The script is exercised via subprocess (sys.executable + absolute path) to test
 the real CLI surface, mirroring test_preflight_check.py. Every subprocess gets a
@@ -41,6 +44,7 @@ import subprocess
 import sys
 import time
 import tomllib
+import types
 from pathlib import Path
 
 import pytest
@@ -394,6 +398,15 @@ def test_a_heading_line_in_fenced_code_or_frontmatter_is_no_heading(tmp_path, mo
         ("skills\\ultracode-goal\\scripts\\gate_eval.py", "gate-eval"),
         ("gate_eval.py:42", "gate-eval"),
         ("scripts/gate_eval.py:42-50", "gate-eval"),
+        # A `:N:M` suffix, a line number then a column number, goes as `:N` and `:N-M` do.
+        ("gate_eval.py:42:7", "gate-eval"),
+        ("C:\\work\\gate_eval.py:10:2", "gate-eval"),
+        # A name copied from Markdown or a log keeps no backticks or quotes around it.
+        ("`gate_eval.py`", "gate-eval"),
+        ("'gate_eval.py'", "gate-eval"),
+        ('"gate_eval.py"', "gate-eval"),
+        ("  `scripts/gate_eval.py:42:7`  ", "gate-eval"),
+        ("`composeStories`", "compose-stories"),
         # Only a lower-case letter followed by an upper-case one splits, so an acronym stays one word.
         ("getHTTPResponse", "get-httpresponse"),
     ],
@@ -405,7 +418,7 @@ def test_a_name_gives_its_defect_key(name, key):
     assert payload["fp"] == _expected_fp("bug", "gate", "verdict-mapping", key)[0]
 
 
-@pytest.mark.parametrize("name", ["--__", "...", "'"])
+@pytest.mark.parametrize("name", ["--__", "...", "'", "`", '""', "` `"])
 def test_a_name_that_yields_no_word_exits_one(name):
     code, payload = _fingerprint_stdin("bug", "gate", {"defect_name": name}, "--section-slug=verdict-mapping")
     assert code == 1
@@ -2608,170 +2621,226 @@ def test_contributing_records_a_fix_in_the_configured_seen_cache():
     assert "(the configured `health_check_seen_cache`, by default `~/.ultracode-goal/health-check-seen.json`)" in contributing
 
 
-# --- version: probe ladder --------------------------------------------------
+# --- version: UCG's own root, then the CLI install's VERSION ------------------------------------
+
+UCG = "bmad-module-ultracode-goal"
+# What a user's project may hold: its own package.json and, for a project that is a plugin, its own marketplace.
+USER_PACKAGE = {"name": "my-web-app", "version": "0.3.1"}
+USER_MARKETPLACE = {"name": "my-plugins", "plugins": [{"name": "my-plugin", "version": "4.0.0"}]}
 
 
-def _version(project_root: Path, skill_root: Path) -> subprocess.CompletedProcess[str]:
-    return _run(
-        "version",
-        "--project-root",
-        str(project_root),
-        "--skill-root",
-        str(skill_root),
+def _write_json(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _marketplace(root: Path, *plugins: dict, name: str = UCG) -> None:
+    _write_json(root / ".claude-plugin" / "marketplace.json", {"name": name, "plugins": list(plugins)})
+
+
+def _package(root: Path, name: str = UCG, version: str = "7.1.0") -> None:
+    _write_json(root / "package.json", {"name": name, "version": version})
+
+
+def _install_version(project: Path, text: str) -> None:
+    (project / "_bmad" / "ucg").mkdir(parents=True, exist_ok=True)
+    (project / "_bmad" / "ucg" / "VERSION").write_text(text, encoding="utf-8")
+
+
+def _user_project(project: Path) -> Path:
+    """A user's project holding its own package.json and its own plugin marketplace, neither of them UCG's."""
+    _write_json(project / "package.json", USER_PACKAGE)
+    _write_json(project / ".claude-plugin" / "marketplace.json", USER_MARKETPLACE)
+    return project
+
+
+def _copy_script(folder: Path) -> Path:
+    """The script copied into folder, which is created: it runs from there, as an install runs it."""
+    folder.mkdir(parents=True, exist_ok=True)
+    copy = folder / SCRIPT.name
+    copy.write_bytes(SCRIPT.read_bytes())
+    return copy
+
+
+def _ucg_checkout(root: Path) -> Path:
+    """The script at <root>/skills/ultracode-goal/scripts/, as a checkout and a plugin hold it."""
+    return _copy_script(root / "skills" / "ultracode-goal" / "scripts")
+
+
+def _version(script: Path, project: Path) -> dict:
+    proc = subprocess.run(
+        [sys.executable, str(script), "version", "--project-root", str(project)],
+        capture_output=True, text=True, env=_env(), stdin=subprocess.DEVNULL, timeout=120,
     )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout)
 
 
-def test_version_nothing_found_is_null_na(tmp_path):
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    proj.mkdir()
-    skill.mkdir()
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == {"version": None, "source": "N/A"}
+def test_version_reads_the_marketplace_entry_named_ucg_first(tmp_path):
+    root = tmp_path / "ucg"
+    _marketplace(root, {"name": "another-plugin", "version": "1.0.0"}, {"name": UCG, "version": " 7.1.0 "})
+    _package(root, version="7.0.9")
+    assert _version(_ucg_checkout(root), tmp_path / "proj") == {
+        "version": "7.1.0", "source": ".claude-plugin/marketplace.json"}
 
 
-def test_version_bmad_ucg_version_wins(tmp_path):
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    (proj / "_bmad" / "ucg").mkdir(parents=True)
-    (proj / "_bmad" / "ucg" / "VERSION").write_text("1.2.3\n", encoding="utf-8")
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    payload = json.loads(proc.stdout)
-    assert payload == {"version": "1.2.3", "source": "_bmad/ucg/VERSION"}
+def test_version_reads_ucg_package_json_without_a_marketplace(tmp_path):
+    root = tmp_path / "ucg"
+    _package(root)
+    assert _version(_ucg_checkout(root), tmp_path / "proj") == {"version": "7.1.0", "source": "package.json"}
 
 
-def test_version_skill_root_version_wins_when_bmad_absent(tmp_path):
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    proj.mkdir()
-    skill.mkdir()
-    (skill / "VERSION").write_text("  0.9.0  ", encoding="utf-8")
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    payload = json.loads(proc.stdout)
-    assert payload["version"] == "0.9.0"
-    assert payload["source"] == f"{skill}/VERSION"
+@pytest.mark.parametrize(
+    "marketplace",
+    [
+        {"name": UCG, "plugins": [{"name": "another-plugin", "version": "9.9.9"}]},
+        {"name": UCG, "plugins": [{"version": "9.9.9"}]},
+        {"name": UCG, "plugins": [{"name": UCG}]},
+        {"name": UCG, "plugins": [{"name": UCG, "version": "  "}]},
+        {"name": UCG, "plugins": [{"name": UCG, "version": 7}]},
+        {"name": UCG, "plugins": {"name": UCG, "version": "9.9.9"}},
+        {"name": UCG, "plugins": ["9.9.9"]},
+        ["not", "an", "object"],
+        "{ this is not valid json {{{",
+    ],
+    ids=["another-plugin", "unnamed-entry", "no-version", "blank-version", "number-version", "plugins-not-a-list",
+         "entry-not-an-object", "not-an-object", "malformed"],
+)
+def test_a_marketplace_with_no_ucg_version_falls_through_to_package_json(tmp_path, marketplace):
+    root = tmp_path / "ucg"
+    path = root / ".claude-plugin" / "marketplace.json"
+    if isinstance(marketplace, str):
+        path.parent.mkdir(parents=True)
+        path.write_text(marketplace, encoding="utf-8")
+    else:
+        _write_json(path, marketplace)
+    _package(root, version="7.0.9")
+    assert _version(_ucg_checkout(root), tmp_path / "proj") == {"version": "7.0.9", "source": "package.json"}
 
 
-def test_version_marketplace_wins_when_version_files_absent(tmp_path):
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    (proj / ".claude-plugin").mkdir(parents=True)
-    skill.mkdir()
-    (proj / ".claude-plugin" / "marketplace.json").write_text(
-        json.dumps({"plugins": [{"version": "2.0.0"}]}), encoding="utf-8"
-    )
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == {"version": "2.0.0", "source": "marketplace.json"}
+@pytest.mark.parametrize(
+    "package",
+    [
+        USER_PACKAGE,
+        {"version": "0.3.1"},
+        {"name": UCG.upper(), "version": "0.3.1"},
+        {"name": UCG, "version": ""},
+        {"name": UCG},
+        "not json at all }{",
+    ],
+    ids=["another-name", "no-name", "name-in-another-case", "empty-version", "no-version", "malformed"],
+)
+def test_a_package_json_with_no_ucg_version_falls_through_to_the_install_version(tmp_path, package):
+    """A foreign file at UCG's root falls through: the install's VERSION, then null."""
+    root = tmp_path / "ucg"
+    if isinstance(package, str):
+        root.mkdir()
+        (root / "package.json").write_text(package, encoding="utf-8")
+    else:
+        _write_json(root / "package.json", package)
+    script = _ucg_checkout(root)
+    project = tmp_path / "proj"
+    assert _version(script, project) == {"version": None, "source": "N/A"}
+    _install_version(project, "7.1.0\n")
+    assert _version(script, project) == {"version": "7.1.0", "source": "_bmad/ucg/VERSION"}
 
 
-def test_version_package_json_is_last_rung(tmp_path):
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    proj.mkdir()
-    skill.mkdir()
-    (proj / "package.json").write_text(
-        json.dumps({"version": "3.1.4"}), encoding="utf-8"
-    )
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == {"version": "3.1.4", "source": "package.json"}
+def test_a_stale_install_version_never_masks_the_roots(tmp_path):
+    """A checkout's own `_bmad/ucg/VERSION`, left by an old install (this checkout's says 2.2.0), loses to its root."""
+    root = tmp_path / "ucg"
+    _marketplace(root, {"name": UCG, "version": "7.1.0"})
+    _package(root)
+    _install_version(root, "2.2.0\n")
+    assert _version(_ucg_checkout(root), root) == {"version": "7.1.0", "source": ".claude-plugin/marketplace.json"}
 
 
-def test_version_first_hit_wins_precedence(tmp_path):
-    """Every rung is populated; the earliest (bmad VERSION) must win."""
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    (proj / "_bmad" / "ucg").mkdir(parents=True)
-    (proj / ".claude-plugin").mkdir(parents=True)
-    skill.mkdir()
-    (proj / "_bmad" / "ucg" / "VERSION").write_text("first", encoding="utf-8")
-    (skill / "VERSION").write_text("second", encoding="utf-8")
-    (proj / ".claude-plugin" / "marketplace.json").write_text(
-        json.dumps({"plugins": [{"version": "third"}]}), encoding="utf-8"
-    )
-    (proj / "package.json").write_text(
-        json.dumps({"version": "fourth"}), encoding="utf-8"
-    )
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == {"version": "first", "source": "_bmad/ucg/VERSION"}
+def test_this_checkout_reports_its_own_version():
+    """The checkout's marketplace answers first: its plugin entry named bmad-module-ultracode-goal."""
+    root = SCRIPT.resolve().parents[3]
+    marketplace = json.loads((root / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+    [expected] = [entry["version"] for entry in marketplace["plugins"] if entry["name"] == UCG]
+    assert _load().UCG_ROOT == root
+    assert _version(SCRIPT, root) == {"version": expected, "source": ".claude-plugin/marketplace.json"}
 
 
-def test_version_skill_precedes_marketplace_and_package(tmp_path):
-    """skill-root VERSION outranks both JSON rungs when bmad VERSION is absent."""
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    (proj / ".claude-plugin").mkdir(parents=True)
-    skill.mkdir()
-    (skill / "VERSION").write_text("skill-wins", encoding="utf-8")
-    (proj / ".claude-plugin" / "marketplace.json").write_text(
-        json.dumps({"plugins": [{"version": "mp"}]}), encoding="utf-8"
-    )
-    (proj / "package.json").write_text(json.dumps({"version": "pkg"}), encoding="utf-8")
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    payload = json.loads(proc.stdout)
-    assert payload["version"] == "skill-wins"
-    assert payload["source"] == f"{skill}/VERSION"
+@pytest.mark.parametrize("skills", [".claude/skills", "_bmad/ucg"])
+def test_a_cli_install_reads_the_install_version_never_the_users_package_json(tmp_path, skills):
+    """The CLI installer copies the skill under .claude/skills/ and _bmad/ucg/ and writes _bmad/ucg/VERSION.
+
+    Neither copy has a root of its own: UCG_ROOT is proj/.claude or proj/_bmad, which hold no package.json or
+    marketplace.json, so the user's own, in proj, are never read.
+    """
+    project = _user_project(tmp_path / "proj")
+    script = _copy_script(project / skills / "ultracode-goal" / "scripts")
+    assert _version(script, project) == {"version": None, "source": "N/A"}
+    _install_version(project, "7.1.0\n")
+    assert _version(script, project) == {"version": "7.1.0", "source": "_bmad/ucg/VERSION"}
 
 
-def test_version_malformed_marketplace_falls_through_to_package(tmp_path):
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    (proj / ".claude-plugin").mkdir(parents=True)
-    skill.mkdir()
-    (proj / ".claude-plugin" / "marketplace.json").write_text(
-        "{ this is not valid json {{{", encoding="utf-8"
-    )
-    (proj / "package.json").write_text(json.dumps({"version": "5.5.5"}), encoding="utf-8")
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == {"version": "5.5.5", "source": "package.json"}
+def test_a_plugin_install_reads_the_plugins_root_never_the_users_project(tmp_path):
+    """#234: the user's package.json and marketplace.json are the project's, never UCG's version."""
+    plugin = tmp_path / "plugins" / "cache" / UCG / UCG / "7.1.0"
+    _marketplace(plugin, {"name": UCG, "version": "7.1.0"})
+    _package(plugin)
+    project = _user_project(tmp_path / "proj")
+    assert _version(_ucg_checkout(plugin), project) == {"version": "7.1.0", "source": ".claude-plugin/marketplace.json"}
 
 
-def test_version_marketplace_missing_key_falls_through(tmp_path):
-    """marketplace.json present but missing plugins[0].version -> next rung."""
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    (proj / ".claude-plugin").mkdir(parents=True)
-    skill.mkdir()
-    (proj / ".claude-plugin" / "marketplace.json").write_text(
-        json.dumps({"plugins": [{"name": "x"}]}), encoding="utf-8"
-    )
-    (proj / "package.json").write_text(json.dumps({"version": "6.0.0"}), encoding="utf-8")
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == {"version": "6.0.0", "source": "package.json"}
+def test_a_plugin_without_its_version_files_is_null_never_the_users_version(tmp_path):
+    project = _user_project(tmp_path / "proj")
+    assert _version(_ucg_checkout(tmp_path / "plugin"), project) == {"version": None, "source": "N/A"}
 
 
-def test_version_empty_version_file_falls_through(tmp_path):
-    """An empty/whitespace VERSION file is not a hit; later rungs win."""
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    (proj / "_bmad" / "ucg").mkdir(parents=True)
-    skill.mkdir()
-    (proj / "_bmad" / "ucg" / "VERSION").write_text("   \n  ", encoding="utf-8")
-    (skill / "VERSION").write_text("7.7.7", encoding="utf-8")
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    payload = json.loads(proc.stdout)
-    assert payload["version"] == "7.7.7"
-    assert payload["source"] == f"{skill}/VERSION"
+def test_an_install_version_saved_with_a_byte_order_mark_gives_the_bare_version(tmp_path):
+    project = tmp_path / "proj"
+    (project / "_bmad" / "ucg").mkdir(parents=True)
+    (project / "_bmad" / "ucg" / "VERSION").write_bytes(b"\xef\xbb\xbf7.1.0\n")
+    assert _version(_ucg_checkout(tmp_path / "ucg"), project) == {"version": "7.1.0", "source": "_bmad/ucg/VERSION"}
 
 
-def test_version_malformed_package_json_with_nothing_else_is_null(tmp_path):
-    proj = tmp_path / "proj"
-    skill = tmp_path / "skill"
-    proj.mkdir()
-    skill.mkdir()
-    (proj / "package.json").write_text("not json at all }{", encoding="utf-8")
-    proc = _version(proj, skill)
-    assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == {"version": None, "source": "N/A"}
+def test_an_empty_install_version_is_null(tmp_path):
+    project = tmp_path / "proj"
+    _install_version(project, "   \n  ")
+    assert _version(_ucg_checkout(tmp_path / "ucg"), project) == {"version": None, "source": "N/A"}
+
+
+def _module_at(fake_path: str):
+    """The script's source run as a module whose __file__ is fake_path, which need not exist."""
+    module = types.ModuleType("health_check_fp_at_a_fake_path")
+    module.__file__ = fake_path
+    exec(compile(SCRIPT.read_text(encoding="utf-8"), fake_path, "exec"), module.__dict__)
+    return module
+
+
+@pytest.mark.parametrize("depth", [0, 1, 2])
+def test_a_shallow_script_has_no_root_rungs(tmp_path, capsys, depth):
+    """Copied to a folder with fewer than four parents, the script has no root of its own: no crash, no root rung."""
+    fake = Path(Path.cwd().anchor, *["d"] * depth, SCRIPT.name)
+    module = _module_at(str(fake))
+    assert module.UCG_ROOT is None
+    project = tmp_path / "proj"
+    _user_project(project)
+    code, payload = _main(module, capsys, "version", "--project-root", str(project))
+    assert (code, payload) == (0, {"version": None, "source": "N/A"})
+    _install_version(project, "7.1.0")
+    code, payload = _main(module, capsys, "version", "--project-root", str(project))
+    assert (code, payload) == (0, {"version": "7.1.0", "source": "_bmad/ucg/VERSION"})
+
+
+def test_a_test_points_the_root_elsewhere_through_the_module_constant(tmp_path, mod, monkeypatch, capsys):
+    root = tmp_path / "ucg"
+    _package(root, version="6.0.0")
+    monkeypatch.setattr(mod, "UCG_ROOT", root)
+    assert _main(mod, capsys, "version", "--project-root", str(tmp_path / "proj")) == (
+        0, {"version": "6.0.0", "source": "package.json"})
+
+
+def test_version_takes_no_skill_root(tmp_path):
+    """The {skill-root}/VERSION rung is gone, and with it the flag."""
+    proc = _run("version", "--project-root", str(tmp_path), "--skill-root", str(tmp_path))
+    assert proc.returncode == 2
+    blocks = [b for b in _fenced_blocks(_reference()) if "health_check_fp.py version" in b]
+    assert blocks == ["uv run {skill-root}/scripts/health_check_fp.py version --project-root {project-root}\n"]
 
 
 # --- the health check's own stage -----------------------------------------------
