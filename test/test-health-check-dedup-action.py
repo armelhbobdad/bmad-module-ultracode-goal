@@ -20,7 +20,8 @@ Covers:
     `[health-check]...`. An issue with no `fp-*` label (a reporter without
     push access sets none) gets the `fp-*` label created, a 422 ignored, then
     the labels it lacks added, from its title or else its body's Fingerprint
-    and Severity sections, and is then deduped or flagged as a labeled issue
+    and Severity sections (the fingerprint read in any letter case, and
+    labeled in lower case), and is then deduped or flagged as a labeled issue
     is; an unfilled template (its placeholder, or only a `Section
     fingerprint:` line) gets no call, and a labeled issue no label call
   - A shared section fingerprint under another defect key (a body line, or a
@@ -347,6 +348,25 @@ def test_an_unlabeled_exact_duplicate_is_labeled_then_closed(tmp_path):
 def test_a_template_filing_whose_labels_were_dropped_is_labeled_from_its_body(tmp_path, body):
     calls = _run(tmp_path, _bare(12, "[health-check] x", body), [])
     assert calls == [["createLabel", FP_T], _labeled(12, "health-check", "workflow-improvement", "bug", FP_T)]
+
+
+@needs_node
+@pytest.mark.parametrize("line", ["`FP-ABC1234`", "Fp-AbC1234", "  `fp-ABC1234`  "])
+def test_the_bodys_fingerprint_is_read_whatever_its_case(tmp_path, line):
+    """Case-blind, as the title is: the report is labeled and deduped under the fingerprint in lower case."""
+    body = f"## Severity\n`gap`\n\n## Fingerprint\n{line}\n\nSection fingerprint: `{FP_S}`\n"
+    calls = _run(tmp_path, _bare(12, "[health-check] x", body), [])
+    assert calls == [["createLabel", "fp-abc1234"],
+                     _labeled(12, "health-check", "workflow-improvement", "gap", "fp-abc1234")]
+    # An earlier open issue under the lower-case label is the canonical one.
+    calls = _run(tmp_path, _bare(12, "[health-check] x", body), [_issue(9, "fp-abc1234", FP_S)])
+    assert calls[:2] == [["createLabel", "fp-abc1234"],
+                         _labeled(12, "health-check", "workflow-improvement", "gap", "fp-abc1234")]
+    assert calls[2:] == [
+        ["comment", 12, calls[2][2]], ["label", 12, ["duplicate"]], ["update", 12, "closed", "not_planned"],
+        ["react", 9, "+1"],
+    ]
+    assert calls[2][2].startswith("Auto-deduped: same fingerprint `fp-abc1234` as #9.")
 
 
 @needs_node

@@ -32,3 +32,6 @@ skills/**/assets/*.workflow.js
 # Test fixtures — hand-crafted artifact sets (some deliberately malformed) that
 # must stay byte-exact for the fail-closed / deterministic kernel tests.
 skills/**/scripts/tests/fixtures/
+
+# Byte-identical with Skill Forge's copy, which its prettier ignores (test/fixtures/**).
+test/fixtures/health-check-shared.json

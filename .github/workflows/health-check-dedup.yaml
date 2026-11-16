@@ -180,13 +180,13 @@ jobs:
                 return lines.slice(start + 1, end < 0 ? lines.length : end);
               };
               const fp = section('fingerprint')
-                .map(l => /^\s*(`?)(fp-[0-9a-f]{7})\1\s*$/.exec(l))
+                .map(l => /^\s*(`?)(fp-[0-9a-f]{7})\1\s*$/i.exec(l))
                 .find(Boolean);
               if (!fp) return null;
               // The severity is the section's first line, alone but for backticks or emphasis.
               const first = section('severity').find(l => l.trim() !== '') || '';
               const severity = /^[\s`*_]*(bug|friction|gap)[\s`*_]*$/i.exec(first);
-              return { severity: severity ? severity[1].toLowerCase() : null, fp: fp[2], from: 'body' };
+              return { severity: severity ? severity[1].toLowerCase() : null, fp: fp[2].toLowerCase(), from: 'body' };
             }
 
             // The reporter could not create the fp-* label: create it, then add each label the report lacks.

@@ -54,7 +54,7 @@ Profile (`production | light`), Run mode (`attended | headless`), and Module Ver
 **Module Version comes from the script:**
 
 ```
-uv run {skill-root}/scripts/health_check_fp.py version --project-root {project-root} --skill-root {skill-root}
+uv run {skill-root}/scripts/health_check_fp.py version --project-root {project-root}
 ```
 
 → `{"version", "source"}`. Write `version` into the Environment table; write `N/A` when it is `null`, or when the call fails or prints no JSON.

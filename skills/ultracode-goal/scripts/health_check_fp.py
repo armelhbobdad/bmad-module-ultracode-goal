@@ -48,12 +48,14 @@ Subcommands:
           a leading numbering token (`1b.`, `5a-ii.`, `4-headless.`),
           lower-case, turn each run of characters that are not ASCII letters or
           digits into `-`, and trim hyphens.
-        defect_name: keep its last path component (after `/` or `\\`), drop a
-          trailing `:N` or `:N-M` line suffix, a known file extension
-          (KNOWN_EXTENSIONS) and then leading dashes and underscores; split at whitespace, `_`, `-`, `.`
-          and each lower-case letter followed by an upper-case one; drop each
-          character that is not an ASCII letter or digit; lower-case; keep the
-          last four words, joined by `-`. A name that yields no word exits 1.
+        defect_name: drop surrounding whitespace, backticks and quotes, keep
+          its last path component (after `/` or `\\`), drop a trailing `:N`,
+          `:N-M` or `:N:M` line suffix, a known file extension
+          (KNOWN_EXTENSIONS) and then leading dashes and underscores; split at
+          whitespace, `_`, `-`, `.` and each lower-case letter followed by an
+          upper-case one; drop each character that is not an ASCII letter or
+          digit; lower-case; keep the last four words, joined by `-`. A name
+          that yields no word exits 1.
         short_description: optional; the issue title's description. It
           exits 1 when it holds a backtick, `$`, a double quote, a backslash,
           `!` or a character that is not printable (a tab, a line break, NUL,
@@ -148,17 +150,25 @@ Subcommands:
       so its records can be repaired by hand; when that rename fails, nothing
       is written. Emit {"written": B, "fp": FP, "record": <what the cache now
       holds under FP>, "set_aside": <the renamed corrupt cache> | null}.
-  version --project-root PATH --skill-root PATH
-      Resolve the module version off a deterministic first-hit-wins probe ladder
-      and emit {"version": "<resolved>", "source": "<which probe hit>"} — or
-      {"version": null, "source": "N/A"} when nothing hits. A probe that exists
-      but is unreadable/malformed (bad JSON, missing key, empty string) falls
-      through to the next rung — it never crashes. The ladder is:
-        1. <project-root>/_bmad/ucg/VERSION   (plain text)  -> "_bmad/ucg/VERSION"
-        2. <skill-root>/VERSION               (plain text)  -> "{skill-root}/VERSION"
-        3. <project-root>/.claude-plugin/marketplace.json    JSON plugins[0].version
-                                                            -> "marketplace.json"
-        4. <project-root>/package.json         JSON version  -> "package.json"
+  version --project-root PATH
+      The version of the UltraCode Goal this script belongs to, never the
+      user's project's: emit {"version": V, "source": S}, or {"version": null,
+      "source": "N/A"} when no rung gives one (exit 0). UCG's own root is the
+      folder three levels above this script's (UCG_ROOT: a checkout's or a
+      plugin's root), and there is none when the script sits fewer than four
+      folders deep. The first rung that gives a non-empty version wins; a file
+      that is missing, unreadable or malformed, or that names another package,
+      falls through to the next:
+        1. UCG_ROOT/.claude-plugin/marketplace.json: the version of its
+           `plugins` entry named bmad-module-ultracode-goal (PACKAGE_NAME)
+                                       -> ".claude-plugin/marketplace.json"
+        2. UCG_ROOT/package.json, when its name is PACKAGE_NAME: its version
+                                       -> "package.json"
+        3. <project-root>/_bmad/ucg/VERSION, which only UCG's CLI installer
+           writes, for the copy it installs under .claude/skills/, which has
+           no root of its own (plain text)
+                                       -> "_bmad/ucg/VERSION"
+      UCG's root comes first, so a stale _bmad/ucg/VERSION never masks it.
   queue --queue-dir DIR --body-file F --title TITLE --repo REPO
       Read F (a missing or unreadable F exits 1 and creates nothing). F
       opens with the body_header `fingerprint` prints (after a UTF-8 BOM and
@@ -253,6 +263,14 @@ URL_PREFIX = "https://"
 # The stage references a section_heading is looked up in: the skill's own
 # references/ folder, beside scripts/, wherever the skill is installed.
 REFERENCES_DIR = Path(__file__).resolve().parent.parent / "references"
+# The root of the UltraCode Goal this script belongs to, a checkout's or a plugin's: the folder above skills/, three
+# levels above this script's. None when the script sits fewer than four folders deep. `version` reads it at call time,
+# so a test can point it elsewhere.
+_PARENTS = Path(__file__).resolve().parents
+UCG_ROOT = _PARENTS[3] if len(_PARENTS) > 3 else None
+# The name UCG's package.json and its marketplace's plugin entry carry: a file at UCG_ROOT that names another package
+# (the user's project, when UCG_ROOT is not UCG's) gives no version.
+PACKAGE_NAME = "bmad-module-ultracode-goal"
 # An ATX heading line: up to three spaces, one to six `#`, then its text.
 _HEADING_LINE_RE = re.compile(r" {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*")
 # The optional closing sequence of an ATX heading (`## Title ##`).
@@ -268,7 +286,9 @@ KNOWN_EXTENSIONS = (
     ".py", ".md", ".json", ".yaml", ".yml", ".toml", ".js", ".cjs", ".mjs", ".ts", ".sh", ".csv", ".txt",
 )
 _PATH_SEP_RE = re.compile(r"[/\\]")
-_LINE_SUFFIX_RE = re.compile(r":[0-9]+(?:-[0-9]+)?$")
+_LINE_SUFFIX_RE = re.compile(r":[0-9]+(?:[-:][0-9]+)?$")
+# What a name copied from Markdown or a log may be wrapped in.
+_NAME_WRAPPERS = "`'\""
 _NAME_SPLIT_RE = re.compile(r"[\s_.-]+")
 _CASE_BOUNDARY_RE = re.compile(r"(?<=[a-z])(?=[A-Z])")
 _NOT_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
@@ -395,8 +415,9 @@ def section_slug(heading: str) -> str:
 
 def defect_key(name: str) -> str:
     """The defect-key rule; an empty string when the name yields no word."""
-    text = _PATH_SEP_RE.split(name.strip())[-1]  # `scripts/gate_eval.py` names `gate_eval.py`
-    text = _LINE_SUFFIX_RE.sub("", text)  # `gate_eval.py:42` and `:42-50` name it too
+    text = name.strip().strip(_NAME_WRAPPERS).strip()  # `gate_eval.py`, in backticks or quotes
+    text = _PATH_SEP_RE.split(text)[-1]  # `scripts/gate_eval.py` names `gate_eval.py`
+    text = _LINE_SUFFIX_RE.sub("", text)  # `gate_eval.py:42`, `:42-50` and `:42:7` name it too
     for ext in KNOWN_EXTENSIONS:
         if text.lower().endswith(ext) and len(text) > len(ext):
             text = text[: -len(ext)]
@@ -1065,64 +1086,65 @@ def cmd_record(args: argparse.Namespace) -> int:
 
 
 def _read_plain_version(path: Path) -> str | None:
-    """Read a plain-text VERSION file. Missing/unreadable/empty -> None."""
+    """Read a plain-text VERSION file, a UTF-8 byte order mark dropped. Missing/unreadable/empty -> None."""
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
     except (FileNotFoundError, OSError):
         return None
     stripped = text.strip()
     return stripped or None
 
 
-def _read_json_version(path: Path, *keys) -> str | None:
-    """Read a JSON file and walk `keys` (str=dict key, int=list index).
-
-    Missing file, malformed JSON, a missing/typed-wrong key, or an empty/
-    non-string resolved value all yield None so the caller falls through.
-    """
+def _read_json(path: Path):
+    """The JSON value in path; None when it is missing, unreadable or malformed."""
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
     except (FileNotFoundError, OSError):
         return None
     try:
-        node = json.loads(text)
-    except ValueError:
+        return json.loads(text)
+    except (ValueError, RecursionError):
         return None
-    for key in keys:
-        if isinstance(key, int):
-            if not isinstance(node, list) or not (-len(node) <= key < len(node)):
-                return None
-            node = node[key]
-        else:
-            if not isinstance(node, dict) or key not in node:
-                return None
-            node = node[key]
-    if not isinstance(node, str):
+
+
+def _json_version(node) -> str | None:
+    """The "version" of a JSON object, stripped; None when node is no object or that is no non-empty string."""
+    version = node.get("version") if isinstance(node, dict) else None
+    if not isinstance(version, str):
         return None
-    stripped = node.strip()
-    return stripped or None
+    return version.strip() or None
+
+
+def _marketplace_version(root: Path) -> str | None:
+    """The version of the plugin entry named PACKAGE_NAME in root's .claude-plugin/marketplace.json."""
+    data = _read_json(root / ".claude-plugin" / "marketplace.json")
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, list):
+        return None
+    return _json_version(next((p for p in plugins if isinstance(p, dict) and p.get("name") == PACKAGE_NAME), None))
+
+
+def _package_version(root: Path) -> str | None:
+    """The version in root's package.json, when its name is PACKAGE_NAME."""
+    data = _read_json(root / "package.json")
+    if not isinstance(data, dict) or data.get("name") != PACKAGE_NAME:
+        return None
+    return _json_version(data)
 
 
 def cmd_version(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).expanduser()
-    skill_root = Path(args.skill_root).expanduser()
+    root = UCG_ROOT
 
-    # First-hit-wins probe ladder. Each rung that exists-but-is-malformed
-    # returns None and falls through to the next.
-    ladder = (
-        (_read_plain_version(project_root / "_bmad" / "ucg" / "VERSION"), "_bmad/ucg/VERSION"),
-        (_read_plain_version(skill_root / "VERSION"), f"{skill_root}/VERSION"),
-        (
-            _read_json_version(
-                project_root / ".claude-plugin" / "marketplace.json",
-                "plugins",
-                0,
-                "version",
-            ),
-            "marketplace.json",
-        ),
-        (_read_json_version(project_root / "package.json", "version"), "package.json"),
-    )
+    # First hit wins: UCG's own root, then the version file only UCG's CLI installer writes. A rung whose file is
+    # missing, malformed or another package's gives None and falls through to the next.
+    ladder = []
+    if root is not None:
+        ladder += [
+            (_marketplace_version(root), ".claude-plugin/marketplace.json"),
+            (_package_version(root), "package.json"),
+        ]
+    ladder.append((_read_plain_version(project_root / "_bmad" / "ucg" / "VERSION"), "_bmad/ucg/VERSION"))
 
     for version, source in ladder:
         if version is not None:
@@ -1294,9 +1316,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     rec_parser.set_defaults(func=cmd_record)
 
-    ver_parser = sub.add_parser("version", help="Resolve the module version off the probe ladder.")
-    ver_parser.add_argument("--project-root", required=True, dest="project_root")
-    ver_parser.add_argument("--skill-root", required=True, dest="skill_root")
+    ver_parser = sub.add_parser(
+        "version", help="The version of the UltraCode Goal this script belongs to, never the user's project's."
+    )
+    ver_parser.add_argument(
+        "--project-root", required=True, dest="project_root",
+        help="The user's project: its _bmad/ucg/VERSION, which UCG's CLI installer writes, is the last rung.",
+    )
     ver_parser.set_defaults(func=cmd_version)
 
     queue_parser = sub.add_parser(
