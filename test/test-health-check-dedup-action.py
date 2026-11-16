@@ -24,6 +24,12 @@ Covers:
     labeled in lower case), and is then deduped or flagged as a labeled issue
     is; an unfilled template (its placeholder, or only a `Section
     fingerprint:` line) gets no call, and a labeled issue no label call
+  - Every label name and a `Section fingerprint:` line are read in any letter
+    case: an issue labeled `FP-ABC1234` is deduped as one labeled
+    `fp-abc1234`, an upper-case section line is flagged as a lower-case one
+    is, a `Health-Check` label acts as `health-check` does, an issue labeled
+    `Possible-Duplicate` is not flagged again, and a report labeled
+    `Health-Check` gets no second `health-check` label
   - A shared section fingerprint under another defect key (a body line, or a
     keyless issue's label) with an earlier open issue gets the
     `possible-duplicate` label, then one "Possible duplicate" comment, and is
@@ -70,10 +76,11 @@ const withLabels = i => ({ ...i, labels: (i.labels || []).map(name => ({ name })
 const current = { state: 'open', ...withLabels(scenario.issue) };
 const open = scenario.open.map(withLabels).filter(i => i.number !== current.number);
 if (current.state === 'open') open.push(current);
+// GitHub matches a label name in any letter case, as it holds one label per name in any case.
 const listForRepo = async ({ labels, state }) => {
   if (state !== 'open') throw new Error(`listForRepo asked for state ${state}`);
-  const want = labels.split(',');
-  return { data: open.filter(i => want.every(w => i.labels.some(l => l.name === w))) };
+  const want = labels.split(',').map(w => w.toLowerCase());
+  return { data: open.filter(i => want.every(w => i.labels.some(l => l.name.toLowerCase() === w))) };
 };
 const github = {
   paginate: async (fn, params) => (await fn(params)).data,
@@ -107,6 +114,8 @@ new AsyncFunction('github', 'context', 'core', script)(github, context, core)
 """
 
 FP_A, FP_B, FP_C, FP_S = "fp-aaaaaaa", "fp-bbbbbbb", "fp-ccccccc", "fp-5555555"
+# A section fingerprint whose hex has letters, so upper-casing it changes more than its `fp-`.
+FP_U = "fp-5e5a5b5"
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="the Action's script runs under node")
 
@@ -207,11 +216,27 @@ def test_a_labeled_event_for_any_other_label_makes_no_call(tmp_path, label):
 
 
 @needs_node
-@pytest.mark.parametrize("label", ["health-check", FP_A])
+@pytest.mark.parametrize("label", ["health-check", FP_A, "Health-Check", FP_A.upper()])
 def test_a_labeled_event_for_health_check_or_a_fingerprint_acts(tmp_path, label):
     calls = _run(tmp_path, _issue(12, FP_A, FP_S), [_issue(10, FP_A, FP_S)], event="labeled", label=label)
     assert ["update", 12, "closed", "not_planned"] in calls
     assert ["react", 10, "+1"] in calls
+
+
+@needs_node
+@pytest.mark.parametrize("event, label", [("opened", None), ("labeled", "FP-ABC1234")], ids=["opened", "labeled"])
+def test_an_upper_case_fingerprint_label_is_deduped_as_one(tmp_path, event, label):
+    """A label created as `FP-ABC1234` is that fingerprint's: it is read, searched and named in lower case."""
+    calls = _run(tmp_path, _issue(12, "FP-ABC1234", FP_S), [_issue(10, "FP-ABC1234", FP_S)], event=event,
+                 label=label)
+    assert calls == [
+        ["comment", 12, calls[0][2]], ["label", 12, ["duplicate"]], ["update", 12, "closed", "not_planned"],
+        ["react", 10, "+1"],
+    ]
+    assert calls[0][2].startswith("Auto-deduped: same fingerprint `fp-abc1234` as #10.")
+    # The earlier issue's own run still closes nothing.
+    assert _run(tmp_path, _issue(10, "FP-ABC1234", FP_S), [_issue(12, "FP-ABC1234", FP_S)], event=event,
+                label=label) == []
 
 
 @needs_node
@@ -400,13 +425,15 @@ def test_a_report_with_no_severity_gets_no_severity_label(tmp_path, body):
         f"## Fingerprint\n`fp-XXXXXXX`\n**Section fingerprint:** `{FP_S}`\n",
         f"## Fingerprint\n`fp-XXXXXXX`\n- Section fingerprint: `{FP_S}`\n",
         f"## Fingerprint\n`fp-XXXXXXX`\n> Section fingerprint: `{FP_S}`\n",
+        f"## Fingerprint\n`fp-XXXXXXX`\nSECTION FINGERPRINT: `{FP_U.upper()}`\n",
     ],
     ids=["sections", "issue-template", "issue-template-unfilled", "fp-elsewhere", "bold-section-line",
-         "bulleted-section-line", "quoted-section-line"],
+         "bulleted-section-line", "quoted-section-line", "upper-case-section-line"],
 )
 @pytest.mark.parametrize("labels", [(), ("health-check", "workflow-improvement")], ids=["bare", "template-labels"])
 def test_an_unfilled_template_gets_no_label_and_no_call(tmp_path, body, labels):
     assert _run(tmp_path, _bare(12, "[health-check] x", body, *labels), [_issue(9, FP_S, None)]) == []
+    assert _run(tmp_path, _bare(12, "[health-check] x", body, *labels), [_issue(9, FP_U, None)]) == []
 
 
 @needs_node
@@ -417,8 +444,10 @@ def test_an_unfilled_template_gets_no_label_and_no_call(tmp_path, body, labels):
         (_bare(12, "[health-check] x", _template(fp=FP_T, severity="gap", section_fp=FP_S),
                "health-check", "workflow-improvement"), ["gap", FP_T]),
         (_bare(12, TITLE_B, _body(FP_S), "health-check", "bug"), ["workflow-improvement", FP_B]),
+        # A label the repository spells in another letter case is the same label.
+        (_bare(12, TITLE_B, _body(FP_S), "Health-Check", "BUG"), ["workflow-improvement", FP_B]),
     ],
-    ids=["template-labels", "title"],
+    ids=["template-labels", "title", "title-labels-in-another-case"],
 )
 def test_only_the_missing_labels_are_added(tmp_path, issue, added):
     calls = _run(tmp_path, issue, [])
@@ -486,6 +515,30 @@ def test_only_the_later_of_two_reports_is_flagged(tmp_path, older, newer):
     _assert_flagged(_run(tmp_path, newer, [older]), 12, "#9", FP_S)
 
 
+def _upper_body(section_fp: str) -> str:
+    """A body whose section line was retyped in upper case."""
+    return _body(None).replace("## Finding", f"SECTION FINGERPRINT: `{section_fp.upper()}`\n\n## Finding")
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "newer, older",
+    [
+        # The new issue's section line in upper case, against a keyless issue's label.
+        (_issue(12, FP_B, None, body=_upper_body(FP_U)), _issue(9, FP_U, None)),
+        # An earlier keyed issue's section line in upper case.
+        (_issue(12, FP_B, FP_U), _issue(9, FP_C, None, body=_upper_body(FP_U))),
+        # A keyless issue's label in upper case, and a new keyless one under it.
+        (_issue(12, FP_B, FP_U), _issue(9, FP_U.upper(), None)),
+        (_issue(12, FP_U.upper(), None), _issue(9, FP_C, FP_U)),
+    ],
+    ids=["own-line", "their-line", "their-label", "own-label"],
+)
+def test_an_upper_case_section_fingerprint_is_flagged(tmp_path, newer, older):
+    """Read in any letter case, as the body's Fingerprint line is, and named in lower case."""
+    _assert_flagged(_run(tmp_path, newer, [older]), 12, "#9", FP_U)
+
+
 @needs_node
 def test_an_existing_possible_duplicate_label_is_not_an_error(tmp_path):
     calls = _run(tmp_path, _issue(12, FP_B, FP_S), [_issue(9, FP_S, None)], label_exists=True)
@@ -493,8 +546,10 @@ def test_an_existing_possible_duplicate_label_is_not_an_error(tmp_path):
 
 
 @needs_node
-def test_an_issue_already_flagged_makes_no_call(tmp_path):
-    flagged = _issue(12, FP_B, FP_S, "possible-duplicate")
+@pytest.mark.parametrize("label", ["possible-duplicate", "Possible-Duplicate"])
+def test_an_issue_already_flagged_makes_no_call(tmp_path, label):
+    # A re-run must not post a second comment, whatever case the repository's label is spelled in.
+    flagged = _issue(12, FP_B, FP_S, label)
     assert _run(tmp_path, flagged, [_issue(9, FP_S, None)]) == []
 
 
@@ -555,9 +610,9 @@ def test_the_header_says_an_unlabeled_report_is_labeled_from_its_title_or_body()
 
 def _section_re() -> re.Pattern:
     """The Action's SECTION_RE, as a Python pattern (the JS literal uses only syntax both share)."""
-    match = re.search(r"const SECTION_RE = /(.+)/m;", _script())
-    assert match, "SECTION_RE is a multiline regex literal in the Action's script"
-    return re.compile(match.group(1), re.MULTILINE)
+    match = re.search(r"const SECTION_RE = /(.+)/mi;", _script())
+    assert match, "SECTION_RE is a multiline, case-blind regex literal in the Action's script"
+    return re.compile(match.group(1), re.MULTILINE | re.IGNORECASE)
 
 
 def test_the_section_line_of_a_filed_body_matches_the_actions_section_re():

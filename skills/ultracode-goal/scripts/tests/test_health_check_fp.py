@@ -332,6 +332,15 @@ def test_real_stage_headings_give_their_slugs(stage, heading, slug):
         ("## Step 2.5 is not numbering", "step-2-5-is-not-numbering"),
         ("## 3.5 GHz is not numbering", "3-5-ghz-is-not-numbering"),
         ("## Closing hashes ##", "closing-hashes"),
+        # An accented letter gives its base letter, and NFKD (not NFD) turns a superscript or a ligature into its
+        # plain characters.
+        ("Résumé du run", "resume-du-run"),
+        ("## 2. État Ünïcode", "etat-unicode"),
+        ("Phase ² ﬁnal", "phase-2-final"),
+        # A letter NFKD cannot split stays, so it is one of the other characters.
+        ("Straße", "stra-e"),
+        # Folded before the numbering is read: a full-width `１.` is the numbering `1.`.
+        ("１. Run the gate", "run-the-gate"),
     ],
 )
 def test_the_slug_rule(mod, heading, slug):
@@ -407,8 +416,61 @@ def test_a_heading_line_in_fenced_code_or_frontmatter_is_no_heading(tmp_path, mo
         ('"gate_eval.py"', "gate-eval"),
         ("  `scripts/gate_eval.py:42:7`  ", "gate-eval"),
         ("`composeStories`", "compose-stories"),
-        # Only a lower-case letter followed by an upper-case one splits, so an acronym stays one word.
+        # A wrapper that closes before the location, and wrappers and whitespace in layers.
+        ("`gate_eval.py`:42", "gate-eval"),
+        ('"scripts/gate_eval.py":42:7', "gate-eval"),
+        ("` 'gate_eval.py' `", "gate-eval"),
+        ("**`gate_eval.py`**", "gate-eval"),
+        # Curly quotes, brackets, emphasis and the punctuation of a sentence: each edge character trails some name.
+        ("“gate_eval.py”", "gate-eval"),
+        ("‘gate_eval.py’", "gate-eval"),
+        ("(gate_eval.py)", "gate-eval"),
+        ("[gate_eval.py]", "gate-eval"),
+        ("{gate_eval.py}", "gate-eval"),
+        ("<gate_eval.py>", "gate-eval"),
+        ("*gate_eval.py*", "gate-eval"),
+        ("gate_eval.py.", "gate-eval"),
+        ("gate_eval.py,", "gate-eval"),
+        ("gate_eval.py;", "gate-eval"),
+        ("gate_eval.py?!", "gate-eval"),
+        ("composeStories()", "compose-stories"),
+        # An opening bracket or quote is an edge at the end of a name too.
+        ("gate_eval.py ([{<‘“", "gate-eval"),
+        # A compiler's or an editor's location, and a GitHub anchor.
+        ("gate_eval.py:42:7:", "gate-eval"),
+        ("gate_eval.py:42:7-12", "gate-eval"),
+        ("gate_eval.py:42-", "gate-eval"),
+        ("gate_eval.py:", "gate-eval"),
+        ("gate_eval.py#L42", "gate-eval"),
+        ("gate_eval.py#L42-L50", "gate-eval"),
+        ("gate_eval.py#L42-50", "gate-eval"),
+        ("gate_eval.py#L42C7", "gate-eval"),
+        ("gate_eval.py#L42-L50C3", "gate-eval"),
+        ("gate_eval.py#L42C7-L50C3", "gate-eval"),
+        ("gate.md?plain=1#L42", "gate"),
+        # The longest anchors: a search that started any later would miss their `?plain=1`.
+        ("gate.md?plain=1#L42-L50", "gate"),
+        ("gate.md?plain=1#L42C7-L50C3", "gate"),
+        # A location inside a wrapper, then more: the location and the edges go until the name stops changing.
+        ("`gate_eval.py:42`:", "gate-eval"),
+        ("(gate_eval.py:42):", "gate-eval"),
+        ("gate_eval.py:1:2:3:4", "gate-eval"),
+        # Up to two more numbers follow the first, and only a `:` starts a location: a fourth joined by `-` makes none.
+        ("gate_eval.py:42-50-60", "gate-eval"),
+        ("gate_eval.py:42-50-60-70", "py42-50-60-70"),
+        # An accented letter gives its base letter, and NFKD (not NFD) a ligature its plain letters.
+        ("ÉtatMachine", "etat-machine"),
+        # A kept accent mark would block the case split: the mark must go.
+        ("caféMachine", "cafe-machine"),
+        ("Ünïcode", "unicode"),
+        ("ﬁleLoader", "file-loader"),
+        # A letter NFKD cannot split stays, and is dropped as any character that is not an ASCII letter or digit.
+        ("Øresund", "resund"),
+        ("Straße", "strae"),
+        # Only a lower-case letter followed by an upper-case one splits, so an acronym stays one word, and a letter
+        # and a digit stay together.
         ("getHTTPResponse", "get-httpresponse"),
+        ("HTTP2Client", "http2client"),
     ],
 )
 def test_a_name_gives_its_defect_key(name, key):
@@ -418,11 +480,47 @@ def test_a_name_gives_its_defect_key(name, key):
     assert payload["fp"] == _expected_fp("bug", "gate", "verdict-mapping", key)[0]
 
 
-@pytest.mark.parametrize("name", ["--__", "...", "'", "`", '""', "` `"])
+@pytest.mark.parametrize(
+    "name",
+    # A name in an alphabet other than the Latin one folds to no ASCII letter, so it yields no word.
+    ["--__", "...", "'", "`", '""', "` `", "**", "(“”)", "#L42", ":42:7",
+     "Проверка"],
+)
 def test_a_name_that_yields_no_word_exits_one(name):
     code, payload = _fingerprint_stdin("bug", "gate", {"defect_name": name}, "--section-slug=verdict-mapping")
     assert code == 1
     assert "yields no word" in payload["error"]
+
+
+def test_the_longest_location_holds_the_most_non_digits_the_search_reads(mod):
+    """The location search starts no further back than _NAME_LOCATION_NON_DIGITS characters that are not digits, so
+    no location may hold more: the longest form holds exactly that many."""
+    longest = "?plain=1#L42C7-L50C3"
+    assert mod._NAME_LOCATION_RE.fullmatch(longest)
+    assert sum(ch not in "0123456789" for ch in longest) == mod._NAME_LOCATION_NON_DIGITS
+
+
+@pytest.mark.parametrize(
+    "name, key",
+    [
+        ("x" + ":1" * 50_000, "x"),  # one location after another, each dropped in its own round
+        ("x" + ":1`" * 33_334, "x"),  # a location, then an edge, then a location, and so on
+        ("x" + ":`" * 50_000, "x"),
+        ("x" + (":" + "1" * 999) * 100, "x"),  # long numbers, each searched again by the rounds after it
+        ("x:" + "1" * 100_000 + "y", "x" + "1" * 100_000 + "y"),  # no location, however long its number
+        ("a" + " " * 100_000 + "b", "a-b"),  # a run of edges that does not end the name
+        ("(" * 50_000 + "x" + ")" * 50_000, "x"),
+    ],
+    ids=["locations", "locations-and-edges", "lone-colons-and-edges", "long-numbers", "long-number", "spaces",
+         "brackets"],
+)
+def test_a_long_name_gives_its_key_in_linear_time(mod, name, key):
+    """A 100,000-character name: a search for each location from the start, or a backtracking edge pattern, would
+    take minutes."""
+    assert len(name) >= 100_000
+    started = time.perf_counter()
+    assert mod.defect_key(name) == key
+    assert time.perf_counter() - started < 2
 
 
 @pytest.mark.parametrize(

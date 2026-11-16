@@ -1,5 +1,0 @@
-type: fixed
-scope: ultracode-goal
-summary: |
-  `health_check_fp.py fingerprint` now drops backticks and straight quotes (`'` and `"`) from both ends of a defect name, once its surrounding whitespace is gone, and a trailing `:N:M` line and column suffix, as it already dropped a trailing `:N` or `:N-M`: `` `gate_eval.py` ``, `'gate_eval.py'`, `"gate_eval.py"` and `gate_eval.py:42:7` now give the defect key `gate-eval`, where they gave `gate-eval-py` and `gate-eval-py42`. Nothing else is dropped, so a name with text after its closing backtick (`` `gate_eval.py`:42 ``), in curly quotes, or with text after its suffix (`gate_eval.py:42:7:`) still gives a key of its own. A defect filed before under the old key, from a name with backticks, quotes or a column, now gets another fingerprint, so its earlier issue matches it only through the section fingerprint, as a possible duplicate. The dedup Action also reads an issue body's `## Fingerprint` line in any letter case, so a report filed without labels whose fingerprint is written `FP-ABC1234` is labeled and deduped under `fp-abc1234`. Both rules now match Skill Forge's.
-issues: [226]
