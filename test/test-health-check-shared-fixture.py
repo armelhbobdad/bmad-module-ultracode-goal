@@ -341,8 +341,9 @@ def _run_compare(tmp_path: Path, mode: str) -> tuple[subprocess.CompletedProcess
     script = tmp_path / "step.sh"
     script.write_text(_compare_step()["run"], encoding="utf-8")
     log = tmp_path / "curl.log"
+    # TMPDIR keeps the step's mktemp file inside tmp_path, so a run leaves nothing behind.
     env = {**os.environ, **_compare_step()["env"], "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-           "FAKE_CURL_MODE": mode, "FAKE_CURL_BODY": str(FIXTURE), "FAKE_CURL_LOG": str(log)}
+           "FAKE_CURL_MODE": mode, "FAKE_CURL_BODY": str(FIXTURE), "FAKE_CURL_LOG": str(log), "TMPDIR": str(tmp_path)}
     # As Actions runs a step whose shell is bash: `bash --noprofile --norc -eo pipefail {0}`.
     proc = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], cwd=REPO_ROOT, env=env,
                           capture_output=True, text=True, timeout=60)
@@ -356,6 +357,12 @@ def test_the_drift_check_passes_on_equal_bytes(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     [call] = calls
     assert f"https://raw.githubusercontent.com/{OTHER_REPO}/{OTHER_REF}/test/fixtures/health-check-shared.json" in call
+    # The fake answers whatever it is asked, so pin what the step's branches rely on in real curl: the status on
+    # stdout (--write-out), the body in a file (--output), and exit 0 on a 404 or a 503 (no --fail), without which
+    # a missing copy would read as a failed fetch and its fix would never be named.
+    words = call.split()
+    assert "--write-out %{http_code}" in call and "--output" in words
+    assert not {"--fail", "-f", "--fail-with-body"} & set(words)
 
 
 @needs_bash
