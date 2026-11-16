@@ -72,7 +72,7 @@ OTHER_REF = "main"
 
 # The pin catches an accidental edit of the fixture. A deliberate one lands in one pull request per repository, each
 # updating this pin in its adapter: the pin alone cannot tell a one-sided edit, which the drift check catches.
-FIXTURE_SHA256 = "16c7562e8207fdfd7bcc8e1d9aec79ec7ac6adf5e24be7c137937552fca11ec5"
+FIXTURE_SHA256 = "b193cb6debc173bb7fcd86f692a703c24036df5895f800bba651055ae0e0c0a0"
 
 SECTIONS = ("about", "fingerprint", "defect_key", "section_slug", "seen", "record")
 STATUSES = ("unseen", "handled", "regression", "possible-regression", "unrecognized")

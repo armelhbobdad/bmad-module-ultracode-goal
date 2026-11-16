@@ -460,6 +460,8 @@ def test_a_heading_line_in_fenced_code_or_frontmatter_is_no_heading(tmp_path, mo
         ("gate_eval.py:42-50-60-70", "py42-50-60-70"),
         # An accented letter gives its base letter, and NFKD (not NFD) a ligature its plain letters.
         ("ÉtatMachine", "etat-machine"),
+        # A kept accent mark would block the case split: the mark must go.
+        ("caféMachine", "cafe-machine"),
         ("Ünïcode", "unicode"),
         ("ﬁleLoader", "file-loader"),
         # A letter NFKD cannot split stays, and is dropped as any character that is not an ASCII letter or digit.

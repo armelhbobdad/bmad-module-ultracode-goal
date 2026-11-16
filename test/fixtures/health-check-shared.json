@@ -406,6 +406,10 @@
       "key": "etat-machine"
     },
     {
+      "name": "caféMachine",
+      "key": "cafe-machine"
+    },
+    {
       "name": "Ünïcode",
       "key": "unicode"
     },

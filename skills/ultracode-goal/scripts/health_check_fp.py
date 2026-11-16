@@ -49,7 +49,7 @@ Subcommands:
           combining marks: an accented letter gives its base letter, and a
           ligature, a superscript or a full-width form its plain characters;
           a letter NFKD cannot split, such as `ß`, `ø`, `ł`, `æ`, `œ` or `ı`,
-          stays and is dropped below), drop a leading numbering token (`1b.`,
+          stays, so it becomes a hyphen below), drop a leading numbering token (`1b.`,
           `5a-ii.`, `4-headless.`), lower-case, turn each run of characters
           that are not ASCII letters or digits into `-`, and trim hyphens.
         defect_name: fold it as a heading is; drop whitespace and the edge
