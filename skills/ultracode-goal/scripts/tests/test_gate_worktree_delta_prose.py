@@ -218,6 +218,12 @@ worktree, so each story paid two cold builds. The rebuild now carries the
 build folders out before its removal and back after its add, around the
 order pinned below; test_gate_build_cache_prose.py pins that rule, and its
 fragment joins the surfaces scanned here.
+
+#241 lets a backfill that stages test files alone scope its sweep, opt-in,
+on top of a green full sweep at the commit it builds on. The full instrument
+the delta profile names now counts that composed sweep as the `scope=full`
+one; test_gate_backfill_scoped_sweep_prose.py pins the rule, and its fragment
+joins the surfaces scanned here.
 """
 
 from __future__ import annotations
@@ -1704,6 +1710,7 @@ def _gate_surfaces() -> dict[str, str]:
             "moved-AC fragment": (changes / "gate-moved-ac-regate.yaml").read_text(encoding="utf-8"),
             "source-reading fragment": (changes / "gate-source-reading-backfill.yaml").read_text(encoding="utf-8"),
             "build-cache fragment": (changes / "gate-worktree-keeps-build-cache.yaml").read_text(encoding="utf-8"),
+            "scoped-sweep fragment": (changes / "gate-backfill-scoped-sweep.yaml").read_text(encoding="utf-8"),
         }
     )
     return surfaces
@@ -5518,7 +5525,10 @@ def _delta_says_automate_is_scoped(para: str) -> bool:
     return bool(
         "exactly as before" not in para
         and re.search(
-            r"ADVANCE requires the full instrument \(every assessor over a `scope=full` sweep, with automate in the scope "
+            # #241: a backfill's scoped sweep, composed with the full one it
+            # builds on, is a `scope=full` sweep too.
+            r"ADVANCE requires the full instrument \(every assessor over a `scope=full` sweep, a backfill's scoped "
+            r"sweep with the full one it builds on included, with automate in the scope "
             r"\"At most one automate pass finishes per gate cycle\"",
             para,
         )
