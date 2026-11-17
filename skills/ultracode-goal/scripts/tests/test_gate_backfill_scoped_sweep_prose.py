@@ -79,7 +79,8 @@ _BASE_CAPTURE = (
 _MENTIONS = (
     "and no file but itself and the run's own records (under `{workflow.implementation_artifacts}` and "
     "`{workflow.trace_output_dir}`) mentions its name, the file name without its last extension (`a.test` for "
-    "`a.test.ts`), which you check with the Grep tool, a mention it finds in a file git does not track included;"
+    "`a.test.ts`), which you check with the Grep tool, searching for that name as a literal string, not a pattern, in "
+    "hidden files too (`.storybook/main.ts`, say), and a mention it finds in a file git does not track counts as well;"
 )
 _TEST_FILE = (
     "- every path `git diff --cached --name-only --no-renames` lists is a test file: it follows its toolchain's "
@@ -403,7 +404,9 @@ _MUTANTS = (
     ("conditions", "holds the capture of a full sweep that went green at that commit", "holds a capture"),
     ("conditions", "and no file but itself and the run's own records (under", "and no file (under"),
     ("conditions", "the file name without its last extension (`a.test` for `a.test.ts`)", "its stem"),
-    ("conditions", ", a mention it finds in a file git does not track included;", ";"),
+    ("conditions", ", and a mention it finds in a file git does not track counts as well;", ";"),
+    ("conditions", "searching for that name as a literal string, not a pattern,", "searching for that name"),
+    ("conditions", " in hidden files too (`.storybook/main.ts`, say),", ""),
     ("conditions", "it follows its toolchain's test-file naming", "it sits under a test folder or follows its "
      "toolchain's test-file naming"),
     ("conditions", "- every fix step 2 makes stays inside those files.", "- step 2 may fix any path."),
@@ -477,11 +480,13 @@ def _is_test_file(path: str, gate: str, mentions: dict[str, str]) -> bool:
     paragraph = _flat(_paragraph(gate))
     named = bool(_TEST_NAME.search(path)) or bool(re.match(r"(?:[^/]+/)*tests/[^/]+\.rs$", path))
     where = mentions.get(Path(path).stem)
-    counted = {"tracked"}
-    if "a mention it finds in a file git does not track included" in paragraph:
-        counted.add("untracked")
-    if "no file but itself and the run's own records" not in paragraph:
-        counted.add("records")
+    counted: set[str] = set()
+    if "mentions its name, the file name without its last extension" in paragraph:
+        counted.add("tracked")
+        if "a mention it finds in a file git does not track counts as well" in paragraph:
+            counted.add("untracked")
+        if "no file but itself and the run's own records" not in paragraph:
+            counted.add("records")
     return named and where not in counted
 
 
@@ -544,8 +549,9 @@ def test_replay_on_the_pre_edit_text_always_runs_the_full_sweep():
     [
         ("chains", " and holds no `sweep=` line, so a scoped sweep never builds on another;", ";",
          {"marker_has_sweep": True}),
-        ("ignores-an-untracked-mention", ", a mention it finds in a file git does not track included;", ";",
+        ("ignores-an-untracked-mention", ", and a mention it finds in a file git does not track counts as well;", ";",
          {"mentions": {"panel.test": "untracked"}}),
+        ("trusts-a-shared-module", _MENTIONS, "and that is all;", {"mentions": {"test_api": "tracked"}}),
         ("needs-no-base", "- `evidence-<story_id>/` holds the capture of a full sweep that went green at that commit "
          "(`sweep-step5-<short sha>.log`, or the numbered capture of its second sweep);\n", "",
          {"base_capture": False}),

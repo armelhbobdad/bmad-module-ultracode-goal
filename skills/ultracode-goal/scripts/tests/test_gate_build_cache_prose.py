@@ -110,8 +110,9 @@ _EXIT_2 = "Its exit 2 means the call was wrong: fix the call or carry nothing, a
 # The escalation sidecar's rule (execute.md): every escalation route writes
 # the sidecar, so the stash is emptied there.
 _DROP = (
-    "So whenever you write this sidecar and `<stash>` holds a build folder, run "
-    "`uv run {skill-root}/scripts/carry_build_cache.py drop --stash <stash>` once the sidecar is written."
+    "So whenever you are about to write this sidecar and `<stash>` holds a build folder, run "
+    "`uv run {skill-root}/scripts/carry_build_cache.py drop --stash <stash>` right before you write it, so a session "
+    "that ends between the two leaves no build behind a story it escalated."
 )
 _DROP_HEAD = "**An escalated story keeps no gate build.**"
 
@@ -346,6 +347,7 @@ def test_every_escalation_drops_the_stash():
     for old, new in (
         ("drop --stash <stash>`", "out --stash <stash>`"),
         ("and `<stash>` holds a build folder, run", "and `<stash>` holds a build folder, you may run"),
+        ("right before you write it, so a session", "once the sidecar is written, so a session"),
         ("never through a link", "through any link"),
     ):
         assert execute.count(old) == 1, old
@@ -480,7 +482,8 @@ _FRAGMENT_SAYS = (
     "After an `escalate`, `advance` or `defer` verdict nothing is carried",
     "the turn-ceiling check has kept it a re-loop",
     "whose last gate cycle logged no verdict or a `reloop`",
-    "has its stash emptied by the script's `drop` mode once its escalation sidecar is written",
+    "has its stash emptied by the script's `drop` mode right before its escalation sidecar is written",
+    "`drop` refuses any folder that is not such a stash",
     "its exit 1 never stops the rebuild or the removal, and its exit 2 means the call was wrong",
     "never carries a test-result cache (`.pytest_cache`, a turbo or nx cache) or a folder reached through a link",
     "(`criterion/`, `nextest/`, `tarpaulin/`, `llvm-cov/`, `tmp/`, `*.profraw`, `*.profdata`)",

@@ -74,8 +74,12 @@ def gate(tmp_path: Path) -> tuple[Path, Path, Path]:
     (worktree / "target" / "criterion" / "bench").mkdir(parents=True)
     (worktree / "target" / "nextest" / "default").mkdir(parents=True)
     (worktree / "target" / "tarpaulin").mkdir()
-    (worktree / "target" / "llvm-cov-target").mkdir()
+    # cargo-llvm-cov's own build folder, nested in the outer one with both
+    # Cargo markers and run results of its own.
+    _cargo_target(worktree / "target" / "llvm-cov-target", "libcov.rlib")
     (worktree / "target" / "llvm-cov-target" / "demo-1.profraw").write_text("raw\n", encoding="utf-8")
+    for name in ("tmp", "nextest", "criterion"):
+        (worktree / "target" / "llvm-cov-target" / name / "x").mkdir(parents=True)
     (worktree / "target" / "llvm-cov").mkdir()
     (worktree / "target" / "tmp" / "it").mkdir(parents=True)  # CARGO_TARGET_TMPDIR, never cleaned by Cargo
     (worktree / "target" / "debug" / "demo.profdata").write_text("merged\n", encoding="utf-8")
@@ -127,15 +131,21 @@ def test_out_deletes_the_run_results_and_carries_no_test_result_cache(gate):
     assert code == 0
     assert out["cleared"] == [
         "target/criterion",
+        "target/llvm-cov",
         "target/nextest",
         "target/tarpaulin",
-        "target/llvm-cov",
         "target/tmp",
         "target/debug/demo.profdata",
+        "target/llvm-cov-target/criterion",
+        "target/llvm-cov-target/nextest",
+        "target/llvm-cov-target/tmp",
         "target/llvm-cov-target/demo-1.profraw",
     ]
     for name in ("criterion", "nextest", "tarpaulin", "llvm-cov", "tmp"):
         assert not (stash / "target" / name).exists()
+    for name in ("criterion", "nextest", "tmp"):
+        assert not (stash / "target" / "llvm-cov-target" / name).exists()
+    assert (stash / "target" / "llvm-cov-target" / "debug" / "deps" / "libcov.rlib").is_file()
     assert not (stash / "target" / "llvm-cov-target" / "demo-1.profraw").exists()
     assert not (stash / "target" / "debug" / "demo.profdata").exists()
     assert (stash / "target" / "debug" / "deps" / "libdemo.rlib").is_file()
@@ -303,9 +313,41 @@ def test_a_missing_worktree_is_refused(tmp_path):
 _LOCKABLE = os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() != 0
 
 
+def test_a_plain_file_named_like_a_run_result_stays(tmp_path):
+    worktree = _worktree(tmp_path / "wt")
+    _cargo_target(worktree / "target")
+    (worktree / "target" / "tmp").write_text("a file, not CARGO_TARGET_TMPDIR\n", encoding="utf-8")
+    (worktree / "target" / "criterion").write_text("a file\n", encoding="utf-8")
+    stash = tmp_path / "gate-build"
+    code, out, err = _run("out", "--worktree", str(worktree), "--stash", str(stash))
+    assert code == 0, err
+    assert out["carried"] == ["target"] and out["cleared"] == []
+    assert (stash / "target" / "tmp").is_file() and (stash / "target" / "criterion").is_file()
+
+
+def test_a_run_result_that_is_a_link_is_unlinked_never_followed(tmp_path):
+    worktree = _worktree(tmp_path / "wt")
+    _cargo_target(worktree / "target")
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "kept").mkdir(parents=True)
+    try:
+        os.symlink(elsewhere, worktree / "target" / "tmp", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available here")
+    stash = tmp_path / "gate-build"
+    code, out, _ = _run("out", "--worktree", str(worktree), "--stash", str(stash))
+    assert code == 0 and out["cleared"] == ["target/tmp"]
+    assert (elsewhere / "kept").is_dir()
+    assert not os.path.lexists(stash / "target" / "tmp")
+
+
 @pytest.mark.skipif(not _LOCKABLE, reason="needs POSIX permissions and a user other than root")
-@pytest.mark.parametrize("locked", ["criterion/bench", "llvm-cov-target"])
-def test_a_run_result_that_cannot_be_deleted_keeps_the_folder_out_of_the_stash(tmp_path, locked):
+@pytest.mark.parametrize(
+    ("locked", "mode"),
+    [("criterion/bench", 0o555), ("llvm-cov-target", 0o555), ("llvm-cov-target", 0o300)],
+    ids=["undeletable-criterion", "undeletable-profraw", "unreadable-folder"],
+)
+def test_a_run_result_that_cannot_be_deleted_keeps_the_folder_out_of_the_stash(tmp_path, locked, mode):
     worktree = _worktree(tmp_path / "wt")
     _cargo_target(worktree / "target")
     folder = worktree / "target" / locked
@@ -314,16 +356,20 @@ def test_a_run_result_that_cannot_be_deleted_keeps_the_folder_out_of_the_stash(t
         "x\n", encoding="utf-8"
     )
     stash = tmp_path / "stash"
-    os.chmod(folder, 0o555)
+    os.chmod(folder, mode)
     try:
         code, out, _ = _run("out", "--worktree", str(worktree), "--stash", str(stash))
     finally:
-        os.chmod(folder, 0o755)
+        # Wherever the folder ended up, give it back its permissions.
+        for place in (folder, stash / "target" / locked):
+            if place.is_dir():
+                os.chmod(place, 0o755)
     assert code == 1
     assert [f["path"] for f in out["failed"]] == ["target"]
     assert out["carried"] == []
     assert (worktree / "target" / "debug" / "deps" / "libdemo.rlib").is_file()
     assert not stash.exists() or not any(stash.iterdir())
+    assert not list(tmp_path.glob("stash/**/*.profraw"))
 
 
 def test_back_through_a_link_in_the_new_worktree_moves_nothing(tmp_path):
@@ -367,8 +413,15 @@ def test_drop_deletes_every_folder_the_stash_holds(gate):
     assert sorted(p.name for p in stash.iterdir()) == [".gitignore"]
 
 
+def _stash(folder: Path) -> Path:
+    """A stash as `out` leaves it: named `gate-build`, ignoring itself."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / ".gitignore").write_text("*\n", encoding="utf-8")
+    return folder
+
+
 def test_drop_never_deletes_through_a_link(tmp_path):
-    stash = tmp_path / "stash"
+    stash = _stash(tmp_path / "gate-build")
     _cargo_target(stash / "target")
     elsewhere = tmp_path / "main"
     _cargo_target(elsewhere / "target")
@@ -384,6 +437,95 @@ def test_drop_never_deletes_through_a_link(tmp_path):
     # What the links point at is untouched.
     assert (elsewhere / "target" / "debug" / "deps" / "libdemo.rlib").is_file()
     assert not (stash / "target").exists()
+
+
+@pytest.mark.parametrize("wrong", ["named-otherwise", "no-ignore-file", "another-ignore-file", "a-repository"])
+def test_drop_refuses_a_folder_that_is_not_a_stash(tmp_path, wrong):
+    """A wrong `--stash` (the project root, the artifacts folder) must never
+    have its folders deleted: `drop` takes only the stash `out` makes."""
+    folder = tmp_path / ("artifacts" if wrong == "named-otherwise" else "gate-build")
+    (folder / "src").mkdir(parents=True)
+    (folder / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+    if wrong != "no-ignore-file":
+        (folder / ".gitignore").write_text("target/\n" if wrong == "another-ignore-file" else "*\n", encoding="utf-8")
+    if wrong == "a-repository":
+        (folder / ".git").mkdir()
+    code, out, err = _run("drop", "--stash", str(folder))
+    assert code == 2 and out is None, err
+    assert (folder / "src" / "main.rs").is_file()
+
+
+@pytest.mark.skipif(not _LOCKABLE, reason="needs POSIX permissions and a user other than root")
+def test_drop_reports_a_folder_it_cannot_delete(tmp_path):
+    stash = _stash(tmp_path / "gate-build")
+    _cargo_target(stash / "target")
+    deps = stash / "target" / "debug" / "deps"
+    os.chmod(deps, 0o555)
+    try:
+        code, out, _ = _run("drop", "--stash", str(stash))
+    finally:
+        os.chmod(deps, 0o755)
+    assert code == 1
+    assert out["failed"][0]["path"] == "target"
+    assert out["cleared"] == []
+
+
+@pytest.mark.skipif(not _LOCKABLE, reason="needs POSIX permissions and a user other than root")
+def test_drop_reports_a_stash_it_cannot_list(tmp_path):
+    stash = _stash(tmp_path / "gate-build")
+    _cargo_target(stash / "target")
+    os.chmod(stash, 0o300)
+    try:
+        code, out, _ = _run("drop", "--stash", str(stash))
+    finally:
+        os.chmod(stash, 0o755)
+    assert code == 1
+    assert [f["path"] for f in out["failed"]] == ["."]
+    assert (stash / "target" / "debug" / "deps" / "libdemo.rlib").is_file()
+
+
+def test_a_stash_that_is_a_link_is_refused_by_out_and_back_and_skipped_by_drop(tmp_path):
+    worktree = _worktree(tmp_path / "wt")
+    _cargo_target(worktree / "target")
+    real = _stash(tmp_path / "elsewhere" / "gate-build")
+    _cargo_target(real / "target", "libkept.rlib")
+    stash = tmp_path / "scratch" / "gate-build"
+    stash.parent.mkdir()
+    try:
+        os.symlink(real, stash, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available here")
+    for mode in ("out", "back"):
+        code, out, err = _run(mode, "--worktree", str(worktree), "--stash", str(stash))
+        assert code == 2 and out is None, mode
+        assert "is a link" in err
+    assert (worktree / "target" / "debug" / "deps" / "libdemo.rlib").is_file()
+    assert (worktree / "target" / "debug" / "deps").is_dir()
+    code, out, _ = _run("drop", "--stash", str(stash))
+    assert code == 0
+    assert out == {"mode": "drop", "carried": [], "cleared": [], "skipped": [{"path": ".", "reason": "link"}],
+                   "failed": []}
+    assert (real / "target" / "debug" / "deps" / "libkept.rlib").is_file()
+
+
+@pytest.mark.parametrize("dangling", [True, False], ids=["dangling-link", "link-to-a-file"])
+def test_a_stash_that_is_a_link_to_nothing_or_a_file_is_refused(tmp_path, dangling):
+    worktree = _worktree(tmp_path / "wt")
+    _cargo_target(worktree / "target")
+    (worktree / "target" / "tmp").mkdir()
+    target = tmp_path / ("gone" if dangling else "a-file")
+    if not dangling:
+        target.write_text("x\n", encoding="utf-8")
+    stash = tmp_path / "gate-build"
+    try:
+        os.symlink(target, stash)
+    except OSError:
+        pytest.skip("symlinks are not available here")
+    for mode in ("out", "back"):
+        code, out, _ = _run(mode, "--worktree", str(worktree), "--stash", str(stash))
+        assert code == 2 and out is None, mode
+    # Nothing changed: the run results are still there.
+    assert (worktree / "target" / "tmp").is_dir()
 
 
 def test_drop_with_no_stash_deletes_nothing(tmp_path):

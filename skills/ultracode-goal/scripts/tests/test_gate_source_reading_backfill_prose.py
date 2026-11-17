@@ -78,16 +78,17 @@ _KILLED_FIRST = (
 # The new paragraph's rules, as sentences or clauses of it.
 _DEFINES = (
     "A test reads source text when it does not execute the code under its gap and reads that code's text, for "
-    "example by a file read, an `include_str!` or `include_bytes!`, a `?raw` import, Python's `inspect.getsource`, "
-    "or an AST or a snapshot of the source."
+    "example by a file read, an `include_str!` or `include_bytes!`, a `?raw` import, Python's `inspect.getsource` "
+    "or JavaScript's `fn.toString()`, or an AST or a snapshot of the source."
 )
 _SPELLING = "yet nothing has executed the behaviour: its kills measure the spelling and nothing else."
 _SUMMARY_FIRST = "Automate's summary says beside each test it backfilled whether the test executes the code"
 _BEFORE_STAGING = "before step 1 of \"When automate backfills\" stages anything, read each test the summary names too"
 _READ_FORM = (
     "a test whose text names the `file` of its gap's rows beside a read form reads source text, whatever the summary "
-    "says of it, and so does one that reads the gap's code by its object, as `inspect.getsource` does, without naming "
-    "the file. The read forms include, among others, `open(`, `read_text`, `read_to_string`, `fs::read`, "
+    "says of it, and so does one that reads the gap's code by its object without naming the file, as Python's "
+    "`inspect.getsource` or JavaScript's `Function.prototype.toString` (`String(fn)`, `fn.toString()`) does. The read "
+    "forms include, among others, `open(`, `read_text`, `read_to_string`, `fs::read`, "
     "`include_str!`, `include_bytes!`, `readFile` and `readFileSync` (Node's `fs` or `fs.promises`), Go's "
     "`os.ReadFile`, a `?raw` import and a parse of the source."
 )
@@ -101,10 +102,11 @@ _NEVER_CLOSES = (
 )
 _NO_LATER_SPELLING = "and no later pass writes another test that reads source text for it."
 _NAMES_APART = (
-    "`scripts/mutate_check.py` finds a row's `expect_red` by the text of its name, so a test that executes the code "
-    "under a name that sits inside the name of a test that reads source text never reads as that row's kill: when you "
-    "delegate automate, tell it to name each test that executes such code so that no test that reads source text has "
-    "a name that contains it."
+    "`scripts/mutate_check.py` finds a row's `expect_red` anywhere on a failure line, a test's file path or its suite "
+    "or class title included, so a test that reads source text and fails can make a row read `KILLED` for a test that "
+    "executes the code whose name sits inside its own name, its file path or its title: when you delegate automate, "
+    "tell it to name each test that executes such code so that no test that reads source text has a name, a file "
+    "path or a suite or class title that contains it."
 )
 
 # Each #239 edit outside the new paragraph as (pre-edit text, live text).
@@ -139,9 +141,9 @@ _ROW_RULE = (
     "and a test a re-loop added under a name other than the row's `expect_red` reads `MISATTRIBUTED` that way. Where "
     "a test that reads source text reads the row's `file` (" + _CITED + " above), the row reads killed only when it "
     "is `KILLED` or `KILLED+others` and its `expect_red` names a test that executes the code, a name that is no part "
-    "of the name of a test that reads source text: any other row there, a `MISATTRIBUTED` one included, reads as a "
-    "row that reads `GREEN` does, and automate makes its second run too (the next bullet), so when you delegate it, "
-    "tell it to.",
+    "of the name, the file path or the suite or class title of a test that reads source text: any other row there, a "
+    "`MISATTRIBUTED` one included, reads as a row that reads `GREEN` does, and automate makes its second run too "
+    "(the next bullet), so when you delegate it, tell it to.",
 )
 _AFRESH = (
     "or `unkilled`, naming its test, while a test backfilled for the gap has not killed its rows.",
@@ -165,7 +167,8 @@ _EDITS = (_NO_SECOND, _SUMMARY_SAYS, _LOG_ONE, _FIELDS, _ROW_RULE, _AFRESH, _LED
 
 _ROW_RULE_CORE = (
     "the row reads killed only when it is `KILLED` or `KILLED+others` and its `expect_red` names a test that executes "
-    "the code, a name that is no part of the name of a test that reads source text"
+    "the code, a name that is no part of the name, the file path or the suite or class title of a test that reads "
+    "source text"
 )
 _ROW_RULE_SECOND_RUN = "reads as a row that reads `GREEN` does, and automate makes its second run too (the next bullet)"
 
@@ -361,8 +364,8 @@ _MUTANTS = (
     ),
     (
         "reads-each-test",
-        ", and so does one that reads the gap's code by its object, as `inspect.getsource` does, without naming the "
-        "file.",
+        ", and so does one that reads the gap's code by its object without naming the file, as Python's "
+        "`inspect.getsource` or JavaScript's `Function.prototype.toString` (`String(fn)`, `fn.toString()`) does.",
         ".",
     ),
     ("reads-each-test", "The read forms include, among others,", "The read forms are"),
@@ -378,10 +381,16 @@ _MUTANTS = (
     ("never-closes", "ever closes that line: it closes only when", "ever closes that line alone: it closes when"),
     (
         "names-apart",
-        "so that no test that reads source text has a name that contains it.",
+        "so that no test that reads source text has a name, a file path or a suite or class title that contains it.",
         "however it likes.",
     ),
-    ("names-apart", "finds a row's `expect_red` by the text of its name", "finds a row's `expect_red` by itself"),
+    ("names-apart", "anywhere on a failure line, a test's file path or its suite or class title included,", "by name,"),
+    (
+        "names-apart",
+        "has a name, a file path or a suite or class title that contains it.",
+        "has a name that contains it.",
+    ),
+    ("reads-each-test", " or JavaScript's `Function.prototype.toString` (`String(fn)`, `fn.toString()`)", ""),
     ("no-second-test", "so no pass writes it another test that reads source text", "so a pass may write it another"),
     ("no-second-test", "and no later pass writes another test that reads source text for it.", "."),
     (
@@ -389,7 +398,8 @@ _MUTANTS = (
         "only when it is `KILLED` or `KILLED+others` and its",
         "only when it is `KILLED`, `KILLED+others` or `MISATTRIBUTED` and its",
     ),
-    ("executing-kill", ", a name that is no part of the name of a test that reads source text", ""),
+    ("executing-kill", ", a name that is no part of the name, the file path or the suite or class title of", ", of"),
+    ("executing-kill", "no part of the name, the file path or the suite or class title of", "no part of the name of"),
     ("executing-kill", "and automate makes its second run too (the next bullet)", "and automate makes no second run"),
     ("summary-says", "and beside each test a row it ran names as its `expect_red`, ", ""),
     ("summary-says", "and for one that reads it, what could execute the code", "and nothing else"),
@@ -680,6 +690,10 @@ _FRAGMENT_SAYS = (
     "it is still committed with the backfill",
     "an `unmeasured` `gate-gap:` line for the behaviour that names the test and what could execute the code",
     "Automate's summary says beside each test whether it executes the code or reads its source text",
+    "`fs::read`",
+    "JavaScript's `Function.prototype.toString`",
+    "automate is told to name each test that executes the code so that no test that reads source text has a name, a "
+    "file path or a suite or class title that contains it",
     "the gate also reads each backfilled test",
     "counts as killed only as `KILLED` or `KILLED+others` with an `expect_red` that names a test that executes the "
     "code",
