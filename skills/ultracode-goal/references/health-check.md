@@ -61,13 +61,21 @@ uv run {skill-root}/scripts/health_check_fp.py version --project-root {project-r
 
 ## 4. Route by run mode
 
+**Split the repository with the script**, once, before the gate and every `gh` call:
+
+```
+uv run {skill-root}/scripts/health_check_fp.py repo --repo "{workflow.health_check_repo}"
+```
+
+→ `{"repo", "host", "owner_repo", "host_flag", "is_default"}`. `{host}` is the host the value names, as `gh` reads it (`github.com` for `OWNER/REPO`), `{owner_repo}` the repository without its host, and `{host_flag}` the flag that names that host to `gh`, empty for an `OWNER/REPO` value: use each exactly as printed, and never write a host or a flag of your own. If the call fails or prints no JSON (no `uv` or script, or a value that is not `[HOST/]OWNER/REPO`), log its error: the repository stays **unsplit**, so every finding routed to live-submit goes to the local queue (§5c) with the reason "Posting these to GitHub failed." and no call of §5a runs for it.
+
 **A finding about the health check itself.** A finding whose stage is `health-check` is never posted. Every route that submits or queues (**[Y]**, **[A]**, **[Q]** and headless) writes it to the local queue (§5c) with the reason "Found in the health check's own instructions; review it before submitting.", which replaces any reason its route would give; **[N]** discards it with the rest. Filing it would have the run's last step post a report about itself, and a defect in that filing would call for another.
 
 ### 4a. Attended routing (HALT gate)
 
 Show every finding: for each one, its `{title}` (§3), the path of its draft and the draft's full text. Say that when the seen-cache check finds the defect was fixed before, one line naming that fix opens the body, and a confirmed regression's title gains `REGRESSION: ` before its short description (§5a step 1). Say too that a finding about the health check itself (stage `health-check`) is queued, never posted, whatever you choose but **[N]** (§4). When every finding's stage is `health-check`, ask instead "Queue these findings locally?" with **[Q]**, **[N]** and **[E]** only.
 
-Then ask, saying "public issues" for "issues" when `{workflow.health_check_repo}` is the default, `armelhbobdad/bmad-module-ultracode-goal` in any letter case, and for any other repository adding "(public if that repository is public)" after its name:
+Then ask, saying "public issues" for "issues" when the split's `is_default` is true (§4), and otherwise, an unsplit repository included, adding "(public if that repository is public)" after its name:
 
 "Submit these findings as issues on {workflow.health_check_repo}, filed with your GitHub account?
 
@@ -103,7 +111,7 @@ Never block or delay the final headless JSON emit: Finalize emits it only after 
 
 ### 5a. Live-submit: dedup, create
 
-For each finding routed to live-submit:
+For each finding routed to live-submit, unless the repository is unsplit (§4):
 
 **1. Check the seen-cache via the script:**
 
@@ -122,20 +130,20 @@ uv run {skill-root}/scripts/health_check_fp.py seen --fp {fp} --legacy-fp {legac
 
 If adding the opening line to the draft fails, log its error and write the finding to the local queue (§5c) with the reason "Posting these to GitHub failed."
 
-**2. Check GitHub CLI** with `gh auth status`. If it runs and fails, fall through to §5c with the reason "GitHub CLI is not available."
+**2. Check GitHub CLI** with `gh auth status {host_flag}`. If it runs and fails, fall through to §5c with the reason "GitHub CLI is not available."
 
 **A refused `gh` call.** When the session refuses `gh auth status` or any later `gh` call of §5a, so that the command never ran, make no further `gh` call in this check: write this finding and every live-submit finding not yet submitted to the local queue (§5c), with the reason "You declined a gh call; nothing was posted." in an attended run, and "A gh call was refused in this session; allow the health check's gh commands (see health_check_autosubmit) to submit unattended." in an unattended one.
 
 **3. Remote dedup search**: one deterministic call, and a second only when the first finds nothing:
 
 ```
-gh search issues --repo {workflow.health_check_repo} --state open "{fp} in:title" --json number,url,title --limit 1
+gh issue list --repo {workflow.health_check_repo} --state open --search "{fp} in:title" --json number,url,title --limit 1
 ```
 
 An issue it finds reports this defect. When it finds none, search once more, for the section fingerprint in titles and bodies:
 
 ```
-gh search issues --repo {workflow.health_check_repo} --state open "{legacy_fp} in:title,body" --json number,url,title --limit 5
+gh issue list --repo {workflow.health_check_repo} --state open --search "{legacy_fp} in:title,body" --json number,url,title --limit 5
 ```
 
 Each issue this second search finds is a **possible match** (§5a-i).
@@ -162,7 +170,7 @@ If either search exits non-zero, it has not shown that no issue matches: log its
 
 Execute the choice:
 
-- **R:** `gh api -X POST /repos/{workflow.health_check_repo}/issues/{match_number}/reactions -f content='+1'`, then record `reacted` (§5b).
+- **R:** `gh api {host_flag} -X POST repos/{owner_repo}/issues/{match_number}/reactions -f content='+1'`, then record `reacted` (§5b).
 - **C:** the reaction call, then write the minimal env+delta body (the Environment table plus one sentence on what differs; no session narrative) with the Write tool to `hc-comment-{fp}.md` in the run folder, show the user its text, and run `gh issue comment {match_number} --repo {workflow.health_check_repo} --body-file "<run folder>/hc-comment-{fp}.md"`; then record `commented` (§5b).
 - **N:** after an exact match, the open issue carries this same fingerprint, so a new issue under it would be closed as its duplicate: choose a more specific defect name that sets this defect apart (the more specific name the fix edits, or the case it covers, still in the source's words), run §3's call again with it and write the draft anew under the new `{fp}`, without a line the old verdict added. Then run steps 1 to 3 again for the new fingerprints and act on what they return as for any finding: the new `seen` verdict alone decides the opening line, the title and `--regression`. After a possible match, proceed to §5a-ii as is: that issue's `fp-*` label differs from `{fp}`.
 - **S:** write the finding to the local queue (§5c) with the reason "You skipped these at the dedup gate." (the Unattended default's reason when nobody was asked).
@@ -230,7 +238,9 @@ After writing the files, keep for §6 this block, once per reason when findings 
 
 then:
 
-"{reason sentence} Run a finding's first two commands to submit it as an issue (the first fails, harmlessly, when its label exists), or open one at <https://github.com/{workflow.health_check_repo}/issues/new/choose>. Without push access to {workflow.health_check_repo}, run its third command alone instead: you can neither create a label nor set one, and the dedup Action labels the issue from its title."
+"{reason sentence} Run a finding's first two commands to submit it as an issue (the first fails, harmlessly, when its label exists), or open one at <https://{host}/{owner_repo}/issues/new/choose>. Without push access to {workflow.health_check_repo}, run its third command alone instead: you can neither create a label nor set one, and the dedup Action labels the issue from its title."
+
+With the repository unsplit (§4), leave out ", or open one at" and its link: there is no host to link. A block that lists no queue file, only drafts, ends with its reason sentence alone.
 
 ## 6. Close
 

@@ -1343,8 +1343,25 @@ def test_an_other_repository_record_under_fp_leaves_the_legacy_one_to_decide(tmp
      ("me/repo", "http://github.com/me/repo/issues/1", False),
      ("me/repo", "https://github.com/me/repo", False),
      ("ghe.example.com/team/repo", "https://ghe.example.com/team/repo/issues/1", True),
-     ("ghe.example.com/team/repo", "https://github.com/team/repo/issues/1", False)],
-    ids=["longer-name", "pull-request", "http", "repository-page", "host-form", "host-form-on-github"],
+     ("ghe.example.com/team/repo", "https://github.com/team/repo/issues/1", False),
+     # The host as gh normalises it, the one its issue URLs carry (#244): `--repo www.github.com/o/r` files on
+     # github.com, so a record of that issue was read as another repository's and never decided.
+     ("www.github.com/o/r", URL, True),
+     ("GitHub.com/O/R", URL, True),
+     ("api.octo.ghe.com/team/repo", "https://octo.ghe.com/team/repo/issues/1", True),
+     ("API.GitHub.localhost/team/repo", "https://github.localhost/team/repo/issues/1", True),
+     # gh drops one leading lower-case `www.` from a --repo host, and keeps an upper-case one, lower-cased.
+     ("www.ghe.example.com/o/r", "https://ghe.example.com/o/r/issues/1", True),
+     ("www.ghe.example.com/o/r", "https://www.ghe.example.com/o/r/issues/1", False),
+     ("www.WWW.ghe.example.com/o/r", "https://www.ghe.example.com/o/r/issues/1", True),
+     ("www.www.ghe.example.com/o/r", "https://www.ghe.example.com/o/r/issues/1", True),
+     ("WWW.ghe.example.com/o/r", "https://www.ghe.example.com/o/r/issues/1", True),
+     ("www.API.Octo.ghe.com/o/r", "https://octo.ghe.com/o/r/issues/1", True),
+     ("www./o/r", URL, True)],
+    ids=["longer-name", "pull-request", "http", "repository-page", "host-form", "host-form-on-github",
+         "www-github-com", "github-com-named", "ghe-com-api-host", "github-localhost", "www-trimmed",
+         "www-trimmed-not-kept", "www-trimmed-once", "www-www-trimmed-once", "upper-case-www-kept",
+         "www-then-ghe-com-api-host", "www-alone-names-no-host"],
 )
 def test_a_record_counts_only_under_the_repositorys_own_url(tmp_path, repo, url, counts):
     cache = _write_cache(tmp_path / "seen.json", {FP: {"action": "resolved", "issue_url": url, "date": "2026-07-19"}})
@@ -1356,6 +1373,165 @@ def test_seen_refuses_a_repo_that_is_not_owner_slash_repo(tmp_path, repo):
     proc = _run("seen", "--fp", FP, "--legacy-fp", LEGACY, "--cache", str(tmp_path / "c.json"), f"--repo={repo}")
     assert proc.returncode == 1
     assert json.loads(proc.stdout) == {"error": f"invalid repo {repo!r}; expected [HOST/]OWNER/REPO"}
+
+
+# --- repo: the host and OWNER/REPO gh files on ----------------------------------------
+# `gh api` and `gh auth status` take no --repo, and the issue-form link is no `gh` call, so the step reads the host
+# and OWNER/REPO of health_check_repo from the script instead of pasting the value after github.com (#244).
+
+DEFAULT_REPO = "armelhbobdad/bmad-module-ultracode-goal"
+
+
+def _repo(value: str) -> subprocess.CompletedProcess[str]:
+    # The `=` form, so an empty value or one that starts with a dash reaches the script's own check.
+    return _run("repo", f"--repo={value}")
+
+
+def _split(value: str, host: str, owner_repo: str, *, is_default: bool = False) -> dict:
+    """What `repo` prints for value: only a value that names a host gets a --hostname flag, one with a HOST part that
+    the `www.` trim does not leave empty (`www./o/r` names none)."""
+    head = value.split("/", 1)[0] if value.count("/") == 2 else ""
+    return {"repo": value, "host": host, "owner_repo": owner_repo,
+            "host_flag": f"--hostname {host}" if head.removeprefix("www.") else "", "is_default": is_default}
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [(DEFAULT_REPO, _split(DEFAULT_REPO, "github.com", DEFAULT_REPO, is_default=True)),
+     ("GitHub.com/Armelhbobdad/BMAD-module-ultracode-goal",
+      _split("GitHub.com/Armelhbobdad/BMAD-module-ultracode-goal", "github.com", "Armelhbobdad/BMAD-module-ultracode-goal",
+             is_default=True)),
+     ("GHE.Example.com/acme/skills", _split("GHE.Example.com/acme/skills", "ghe.example.com", "acme/skills")),
+     (f"ghe.example.com/{DEFAULT_REPO}", _split(f"ghe.example.com/{DEFAULT_REPO}", "ghe.example.com", DEFAULT_REPO)),
+     ("www.github.com/o/r", _split("www.github.com/o/r", "github.com", "o/r")),
+     ("api.octo.ghe.com/o/r", _split("api.octo.ghe.com/o/r", "octo.ghe.com", "o/r")),
+     ("API.GitHub.localhost/o/r", _split("API.GitHub.localhost/o/r", "github.localhost", "o/r")),
+     ("Owner/Repo", _split("Owner/Repo", "github.com", "Owner/Repo")),
+     # gh drops one leading lower-case `www.` from a --repo host (gh 2.104.0), and a host the trim leaves empty names
+     # none, so gh reads `www./o/r` as o/r on its default host.
+     ("www.ghe.example.com/o/r",
+      {"repo": "www.ghe.example.com/o/r", "host": "ghe.example.com", "owner_repo": "o/r",
+       "host_flag": "--hostname ghe.example.com", "is_default": False}),
+     ("www.WWW.ghe.example.com/o/r",
+      {"repo": "www.WWW.ghe.example.com/o/r", "host": "www.ghe.example.com", "owner_repo": "o/r",
+       "host_flag": "--hostname www.ghe.example.com", "is_default": False}),
+     ("www.www.ghe.example.com/o/r",
+      {"repo": "www.www.ghe.example.com/o/r", "host": "www.ghe.example.com", "owner_repo": "o/r",
+       "host_flag": "--hostname www.ghe.example.com", "is_default": False}),
+     ("WWW.ghe.example.com/o/r",
+      {"repo": "WWW.ghe.example.com/o/r", "host": "www.ghe.example.com", "owner_repo": "o/r",
+       "host_flag": "--hostname www.ghe.example.com", "is_default": False}),
+     ("www.API.Octo.ghe.com/o/r",
+      {"repo": "www.API.Octo.ghe.com/o/r", "host": "octo.ghe.com", "owner_repo": "o/r",
+       "host_flag": "--hostname octo.ghe.com", "is_default": False}),
+     ("www./o/r",
+      {"repo": "www./o/r", "host": "github.com", "owner_repo": "o/r", "host_flag": "", "is_default": False})],
+    ids=["default", "named-github-com", "ghes", "default-on-another-host", "www-github-com", "ghe-com-api-host",
+         "github-localhost", "owner-repo-case-kept", "www-trimmed", "www-trimmed-once", "www-www-trimmed-once",
+         "upper-case-www-kept", "www-then-ghe-com-api-host", "www-alone-names-no-host"],
+)
+def test_repo_prints_the_host_gh_files_on_and_the_owner_repo(value, expected):
+    proc = _repo(value)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == expected
+
+
+@pytest.mark.parametrize("value", ["https://github.com/o/r", "o", "", "o/r/x/y", "-o/r", "o/r x"])
+def test_repo_refuses_a_value_that_is_not_owner_slash_repo(value):
+    proc = _repo(value)
+    assert proc.returncode == 1
+    assert json.loads(proc.stdout) == {"error": f"invalid repo {value!r}; expected [HOST/]OWNER/REPO"}
+
+
+def test_repo_needs_its_repo_argument():
+    assert _run("repo").returncode == 2
+
+
+@pytest.mark.parametrize("value, flag", [("owner/repo", ""), (DEFAULT_REPO, ""),
+                                         ("github.com/owner/repo", "--hostname github.com"),
+                                         ("WWW.GitHub.com/owner/repo", "--hostname github.com"),
+                                         ("GHE.example.com/acme/skills", "--hostname ghe.example.com"),
+                                         ("www.ghe.example.com/o/r", "--hostname ghe.example.com"),
+                                         ("www.WWW.ghe.example.com/o/r", "--hostname www.ghe.example.com"),
+                                         ("www.www.ghe.example.com/o/r", "--hostname www.ghe.example.com"),
+                                         ("WWW.ghe.example.com/o/r", "--hostname www.ghe.example.com"),
+                                         ("www.API.Octo.ghe.com/o/r", "--hostname octo.ghe.com"),
+                                         ("www./o/r", "")],
+                         ids=["owner-repo", "default", "named-github-com", "github-com-subdomain", "host",
+                              "www-trimmed", "www-trimmed-once", "www-www-trimmed-once", "upper-case-www-kept",
+                              "www-then-ghe-com-api-host", "www-alone-names-no-host"])
+def test_only_a_value_that_names_a_host_gets_a_hostname_flag(mod, value, flag):
+    """For OWNER/REPO, a --hostname github.com would pin github.com while every --repo call follows gh's default host
+    (GH_HOST, or the one host gh is logged in to), splitting one run across two hosts. A named host goes to
+    --hostname normalised, since `--hostname` does not normalise it as `--repo` does."""
+    assert mod.repo_fields(value)["host_flag"] == flag
+
+
+@pytest.mark.parametrize("value, is_default", [(DEFAULT_REPO, True), (DEFAULT_REPO.upper(), True),
+                                               (f"github.com/{DEFAULT_REPO}", True),
+                                               (f"www.GitHub.com/{DEFAULT_REPO.upper()}", True),
+                                               (f"ghe.example.com/{DEFAULT_REPO}", False),
+                                               ("armelhbobdad/bmad-module-ultracode-goal-fork", False),
+                                               ("me/bmad-module-ultracode-goal", False)],
+                         ids=["default", "upper-case", "named-github-com", "github-com-subdomain", "other-host",
+                              "longer-name", "other-owner"])
+def test_is_default_is_the_default_repository_on_github_com_in_any_letter_case(mod, value, is_default):
+    """Only the default's issues are known to be public: the same OWNER/REPO on another host is no default."""
+    assert mod.repo_fields(value)["is_default"] is is_default
+    assert mod.DEFAULT_REPO == DEFAULT_REPO
+
+
+def test_the_default_repository_is_the_one_customize_ships():
+    customize = tomllib.loads((Path(__file__).resolve().parents[2] / "customize.toml").read_text(encoding="utf-8"))
+    assert customize["workflow"]["health_check_repo"] == _load().DEFAULT_REPO
+
+
+@pytest.mark.parametrize("repo, split", [
+    ("owner/repo", ("github.com", "owner/repo")),
+    ("Owner/Repo", ("github.com", "Owner/Repo")),
+    ("ghe.example.com/acme/skills", ("ghe.example.com", "acme/skills")),
+    ("GHE.Example.COM/Acme/Skills", ("ghe.example.com", "Acme/Skills")),
+    ("github.com/acme/skills", ("github.com", "acme/skills")),
+    ("octo.ghe.com/acme/my.repo_x", ("octo.ghe.com", "acme/my.repo_x")),
+    ("www.github.com/acme/skills", ("github.com", "acme/skills")),
+    ("API.GitHub.com/acme/skills", ("github.com", "acme/skills")),
+    ("api.octo.ghe.com/acme/skills", ("octo.ghe.com", "acme/skills")),
+    ("ghe.com/acme/skills", ("ghe.com", "acme/skills")),
+    ("API.GitHub.localhost/acme/skills", ("github.localhost", "acme/skills")),
+    ("www.ghe.example.com/o/r", ("ghe.example.com", "o/r")),
+    ("www.WWW.ghe.example.com/o/r", ("www.ghe.example.com", "o/r")),
+    ("www.www.ghe.example.com/o/r", ("www.ghe.example.com", "o/r")),
+    ("WWW.ghe.example.com/o/r", ("www.ghe.example.com", "o/r")),
+    ("www.API.Octo.ghe.com/o/r", ("octo.ghe.com", "o/r")),
+    ("www./o/r", ("github.com", "o/r")),
+], ids=["owner-repo", "owner-repo-case-kept", "host", "host-lower-cased", "github-com-named", "ghe-com-tenant",
+        "www-github-com", "api-github-com", "ghe-com-api-host", "ghe-com-bare", "github-localhost", "www-trimmed",
+        "www-trimmed-once", "www-www-trimmed-once", "upper-case-www-kept", "www-then-ghe-com-api-host",
+        "www-alone-names-no-host"])
+def test_split_repo_gives_the_host_gh_files_on_and_the_issue_prefix_follows_it(mod, repo, split):
+    """The host is the one gh files on: `--repo` normalises a *.github.com, *.github.localhost or *.ghe.com host,
+    so the seen cache's issue URLs carry the normalised one."""
+    assert mod.REPO_RE.fullmatch(repo)
+    assert mod.split_repo(repo) == split
+    assert mod._issue_prefix(repo) == f"https://{split[0]}/{split[1]}/"
+    fields = mod.repo_fields(repo)
+    assert (fields["host"], fields["owner_repo"]) == split
+
+
+def test_repo_and_seen_derive_the_host_from_one_split(mod, monkeypatch, capsys, tmp_path):
+    """One normalisation for all three: a change to split_repo reaches the host and the --hostname flag `repo`
+    prints and the issue prefix `seen --repo` reads."""
+    monkeypatch.setattr(mod, "split_repo", lambda repo: ("tracker.example", "team/tracked"))
+    value = "ghe.example.com/o/r"
+    code, out = _main(mod, capsys, "repo", "--repo", value)
+    assert code == 0
+    assert (out["host"], out["owner_repo"], out["host_flag"]) == (
+        "tracker.example", "team/tracked", "--hostname tracker.example")
+    assert mod._issue_prefix(value) == "https://tracker.example/team/tracked/"
+    url = "https://tracker.example/team/tracked/issues/9"
+    cache = _write_cache(tmp_path / "seen.json", {FP: {"action": "resolved", "issue_url": url, "date": "2026-07-19"}})
+    code, out = _main(mod, capsys, "seen", "--fp", FP, "--legacy-fp", LEGACY, "--cache", str(cache), "--repo", value)
+    assert code == 0 and out["status"] == "regression"
 
 
 HEARTBEAT = """
@@ -2174,11 +2350,14 @@ def test_the_gate_shows_each_title_and_body_and_y_submits_only_bugs():
 def test_the_gate_names_where_the_issues_go():
     """The only consent point says what [Y] does: issues on the configured repo, under the user's account (enhancement-4)."""
     gate = _flow(_section("### 4a. Attended routing", "### 4-headless."))
-    # Public on the default whatever its letter case, and a note for any other repository, a public fork included.
-    assert ('Then ask, saying "public issues" for "issues" when `{workflow.health_check_repo}` is the default, '
-            '`armelhbobdad/bmad-module-ultracode-goal` in any letter case, and for any other repository adding '
-            '"(public if that repository is public)" after its name: "Submit these findings as issues on '
-            '{workflow.health_check_repo}, filed with your GitHub account?') in gate
+    # Public on the default whatever its letter case, on github.com alone (#244: the default's OWNER/REPO on another
+    # host is not public there), and a note for any other repository, a public fork and an unsplit value included.
+    assert ('Then ask, saying "public issues" for "issues" when the split\'s `is_default` is true (§4), and '
+            'otherwise, an unsplit repository included, adding "(public if that repository is public)" after its '
+            'name: "Submit these findings as issues on {workflow.health_check_repo}, filed with your GitHub '
+            "account?") in gate
+    # The script decides the default (test_is_default_is_the_default_repository_on_github_com_in_any_letter_case).
+    assert "armelhbobdad/bmad-module-ultracode-goal" not in gate
     skill_root = Path(__file__).resolve().parents[2]
     assert 'health_check_repo = "armelhbobdad/bmad-module-ultracode-goal"' in (
         skill_root / "customize.toml").read_text(encoding="utf-8"), "the default the gate names is the shipped one"
@@ -2194,6 +2373,11 @@ def test_the_dedup_gate_names_the_matched_issue_apart_from_the_findings_title():
             "search:") in _flow(menu)
     assert '"Matching report found: #{match_number}: {match_title}' in menu
     assert "Possible match: #{match_number}: {match_title}" in menu
+    # `gh api` takes no --repo: the host goes to `{host_flag}` and the path names OWNER/REPO alone, with no leading
+    # slash (#244: `repos/HOST/OWNER/REPO/...` went to gh's default host and failed).
+    assert ("- **R:** `gh api {host_flag} -X POST repos/{owner_repo}/issues/{match_number}/reactions "
+            "-f content='+1'`") in menu
+    assert "repos/{workflow.health_check_repo}" not in _reference()
     assert "/issues/{match_number}/reactions" in menu and "gh issue comment {match_number} " in menu
     assert "{N}" not in menu and "{title}" not in menu
     # Everywhere else `{title}` is the finding's own, and the commands that file it use it.
@@ -2281,7 +2465,10 @@ def test_every_local_outcome_shows_its_paths_reason_and_the_printed_commands():
     queue = _flow(_section(QUEUE))
     assert '"{N} finding(s) saved locally:" then each path, each followed by its three `commands`, exactly as printed.' in queue
     assert ('"{reason sentence} Run a finding\'s first two commands to submit it as an issue (the first fails, '
-            "harmlessly, when its label exists)") in queue
+            "harmlessly, when its label exists), or open one at <https://{host}/{owner_repo}/issues/new/choose>.") in queue
+    # #244: a block of drafts printed no command, and an unsplit repository has no host to link.
+    assert ('With the repository unsplit (§4), leave out ", or open one at" and its link: there is no host to link. '
+            "A block that lists no queue file, only drafts, ends with its reason sentence alone.") in queue
     assert "In an unattended run" not in queue
     assert "in an unattended one, display nothing and wait for nothing, and log the kept lines alone." in _flow(
         _section("## 6. Close"))
@@ -2386,7 +2573,7 @@ def test_a_failed_label_create_is_no_error_and_no_command_is_compound():
     # `--repo` right after the subcommand, so an allow rule scoped to the repository matches each live call.
     for block in _fenced_blocks(body):
         flowed = _flow(block.replace("\\\n", " "))
-        for sub in ("gh label create", "gh search issues", "gh issue create"):
+        for sub in ("gh label create", "gh issue list", "gh issue create"):
             if sub in flowed:
                 assert f"{sub} --repo {{workflow.health_check_repo}} " in flowed, block
     docs = _docs()
@@ -2402,6 +2589,88 @@ def test_a_refused_gh_call_stops_every_gh_call_of_the_check():
             'submitted to the local queue (§5c), with the reason "You declined a gh call; nothing was posted." in an '
             "attended run, and \"A gh call was refused in this session; allow the health check's gh commands (see "
             'health_check_autosubmit) to submit unattended." in an unattended one.') in refused
+
+
+_SPLIT_CALL = 'uv run {skill-root}/scripts/health_check_fp.py repo --repo "{workflow.health_check_repo}"'
+
+
+def test_the_repository_is_split_once_before_the_gate_and_every_gh_call():
+    """#244: `gh api` and `gh auth status` take no --repo and the issue-form link is no gh call, so the step reads the
+    host, OWNER/REPO and --hostname flag from the script, once, at the head of §4 (reached only with a finding)."""
+    body = _reference()
+    assert body.count("health_check_fp.py repo ") == 1
+    route = _section("## 4. Route by run mode", "### 4a.")
+    [first, *_] = _fenced_blocks(route)
+    assert first.strip() == _SPLIT_CALL
+    split = route.index(_SPLIT_CALL)
+    assert split < route.index("**A finding about the health check itself.**")
+    # Before the gate, and before every gh call and every use of what it prints.
+    assert body.index(_SPLIT_CALL) < body.index("### 4a. Attended routing")
+    assert body.index(_SPLIT_CALL) < min(m.start() for m in re.finditer(r"\bgh (auth|issue|label|api) ", body))
+    for placeholder in ("{host}", "{owner_repo}", "{host_flag}", "`is_default`"):
+        assert body.index(placeholder) > body.index(_SPLIT_CALL), placeholder
+    flowed = _flow(route)
+    # The keys the step names are the ones the script prints, in its order.
+    printed = ", ".join(f'"{key}"' for key in _load().repo_fields("o/r"))
+    assert printed == '"repo", "host", "owner_repo", "host_flag", "is_default"'
+    assert "→ `{" + printed + "}`." in flowed
+    # Not "the host gh files on": under GH_HOST an OWNER/REPO value files on another host (out of scope here).
+    assert ("`{host}` is the host the value names, as `gh` reads it (`github.com` for `OWNER/REPO`), `{owner_repo}` "
+            "the repository without its host, and `{host_flag}` "
+            "the flag that names that host to `gh`, empty for an `OWNER/REPO` value: use each exactly as printed, and "
+            "never write a host or a flag of your own.") in flowed
+    # A failed call leaves nothing to post with: every finding bound for GitHub is queued, nothing is guessed.
+    assert ("If the call fails or prints no JSON (no `uv` or script, or a value that is not `[HOST/]OWNER/REPO`), log "
+            "its error: the repository stays **unsplit**, so every finding routed to live-submit goes to the local "
+            'queue (§5c) with the reason "Posting these to GitHub failed." and no call of §5a runs for it.') in flowed
+    live = _flow(_section("### 5a. Live-submit", "**1. Check the seen-cache"))
+    assert "For each finding routed to live-submit, unless the repository is unsplit (§4):" in live
+
+
+def test_the_gh_calls_reach_the_repositorys_own_host():
+    """#244: `gh search issues --repo` cannot name a host, `gh api repos/HOST/OWNER/REPO/...` goes to gh's default
+    host, and a bare `gh auth status` fails on any stale login. The step's calls take what `repo` printed."""
+    body = _reference()
+    assert "gh search" not in body
+    # The step never writes --hostname itself: `{host_flag}` is the script's, empty for OWNER/REPO, so a run under
+    # GH_HOST or logged in to one Enterprise host alone keeps every call on the host --repo reaches.
+    assert "--hostname {" not in body and "--hostname" not in body
+    # No github.com path is built from the setting anywhere in the step.
+    assert "github.com/{" not in body
+    assert "**2. Check GitHub CLI** with `gh auth status {host_flag}`." in body
+    blocks = [_flow(b) for b in _fenced_blocks(_section("**3. Remote dedup search**", "**5a-i."))]
+    assert blocks == [
+        'gh issue list --repo {workflow.health_check_repo} --state open --search "{fp} in:title" '
+        "--json number,url,title --limit 1",
+        'gh issue list --repo {workflow.health_check_repo} --state open --search "{legacy_fp} in:title,body" '
+        "--json number,url,title --limit 5",
+    ]
+    calls = re.findall(r"`(gh [^`\n]*)`", body) + [
+        line.strip() for b in _fenced_blocks(body) for line in b.replace("\\\n", " ").splitlines()
+        if line.strip().startswith("gh ")]
+    for call in calls:
+        if call.startswith("gh api "):
+            assert call.startswith("gh api {host_flag} -X POST repos/{owner_repo}/"), call
+        elif call.startswith("gh auth status") and call != "gh auth status":
+            assert call == "gh auth status {host_flag}", call
+        elif "{" in call:
+            assert re.match(r"gh [a-z]+ [a-z]+ (\{match_number\} )?--repo \{workflow\.health_check_repo\} ", call), call
+    # The issue-form link is built from the split, too.
+    assert "<https://{host}/{owner_repo}/issues/new/choose>" in body
+
+
+def test_an_unsplit_repository_or_a_block_of_drafts_links_no_issue_form():
+    """#244: a block that listed drafts printed no command but still said to run a finding's first two commands and
+    linked the form, and a repository the script could not split has no host to link."""
+    queue = _flow(_section(QUEUE))
+    hint = queue.index("{reason sentence} Run a finding's first two commands")
+    rule = queue.index('With the repository unsplit (§4), leave out ", or open one at" and its link')
+    drafts = queue.index("A block that lists no queue file, only drafts, ends with its reason sentence alone.")
+    assert hint < rule < drafts
+    # The draft listed in a queue file's place points at the manual route, never at commands.
+    assert ('followed, in place of commands, by "Submit it as '
+            "<https://armelhbobdad.github.io/bmad-module-ultracode-goal/health-check/#submitting-a-queued-finding-"
+            'manually> says."') in queue
 
 
 def test_evidence_cites_only_module_files():
@@ -2424,10 +2693,13 @@ def test_the_flag_mode_says_it_skips_the_heading_check_and_prints_no_title():
             "body_header.") in doc
     # Under --repo, every issue_url but an empty or missing one must sit under the prefix.
     assert ("any other record whose issue_url is not a string under https://github.com/OWNER/REPO/ "
-            "(https://HOST/OWNER/REPO/ for a REPO that names a host), compared in any letter case, counts as no "
+            "(https://HOST/OWNER/REPO/ for a REPO that names a host, HOST normalised as `repo` prints it, so "
+            "www.github.com/OWNER/REPO reads github.com's URLs), compared in any letter case, counts as no "
             "record") in doc
     # And the docstring documents the commands as they are now.
     assert "seen --fp FP --legacy-fp FP --cache PATH [--repo REPO]" in doc
+    assert "repo --repo REPO" in doc
+    assert 'Emit {"repo", "host", "owner_repo", "host_flag", "is_default"}' in doc
     assert "queue --queue-dir DIR --body-file F --title TITLE --repo REPO" in doc
 
 
@@ -2484,7 +2756,16 @@ def test_a_redirected_repository_is_told_what_it_needs():
     blob = "https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/"
     for name in (".github/ISSUE_TEMPLATE/workflow-health-check.md", ".github/workflows/health-check-dedup.yaml"):
         assert blob + name in comment, name
-    assert "A repository on a host other than github.com is given as HOST/OWNER/REPO." in comment
+    # gh files on a host only once it is logged in there (#244).
+    # `gh auth login --hostname` takes HOST verbatim, while --repo and {host_flag} drop a leading lower-case `www.` and
+    # lower-case it, so a login to HOST as written can be one no call uses.
+    assert ("A repository on a host other than github.com is given as HOST/OWNER/REPO: log gh in to that host first, "
+            "with gh auth login --hostname HOST, HOST in lower case and without a leading www.") in comment
+    # The Node version is the pinned commit's, which Dependabot moves, so neither names one.
+    assert ("On a host other than github.com the Action runs only once GitHub Actions is on there, its runs-on names "
+            "one of the host's runners, the host can reach actions/github-script at the commit the Action pins, and "
+            "those runners can run the Node version that commit's action.yml names in runs.using.") in comment
+    assert "Node 24" not in comment
     # `record` keys the cache by fingerprint alone, so a shared cache cannot serve two repositories.
     assert ("Such a project must also set its own health_check_seen_cache: the cache keys each record by fingerprint "
             "alone, so two projects filing to different repositories would block or overwrite each other's records. "
@@ -2495,11 +2776,22 @@ def test_a_redirected_repository_is_told_what_it_needs():
             "one report.") in cache
     docs = _flow(_docs())
     assert ("**To send findings to another repository**, set `health_check_repo` to it under the same header "
-            "(`OWNER/REPO`, or `HOST/OWNER/REPO` on a host other than github.com), and set that repository up as the "
-            "default one is: create the labels " + _REPO_LABELS + " there, and copy two files into it unchanged, the "
-            "issue template [`.github/ISSUE_TEMPLATE/workflow-health-check.md`](" + blob + ".github/ISSUE_TEMPLATE/"
+            "(`OWNER/REPO`, or `HOST/OWNER/REPO` on a host other than github.com, such as a GitHub Enterprise Server "
+            "host: log in to that host first, with `gh auth login --hostname HOST`, writing HOST in lower case and "
+            "without a leading `www.`, as `gh` reads the host of a repository), and set that repository up as "
+            "the default one is: create the labels " + _REPO_LABELS + " there, and copy two files into it unchanged, "
+            "the issue template [`.github/ISSUE_TEMPLATE/workflow-health-check.md`](" + blob + ".github/ISSUE_TEMPLATE/"
             "workflow-health-check.md) and the dedup Action [`.github/workflows/health-check-dedup.yaml`](" + blob +
             ".github/workflows/health-check-dedup.yaml), which reads its repository from the run.") in docs
+    # The Action copied to such a host runs only where that host can run it (#244).
+    assert ("On a host other than github.com, the Action runs only once GitHub Actions is on there, its `runs-on` "
+            "names one of the host's runners, the host can reach `actions/github-script` at the commit the Action "
+            "pins, and those runners can run the Node version that commit's `action.yml` names in "
+            "`runs.using`.") in docs
+    assert "Node 24" not in docs
+    action = (Path(__file__).resolve().parents[4] / ".github" / "workflows" / "health-check-dedup.yaml").read_text(
+        encoding="utf-8")
+    assert "runs-on:" in action and re.search(r"uses: actions/github-script@[0-9a-f]{40}\b", action)
     assert ("Set the project's own `health_check_seen_cache` too: the cache keys each record by fingerprint alone, so "
             "two projects that share it and file to different repositories would block or overwrite each other's "
             "records.") in docs
@@ -2611,7 +2903,7 @@ def test_the_docs_say_the_off_switch_closes_pending_friction_and_draw_the_marker
     assert "public issue" not in chart and "Reflect on this run" not in chart
 
 
-_AUTOSUBMIT_ALLOW = 'allowlist_commands = ["gh auth status", "gh search issues", "gh label create", "gh issue create"]'
+_AUTOSUBMIT_ALLOW = 'allowlist_commands = ["gh auth status", "gh issue list", "gh label create", "gh issue create"]'
 
 
 def _docs() -> str:
@@ -2648,18 +2940,42 @@ def test_the_gh_allow_rules_say_they_persist_how_to_scope_them_and_how_to_remove
                                                        customize.index("health_check_autosubmit =")],
                               flags=re.MULTILINE).split())
     assert ".claude/settings.local.json, where it stays for every later session in the project" in comment
-    assert ('"gh search issues --repo <repo>", "gh label create --repo <repo>" and "gh issue create --repo <repo>", '
+    assert ('"gh issue list --repo <repo>", "gh label create --repo <repo>" and "gh issue create --repo <repo>", '
             "<repo> being health_check_repo") in comment
     assert "When you turn autosubmit off, drop the entries and delete their Bash(gh ...) rules" in comment
     docs = _flow(_docs())
     assert ("These rules outlast the run: they stay in `.claude/settings.local.json` and apply to every later session "
             "in the project, so any agent working there can then create issues and labels on any repository without "
             "asking.") in docs
-    assert ('allowlist_commands = ["gh auth status", "gh search issues --repo <health_check_repo>", '
+    assert ('allowlist_commands = ["gh auth status", "gh issue list --repo <health_check_repo>", '
             '"gh label create --repo <health_check_repo>", "gh issue create --repo <health_check_repo>"]') in _docs()
     assert ("When you turn autosubmit off, remove the entries, then delete the rules preflight wrote for them, such as "
             "`Bash(gh issue create:*)`, from `.claude/settings.local.json` yourself: preflight only adds rules.") in docs
     assert "POSIX shell (bash, zsh, Git Bash or WSL)" in docs
+
+
+def test_the_docs_give_the_search_rule_migration_beside_the_allowlist_examples():
+    """#244: `gh search issues` cannot name a host, so the step searches with `gh issue list`, and the rule the 7.2.0
+    and 7.3.0 advice wrote matches no call the step makes now. `gh auth status` keeps its rule: preflight writes
+    `Bash(gh auth status:*)`, which matches the call with its host flag."""
+    docs = _docs()
+    flowed = _flow(docs)
+    migration = ("An override written for 7.3.0 or earlier allows `gh search issues`, which the health check no longer "
+                 "runs: it searches with `gh issue list`, whose `--repo` also takes a host. In the `[workflow]` "
+                 'override, replace `"gh search issues"` with `"gh issue list"` (or `"gh search issues --repo '
+                 '<health_check_repo>"` with `"gh issue list --repo <health_check_repo>"`), and delete the rule '
+                 "preflight wrote for the old entry, `Bash(gh search issues:*)` or `Bash(gh search issues --repo "
+                 "<health_check_repo>:*)`, from `.claude/settings.local.json`.")
+    assert migration in flowed
+    # Right after the scoped example, before the removal advice.
+    assert (docs.index('"gh issue list --repo <health_check_repo>"') < docs.index("An override written for 7.3.0")
+            < docs.index("When you turn autosubmit off"))
+    # No allow rule or override the docs or the comment give names the old search any more.
+    customize = (Path(__file__).resolve().parents[2] / "customize.toml").read_text(encoding="utf-8")
+    assert "gh search" not in customize
+    for block in re.findall(r"```toml\n(.*?)```", docs, re.DOTALL):
+        assert "gh search" not in block, block
+    assert "gh auth status --hostname" not in docs and "gh auth status --hostname" not in customize
 
 
 def test_every_override_the_docs_show_sits_under_workflow():
@@ -2681,9 +2997,12 @@ def test_every_override_the_docs_show_sits_under_workflow():
 def test_the_docs_name_the_configured_repositorys_chooser():
     """An override that keeps findings off the public default must not be undone by the docs' link (customization-2)."""
     docs = _flow(_docs())
+    # On the repository's own host: `https://github.com/HOST/OWNER/REPO/...` is a 404 (#244).
     assert ("You can also open one through the issue chooser of `<health-check-repo>`, "
-            "`https://github.com/<health-check-repo>/issues/new/choose` (on the default, "
+            "`https://<host>/<owner>/<repo>/issues/new/choose`, `<host>` being the host you logged in to for a "
+            "`HOST/OWNER/REPO` value, and `github.com` for `OWNER/REPO` (on the default, "
             "<https://github.com/armelhbobdad/bmad-module-ultracode-goal/issues/new/choose>).") in docs
+    assert "github.com/<health-check-repo>" not in docs
     assert "through the repository's issue chooser at" not in docs
     # A filing through the chooser pastes the body_header too, never fills in its sections one by one.
     assert ("so replace its sections from Workflow through Defect Key with the `body_header` that the "

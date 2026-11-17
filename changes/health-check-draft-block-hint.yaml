@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  When the health check lists findings by their drafts instead of queue files, as it does when its `queue` call fails, a block that lists only drafts no longer closes by telling you to run a finding's first two commands, which it did not print, or by linking an issue form. It ends with the sentence that says why the findings stayed local, and each draft still points to the docs on submitting a queued finding.
+issues: [244]
