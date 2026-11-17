@@ -356,11 +356,14 @@ def _present_and_readable(path: Path | None) -> bool:
 
 # A story's run folders directly under impl-artifacts: `.scratch-<story_id>/`
 # (throwaway build space, which a dead run can leave behind, and where the
-# gate keeps its worktree's build folders between a removal and an add) and
-# `evidence-<story_id>/` (captured output, which no step removes). Neither holds
-# a story file or a TEA artifact, so the story-file and leaked-artifact scans
-# never walk into one; a folder so named deeper down is read.
-_RUN_FOLDER_RE = re.compile(r"^(?:evidence-|\.scratch-)")
+# gate keeps its worktree's build folders between a removal and an add),
+# `evidence-<story_id>/` (captured output, which no step removes) and
+# `.gate-worktree-<story_id>/` (the gate's measurement worktree, which a dead
+# session can leave behind with a build tree in it and, on a tracked artifact
+# tree, copies of the story files). None holds a story file or a TEA artifact
+# of this run, so the story-file and leaked-artifact scans never walk into
+# one; a folder so named deeper down is read.
+_RUN_FOLDER_RE = re.compile(r"^(?:evidence-|\.scratch-|\.gate-worktree-)")
 
 
 def _files_outside_run_folders(impl_artifacts: Path, pattern: str) -> list[Path]:

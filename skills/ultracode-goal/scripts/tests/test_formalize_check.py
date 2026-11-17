@@ -786,7 +786,14 @@ def test_partially_seeded_story_set_is_remediable_not_ready(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("folder", "skipped"), [("evidence-7-3", True), (".scratch-7-3", True), ("", False), ("notes/evidence-x", False)]
+    ("folder", "skipped"),
+    [
+        ("evidence-7-3", True),
+        (".scratch-7-3", True),
+        (".gate-worktree-7-3", True),
+        ("", False),
+        ("notes/evidence-x", False),
+    ],
 )
 def test_a_story_named_file_in_a_run_folder_covers_no_key(tmp_path, folder, skipped):
     # A story's evidence and scratch folders stay under impl-artifacts, and a
@@ -821,6 +828,8 @@ def _run_folder_tree(impl: Path) -> None:
         "evidence-7-1/7-3-notes.md",
         ".scratch-7-1/gate-build/target/debug/deps/libbacktrace-x.rlib",
         ".scratch-7-1/notes.md",
+        ".gate-worktree-7-1/target/debug/deps/libbacktrace-y.rlib",
+        ".gate-worktree-7-1/impl-artifacts/7-1-kernel.md",
         "evidence-trace-matrix.md",
     ):
         (impl / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -838,7 +847,7 @@ def test_the_walk_finds_what_the_filtered_glob_found(tmp_path, pattern):
 
     def in_run_folder(path: Path) -> bool:
         parts = path.relative_to(impl).parts
-        return len(parts) > 1 and bool(re.match(r"^(?:evidence-|\.scratch-)", parts[0]))
+        return len(parts) > 1 and bool(re.match(r"^(?:evidence-|\.scratch-|\.gate-worktree-)", parts[0]))
 
     before = sorted(p for p in impl.rglob(pattern) if p.is_file() and not in_run_folder(p))
     assert fc._files_outside_run_folders(impl, pattern) == before
@@ -864,7 +873,28 @@ def test_the_walk_never_enters_a_top_level_run_folder(tmp_path, monkeypatch):
     fc._story_files(impl, "7", ["7-1"])
     fc._leaked_tea_artifacts(impl, None)
     assert walked and "notes/evidence-x" in walked
-    assert not [d for d in walked if d.split("/")[0].startswith(("evidence-", ".scratch-"))]
+    assert not [d for d in walked if d.split("/")[0].startswith(("evidence-", ".scratch-", ".gate-worktree-"))]
+
+
+def test_a_dead_gate_worktree_is_neither_a_leak_nor_a_story_file(tmp_path):
+    # A dead session's gate worktree on a Rust project holds a Cargo build
+    # (`libbacktrace-*.rlib` carries the marker "trace") and, on a tracked
+    # artifact tree, copies of the story files: neither scan reads them.
+    impl = tmp_path / "impl-artifacts"
+    worktree = impl / ".gate-worktree-7-1"
+    deps = worktree / "target" / "debug" / "deps"
+    deps.mkdir(parents=True)
+    (deps / "libbacktrace-x.rlib").write_bytes(b"\0")
+    copy = worktree / "_bmad-output" / "implementation-artifacts" / "7-1-kernel.md"
+    copy.parent.mkdir(parents=True)
+    copy.write_text(_story_body("7-1-kernel"), encoding="utf-8")
+    assert fc._leaked_tea_artifacts(impl, None) == []
+    assert fc._story_files(impl, "7", ["7-1-kernel"]) == []
+    # Twin: the same files outside the worktree are read as they always were.
+    (impl / "libbacktrace-x.rlib").write_bytes(b"\0")
+    (impl / "7-1-kernel.md").write_text(_story_body("7-1-kernel"), encoding="utf-8")
+    assert fc._leaked_tea_artifacts(impl, None) == [impl / "libbacktrace-x.rlib"]
+    assert fc._story_files(impl, "7", ["7-1-kernel"]) == [impl / "7-1-kernel.md"]
 
 
 def test_fully_seeded_story_set_emits_no_coverage_gap(tmp_path):
