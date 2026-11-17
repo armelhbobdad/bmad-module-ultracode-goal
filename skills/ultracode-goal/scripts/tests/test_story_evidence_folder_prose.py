@@ -390,13 +390,16 @@ def _tree(tmp_path: Path, names: tuple[str, ...]) -> Path:
 
 # Each a file the formalize scans would misread anywhere else: a tool-named
 # capture, a note named like a later Epic's story or like an uncovered story of
-# this one, and a stale scratch build (memory/scratch-directory-children-
-# flagged-as-leaked-tea-artifacts.md).
+# this one, a stale scratch build (memory/scratch-directory-children-
+# flagged-as-leaked-tea-artifacts.md), and a dead gate worktree's build and its
+# copy of a story file.
 _IN_RUN_FOLDERS = (
     "evidence-4-1/trace.zip",
     "evidence-4-1/5-2-notes.md",
     "evidence-4-3/4-3-notes.md",
     ".scratch-2-3/target/debug/deps/libbacktrace-x.rlib",
+    ".gate-worktree-2-3/rust/target/debug/deps/libbacktrace-y.rlib",
+    ".gate-worktree-2-3/stories/2-3-cli.md",
 )
 
 
@@ -428,7 +431,14 @@ def test_the_same_files_outside_a_top_level_run_folder_are_read(tmp_path, where)
     names = [rel.split("/", 1)[1] for rel in _IN_RUN_FOLDERS]
     rels = tuple(names) if where == "root" else tuple("notes/evidence-x/" + n for n in names)
     read = {path.name for path in _formalize_reads(_files(impl, rels), tmp_path)}
-    assert read == {"trace.zip", "5-2-notes.md", "4-3-notes.md", "libbacktrace-x.rlib"}
+    assert read == {
+        "trace.zip",
+        "5-2-notes.md",
+        "4-3-notes.md",
+        "libbacktrace-x.rlib",
+        "libbacktrace-y.rlib",
+        "2-3-cli.md",
+    }
 
 
 def test_a_file_or_folder_only_named_like_a_run_folder_is_read(tmp_path):

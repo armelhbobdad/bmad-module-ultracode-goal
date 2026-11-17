@@ -291,6 +291,11 @@ def test_the_gate_rebuilds_its_worktree_with_commands_the_allowlist_runs():
         "git worktree remove --force /p/_bmad-output/implementation-artifacts/.gate-worktree-4-2",
         "git worktree add /p/_bmad-output/implementation-artifacts/.gate-worktree-4-2 0123abc",
         "uv run /s/scripts/link_worktree_deps.py --project-root /p --worktree /w",
+        # Issue #240: the build folders carried out before the removal and back after the add.
+        "uv run /s/scripts/carry_build_cache.py out --worktree /w --stash /p/.scratch-4-2/gate-build",
+        "uv run /s/scripts/carry_build_cache.py back --worktree /w --stash /p/.scratch-4-2/gate-build",
+        # Issue #240: an escalation empties the stash.
+        "uv run /s/scripts/carry_build_cache.py drop --stash /p/.scratch-4-2/gate-build",
         # Issue #182: the check for a server the runner would reuse, at setup and after the rebuild.
         "uv run /s/scripts/probe_servers.py --url http://localhost:3001 --url http://127.0.0.1:3199",
         "git status --porcelain --untracked-files=all",

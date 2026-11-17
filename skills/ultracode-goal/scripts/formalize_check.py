@@ -71,6 +71,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -354,20 +355,35 @@ def _present_and_readable(path: Path | None) -> bool:
 
 
 # A story's run folders directly under impl-artifacts: `.scratch-<story_id>/`
-# (throwaway build space, which a dead run can leave behind) and
-# `evidence-<story_id>/` (captured output, which no step removes). Neither holds
-# a story file or a TEA artifact, so the story-file and leaked-artifact scans
-# skip every file below one of them; a folder so named deeper down is read.
-_RUN_FOLDER_RE = re.compile(r"^(?:evidence-|\.scratch-)")
+# (throwaway build space, which a dead run can leave behind, and where the
+# gate keeps its worktree's build folders between a removal and an add),
+# `evidence-<story_id>/` (captured output, which no step removes) and
+# `.gate-worktree-<story_id>/` (the gate's measurement worktree, which a dead
+# session can leave behind with a build tree in it and, on a tracked artifact
+# tree, copies of the story files). None holds a story file or a TEA artifact
+# of this run, so the story-file and leaked-artifact scans never walk into
+# one; a folder so named deeper down is read.
+_RUN_FOLDER_RE = re.compile(r"^(?:evidence-|\.scratch-|\.gate-worktree-)")
 
 
-def _in_run_folder(path: Path, impl_artifacts: Path) -> bool:
-    """True when the first path component below impl-artifacts is a run folder."""
-    try:
-        parts = path.relative_to(impl_artifacts).parts
-    except ValueError:
-        return False
-    return len(parts) > 1 and bool(_RUN_FOLDER_RE.match(parts[0]))
+def _files_outside_run_folders(impl_artifacts: Path, pattern: str) -> list[Path]:
+    """Every file under impl-artifacts whose name matches `pattern`, sorted.
+
+    The walk skips each top-level run folder instead of reading it and
+    dropping its files afterwards: a scratch folder can hold a build tree of
+    many thousands of files (a Cargo `target`), which every preflight would
+    otherwise list, stat and sort. The files it returns are the ones
+    `impl_artifacts.rglob(pattern)` finds outside those folders.
+    """
+    found: list[Path] = []
+    for current, dirs, files in os.walk(impl_artifacts):
+        if Path(current) == impl_artifacts:
+            dirs[:] = [name for name in dirs if not _RUN_FOLDER_RE.match(name)]
+        for name in files:
+            path = Path(current) / name
+            if path.match(pattern) and path.is_file():
+                found.append(path)
+    return sorted(found)
 
 
 def _story_files(impl_artifacts: Path, epic: str, story_keys: list[str]) -> list[Path]:
@@ -378,19 +394,19 @@ def _story_files(impl_artifacts: Path, epic: str, story_keys: list[str]) -> list
     The coverage check reads all of them, since a done parent's file covers its
     decomposed children, and so does the declared-id set. Which of them the
     per-story checks read is `_in_scope_story_files`'s call. A file inside a
-    story's run folder is none (`_in_run_folder`).
+    story's run folder is none (`_files_outside_run_folders`).
     """
     if not impl_artifacts.is_dir():
         return []
     try:
-        all_md = sorted(p for p in impl_artifacts.rglob("*.md") if p.is_file())
+        all_md = _files_outside_run_folders(impl_artifacts, "*.md")
     except OSError:
         return []
     prefix = f"{epic}-"
     files: list[Path] = []
     for path in all_md:
         name = path.name.lower()
-        if name.startswith("sprint-status") or _in_run_folder(path, impl_artifacts):
+        if name.startswith("sprint-status"):
             continue
         if name.startswith(prefix) or any(name.startswith(f"{k.lower()}") for k in story_keys):
             files.append(path)
@@ -823,19 +839,19 @@ def _leaked_tea_artifacts(
     WRONG LOCATION, not on mere presence of a TEA file). UCG's own story notes /
     run sentinels are excluded even when their filename carries a marker token
     (see _is_ucg_impl_artifact), and so is every file inside a story's run
-    folder (`_in_run_folder`): a scratch build's `libbacktrace-*.rlib` or a
-    capture a tool named `trace.zip` is no TEA artifact.
+    folder (`_files_outside_run_folders`): a scratch build's `libbacktrace-*.rlib`
+    or a capture a tool named `trace.zip` is no TEA artifact.
     """
     if not impl_artifacts.is_dir():
         return []
     try:
-        all_files = sorted(p for p in impl_artifacts.rglob("*") if p.is_file())
+        all_files = _files_outside_run_folders(impl_artifacts, "*")
     except OSError:
         return []
     leaked: list[Path] = []
     for path in all_files:
         name = path.name.lower()
-        if not any(marker in name for marker in TEA_ARTIFACT_MARKERS) or _in_run_folder(path, impl_artifacts):
+        if not any(marker in name for marker in TEA_ARTIFACT_MARKERS):
             continue
         if _is_ucg_impl_artifact(path, name):
             continue

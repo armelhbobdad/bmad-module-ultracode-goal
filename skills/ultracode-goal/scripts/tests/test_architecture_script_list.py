@@ -68,7 +68,9 @@ def test_the_architecture_layout_lists_every_script(script):
     assert script in _listed(_layout()), f"docs/architecture.md's scripts/ tree has no line for {script}"
 
 
-@pytest.mark.parametrize("script", ["probe_servers.py", "link_worktree_deps.py", "hooks/budget_stop.py"])
+@pytest.mark.parametrize(
+    "script", ["probe_servers.py", "link_worktree_deps.py", "carry_build_cache.py", "hooks/budget_stop.py"]
+)
 def test_layout_reader_misses_a_dropped_line(script):
     """The twin: a layout without a script's line does not list it."""
     layout = _layout()

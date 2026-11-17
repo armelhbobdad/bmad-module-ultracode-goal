@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The readiness check behind `/ucg-formalize` and preflight no longer reads a dead session's gate worktree, `.gate-worktree-<story_id>/` under the implementation artifacts folder, as part of the run. On a Rust project that worktree holds a Cargo build whose `libbacktrace-*.rlib` read as a leaked TEA artifact and kept the next launch off `ready`, and on a tracked artifact tree its copies of the story files read as story files. Both scans now skip it as they skip a story's scratch and evidence folders.

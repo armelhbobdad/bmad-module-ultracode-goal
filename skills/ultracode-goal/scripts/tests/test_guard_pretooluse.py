@@ -281,6 +281,26 @@ def test_epic_branch_commit_allowed_with_tests_marker(tmp_path: Path) -> None:
     assert out is None
 
 
+def test_a_marker_with_a_sweep_line_still_allows_the_commit(tmp_path: Path) -> None:
+    # #241: the gate's marker after a scoped backfill sweep keeps its copied
+    # `baseline=` line and adds `scope=full` and a `sweep=` line; the guard
+    # reads only the baseline, so the backfill commit goes through.
+    repo, impl = _green_story_repo(tmp_path, stage=True)
+    marker = impl / ".tests-ran-STORY-1"
+    marker.write_text(
+        marker.read_text() + "scope=full\nsweep=sweep-step5-1a2b3c4.log+sweep-backfill-1a2b3c4.log\n"
+    )
+
+    code, out = _run_hook(
+        _commit_event(repo),
+        repo,
+        {"ULTRACODE_IMPL_ARTIFACTS": str(impl)},
+    )
+
+    assert code == 0
+    assert out is None
+
+
 def test_blank_story_id_env_falls_through_to_the_marker(tmp_path: Path) -> None:
     # A whitespace-only ULTRACODE_STORY_ID is unset, as the Stop hook reads it, so
     # the guard finds STORY-1 from .current-story and lets the green commit through

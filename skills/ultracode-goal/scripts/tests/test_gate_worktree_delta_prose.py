@@ -205,6 +205,25 @@ hook only once every `pre-commit` job has passed, so the staged tree is the
 one the marker certifies. The story's commits and the gate's two now answer it
 in the message with the marker as it stands, the gate's inside each commit's
 two fixes, and each rule is pinned below with a mutant twin.
+
+#239 found a backfilled test that read the code's source text, where no
+runner could execute that code, closing the gap as killed though nothing had
+run the behaviour. The ledger's `gate` source now names the `unmeasured` line
+the gate logs for that behaviour, and the fragment of that fix joins the
+surfaces scanned here; test_gate_source_reading_backfill_prose.py pins the
+rule itself.
+
+#240 found the rebuild deleting the worktree's Cargo build folder with the
+worktree, so each story paid two cold builds. The rebuild now carries the
+build folders out before its removal and back after its add, around the
+order pinned below; test_gate_build_cache_prose.py pins that rule, and its
+fragment joins the surfaces scanned here.
+
+#241 lets a backfill that stages test files alone scope its sweep, opt-in,
+on top of a green full sweep at the commit it builds on. The full instrument
+the delta profile names now counts that composed sweep as the `scope=full`
+one; test_gate_backfill_scoped_sweep_prose.py pins the rule, and its fragment
+joins the surfaces scanned here.
 """
 
 from __future__ import annotations
@@ -1541,6 +1560,9 @@ def test_no_surface_sends_a_gap_to_a_reloop_before_trace():
             encoding="utf-8"
         ),
         "owned-gap fragment": (_REPO_ROOT / "changes" / "gate-owned-gap-lines.yaml").read_text(encoding="utf-8"),
+        "source-reading fragment": (_REPO_ROOT / "changes" / "gate-source-reading-backfill.yaml").read_text(
+            encoding="utf-8"
+        ),
     }
     for name, text in surfaces.items():
         flat = re.sub(r"\s+", " ", text)
@@ -1611,7 +1633,10 @@ _GAP_ROUTE_SENTENCES = {
         # also names a risk or a gap a written ruling assigned to another owner,
         # a `med` row like every other `gate-gap:` row. Reviewed (#222): it also
         # names an AC the operator moved out of the story, a `med` row too.
-        ("One heading per Epic, then a row per parked item; `status` is `open` at ", "845a970d6724"),
+        # Reviewed (#239): it also names the behaviour under a gap whose rows
+        # only a test that reads source text killed, an `unmeasured` `med` row
+        # like every other `gate-gap:` row.
+        ("One heading per Epic, then a row per parked item; `status` is `open` at ", "a4f95ac53dbf"),
         ("Only non-gate-blocking work (CONCERNS, non-critical findings, parked dec", "cf302cd47862"),
         # Reviewed (#221): the red sweep's re-loop leaves an owned line out of its
         # findings; the red alone ends the cycle.
@@ -1683,6 +1708,9 @@ def _gate_surfaces() -> dict[str, str]:
             "reused-server fragment": (changes / "gate-worktree-reused-server.yaml").read_text(encoding="utf-8"),
             "owned-gap fragment": (changes / "gate-owned-gap-lines.yaml").read_text(encoding="utf-8"),
             "moved-AC fragment": (changes / "gate-moved-ac-regate.yaml").read_text(encoding="utf-8"),
+            "source-reading fragment": (changes / "gate-source-reading-backfill.yaml").read_text(encoding="utf-8"),
+            "build-cache fragment": (changes / "gate-worktree-keeps-build-cache.yaml").read_text(encoding="utf-8"),
+            "scoped-sweep fragment": (changes / "gate-backfill-scoped-sweep.yaml").read_text(encoding="utf-8"),
         }
     )
     return surfaces
@@ -3740,8 +3768,9 @@ def test_a_gap_never_changes_a_route():
         "`gate` (CONCERNS, an operator-evidence AC's evidence still owed, an AC the operator moved out of the story, "
         "or an open `gate-gap:` line: a coverage "
         "gap automate reported rather than backfilled, a risk on a P0 criterion it left unmeasured, a gap whose rows "
-        "could not run, a backfilled test that was never written, a backfilled test that did not kill its mutant, or a "
-        "risk or a gap a written ruling assigned to another owner)"
+        "could not run, the behaviour under a gap whose rows only a test that reads source text killed, a backfilled "
+        "test that was never written, a backfilled test that did not kill its mutant, or a risk or a gap a written "
+        "ruling assigned to another owner)"
     ) in ledger
     assert re.search(r"take the verdict's `reasons` and the review's findings", GATE)
 
@@ -5496,7 +5525,10 @@ def _delta_says_automate_is_scoped(para: str) -> bool:
     return bool(
         "exactly as before" not in para
         and re.search(
-            r"ADVANCE requires the full instrument \(every assessor over a `scope=full` sweep, with automate in the scope "
+            # #241: a backfill's scoped sweep, composed with the full one it
+            # builds on, is a `scope=full` sweep too.
+            r"ADVANCE requires the full instrument \(every assessor over a `scope=full` sweep, a backfill's scoped "
+            r"sweep with the full one it builds on included, with automate in the scope "
             r"\"At most one automate pass finishes per gate cycle\"",
             para,
         )

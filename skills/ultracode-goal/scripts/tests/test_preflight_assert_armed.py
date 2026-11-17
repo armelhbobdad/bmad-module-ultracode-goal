@@ -1933,6 +1933,31 @@ def _story_files(
         )
 
 
+def test_a_marker_with_a_sweep_line_reads_fresh(tmp_path: Path) -> None:
+    """#241: a marker the gate wrote after a scoped backfill sweep carries
+    `scope=full` and a `sweep=` line beside its copied `baseline=`; preflight
+    reads only the baseline, so the marker is still fresh."""
+    root = _repo(tmp_path)
+    _arm(root)
+    impl = root / "impl"
+    impl.mkdir()
+    base = _head(root)
+    (impl / ".baseline-7-2").write_text(base + "\n", encoding="utf-8")
+    (impl / ".tests-ran-7-2").write_text(
+        f"baseline={base}\nscope=full\nsweep=sweep-step5-1a2b3c4.log+sweep-backfill-1a2b3c4.log\n",
+        encoding="utf-8",
+    )
+    (root / "work.txt").write_text("done\n", encoding="utf-8")
+    _git(root, "add", "work.txt")
+    _git(root, "commit", "-q", "-m", "story 7-2")
+    trace = root / "trace"
+    trace.mkdir()
+    _, out = _run(root, "--story", "7-2", "--trace-output", str(trace), impl=impl)
+    story = out["checks"]["story"]
+    assert story["tests_ran_fresh"] is True
+    assert story["route"] == "gate-owed"
+
+
 def test_no_baseline_routes_to_story_boundary(tmp_path: Path) -> None:
     """The normal `--max-stories` case: nothing to re-read, write it fresh."""
     root = _repo(tmp_path)

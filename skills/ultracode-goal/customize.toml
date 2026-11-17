@@ -43,6 +43,22 @@ parallel_max_concurrency = 8
 # git and `uv run` command the references prescribe covered by this list.
 allowlist_commands = ["git status", "git add", "git commit", "git rev-parse", "git diff", "git check-ignore", "git worktree", "npm test", "npm run lint", "npm run build", "pytest", "uv run", "date"]
 
+# --- Gate backfill sweep (opt-in) ---
+# The sweep the gate runs before it commits a test bmad-testarch-automate
+# backfilled. "full" (default) = the full three-axis sweep, cache-defeated, as
+# Execute's step 5 runs it. "scoped" = when every path the backfill stages is a
+# test file (named as its toolchain names one, and mentioned by no other file
+# outside the run's own records) and Execute's full step-5 sweep went green at
+# the commit the backfill builds on, re-run only the checks of the packages
+# that hold those files and every check that reads files across packages or
+# git's file list (unless its own declared inputs exclude every staged path),
+# and print each check left out. It trusts that earlier full sweep for every
+# check it does not re-run, which is why it is opt-in. The tests-ran marker
+# keeps scope=full and gains a sweep= line naming both captures. Any other
+# backfill runs the full sweep. A scalar: a team or user layer overrides it;
+# any value other than "scoped" reads as "full".
+backfill_sweep = "full"
+
 # --- Hook fired at epic completion (prompt or shell command); empty = none ---
 on_epic_complete = ""
 

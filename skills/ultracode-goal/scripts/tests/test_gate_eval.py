@@ -1196,6 +1196,38 @@ def test_sweep_scope_full_passes_the_verdict_through(tmp_path):
     assert result["sweep_scope"] == "full"
 
 
+def test_sweep_scope_full_beside_a_sweep_line_passes_the_verdict_through(tmp_path):
+    """#241: after a scoped backfill sweep the gate's marker keeps `scope=full`
+    and adds a `sweep=` line naming the two captures it rests on. The script
+    reads only the `scope=` line, so the verdict, the reasons and
+    `sweep_scope` are what a plain `scope=full` marker gives."""
+    write_slim(tmp_path, "PASS")
+    plain = run_gate(tmp_path, tests_ran=_write_marker(tmp_path, _MARKER_BASELINE, "scope=full", name="plain"))
+    marker = _write_marker(
+        tmp_path, _MARKER_BASELINE, "scope=full", "sweep=sweep-step5-1a2b3c4.log+sweep-backfill-1a2b3c4.log"
+    )
+
+    result = run_gate(tmp_path, tests_ran=marker)
+
+    assert result["verdict"] == "advance"
+    assert result["sweep_scope"] == "full"
+    assert result["reasons"] == plain["reasons"]
+
+
+def test_a_sweep_line_never_lifts_the_scoped_cap(tmp_path):
+    """Twin: the `sweep=` line carries no scope of its own, so a `scope=scoped`
+    marker beside one is still capped."""
+    write_slim(tmp_path, "PASS")
+    marker = _write_marker(
+        tmp_path, _MARKER_BASELINE, "scope=scoped", "sweep=sweep-step5-1a2b3c4.log+sweep-backfill-1a2b3c4.log"
+    )
+
+    result = run_gate(tmp_path, tests_ran=marker)
+
+    assert result["verdict"] == "reloop"
+    assert result["sweep_scope"] == "scoped"
+
+
 def test_sweep_scope_scoped_caps_advance_at_reloop(tmp_path):
     write_slim(tmp_path, "PASS")
     marker = _write_marker(
