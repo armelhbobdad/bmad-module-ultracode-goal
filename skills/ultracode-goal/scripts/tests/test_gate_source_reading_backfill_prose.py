@@ -77,15 +77,19 @@ _KILLED_FIRST = (
 
 # The new paragraph's rules, as sentences or clauses of it.
 _DEFINES = (
-    "A test reads source text when it does not execute the code under its gap and reads that code's text: a file "
-    "read, an `include_str!`, a `?raw` import, or an AST or a snapshot of the source."
+    "A test reads source text when it does not execute the code under its gap and reads that code's text, for "
+    "example by a file read, an `include_str!` or `include_bytes!`, a `?raw` import, Python's `inspect.getsource`, "
+    "or an AST or a snapshot of the source."
 )
 _SPELLING = "yet nothing has executed the behaviour: its kills measure the spelling and nothing else."
 _SUMMARY_FIRST = "Automate's summary says beside each test it backfilled whether the test executes the code"
 _BEFORE_STAGING = "before step 1 of \"When automate backfills\" stages anything, read each test the summary names too"
 _READ_FORM = (
-    "a test whose text names the `file` of its gap's rows beside a read form (`open(`, `read_text`, `readFileSync`, "
-    "`include_str!`, `?raw`, a parse of the source) reads source text, whatever the summary says of it."
+    "a test whose text names the `file` of its gap's rows beside a read form reads source text, whatever the summary "
+    "says of it, and so does one that reads the gap's code by its object, as `inspect.getsource` does, without naming "
+    "the file. The read forms include, among others, `open(`, `read_text`, `read_to_string`, `fs::read`, "
+    "`include_str!`, `include_bytes!`, `readFile` and `readFileSync` (Node's `fs` or `fs.promises`), Go's "
+    "`os.ReadFile`, a `?raw` import and a parse of the source."
 )
 _COMMIT_AND_LOG = (
     "Commit such a test with the backfill like any other, and log an `unmeasured` `gate-gap:` line for the behaviour "
@@ -96,6 +100,12 @@ _NEVER_CLOSES = (
     "a test that executes the code kills every row behind it"
 )
 _NO_LATER_SPELLING = "and no later pass writes another test that reads source text for it."
+_NAMES_APART = (
+    "`scripts/mutate_check.py` finds a row's `expect_red` by the text of its name, so a test that executes the code "
+    "under a name that sits inside the name of a test that reads source text never reads as that row's kill: when you "
+    "delegate automate, tell it to name each test that executes such code so that no test that reads source text has "
+    "a name that contains it."
+)
 
 # Each #239 edit outside the new paragraph as (pre-edit text, live text).
 _NO_SECOND = (
@@ -246,6 +256,12 @@ def _never_closes_by_spelling(paragraph: str) -> bool:
     return _NEVER_CLOSES in _flat(paragraph)
 
 
+def _names_executing_tests_apart(paragraph: str) -> bool:
+    """`mutate_check.py` matches `expect_red` as a substring of a failure line,
+    so an executing test named inside a spelling test's name could never count."""
+    return _NAMES_APART in _flat(paragraph)
+
+
 def _writes_no_second_spelling_test(text: str) -> bool:
     flat = _flat(text)
     return _NO_SECOND[1] in flat and _NO_LATER_SPELLING in _flat(_paragraph(text))
@@ -302,6 +318,7 @@ _PARAGRAPH_RULES = {
     "reads-each-test": _reads_each_backfilled_test,
     "commits-and-logs": _commits_it_and_logs_the_behaviour,
     "never-closes": _never_closes_by_spelling,
+    "names-apart": _names_executing_tests_apart,
 }
 
 
@@ -333,11 +350,24 @@ def test_each_rule_of_the_gate_holds_and_is_absent_before_the_edit(rule):
 
 # One-clause mutants, each of which drops or weakens one rule.
 _MUTANTS = (
-    ("defines", "a file read, an `include_str!`, a `?raw` import, or an AST", "a file read"),
+    ("defines", "a file read, an `include_str!` or `include_bytes!`, a `?raw` import, Python's", "a file read, or"),
+    ("defines", "reads that code's text, for example by a file read,", "reads that code's text, by a file read"),
     ("defines", "when it does not execute the code under its gap and reads", "when it reads"),
     ("defines", "its kills measure the spelling and nothing else", "its kills close the gap"),
-    ("reads-each-test", ", whatever the summary says of it.", ", unless the summary says it executes the code."),
-    ("reads-each-test", "`readFileSync`, `include_str!`, `?raw`, a parse", "`readFileSync`, a parse"),
+    (
+        "reads-each-test",
+        "reads source text, whatever the summary says of it, and so does",
+        "reads source text unless the summary says it executes the code, and so does",
+    ),
+    (
+        "reads-each-test",
+        ", and so does one that reads the gap's code by its object, as `inspect.getsource` does, without naming the "
+        "file.",
+        ".",
+    ),
+    ("reads-each-test", "The read forms include, among others,", "The read forms are"),
+    ("reads-each-test", "`read_to_string`, `fs::read`, `include_str!`, `include_bytes!`,", "`include_str!`,"),
+    ("reads-each-test", "Go's `os.ReadFile`, ", ""),
     ("reads-each-test", "stages anything, read each test the summary names too", "stages anything, trust the summary"),
     (
         "commits-and-logs",
@@ -346,6 +376,12 @@ _MUTANTS = (
     ),
     ("commits-and-logs", "Commit such a test with the backfill like any other", "Leave such a test unstaged"),
     ("never-closes", "ever closes that line: it closes only when", "ever closes that line alone: it closes when"),
+    (
+        "names-apart",
+        "so that no test that reads source text has a name that contains it.",
+        "however it likes.",
+    ),
+    ("names-apart", "finds a row's `expect_red` by the text of its name", "finds a row's `expect_red` by itself"),
     ("no-second-test", "so no pass writes it another test that reads source text", "so a pass may write it another"),
     ("no-second-test", "and no later pass writes another test that reads source text for it.", "."),
     (

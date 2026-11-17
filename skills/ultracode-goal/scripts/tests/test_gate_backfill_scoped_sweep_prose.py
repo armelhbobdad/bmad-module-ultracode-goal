@@ -76,11 +76,15 @@ _BASE_CAPTURE = (
     "- `evidence-<story_id>/` holds the capture of a full sweep that went green at that commit (`sweep-step5-<short "
     "sha>.log`, or the numbered capture of its second sweep);"
 )
+_MENTIONS = (
+    "and no file but itself and the run's own records (under `{workflow.implementation_artifacts}` and "
+    "`{workflow.trace_output_dir}`) mentions its name, the file name without its last extension (`a.test` for "
+    "`a.test.ts`), which you check with the Grep tool, a mention it finds in a file git does not track included;"
+)
 _TEST_FILE = (
     "- every path `git diff --cached --name-only --no-renames` lists is a test file: it follows its toolchain's "
     "test-file naming (`*.test.*`, `*.spec.*`, `test_*.py`, `*_test.py`, `*_test.go`, or a file in a Rust crate's "
-    "top-level `tests/` folder), and its name, without its extension, appears in no other tracked file, which you "
-    "check with the Grep tool;"
+    "top-level `tests/` folder), " + _MENTIONS
 )
 _FIXES = "- every fix step 2 makes stays inside those files."
 _DOUBT = "When one does not hold, or you are in any doubt, run the full sweep: it is never wrong, only slower."
@@ -103,6 +107,10 @@ _MARKER = (
     "Step 3 then writes `scope=full`, since the full sweep at the base and this one together cover the backfill's "
     "tree, beside the `sweep=` line that names the green capture on each side; `gate_eval.py --tests-ran` reads only "
     "the `scope=` line."
+)
+_LOG_LINE = (
+    "The story's next step 5 writes a marker without that line, so log its value in `.decision-log.md` too, on a "
+    "line of its own that starts `backfill-sweep:`, never inside the `gate-backfill:` line a resume reads."
 )
 _FALLBACK = (
     "When step 4's commit takes in a path outside the staged set (a `pre-commit` job that stages a file it rewrote), "
@@ -300,6 +308,10 @@ def _writes_the_composed_marker(paragraph: str) -> bool:
     return _MARKER in _flat(paragraph) and _FALLBACK in _flat(paragraph)
 
 
+def _logs_the_sweep_value(paragraph: str) -> bool:
+    return _LOG_LINE in _flat(paragraph)
+
+
 def _leaves_the_second_run_alone(paragraph: str) -> bool:
     return _SECOND_RUN in _flat(paragraph)
 
@@ -310,6 +322,7 @@ _PARAGRAPH_RULES = {
     "runs": _runs_what_the_files_can_change,
     "flaky": _reads_a_red_at_its_own_scope,
     "marker": _writes_the_composed_marker,
+    "log-line": _logs_the_sweep_value,
     "second-run": _leaves_the_second_run_alone,
 }
 
@@ -388,8 +401,9 @@ _MUTANTS = (
     ("conditions", " and holds no `sweep=` line, so a scoped sweep never builds on another;", ";"),
     ("conditions", "and the `gate-backfill-base:` commit are one commit;", "are one commit;"),
     ("conditions", "holds the capture of a full sweep that went green at that commit", "holds a capture"),
-    ("conditions", ", and its name, without its extension, appears in no other tracked file, which you check with the "
-     "Grep tool;", ";"),
+    ("conditions", "and no file but itself and the run's own records (under", "and no file (under"),
+    ("conditions", "the file name without its last extension (`a.test` for `a.test.ts`)", "its stem"),
+    ("conditions", ", a mention it finds in a file git does not track included;", ";"),
     ("conditions", "it follows its toolchain's test-file naming", "it sits under a test folder or follows its "
      "toolchain's test-file naming"),
     ("conditions", "- every fix step 2 makes stays inside those files.", "- step 2 may fix any path."),
@@ -402,6 +416,8 @@ _MUTANTS = (
     ("flaky", "its second sweep run at the same tree and the same scope.", "its second sweep run in full."),
     ("marker", "Step 3 then writes `scope=full`,", "Step 3 then writes `scope=scoped`,"),
     ("marker", "write the marker again from it with no `sweep=` line,", "keep the marker,"),
+    ("log-line", "so log its value in `.decision-log.md` too,", "so let it go,"),
+    ("log-line", ", never inside the `gate-backfill:` line a resume reads.", ", or inside the `gate-backfill:` line."),
     ("second-run", "still takes the test command of the story's full sweep", "takes this sweep's command"),
 )
 
@@ -454,11 +470,19 @@ def test_the_step_5_rule_rejects_a_one_clause_mutant():
 _TEST_NAME = re.compile(r"(?:^|/)(?:[^/]+\.(?:test|spec)\.[^/]+|test_[^/]+\.py|[^/]+_test\.(?:py|go))$")
 
 
-def _is_test_file(path: str, gate: str, mentioned: set[str]) -> bool:
+def _is_test_file(path: str, gate: str, mentions: dict[str, str]) -> bool:
+    """A staged path's test-file reading off the bullet: its naming, then each
+    mention of its name (the file name without its last extension) by where it
+    sits: `records` (the run's own), `tracked` or `untracked`."""
     paragraph = _flat(_paragraph(gate))
     named = bool(_TEST_NAME.search(path)) or bool(re.match(r"(?:[^/]+/)*tests/[^/]+\.rs$", path))
-    unmentioned = Path(path).stem not in mentioned or "appears in no other tracked file" not in paragraph
-    return named and unmentioned
+    where = mentions.get(Path(path).stem)
+    counted = {"tracked"}
+    if "a mention it finds in a file git does not track included" in paragraph:
+        counted.add("untracked")
+    if "no file but itself and the run's own records" not in paragraph:
+        counted.add("records")
+    return named and where not in counted
 
 
 def _form(gate: str, state: dict) -> str:
@@ -476,7 +500,7 @@ def _form(gate: str, state: dict) -> str:
         return "full"
     if not state["base_capture"] and _BASE_CAPTURE in lines:
         return "full"
-    if not all(_is_test_file(path, gate, state["mentioned"]) for path in state["staged"]):
+    if not all(_is_test_file(path, gate, state["mentions"]) for path in state["staged"]):
         return "full"
     return "scoped"
 
@@ -487,7 +511,7 @@ _SCOPED = {
     "one_commit": True,
     "base_capture": True,
     "staged": ["packages/web/src/panel.test.ts", "tests/test_api.py"],
-    "mentioned": set(),
+    "mentions": {},
 }
 
 
@@ -501,7 +525,9 @@ _SCOPED = {
         ("moved-head", {"one_commit": False}, "full"),
         ("no-base-capture", {"base_capture": False}, "full"),
         ("a-helper", {"staged": ["tests/helpers.ts"]}, "full"),
-        ("a-shared-test-module", {"mentioned": {"test_api"}}, "full"),
+        ("a-shared-test-module", {"mentions": {"test_api": "tracked"}}, "full"),
+        ("named-in-an-untracked-file", {"mentions": {"panel.test": "untracked"}}, "full"),
+        ("named-only-in-the-runs-records", {"mentions": {"test_api": "records", "panel.test": "records"}}, "scoped"),
         ("a-rust-integration-test", {"staged": ["crates/core/tests/parse.rs"]}, "scoped"),
     ],
 )
@@ -518,8 +544,8 @@ def test_replay_on_the_pre_edit_text_always_runs_the_full_sweep():
     [
         ("chains", " and holds no `sweep=` line, so a scoped sweep never builds on another;", ";",
          {"marker_has_sweep": True}),
-        ("trusts-a-shared-module", ", and its name, without its extension, appears in no other tracked file, which "
-         "you check with the Grep tool;", ";", {"mentioned": {"test_api"}}),
+        ("ignores-an-untracked-mention", ", a mention it finds in a file git does not track included;", ";",
+         {"mentions": {"panel.test": "untracked"}}),
         ("needs-no-base", "- `evidence-<story_id>/` holds the capture of a full sweep that went green at that commit "
          "(`sweep-step5-<short sha>.log`, or the numbered capture of its second sweep);\n", "",
          {"base_capture": False}),
@@ -574,6 +600,12 @@ _DOCS_SAY = {
     "troubleshooting.md": ("A marker that carries a `sweep=` line beside `scope=full` is no cause",),
     "architecture.md": ("the opt-in `backfill_sweep`",),
     "_internal/STABILITY.md": ("`allowlist_commands`, `backfill_sweep`, `on_epic_complete`",),
+    "operating-tips.md": (
+        "**Turn on `backfill_sweep = \"scoped\"` when a backfill's full sweep costs you more than it tells you.**",
+        "the green capture step 5 left in `evidence-<story_id>/` as `sweep-step5-<short sha>.log`",
+        "Set the key before the story's Execute runs: a step 5 that ran with it unset saved no such capture, and the "
+        "gate then runs the full sweep.",
+    ),
 }
 
 

@@ -56,28 +56,43 @@ _SCRIPT = _SKILL_ROOT / "scripts" / "carry_build_cache.py"
 _FRAGMENT = _REPO / "changes" / "gate-worktree-keeps-build-cache.yaml"
 _ARCHITECTURE = _REPO / "docs" / "architecture.md"
 
+_EXECUTE = _SKILL_ROOT / "references" / "execute.md"
+_TIPS = _REPO / "docs" / "operating-tips.md"
 _REBUILD_HEAD = "**Rebuild the worktree once automate has finished (production).**"
 _CAVEAT_HEAD = "- **Dependency directories do not follow the commit.**"
 _HONESTY_HEAD = "Record in `.decision-log.md`, once per gated story"
 
 _OUT = "`uv run {skill-root}/scripts/carry_build_cache.py out --worktree <tmp-path> --stash <stash>`"
+_AFTER_THE_CEILING = (
+    "the one once a `reloop` verdict is recorded and the turn-ceiling check of the `reloop` route under \"Route on "
+    "the verdict\" has kept it a re-loop"
+)
+_RESUME_REGATED = (
+    "and a resume's of a dead session's worktree when the story's last gate cycle logged no verdict or a `reloop`"
+)
 _WHEN_OUT = (
     "So carry the worktree's own across each replacement after which the story is gated again: right before the "
-    "rebuild's `git worktree remove --force <tmp-path>`, the one once a `reloop` verdict is recorded, and a resume's "
-    "of a dead session's worktree, run " + _OUT + ","
+    "rebuild's `git worktree remove --force <tmp-path>`, " + _AFTER_THE_CEILING + ", " + _RESUME_REGATED + ", run "
+    + _OUT + ","
 )
 _WHEN_BACK = (
     "and right after every `git worktree add <tmp-path> <commit>`, before the links above, the same call with `back` "
     "in place of `out`."
 )
 _NOTHING_AFTER = (
-    "Once an `escalate`, `advance` or `defer` verdict is recorded, carry nothing out: the build folder goes with the "
-    "worktree, as it always has, so a story that stops holds no build of its own, and its re-gate builds cold."
+    "Once an `escalate`, `advance` or `defer` verdict is recorded, a `reloop` the turn-ceiling check turns into "
+    "`escalate` included, carry nothing out: the build folder goes with the worktree, as it always has, so a story "
+    "that stops holds no build of its own, and its re-gate builds cold."
 )
 _STASH = (
     "`<stash>` is `{workflow.implementation_artifacts}/.scratch-<story_id>/gate-build`, so the gate's build "
     "folders sit in the story's scratch folder (`references/execute.md`, step 0) while they are out of the "
     "worktree, and never pass to another story."
+)
+_ESCALATED = "A story that escalates keeps none of them (`references/execute.md`, \"Escalation sidecar\")."
+_DIR = (
+    "(`--dir <path>`, repeatable, names another toolchain's build folder instead, and only one whose tool rebuilds "
+    "from changed source and never replays a test result)"
 )
 _NEVER_CARRIES = (
     "never a test-result cache (`.pytest_cache`, a turbo or nx cache), a folder reached through a link or a path "
@@ -85,26 +100,37 @@ _NEVER_CARRIES = (
 )
 _RUN_RESULTS = (
     "before it carries a Cargo folder out it deletes the run results Cargo's tools keep there (`criterion/`, "
-    "`nextest/`, `tarpaulin/`, `*.profraw`), which a mutant's run wrote."
+    "`nextest/`, `tarpaulin/`, `llvm-cov/`, `tmp/`, `*.profraw`, `*.profdata`), which a mutant's run wrote."
 )
-_COLD = "A folder it cannot move stays in the worktree and goes with it, so its next build is cold, never wrong."
+_COLD = (
+    "A folder it cannot move stays in the worktree and goes with it, so its next build is cold, never wrong: its "
+    "exit 1, a folder that failed, never stops the rebuild or the removal."
+)
+_EXIT_2 = "Its exit 2 means the call was wrong: fix the call or carry nothing, and the honesty line says which."
+# The escalation sidecar's rule (execute.md): every escalation route writes
+# the sidecar, so the stash is emptied there.
+_DROP = (
+    "So whenever you write this sidecar and `<stash>` holds a build folder, run "
+    "`uv run {skill-root}/scripts/carry_build_cache.py drop --stash <stash>` once the sidecar is written."
+)
+_DROP_HEAD = "**An escalated story keeps no gate build.**"
 
 # Each #240 edit as (pre-edit text, live text).
 _REMOVAL = (
     "and a measurement surface holds nothing to preserve), then `git worktree prune`; a resume that finds a dead "
     "session's stale `.gate-worktree-<story_id>` removes it the same way before creating its own.",
     "and a measurement surface holds nothing to keep but the build folders the first caveat below carries out when "
-    "the verdict is `reloop`), then `git worktree prune`; a resume that finds a dead session's stale "
-    "`.gate-worktree-<story_id>` carries its build folders out and removes it the same way before creating its own.",
+    "the verdict is a `reloop` the turn-ceiling check keeps), then `git worktree prune`; a resume that finds a dead "
+    "session's stale `.gate-worktree-<story_id>` removes it the same way before creating its own, carrying its build "
+    "folders out first only when the story's last gate cycle logged no verdict or a `reloop`.",
 )
 _CAVEAT = (
     "measure both once per repo before committing to one.",
     "measure both once per repo before committing to one. A build folder (Cargo's `target`) does not follow the "
     "commit either, and is never linked: two trees that build into one folder run each other's output as their own. "
-    + _WHEN_OUT + " " + _WHEN_BACK + " " + _NOTHING_AFTER + " " + _STASH + " The script moves every Cargo build "
-    "folder (`--dir <path>`, repeatable, names another toolchain's build folder instead) to the same path with a "
-    "rename, " + _NEVER_CARRIES + ", and " + _RUN_RESULTS + " It prints what it carried, skipped and failed to move. "
-    + _COLD,
+    + _WHEN_OUT + " " + _WHEN_BACK + " " + _NOTHING_AFTER + " " + _STASH + " " + _ESCALATED + " The script moves "
+    "every Cargo build folder " + _DIR + " to the same path with a rename, " + _NEVER_CARRIES + ", and " + _RUN_RESULTS
+    + " It prints what it carried, skipped and failed to move. " + _COLD + " " + _EXIT_2,
 )
 _REBUILD_STEPS = (
     "replace the worktree instead of trusting it: remove it with `git worktree remove --force <tmp-path>`, add it "
@@ -174,7 +200,20 @@ def _carries_before_each_regated_removal(text: str) -> bool:
 
 def _carries_nothing_after_a_final_verdict(text: str) -> bool:
     caveat = _flat(_paragraph(text, _CAVEAT_HEAD))
-    return _NOTHING_AFTER in caveat and _REMOVAL[1] in _flat(text)
+    return _NOTHING_AFTER in caveat and _REMOVAL[1] in _flat(text) and _ESCALATED in caveat
+
+
+def _drops_the_stash_on_every_escalation(execute: str) -> bool:
+    """In the sidecar section every escalation route passes through."""
+    section = execute[execute.index("### Escalation sidecar") :]
+    section = section[: section.index("\n### ", 1)] if "\n### " in section[1:] else section
+    paragraph = _flat(_paragraph(section, _DROP_HEAD))
+    return _DROP in paragraph and "never through a link" in paragraph
+
+
+def _reads_the_exit_codes(text: str) -> bool:
+    caveat = _flat(_paragraph(text, _CAVEAT_HEAD))
+    return _COLD in caveat and _EXIT_2 in caveat and _DIR in caveat
 
 
 def _keeps_the_stash_in_scratch(text: str) -> bool:
@@ -218,6 +257,7 @@ _RULES = {
     "rebuild-order": _rebuild_carries_around_the_removal_and_the_add,
     "exception": _qualifies_what_the_rebuild_leaves,
     "honesty-line": _honesty_line_names_the_folders,
+    "exit-codes-and-dir": _reads_the_exit_codes,
 }
 
 
@@ -230,8 +270,12 @@ def test_each_rule_holds_and_is_absent_before_the_edit(rule):
 
 # One-clause mutants, each of which drops or weakens one rule.
 _MUTANTS = (
-    ("when-out-and-back", "the one once a `reloop` verdict is recorded, and a resume's", "and a resume's"),
-    ("when-out-and-back", ", and a resume's of a dead session's worktree, run", ", run"),
+    (
+        "when-out-and-back",
+        " and the turn-ceiling check of the `reloop` route under \"Route on the verdict\" has kept it a re-loop",
+        "",
+    ),
+    ("when-out-and-back", " when the story's last gate cycle logged no verdict or a `reloop`, run", ", run"),
     ("when-out-and-back", "and right after every `git worktree add", "and right after the rebuild's `git worktree add"),
     ("when-out-and-back", "before the links above, the same call", "after the links above, the same call"),
     (
@@ -239,14 +283,24 @@ _MUTANTS = (
         "carry nothing out: the build folder goes",
         "carry them out too: the build folder goes",
     ),
-    ("nothing-after-a-final-verdict", "carries out when the verdict is `reloop`", "carries out whatever the verdict"),
-    ("nothing-after-a-final-verdict", "carries its build folders out and removes it", "removes it"),
+    (
+        "nothing-after-a-final-verdict",
+        "carries out when the verdict is a `reloop` the turn-ceiling check keeps",
+        "carries out whatever the verdict",
+    ),
+    (
+        "nothing-after-a-final-verdict",
+        ", carrying its build folders out first only when",
+        ", carrying its build folders out first even when",
+    ),
+    ("nothing-after-a-final-verdict", ", a `reloop` the turn-ceiling check turns into `escalate` included,", ","),
+    ("nothing-after-a-final-verdict", "A story that escalates keeps none of them", "A story that escalates keeps them"),
     ("stash-in-scratch", "/.scratch-<story_id>/gate-build`", "/.gate-build-<story_id>`"),
     ("stash-in-scratch", ", and never pass to another story.", ", and pass on to the next story."),
     ("never-carries-a-run", "never a test-result cache (`.pytest_cache`, a turbo or nx cache), ", ""),
     ("never-carries-a-run", "a folder reached through a link or a path", "a path"),
-    ("never-carries-a-run", "(`criterion/`, `nextest/`, `tarpaulin/`, `*.profraw`)", "(`criterion/`)"),
-    ("never-carries-a-run", "so its next build is cold, never wrong.", "so a copy of it is carried instead."),
+    ("never-carries-a-run", "`llvm-cov/`, `tmp/`, `*.profraw`, `*.profdata`", "`*.profraw`"),
+    ("never-carries-a-run", "so its next build is cold, never wrong:", "so a copy of it is carried instead:"),
     (
         "rebuild-order",
         "carry its build folders out with the `carry_build_cache.py` call the first caveat above gives, ",
@@ -256,6 +310,17 @@ _MUTANTS = (
     ("exception", "never a result it reads", "and a result it reads"),
     ("exception", "so Cargo rebuilds each crate of the worktree from the commit's source", "so Cargo reuses it"),
     ("honesty-line", "and each one it skipped, with the reason it printed, or failed to move.", "."),
+    ("exit-codes-and-dir", "never stops the rebuild or the removal.", "stops the rebuild."),
+    (
+        "exit-codes-and-dir",
+        "Its exit 2 means the call was wrong: fix the call or carry nothing",
+        "Its exit 2 is a warning",
+    ),
+    (
+        "exit-codes-and-dir",
+        ", and only one whose tool rebuilds from changed source and never replays a test result)",
+        ")",
+    ),
 )
 
 
@@ -268,6 +333,27 @@ def test_each_rule_rejects_a_one_clause_mutant(rule, old, new):
     mutant = live.replace(old, new, 1)
     assert mutant != live, "the mutant must actually change the text"
     assert _RULES[rule](live) and not _RULES[rule](mutant)
+
+
+def test_every_escalation_drops_the_stash():
+    execute = _read(_EXECUTE)
+    assert _drops_the_stash_on_every_escalation(execute)
+    section = execute[execute.index("### Escalation sidecar") :]
+    # The rule sits where every escalation route writes the sidecar.
+    assert "Every escalation route" in section[: section.index(_DROP_HEAD)]
+    paragraph = _paragraph(execute, _DROP_HEAD)
+    assert not _drops_the_stash_on_every_escalation(execute.replace(paragraph + "\n\n", "", 1))
+    for old, new in (
+        ("drop --stash <stash>`", "out --stash <stash>`"),
+        ("and `<stash>` holds a build folder, run", "and `<stash>` holds a build folder, you may run"),
+        ("never through a link", "through any link"),
+    ):
+        assert execute.count(old) == 1, old
+        mutant = execute.replace(old, new, 1)
+        assert mutant != execute
+        assert not _drops_the_stash_on_every_escalation(mutant)
+    # It names the stash only: no remove verb shares a sentence with the scratch folder.
+    assert ".scratch-" not in paragraph and "scratch folder" not in paragraph
 
 
 def test_the_back_step_can_not_move_ahead_of_the_links():
@@ -312,7 +398,7 @@ def _help() -> str:
 
 def test_the_prose_names_the_scripts_own_modes_and_flags():
     usage = _help()
-    for word in ("out", "back", "--worktree", "--stash", "--dir"):
+    for word in ("out", "back", "drop", "--worktree", "--stash", "--dir"):
         assert word in usage, word
     caveat = _flat(_paragraph(_read(_GATE), _CAVEAT_HEAD))
     assert _OUT in caveat and "`--dir <path>`" in caveat
@@ -392,12 +478,22 @@ _FRAGMENT_SAYS = (
     "the removal once a `reloop` verdict is recorded",
     "back to the same path right after every `git worktree add`",
     "After an `escalate`, `advance` or `defer` verdict nothing is carried",
+    "the turn-ceiling check has kept it a re-loop",
+    "whose last gate cycle logged no verdict or a `reloop`",
+    "has its stash emptied by the script's `drop` mode once its escalation sidecar is written",
+    "its exit 1 never stops the rebuild or the removal, and its exit 2 means the call was wrong",
     "never carries a test-result cache (`.pytest_cache`, a turbo or nx cache) or a folder reached through a link",
-    "(`criterion/`, `nextest/`, `tarpaulin/`, `*.profraw`)",
+    "(`criterion/`, `nextest/`, `tarpaulin/`, `llvm-cov/`, `tmp/`, `*.profraw`, `*.profdata`)",
     "a build is cold but never wrong",
     "Mutated sources and copied tests are still discarded",
     "the cache never passes from one story to the next",
 )
+
+
+def test_the_operating_tip_says_an_escalation_keeps_no_build():
+    tip = _flat(_read(_TIPS))
+    assert "**Expect one cold Cargo build per gated story, not two.**" in tip
+    assert "and an escalation deletes what it had carried, so a re-gate after an escalation builds cold again." in tip
 
 
 def test_the_fragment_says_what_the_prose_does():
