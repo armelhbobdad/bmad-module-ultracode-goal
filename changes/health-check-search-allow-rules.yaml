@@ -1,0 +1,7 @@
+type: breaking
+scope: ultracode-goal
+summary: |
+  The health check now searches for an open issue that matches a finding with `gh issue list --repo <repo> --search` instead of `gh search issues`, whose `--repo` cannot name a host, so the search no longer exits `1`, queuing every finding, for a `health_check_repo` written `HOST/OWNER/REPO`. The `customize.toml` comment and the Health Check page now name `gh issue list` in the `allowlist_commands` override they give for `health_check_autosubmit = true`. A headless run whose override still names `gh search issues`, as the advice of 7.2.0 and 7.3.0 did, has no rule that allows the new search. In a mode that asks first, such as `drive_epic.py`'s default `acceptEdits`, nobody is there to answer, so the call is refused and the run saves its bug findings to the local queue, with a reason saying a `gh` call was refused, instead of filing them; under Auto Mode the classifier decides whether the call runs.
+migration: |
+  In the `[workflow]` override in `_bmad/custom/ultracode-goal.toml` (or `ultracode-goal.user.toml`), replace `"gh search issues"` with `"gh issue list"` in `allowlist_commands`, or `"gh search issues --repo <repo>"` with `"gh issue list --repo <repo>"`, and delete `Bash(gh search issues:*)` or `Bash(gh search issues --repo <repo>:*)` from `.claude/settings.local.json`.
+issues: [244]

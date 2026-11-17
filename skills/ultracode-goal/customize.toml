@@ -79,7 +79,9 @@ on_escalation = ""
 # separate enabled toggle. (assets/module.yaml carries a test-pinned mirror of
 # this default for BMad-core readers of module.yaml; this file is what the live
 # run reads.)
-# A repository on a host other than github.com is given as HOST/OWNER/REPO.
+# A repository on a host other than github.com is given as HOST/OWNER/REPO:
+# log gh in to that host first, with gh auth login --hostname HOST, HOST in
+# lower case and without a leading www.
 # To send findings to another repository, create these labels there:
 # health-check, workflow-improvement, bug, friction, gap, duplicate and
 # possible-duplicate, and copy two files into it unchanged: the issue template,
@@ -88,6 +90,10 @@ on_escalation = ""
 # https://github.com/armelhbobdad/bmad-module-ultracode-goal/blob/main/.github/workflows/health-check-dedup.yaml
 # Without the labels the first create fails and the retry files the issue
 # unlabeled; without the Action nothing labels it or closes a duplicate.
+# On a host other than github.com the Action runs only once GitHub Actions is
+# on there, its runs-on names one of the host's runners, the host can reach
+# actions/github-script at the commit the Action pins, and those runners can
+# run the Node version that commit's action.yml names in runs.using.
 # Such a project must also set its own health_check_seen_cache: the cache keys
 # each record by fingerprint alone, so two projects filing to different
 # repositories would block or overwrite each other's records. The check only
@@ -112,13 +118,13 @@ health_check_queue_path = "{project-root}/_bmad-output/ultracode-goal/improvemen
 #        an unattended run has nobody to approve them, so each is refused
 #        and the finding queued. Allow them under [workflow] in
 #        {project-root}/_bmad/custom/ultracode-goal.toml (or .user.toml):
-#          allowlist_commands = ["gh auth status", "gh search issues", "gh label create", "gh issue create"]
+#          allowlist_commands = ["gh auth status", "gh issue list", "gh label create", "gh issue create"]
 #        Arrays append: the list above keeps every command it holds.
 #        Preflight writes each entry as an allow rule in
 #        .claude/settings.local.json, where it stays for every later session
 #        in the project: any agent there can then create issues and labels on
 #        any repository without asking. To keep them to the health-check
-#        repository, write "gh search issues --repo <repo>",
+#        repository, write "gh issue list --repo <repo>",
 #        "gh label create --repo <repo>" and "gh issue create --repo <repo>",
 #        <repo> being health_check_repo. When you turn autosubmit off, drop the
 #        entries and delete their Bash(gh ...) rules from

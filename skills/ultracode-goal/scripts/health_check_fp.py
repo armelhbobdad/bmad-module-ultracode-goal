@@ -10,8 +10,10 @@ finding (turning a section heading into its slug and a defect name into its
 key) with the issue title and the machine-read top of the issue body, reads
 the machine-local seen-cache into a verdict (asking GitHub for a recorded
 issue's state through `gh`, bounded) with the line a regression's body opens
-with, merge-writes a record under a lock, and writes a drafted body into the
-local queue under a free name with the commands that submit it. It
+with, merge-writes a record under a lock, splits the configured repository
+into the host it names, as gh reads it (github.com for OWNER/REPO), and its
+OWNER/REPO, and writes a drafted body into the local queue under a free name
+with the commands that submit it. It
 makes NO submit/queue/route decision: that judgment lives in
 references/health-check.md (the LLM), as do the severity, the section and the
 defect name it is given.
@@ -98,7 +100,9 @@ Subcommands:
       issue_url, or that is not an object, names no repository and counts as
       without --repo; any other record whose issue_url is not a string under
       https://github.com/OWNER/REPO/ (https://HOST/OWNER/REPO/ for a REPO that
-      names a host), compared in any letter case, counts as no record, under
+      names a host, HOST normalised as `repo` prints it, so
+      www.github.com/OWNER/REPO reads github.com's URLs), compared in any
+      letter case, counts as no record, under
       either fingerprint: another repository's issue, a URL that is not
       https:// or one that is not a string alike. The record under --fp
       decides; only when the cache has no --fp key does the record under
@@ -146,6 +150,33 @@ Subcommands:
                                       regression ... D P. after a legacy record)
         a merge:                      the same with "merged" for "closed as
                                       completed".
+  repo --repo REPO
+      Validate REPO as [HOST/]OWNER/REPO (exit 1) and split it into the
+      host it names, as gh reads it (github.com for OWNER/REPO), and its
+      OWNER/REPO. Emit {"repo", "host", "owner_repo", "host_flag",
+      "is_default"}:
+        repo        REPO as written
+        host        the HOST REPO names, normalised as gh normalises a
+                    hostname (one leading lower-case `www.` dropped, so
+                    www.WWW.example.com is www.example.com while
+                    WWW.example.com keeps its `www.`; then lower case, any
+                    *.github.com is github.com, any *.github.localhost is
+                    github.localhost, a *.ghe.com name is its tenant's:
+                    api.octo.ghe.com is octo.ghe.com), else github.com
+                    (DEFAULT_HOST). A HOST the trim leaves empty
+                    (www./OWNER/REPO) names no host, as gh reads it. The step
+                    links the issue form on it, and `seen --repo` reads issue
+                    URLs under it
+        owner_repo  REPO without its host, the OWNER/REPO of a `gh api` path
+        host_flag   `--hostname HOST` when REPO names a host (not for
+                    www./OWNER/REPO), else "". `gh api` takes no --repo:
+                    with it, it reaches the host every --repo call reaches,
+                    the named one, or gh's default (GH_HOST, or the host gh
+                    is logged in to) for OWNER/REPO. `gh auth status` checks
+                    the named host alone with it, and every host gh knows
+                    without it
+        is_default  host is DEFAULT_HOST and owner_repo is DEFAULT_REPO in any
+                    letter case
   record --fp FP --cache PATH --issue-url URL --action A --date YYYY-MM-DD
          [--regression]
       Validate FP; A is created, reacted or commented with an https:// URL
@@ -274,6 +305,12 @@ DEFECT_KEY_RE = re.compile(r"[a-z0-9]+(-[a-z0-9]+){0,3}")
 FP_RE = re.compile(r"fp-[0-9a-f]{7}")
 DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 URL_PREFIX = "https://"
+# The host the script reads an OWNER/REPO value as on, for the issue-form link and the seen cache's issue URLs.
+DEFAULT_HOST = "github.com"
+# The domain of GitHub Enterprise Cloud tenants with data residency (TENANT.ghe.com), which gh normalises to the tenant.
+GHE_COM = "ghe.com"
+# The host of a GitHub development instance, which gh normalises any *.github.localhost to.
+GITHUB_LOCALHOST = "github.localhost"
 
 # The stage references a section_heading is looked up in: the skill's own
 # references/ folder, beside scripts/, wherever the skill is installed.
@@ -349,6 +386,8 @@ _DRAFT_HEADER_RE = re.compile(
 )
 # A repository as gh takes it: [HOST/]OWNER/REPO.
 REPO_RE = re.compile(r"(?:[A-Za-z0-9][A-Za-z0-9.-]*/)?[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+")
+# The health_check_repo customize.toml ships: its issues are public, which the step's gate says.
+DEFAULT_REPO = "armelhbobdad/bmad-module-ultracode-goal"
 
 GH_TIMEOUT_SEC = 10.0
 KILL_WAIT_SEC = 2.0  # each wait once the time limit stops gh: SIGTERM or taskkill, then the child
@@ -381,6 +420,37 @@ def _repo_error(repo: str) -> str | None:
     if REPO_RE.fullmatch(repo):
         return None
     return "invalid repo %r; expected [HOST/]OWNER/REPO" % repo
+
+
+def _normalize_host(host: str) -> str:
+    """host as gh normalises a hostname before it uses one: one leading lower-case `www.` dropped (www.WWW.example.com
+    is www.example.com, while WWW.example.com keeps its `www.`), then lower case, any *.github.com is github.com, any
+    *.github.localhost is github.localhost, and a *.ghe.com name is its tenant's (api.octo.ghe.com is octo.ghe.com).
+    `--repo` normalises its host this way; `--hostname` does not, so the step is given the normalised one. A host the
+    trim leaves empty (`www.`) gives "", which names no host."""
+    host = host.removeprefix("www.").lower()
+    if host.endswith("." + DEFAULT_HOST):
+        return DEFAULT_HOST
+    if host.endswith("." + GITHUB_LOCALHOST):
+        return GITHUB_LOCALHOST
+    if host.endswith("." + GHE_COM):
+        return ".".join(host.split(".")[-3:])
+    return host
+
+
+def _named_host(repo: str) -> str | None:
+    """The host repo names, normalised as gh does, or None when it names none: an OWNER/REPO value, or one whose host
+    the `www.` trim leaves empty (`www./OWNER/REPO`), which gh reads as OWNER/REPO on its default host."""
+    if repo.count("/") != 2:
+        return None
+    return _normalize_host(repo.split("/", 1)[0]) or None
+
+
+def split_repo(repo: str) -> tuple[str, str]:
+    """(HOST, OWNER/REPO) of repo, which REPO_RE has accepted: the host it names, normalised as gh does, else
+    DEFAULT_HOST."""
+    owner_repo = repo.split("/", 1)[1] if repo.count("/") == 2 else repo
+    return _named_host(repo) or DEFAULT_HOST, owner_repo
 
 
 def _sha7(text: str) -> str:
@@ -841,8 +911,10 @@ def _verdict(record) -> tuple[str, str | None]:
 
 
 def _issue_prefix(repo: str) -> str:
-    """The start of every issue URL of repo: github.com's, or the host's when repo names one."""
-    return f"{URL_PREFIX}{repo}/" if repo.count("/") == 2 else f"{URL_PREFIX}github.com/{repo}/"
+    """The start of every issue URL of repo: github.com's, or the host's when repo names one, normalised as the
+    `repo` subcommand prints it (split_repo), so www.github.com/OWNER/REPO reads github.com's URLs."""
+    host, owner_repo = split_repo(repo)
+    return f"{URL_PREFIX}{host}/{owner_repo}/"
 
 
 def _in_repo(record, repo: str | None) -> bool:
@@ -1217,6 +1289,33 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- repo ----------------------------------------------------------------------
+
+
+def repo_fields(repo: str) -> dict:
+    """What `repo` prints for repo, which REPO_RE has accepted: {"repo", "host", "owner_repo", "host_flag",
+    "is_default"}. The host and OWNER/REPO are split_repo's, the split `seen --repo` compares issue URLs with."""
+    host, owner_repo = split_repo(repo)
+    return {
+        "repo": repo,
+        "host": host,
+        "owner_repo": owner_repo,
+        # split_repo's host, and only for a value that names one, by the rule split_repo reads it with: for
+        # OWNER/REPO, --hostname github.com would pin github.com while every --repo call follows gh's default host
+        # (GH_HOST, or the one host gh is logged in to).
+        "host_flag": f"--hostname {host}" if _named_host(repo) else "",
+        "is_default": host == DEFAULT_HOST and owner_repo.lower() == DEFAULT_REPO.lower(),
+    }
+
+
+def cmd_repo(args: argparse.Namespace) -> int:
+    problem = _repo_error(args.repo)
+    if problem:
+        return _fail(problem)
+    print(json.dumps(repo_fields(args.repo)))
+    return 0
+
+
 # --- queue ---------------------------------------------------------------------
 
 
@@ -1363,6 +1462,12 @@ def main(argv: list[str] | None = None) -> int:
         "as no record.",
     )
     seen_parser.set_defaults(func=cmd_seen)
+
+    repo_parser = sub.add_parser(
+        "repo", help="Split the repository findings are filed on into its host, OWNER/REPO and gh --hostname flag."
+    )
+    repo_parser.add_argument("--repo", required=True, help="The configured health_check_repo, [HOST/]OWNER/REPO.")
+    repo_parser.set_defaults(func=cmd_repo)
 
     rec_parser = sub.add_parser("record", help="Record a fingerprint outcome to the cache.")
     rec_parser.add_argument("--fp", required=True)

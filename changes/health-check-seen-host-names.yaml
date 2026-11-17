@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  `health_check_fp.py seen --repo` now reads the host of a `HOST/OWNER/REPO` value as `gh` does before it compares a recorded issue URL with it: in lower case, without a leading `www.`, `github.com` for any `*.github.com` name and `TENANT.ghe.com` for `api.TENANT.ghe.com`. A `health_check_repo` of `www.github.com/OWNER/REPO` used to read the record of every issue `gh` filed there, under `https://github.com/OWNER/REPO/`, as another repository's, so that record neither suppressed a finding already filed nor linked a regression to the fixed issue.
+issues: [244]
