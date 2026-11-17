@@ -37,7 +37,9 @@ tools keep there (`criterion/`, `nextest/`, `tarpaulin/`, `llvm-cov/` and
 and at the top of every Cargo build folder inside it, such as
 `llvm-cov-target`, and every `*.profraw` and `*.profdata` file in it), since
 a mutant's run wrote them. Such a name is deleted only when it is a folder or
-a link (the link itself); a plain file of that name stays. A folder whose run
+a link (the link itself); a plain file of that name stays. `out` clears
+every folder it carries this way, a `--dir` one included, so a Cargo build
+folder nested in another toolchain's folder loses its run results too. A folder whose run
 results cannot all be deleted, an unreadable folder inside it included, is
 not carried. `out` skips a folder the
 stash already holds (`exists`), so nothing is merged. `back` skips a folder
@@ -51,7 +53,8 @@ How `drop` deletes. Every folder the stash holds, with everything in it,
 never through a link: a link inside is deleted itself, never what it points
 at, and a folder of the stash that is a link, or a stash that is one, is
 skipped. The stash's `.gitignore` stays. A missing stash holds nothing to
-delete. Since it deletes every folder it finds, `drop` refuses a stash that
+delete; a stash it cannot reach (a parent folder it may not search) is
+reported under `failed`. Since it deletes every folder it finds, `drop` refuses a stash that
 is not a folder named `gate-build` holding the `.gitignore` reading `*` that
 `out` writes, or one that holds a `.git`.
 
@@ -141,7 +144,7 @@ def _inside(path: Path, root: Path) -> bool:
 
 
 def _is_cargo_folder(path: Path) -> bool:
-    return all((path / marker).is_file() for marker in CARGO_MARKERS)
+    return all(os.path.isfile(path / marker) for marker in CARGO_MARKERS)
 
 
 def _is_result_cache(rel: str) -> bool:
@@ -160,7 +163,7 @@ def discover(root: Path) -> list[str]:
         here = Path(current)
         entries = set(dirs) | set(files)
         if current != str(root) and entries & _UNWALKED_MARKERS:
-            if all(marker in entries for marker in CARGO_MARKERS):
+            if _is_cargo_folder(here):
                 found.append(Path(os.path.relpath(current, root)).as_posix())
             dirs[:] = []  # a build folder, another cache, a nested repository or a virtual environment
             continue
@@ -241,7 +244,7 @@ def _prune_empty_parents(path: Path, root: Path) -> None:
 def _make_stash(stash: Path) -> None:
     stash.mkdir(parents=True, exist_ok=True)
     ignore = stash / ".gitignore"
-    if not ignore.exists():
+    if not os.path.exists(ignore):
         ignore.write_text("*\n", encoding="utf-8")
 
 
@@ -271,9 +274,9 @@ def carry(mode: str, worktree: Path, stash: Path, rel_dirs: list[str]) -> dict:
             skipped.append({"path": rel, "reason": "link"})
         elif not _inside(source, source_root):
             skipped.append({"path": rel, "reason": "outside"})
-        elif not source.is_dir():
+        elif not os.path.isdir(source):
             skipped.append({"path": rel, "reason": "not-a-folder"})
-        elif mode == "back" and not target.parent.is_dir():
+        elif mode == "back" and not os.path.isdir(target.parent):
             skipped.append({"path": rel, "reason": "parent-missing"})
         elif os.path.lexists(target):
             skipped.append({"path": rel, "reason": "exists"})
@@ -282,8 +285,9 @@ def carry(mode: str, worktree: Path, stash: Path, rel_dirs: list[str]) -> dict:
         else:
             try:
                 if mode == "out":
-                    if _is_cargo_folder(source):
-                        _clear_run_results(source, rel, cleared)
+                    # Every folder carried out, a `--dir` one included: the
+                    # clearing finds each Cargo build folder inside it.
+                    _clear_run_results(source, rel, cleared)
                     _make_stash(stash)
                     target.parent.mkdir(parents=True, exist_ok=True)
                 os.rename(source, target)
@@ -303,7 +307,7 @@ def drop(stash: Path) -> dict:
     failed: list[dict] = []
     if _is_link(stash):
         skipped.append({"path": ".", "reason": "link"})
-    elif stash.is_dir():
+    elif os.path.isdir(stash):
         try:
             entries = sorted(os.listdir(stash))
         except OSError as exc:
@@ -313,7 +317,7 @@ def drop(stash: Path) -> dict:
             path = stash / entry
             if _is_link(path):
                 skipped.append({"path": entry, "reason": "link"})
-            elif path.is_dir():
+            elif os.path.isdir(path):
                 try:
                     shutil.rmtree(path)
                 except OSError as exc:
@@ -347,7 +351,7 @@ def _is_a_stash(stash: Path) -> str | None:
         return f"the stash must be a folder named {STASH_NAME}: {stash}"
     try:
         ignore = (stash / ".gitignore").read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         ignore = None
     if ignore is None or ignore.rstrip("\r\n") != "*":
         return f"the stash holds no .gitignore reading * as out writes it: {stash}"
@@ -384,8 +388,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "drop":
         if args.worktree or args.dir:
             return _error("drop takes --stash alone")
+        try:
+            os.lstat(stash)
+        except FileNotFoundError:
+            pass  # no stash: nothing to delete
+        except OSError as exc:
+            result = {"mode": "drop", "carried": [], "cleared": [], "skipped": [],
+                      "failed": [{"path": ".", "error": str(exc)}]}
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            return 1
         if os.path.lexists(stash) and not _is_link(stash):
-            if not stash.is_dir():
+            if not os.path.isdir(stash):
                 return _error(f"the stash is not a folder: {stash}")
             reason = _is_a_stash(stash)
             if reason is not None:
@@ -397,10 +410,10 @@ def main(argv: list[str] | None = None) -> int:
         return _error(f"{args.mode} needs --worktree")
     if _is_link(stash):
         return _error(f"the stash is a link: {stash}")
-    if os.path.lexists(stash) and not stash.is_dir():
+    if os.path.lexists(stash) and not os.path.isdir(stash):
         return _error(f"the stash is not a folder: {stash}")
     worktree = Path(os.path.abspath(args.worktree))
-    if not worktree.is_dir():
+    if not os.path.isdir(worktree):
         return _error(f"the worktree is not a folder: {worktree}")
     if _overlap(worktree, stash):
         return _error(f"the stash and the worktree must not hold each other: {stash}")
@@ -412,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
         rel_dirs.append(rel)
     if not rel_dirs:
         root = worktree if args.mode == "out" else stash
-        rel_dirs = discover(root) if root.is_dir() else []
+        rel_dirs = discover(root) if os.path.isdir(root) else []
     result = carry(args.mode, worktree, stash, _outermost(rel_dirs))
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 1 if result["failed"] else 0

@@ -92,14 +92,18 @@ _DOUBT = "When one does not hold, or you are in any doubt, run the full sweep: i
 _RUNS = (
     "The scoped form runs, cache-defeated and printed, every check of each package that holds a staged path, and "
     "every check that reads files across packages or git's file list (a format, lint or type check, a scanner, a "
-    "tracked-files gate, a per-file line cap, a build-input manifest)."
+    "tracked-files gate, a per-file line cap, a build-input manifest) unless its own declared inputs exclude every "
+    "staged path."
 )
 _LEAVES_OUT = (
     "It leaves out only the checks of a package that holds no staged path, and a repo-wide check whose own declared "
     "inputs exclude every staged path, and it prints each check it leaves out and why; when it cannot tell whether a "
     "check reads a staged path, it runs that check."
 )
-_CAPTURE = "Capture it as `sweep-backfill-<short sha>.log`, as the full form is captured."
+_CAPTURE = (
+    "Capture it as `sweep-backfill-<short sha>.log`, as the full form is captured, with the staged paths it ran for, "
+    "as `git diff --cached --name-only --no-renames` listed them, printed in it."
+)
 _FLAKY = (
     "A red in it takes step 2's route, and `references/execute.md` step 2 reads a red the story's changes do not "
     "explain the same way here, its second sweep run at the same tree and the same scope."
@@ -114,9 +118,20 @@ _LOG_LINE = (
     "line of its own that starts `backfill-sweep:`, never inside the `gate-backfill:` line a resume reads."
 )
 _FALLBACK = (
-    "When step 4's commit takes in a path outside the staged set (a `pre-commit` job that stages a file it rewrote), "
-    "run the full sweep on that commit before step 5, write the marker again from it with no `sweep=` line, and read "
-    "a red in it as a red in step 2's sweep."
+    "Step 4's commit can take in a path outside the staged set (a `pre-commit` job that stages a file it rewrote), "
+    "so step 5 opens with a check, which a resume that starts at step 5 runs too: before it refreshes "
+    "`.commit-<story_id>`, when the marker carries a `sweep=` line and `git diff --name-only --no-renames <base> "
+    "HEAD`, with `<base>` the `gate-backfill-base:` commit, lists a path the scoped capture's printed staged list "
+    "does not hold, run the full sweep on `HEAD`. When it is green, write the marker again from it with no `sweep=` "
+    "line, then go on with step 5. A red in it ends the cycle at a re-loop as \"A red backfill sweep ends the cycle "
+    "at a re-loop\" below does, except that its `assessed-commit:` line names the backfill commit, `HEAD`, and the "
+    "files are already committed; that logged verdict takes a resume out of `references/execute.md`'s fifth resume "
+    "case."
+)
+# Step 5's own sentence keeps its pinned opening; the pointer goes at its end.
+_STEP5_POINTER = (
+    "When the marker carries a `sweep=` line, this step opens, before its refresh, with the check \"A backfill of "
+    "test files alone may scope its sweep\" below gives, on a resume that starts here too."
 )
 _SECOND_RUN = (
     "The second run a row that reads `GREEN` gets (\"A reported gap stays open until a later pass measures it "
@@ -197,6 +212,10 @@ def _delta(text: str) -> str:
     return text[start : text.index("\n\n", start)]
 
 
+def _backfill_step5(text: str) -> str:
+    return _step(text, "\n5. Refresh `.commit-<story_id>` from `HEAD`", "\n\nThe new commit is now")
+
+
 def _step5(text: str) -> str:
     return next(line for line in text.splitlines() if line.startswith("5. **Re-verify on the committed HEAD.**"))
 
@@ -205,6 +224,7 @@ def _pre_edit(gate: str) -> str:
     paragraph = _paragraph(gate)
     if paragraph:
         gate = gate.replace(paragraph + "\n\n", "", 1)
+    gate = gate.replace(" " + _STEP5_POINTER, "", 1)
     for old, new in _GATE_EDITS:
         gate = gate.replace(new, old, 1)
     return gate
@@ -221,7 +241,9 @@ def test_the_pre_edit_texts_are_real_reconstructions():
         assert live.count(new) == 1, new[:80]
         assert pre.count(old) == 1 and new not in pre, old[:80]
     assert _HEAD not in pre and _CITED not in pre and "backfill_sweep" not in pre and "sweep=" not in pre
-    assert len(live) - len(pre) == len(_paragraph(live)) + 2 + sum(len(new) - len(old) for old, new in _GATE_EDITS)
+    assert len(live) - len(pre) == (
+        len(_paragraph(live)) + 2 + len(_STEP5_POINTER) + 1 + sum(len(new) - len(old) for old, new in _GATE_EDITS)
+    )
     assert execute.count(_STEP5[1]) == 1 and "backfill_sweep" not in execute_pre
     # The step after the commit's paragraph is the red-sweep paragraph again.
     assert "turns like any wait (`references/execute.md`, \"Waiting spends turns\").\n\n" + _PRE_TRACE in pre
@@ -261,6 +283,10 @@ def test_the_key_is_read_where_the_sweep_is_chosen_and_where_its_base_is_capture
     assert "{workflow.backfill_sweep}" in _step5(_read(_EXECUTE))
     comment = _read(_CUSTOMIZE).split("backfill_sweep = ", 1)[0].rsplit("# --- ", 1)[1]
     assert "any value other than \"scoped\" reads as \"full\"" in _flat(comment.replace("# ", ""))
+    comment = _flat(comment.replace("# ", ""))
+    assert "mentioned by no other file outside the run's own records" in comment and "tracked file" not in comment
+    assert "(unless its own declared inputs exclude every staged path)" in comment
+    assert "allowlist_commands" not in comment
     # The first `allowlist_commands` in the file is still the key itself.
     assert _read(_CUSTOMIZE).split("allowlist_commands", 1)[1].startswith(" = [")
 
@@ -372,11 +398,26 @@ def _the_full_instrument_takes_a_composed_sweep(text: str) -> bool:
     return _INSTRUMENT[1] in _flat(_delta(text))
 
 
+def _step5_opens_with_the_check(text: str) -> bool:
+    """Step 5, which a normal backfill and a resume both pass through, keeps
+    its pinned opening and points at the check that runs before its refresh,
+    and the check itself names that resume."""
+    step = _flat(_backfill_step5(text))
+    paragraph = _flat(_paragraph(text))
+    return bool(
+        step.strip().startswith("5. Refresh `.commit-<story_id>` from `HEAD`")
+        and _STEP5_POINTER in step
+        and "which a resume that starts at step 5 runs too" in paragraph
+        and "before it refreshes `.commit-<story_id>`" in paragraph
+    )
+
+
 _GATE_RULES = {
     "switch": _switches_in_step_2,
     "step-3": _step3_names_both_captures,
     "composed": _the_cap_reads_a_composed_marker_as_full,
     "instrument": _the_full_instrument_takes_a_composed_sweep,
+    "step-5-check": _step5_opens_with_the_check,
 }
 
 
@@ -415,10 +456,20 @@ _MUTANTS = (
     ("runs", "The scoped form runs, cache-defeated and printed,", "The scoped form runs"),
     ("runs", ", and every check that reads files across packages or git's file list", ""),
     ("runs", "and it prints each check it leaves out and why;", "and it prints nothing it leaves out;"),
+    ("runs", ") unless its own declared inputs exclude every staged path.", ")."),
     ("runs", "when it cannot tell whether a check reads a staged path, it runs that check.", "it skips any other."),
     ("flaky", "its second sweep run at the same tree and the same scope.", "its second sweep run in full."),
     ("marker", "Step 3 then writes `scope=full`,", "Step 3 then writes `scope=scoped`,"),
-    ("marker", "write the marker again from it with no `sweep=` line,", "keep the marker,"),
+    ("marker", "write the marker again from it with no `sweep=` line, then", "keep the marker, then"),
+    ("marker", "lists a path the scoped capture's printed staged list does not hold", "lists any path"),
+    (
+        "marker",
+        "except that its `assessed-commit:` line names the backfill commit, `HEAD`, and the files are already "
+        "committed;",
+        "naming the `gate-backfill-base:` commit;",
+    ),
+    ("runs", ", with the staged paths it ran for, as `git diff --cached --name-only --no-renames` listed them, "
+     "printed in it.", "."),
     ("log-line", "so log its value in `.decision-log.md` too,", "so let it go,"),
     ("log-line", ", never inside the `gate-backfill:` line a resume reads.", ", or inside the `gate-backfill:` line."),
     ("second-run", "still takes the test command of the story's full sweep", "takes this sweep's command"),
@@ -445,6 +496,14 @@ _GATE_MUTANTS = (
     ("composed", "the full sweep at the commit a backfill of test files alone built on together with",
      "a backfill's sweep without"),
     ("instrument", "a backfill's scoped sweep with the full one it builds on included, ", ""),
+    # A resume that starts at step 5 runs the check: each half of that rule is load-bearing.
+    ("step-5-check", ", on a resume that starts here too.", "."),
+    ("step-5-check", ", which a resume that starts at step 5 runs too:", ":"),
+    (
+        "step-5-check",
+        "this step opens, before its refresh, with the check",
+        "this step ends, after its refresh, with the check",
+    ),
 )
 
 
@@ -602,6 +661,7 @@ _DOCS_SAY = {
         "Its marker then keeps `scope=full` beside a `sweep=` line naming the two green captures it rests on, which "
         "the script does not read, and one scoped sweep never builds on another.",
         "The gate writes the marker too,",
+        "unless that check's own declared inputs exclude every staged path,",
     ),
     "troubleshooting.md": ("A marker that carries a `sweep=` line beside `scope=full` is no cause",),
     "architecture.md": ("the opt-in `backfill_sweep`",),

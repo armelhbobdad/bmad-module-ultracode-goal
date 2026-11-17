@@ -528,6 +528,79 @@ def test_a_stash_that_is_a_link_to_nothing_or_a_file_is_refused(tmp_path, dangli
     assert (worktree / "target" / "tmp").is_dir()
 
 
+def test_drop_refuses_a_stash_whose_ignore_file_is_not_text(tmp_path):
+    stash = tmp_path / "gate-build"
+    _cargo_target(stash / "target")
+    (stash / ".gitignore").write_bytes(b"\xff\xfe*\n")
+    code, out, err = _run("drop", "--stash", str(stash))
+    assert code == 2 and out is None, err
+    assert "Traceback" not in err
+    assert (stash / "target" / "debug" / "deps" / "libdemo.rlib").is_file()
+
+
+@pytest.mark.skipif(not _LOCKABLE, reason="needs POSIX permissions and a user other than root")
+def test_a_path_behind_a_folder_that_cannot_be_searched_never_crashes(tmp_path):
+    """On Python 3.11 and 3.12 `Path.is_dir()` raises for a path whose parent
+    may not be searched; each mode reports instead of a traceback, and `drop`
+    reports a stash it cannot reach rather than doing nothing with exit 0."""
+    worktree = _worktree(tmp_path / "wt")
+    _cargo_target(worktree / "target")
+    locked = tmp_path / "locked"
+    _cargo_target(_stash(locked / "gate-build") / "target")
+    _worktree(locked / "wt")
+    os.chmod(locked, 0o600)
+    try:
+        code, out, err = _run("out", "--worktree", str(locked / "wt"), "--stash", str(tmp_path / "gate-build"))
+        assert code == 2 and out is None and "Traceback" not in err
+        code, out, err = _run(
+            "back", "--worktree", str(worktree), "--stash", str(locked / "gate-build"), "--dir", "target"
+        )
+        assert "Traceback" not in err and out is not None
+        assert out["carried"] == [] and code in (0, 1)
+        code, out, err = _run("drop", "--stash", str(locked / "gate-build"))
+        assert "Traceback" not in err
+        assert code == 1 and [f["path"] for f in out["failed"]] == ["."] and out["cleared"] == []
+    finally:
+        os.chmod(locked, 0o755)
+    assert (locked / "gate-build" / "target" / "debug" / "deps" / "libdemo.rlib").is_file()
+    assert (worktree / "target" / "debug" / "deps" / "libdemo.rlib").is_file()
+
+
+def test_a_dir_folder_holding_a_cargo_build_has_its_run_results_cleared(tmp_path):
+    worktree = _worktree(tmp_path / "wt")
+    _cargo_target(worktree / "build" / "cargo")
+    (worktree / "build" / "cargo" / "tmp" / "it").mkdir(parents=True)
+    (worktree / "build" / "cargo" / "debug" / "x.profraw").write_text("raw\n", encoding="utf-8")
+    (worktree / "build" / "classes").mkdir()
+    (worktree / "build" / "classes" / "tmp").mkdir()  # not a Cargo folder: kept
+    stash = tmp_path / "gate-build"
+    code, out, err = _run("out", "--worktree", str(worktree), "--stash", str(stash), "--dir", "build")
+    assert code == 0, err
+    assert out["carried"] == ["build"]
+    assert out["cleared"] == ["build/cargo/tmp", "build/cargo/debug/x.profraw"]
+    assert not (stash / "build" / "cargo" / "tmp").exists()
+    assert not (stash / "build" / "cargo" / "debug" / "x.profraw").exists()
+    assert (stash / "build" / "classes" / "tmp").is_dir()
+
+
+def test_a_folder_whose_cargo_marker_is_a_dangling_link_is_not_discovered(tmp_path):
+    worktree = _worktree(tmp_path / "wt")
+    _cargo_target(worktree / "target")
+    (worktree / "target" / "tmp").mkdir()
+    (worktree / "target" / "CACHEDIR.TAG").unlink()
+    try:
+        os.symlink(tmp_path / "gone", worktree / "target" / "CACHEDIR.TAG")
+    except OSError:
+        pytest.skip("symlinks are not available here")
+    stash = tmp_path / "gate-build"
+    code, out, err = _run("out", "--worktree", str(worktree), "--stash", str(stash))
+    assert code == 0, err
+    assert out["carried"] == [] and out["cleared"] == []
+    # Left in the worktree, it goes with it: the run results never reach the stash.
+    assert (worktree / "target" / "tmp").is_dir()
+    assert not stash.exists()
+
+
 def test_drop_with_no_stash_deletes_nothing(tmp_path):
     code, out, err = _run("drop", "--stash", str(tmp_path / "none"))
     assert code == 0, err
