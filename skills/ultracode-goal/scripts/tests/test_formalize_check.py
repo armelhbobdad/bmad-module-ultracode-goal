@@ -809,6 +809,64 @@ def test_a_story_named_file_in_a_run_folder_covers_no_key(tmp_path, folder, skip
     assert all(g["kind"] != "leaked_tea_artifact" for g in out["mechanical_gaps"])
 
 
+def _run_folder_tree(impl: Path) -> None:
+    """A note and a TEA-named file at the root, below a folder, in a run
+    folder at the top, and in a run-folder name further down."""
+    for rel in (
+        "7-1-kernel.md",
+        "trace-7-1.md",
+        "notes/7-2-adapter.md",
+        "notes/evidence-x/traceability.md",
+        "evidence-7-1/trace.zip",
+        "evidence-7-1/7-3-notes.md",
+        ".scratch-7-1/gate-build/target/debug/deps/libbacktrace-x.rlib",
+        ".scratch-7-1/notes.md",
+        "evidence-trace-matrix.md",
+    ):
+        (impl / rel).parent.mkdir(parents=True, exist_ok=True)
+        (impl / rel).write_text("x\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("pattern", ["*", "*.md"])
+def test_the_walk_finds_what_the_filtered_glob_found(tmp_path, pattern):
+    # #240: the gate keeps its worktree's build folders in a story's scratch
+    # folder, so the scans skip the run folders as they walk instead of
+    # listing every file there and dropping it after. The files they read are
+    # the same: every match of the glob outside a top-level run folder.
+    impl = tmp_path / "impl-artifacts"
+    _run_folder_tree(impl)
+
+    def in_run_folder(path: Path) -> bool:
+        parts = path.relative_to(impl).parts
+        return len(parts) > 1 and bool(re.match(r"^(?:evidence-|\.scratch-)", parts[0]))
+
+    before = sorted(p for p in impl.rglob(pattern) if p.is_file() and not in_run_folder(p))
+    assert fc._files_outside_run_folders(impl, pattern) == before
+    assert before  # the tree holds files the walk must find
+
+
+def test_the_walk_never_enters_a_top_level_run_folder(tmp_path, monkeypatch):
+    # Twin: the folders it lists are recorded, so a walk that read a run folder
+    # and filtered its files out afterwards fails here, though it returns the
+    # same files.
+    impl = tmp_path / "impl-artifacts"
+    _run_folder_tree(impl)
+    walked: list[str] = []
+    real_walk = fc.os.walk
+
+    def recording_walk(top, *args, **kwargs):
+        for current, dirs, files in real_walk(top, *args, **kwargs):
+            walked.append(Path(current).relative_to(impl).as_posix())
+            yield current, dirs, files
+
+    monkeypatch.setattr(fc.os, "walk", recording_walk)
+    fc._files_outside_run_folders(impl, "*")
+    fc._story_files(impl, "7", ["7-1"])
+    fc._leaked_tea_artifacts(impl, None)
+    assert walked and "notes/evidence-x" in walked
+    assert not [d for d in walked if d.split("/")[0].startswith(("evidence-", ".scratch-"))]
+
+
 def test_fully_seeded_story_set_emits_no_coverage_gap(tmp_path):
     # Anti-vacuous twin (data): the SAME project with all three story files
     # present fires ZERO coverage gaps, proving the gap keys on the UNCOVERED

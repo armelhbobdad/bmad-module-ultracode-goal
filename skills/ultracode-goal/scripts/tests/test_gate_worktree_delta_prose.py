@@ -212,6 +212,12 @@ run the behaviour. The ledger's `gate` source now names the `unmeasured` line
 the gate logs for that behaviour, and the fragment of that fix joins the
 surfaces scanned here; test_gate_source_reading_backfill_prose.py pins the
 rule itself.
+
+#240 found the rebuild deleting the worktree's Cargo build folder with the
+worktree, so each story paid two cold builds. The rebuild now carries the
+build folders out before its removal and back after its add, around the
+order pinned below; test_gate_build_cache_prose.py pins that rule, and its
+fragment joins the surfaces scanned here.
 """
 
 from __future__ import annotations
@@ -1697,6 +1703,7 @@ def _gate_surfaces() -> dict[str, str]:
             "owned-gap fragment": (changes / "gate-owned-gap-lines.yaml").read_text(encoding="utf-8"),
             "moved-AC fragment": (changes / "gate-moved-ac-regate.yaml").read_text(encoding="utf-8"),
             "source-reading fragment": (changes / "gate-source-reading-backfill.yaml").read_text(encoding="utf-8"),
+            "build-cache fragment": (changes / "gate-worktree-keeps-build-cache.yaml").read_text(encoding="utf-8"),
         }
     )
     return surfaces

@@ -61,6 +61,7 @@ skills/ultracode-goal/
 │   ├── mutate_check.py            #   mutation harness: attributable-red proof for the story's guards
 │   ├── probe_servers.py           #   which URLs a test runner may reuse already answer, from which folder; stops a server the run left up
 │   ├── link_worktree_deps.py      #   links the main tree's dependency folders into the gate worktree
+│   ├── carry_build_cache.py       #   carries the gate worktree's build folders aside across its rebuild
 │   ├── gate_trail.py              #   per-story evidence trail (gate-trail.md) at finalize
 │   ├── formalize_check.py         #   readiness kernel behind the /ucg-formalize gate
 │   ├── status_render.py           #   read-side render behind /ucg-status
