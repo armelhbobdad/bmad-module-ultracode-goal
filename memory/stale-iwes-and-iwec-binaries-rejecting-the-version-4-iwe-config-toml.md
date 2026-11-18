@@ -1,0 +1,8 @@
+---
+created: "2026-10-16 14:00"
+session: "32c0ba1b-6b80-4f30-bf50-a7a5a6ac2c6d"
+---
+
+# Stale iwes and iwec binaries rejecting the version-4 .iwe/config.toml
+
+The iwe binaries on the maintainer's machine drift apart, and an older one cannot parse this repository's `.iwe/config.toml` once it is version 4 (`[library]` renamed `[workspace]`). On 2026-10-16 the npx copy behind the iwe MCP server (0.26.1 at the time) migrated the config, after which the cargo build first on PATH (`~/.cargo/bin/iwe`, 0.24.2) failed every command with "TOML parse error at line 4, column 2 | [workspace] | unknown field `workspace`", and `iwe internal claude session brief` misreported "error: this directory is not a memory-enabled iwe workspace"; `cargo install iwe iwes iwec` brought the PATH build of iwe level with the npx one. By 2026-10-18 `iwe` was 0.28.0 but `iwes` (0.24.0) and `iwec` (0.24.2) were older: iwes stops with "Failed to parse config file ... TOML parse error at line 4, column 2" and "unknown field `workspace`", so the IWE LSP server and an iwec MCP server fail on this workspace while the `iwe` CLI works. The suggested fix, `cargo install --force iwes iwec` (all three crates are 0.28.0), had not been applied by 2026-11-18, when `iwec --version` still printed 0.24.2 and `iwes --version` started the server and hit the same parse error. When an iwe command or server fails on a config that looks valid, compare the versions `which -a iwe` lists against the npx copy and check `iwes` and `iwec` before touching `.iwe/config.toml` or blaming the workspace. Related: [[iwe-posttooluse-hook-rewrites-skf-generated-markdown]], which records the in-place config migration.
