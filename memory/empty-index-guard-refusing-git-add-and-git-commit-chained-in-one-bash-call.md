@@ -1,0 +1,8 @@
+---
+created: "2026-10-28 02:08"
+session: "3db662c1-d326-4c49-93fb-f5b18179d765"
+---
+
+# Empty-index guard refusing git add and git commit chained in one Bash call
+
+In the maintainer's dev session this repository's own PreToolUse guard (`skills/ultracode-goal/scripts/hooks/guard_pretooluse.py`, armed from the gitignored `.claude/settings.local.json`) judges a Bash command string before any of it runs. So one call of the form `git add <paths> && git commit -q -F <msg-file>` is refused on a feature branch, even with no story running, with "PreToolUse:Bash hook error: Empty-index guard: refusing `git commit`" and "the staged index is empty (or could not be read)... Stage this story's paths in a prior, SEPARATE tool call (`git add <this story's paths>`), then commit as a second, distinct tool call": the staging in that same call has not happened yet when the guard reads the index, and `git commit -a` or commit-time pathspecs are refused for the same reason. Stage in one Bash call (`git add <paths> && git status --short`, or `git diff --cached --stat`), then commit in a second, separate call (`git commit -q -F <file>`). Command text that merely names the commit verb is judged the same way: on 2026-11-18 an iwe stage heredoc naming it was refused on `main` with "Protected-branch guard: refusing `git commit` on 'main'", so put such text in a file and run the file. Sessions hit the chained form repeatedly before splitting the calls: on 2026-10-28, twice on 2026-11-03 (15:35 and 22:56), on 2026-11-14, on 2026-11-16 and on 2026-11-17. Related: [[repo-guard-reading-a-commit-revision-suffix-as-a-git-commit]].

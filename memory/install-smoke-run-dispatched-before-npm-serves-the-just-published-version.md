@@ -1,0 +1,8 @@
+---
+created: "2026-10-25 22:38"
+session: "3db662c1-d326-4c49-93fb-f5b18179d765"
+---
+
+# Install smoke run dispatched before npm serves the just-published version
+
+npm accepts a publish from the "Publish to npm via OIDC trusted publishing" step of `release.yaml` before the registry serves it: the publish log ends with "Your package is being processed and may take a few minutes to become available", and in that window `npm view bmad-module-ultracode-goal@<version> version` returns "npm error code E404" ("No match found for version 3.0.0-rc.1") while the dist-tags still show the previous version. The window lasted about two minutes for 3.0.0-rc.1 (dist-tags showed only `latest: 2.3.0` and `alpha` until `rc: 3.0.0-rc.1` appeared) and about 180s for 7.3.0 (`latest: 7.2.0`). An `install-smoke.yaml` run dispatched in that window with the exact version, as step 1 of "After the publish" in docs/_internal/RELEASING.md directs, fails on every leg with `::error::npm has no bmad-module-ultracode-goal@<version>: smoke failed`, and RELEASING.md warns only that `latest` can still read the previous version. Poll `npm view bmad-module-ultracode-goal@<version> version` (or the registry dist-tags) until the version resolves, then dispatch `gh workflow run install-smoke.yaml --ref main -f version=<version>`; the 7.3.0 rerun passed on ubuntu, windows and macos. A failure with that `npm has no` message means the version is not visible yet, not a bad version, so confirm the publish in the release run's publish-step log and do not take the "A failing leg routes through Scenario B" (deprecate and ship forward) path for it.
