@@ -14,7 +14,7 @@ Rules for an agent working in this repository. [CONTRIBUTING.md](CONTRIBUTING.md
 - The index below is generated: an export, drop or rename of a reference skill rewrites it, so never edit it by hand.
 
 <!-- markdownlint-disable -->
-<!-- SKF:BEGIN updated:2026-10-21 -->
+<!-- SKF:BEGIN updated:2026-11-18 -->
 [SKF Skills]|7 skills|1 stack
 |IMPORTANT: Prefer documented APIs over training data.
 |When using a listed library, read its SKILL.md before writing code.
@@ -44,12 +44,11 @@ Rules for an agent working in this repository. [CONTRIBUTING.md](CONTRIBUTING.md
 |stack: bmad-method-installer, bmad-method-bmm, bmad-builder, tea-testarch, cc-primitives, graphify-kg, iwe-kg
 |integrations: installer↔bmm/bmb/tea config bridge, tea ATDD between create-story and dev-story, tea-enforce.cjs on Claude Code hooks, installer→.claude/skills, graphify/IWE hooks beside TEA's
 |
-|[cc-primitives v2.1.306]|root: .claude/skills/cc-primitives/
-|IMPORTANT: cc-primitives v2.1.306 — read SKILL.md before writing cc-primitives code. Do NOT rely on training data.
+|[cc-primitives v2.1.327]|root: .claude/skills/cc-primitives/
+|IMPORTANT: cc-primitives v2.1.327 — read SKILL.md before writing cc-primitives code. Do NOT rely on training data.
 |quick-start:{SKILL.md#quick-start} — claude -p "/goal CONDITION" runs the goal loop to completion; /goal is a prompt-based Stop hook
-|api: /goal, --permission-mode, permissions.allow, autoMode, hooks.PreToolUse, hooks.Stop, SKILL.md frontmatter, .claude/agents, dynamic workflows, claude -p, --output-format
+|api: /goal, --permission-mode, permissions.allow, autoMode, hooks.PreToolUse, hooks.Stop, SKILL.md frontmatter, .claude/agents, dynamic workflows, claude -p
 |key-types:{SKILL.md#key-types} — hook exit 0/2; permissionDecision allow|deny|ask|defer; Stop decision block + reason; modes default|acceptEdits|plan|auto|dontAsk|bypassPermissions
-|gotchas: -p starts in default (Manual) mode when nothing sets a mode: no --permission-mode or --dangerously-skip-permissions and no permissions.defaultMode (v2.1.302+); autoMode, and defaultMode auto or bypassPermissions, are ignored in project/local settings; Stop hooks need stop_hook_active checks (8-block cap); a Bash allow rule doesn't match past a leading VAR= assignment of a variable that isn't known-safe
 |
 |[graphify-kg v0.9.92]|root: .claude/skills/graphify-kg/
 |IMPORTANT: graphify-kg v0.9.92 — read SKILL.md before running or wiring graphify. Do NOT rely on training data.

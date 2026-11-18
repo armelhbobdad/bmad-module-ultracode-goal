@@ -78,7 +78,7 @@
       }
     },
     "cc-primitives": {
-      "active_version": "2.1.306",
+      "active_version": "2.1.327",
       "versions": {
         "2.1.283": {
           "ides": [
@@ -92,6 +92,13 @@
             "claude-code"
           ],
           "last_exported": "2026-10-21",
+          "status": "archived"
+        },
+        "2.1.327": {
+          "ides": [
+            "claude-code"
+          ],
+          "last_exported": "2026-11-18",
           "status": "active"
         }
       }
@@ -133,5 +140,5 @@
       }
     }
   },
-  "updated_at": "2026-10-21T21:19:44.081679+00:00"
+  "updated_at": "2026-11-18T20:38:18.629810+00:00"
 }
