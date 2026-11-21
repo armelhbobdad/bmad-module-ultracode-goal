@@ -2399,12 +2399,18 @@ def test_each_heading_gate_md_names_as_no_cycle_keeps_the_verdict(tmp_path):
 
 # ---------------------------------------------------------------------------
 # The release notes. A change fragment becomes the CHANGELOG, so the two the
-# trail's fixes added say what it reads, and what it read before, no more.
+# trail's fixes added say what it reads, and what it read before, no more. The
+# 4.0.0 one is read from that release's block of CHANGELOG.md, which holds its
+# sentences verbatim: its fragment, `changes/gate-story-heading.yaml`, was
+# removed after the release. The block is read at test time, never copied here.
 # ---------------------------------------------------------------------------
 
 _CHANGES = SCRIPTS.parents[2] / "changes"
+_CHANGELOG = SCRIPTS.parents[2] / "CHANGELOG.md"
+# The 4.0.0 entry, keyed like a fragment but read from CHANGELOG.md.
+_RELEASE_4_0_0 = "CHANGELOG.md [4.0.0]"
 _FRAGMENT_CLAUSES = {
-    "gate-story-heading.yaml": (
+    _RELEASE_4_0_0: (
         # Main read any `Story` heading with a digit-led id, at levels 2 to 4.
         "the trail found no recorded verdict for a story whose verdict JSON stood under no heading of its own "
         "reading `Story` and then an id starting with a digit",
@@ -2418,6 +2424,18 @@ _FRAGMENT_CLAUSES = {
 }
 
 
+def _release_notes(name: str) -> str:
+    """The text a pin reads: the fragment `name` in `changes/`, or, for the
+    4.0.0 entry, that release's block of CHANGELOG.md, from its heading to the
+    next release's."""
+    if name != _RELEASE_4_0_0:
+        return (_CHANGES / name).read_text(encoding="utf-8")
+    text = _CHANGELOG.read_text(encoding="utf-8")
+    block = re.search(r"^## \[4\.0\.0\].*?(?=^## \[|\Z)", text, re.MULTILINE | re.DOTALL)
+    assert block, "CHANGELOG.md has no `## [4.0.0]` block"
+    return block.group(0)
+
+
 def _fragment_failures(name: str, text: str) -> list[str]:
     flat = re.sub(r"\s+", " ", text)
     return [clause for clause in _FRAGMENT_CLAUSES[name] if clause not in flat]
@@ -2425,20 +2443,20 @@ def _fragment_failures(name: str, text: str) -> list[str]:
 
 @pytest.mark.parametrize("name", sorted(_FRAGMENT_CLAUSES))
 def test_the_trail_fragments_say_what_the_trail_reads(name):
-    assert _fragment_failures(name, (_CHANGES / name).read_text(encoding="utf-8")) == []
+    assert _fragment_failures(name, _release_notes(name)) == []
 
 
 @pytest.mark.parametrize(
     ("name", "claim", "replaced"),
     [
         (
-            "gate-story-heading.yaml",
+            _RELEASE_4_0_0,
             "the trail found no recorded verdict for a story whose verdict JSON stood under no heading of its own "
             "reading `Story` and then an id starting with a digit",
             "a log whose stories were headed any other way gave the trail no recorded verdict at all",
         ),
         (
-            "gate-story-heading.yaml",
+            _RELEASE_4_0_0,
             "A later `### Story <story_id>: gate` heading for the same story",
             "A later cycle's heading for the same story",
         ),
@@ -2452,6 +2470,6 @@ def test_the_trail_fragments_say_what_the_trail_reads(name):
 )
 def test_the_fragment_pin_reds_on_the_claim_it_replaced(name, claim, replaced):
     """Twin: each fragment with the claim it carried before reds the pin."""
-    text = (_CHANGES / name).read_text(encoding="utf-8")
+    text = _release_notes(name)
     assert claim in text
     assert _fragment_failures(name, text.replace(claim, replaced))
