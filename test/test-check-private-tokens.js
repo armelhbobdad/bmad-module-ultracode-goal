@@ -5,7 +5,8 @@
  * tests pin its silent pass without a token list, the token matching rules,
  * what a push is checked for (commit messages, added lines, added and renamed
  * paths, only the commits no remote holds yet), the main-worktree fallback
- * for a linked worktree, and the --tree sweep.
+ * for a linked worktree, the --tree sweep, and the --text check of text
+ * on stdin, which exits 2 without a list.
  *
  * The pure helpers are called directly; the exit-code tests drive the tool
  * against throwaway repositories, each cloned from a throwaway bare remote,
@@ -19,7 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const TOOL = path.join(__dirname, '..', 'tools', 'check-private-tokens.js');
-const { parseTokens, buildMatcher, findTokens, parseAddedLines, parsePushedRefs } = require(TOOL);
+const { parseTokens, buildMatcher, findTokens, parseAddedLines, parsePushedRefs, checkText } = require(TOOL);
 
 const ZERO = '0'.repeat(40);
 const CLEAN_BASE = { 'README.md': 'A clean readme.\n' };
@@ -118,6 +119,16 @@ function prePush(root, extra = [], refs = null) {
 
 function tree(root, extra = []) {
   const result = spawnSync(process.execPath, [TOOL, '--root', root, '--tree', ...extra], { encoding: 'utf8', env: cleanEnv() });
+  return { status: result.status, out: result.stdout + result.stderr };
+}
+
+/** Run the tool on a text given on stdin, as before posting it on GitHub. */
+function text(root, input, extra = []) {
+  const result = spawnSync(process.execPath, [TOOL, '--root', root, '--text', ...extra], {
+    encoding: 'utf8',
+    env: cleanEnv(),
+    input,
+  });
   return { status: result.status, out: result.stdout + result.stderr };
 }
 
@@ -341,9 +352,71 @@ test('--tree finds tokens in tracked files and paths, not in untracked files', (
   assert.match(clean.out, /tracked file/);
 });
 
+// --- The text check ---
+
+test('checkText: finding lines name stdin and the line, like --tree; a final newline adds no line', () => {
+  const tokens = parseTokens(LIST);
+  const matcher = buildMatcher(tokens);
+  assert.deepStrictEqual(checkText('clean\r\nran AWX on zz-9-1\nAcme widgets\n', matcher, tokens), {
+    findings: ['stdin:2: awx', 'stdin:2: zz-9-1', 'stdin:3: Acme Widgets'],
+    lines: 3,
+  });
+  assert.deepStrictEqual(checkText('', matcher, tokens), { findings: [], lines: 0 });
+  assert.deepStrictEqual(checkText('one\n', matcher, tokens), { findings: [], lines: 1 });
+});
+
+test('--text passes clean text on stdin and says what it checked', () => {
+  const root = makeClone();
+  const { status, out } = text(root, 'Title\n\nA body with an invented key ex-51-2.\n');
+  assert.strictEqual(status, 0, out);
+  assert.match(out, /no token from \.private-tokens in 3 line\(s\) of standard input/);
+});
+
+test('--text fails on a token with the --tree finding lines and exits 1', () => {
+  const root = makeClone({ 'docs/page.md': 'line one\nmeets Acme Widgets\n' });
+  const { status, out } = text(root, 'line one\nmeets Acme Widgets\nkey q7-12\n');
+  assert.strictEqual(status, 1, out);
+  assert.match(out, /^ {2}stdin:2: Acme Widgets$/m);
+  assert.match(out, /^ {2}stdin:3: q7-$/m);
+  assert.match(out, /Reword each one/);
+  // The same text in a tracked file gives the same finding line, with the file in place of stdin.
+  const swept = tree(root);
+  assert.match(swept.out, /^ {2}docs\/page\.md:2: Acme Widgets$/m);
+});
+
+test('--text exits 2 when no token list is found, where the other modes pass silently', () => {
+  const root = makeClone(undefined, null);
+  const { status, out } = text(root, 'Acme Widgets\n');
+  assert.strictEqual(status, 2, out);
+  assert.match(out, /no \.private-tokens list found/);
+  const missing = text(root, 'plain\n', ['--list', path.join(root, 'nope.txt')]);
+  assert.strictEqual(missing.status, 2, missing.out);
+  assert.match(missing.out, /token list .*nope\.txt not found/);
+});
+
+test('--text from a linked worktree uses the list at the main worktree root', () => {
+  const root = makeClone();
+  const linked = path.join(tmpDir('cpt-wt-'), 'wt');
+  git(root, ['worktree', 'add', '-q', '-b', 'wt-text', linked]);
+  const { status, out } = text(linked, 'ran awx\n');
+  assert.strictEqual(status, 1, out);
+  assert.match(out, /stdin:1: awx/);
+});
+
 test('without a mode the tool prints its usage and exits 2', () => {
   const result = spawnSync(process.execPath, [TOOL], { encoding: 'utf8', env: cleanEnv() });
   assert.strictEqual(result.status, 2);
+  assert.match(result.stderr, /usage/);
+});
+
+test('more than one mode is a usage error, so --text never falls back to another mode', () => {
+  const root = makeClone();
+  const result = spawnSync(process.execPath, [TOOL, '--root', root, '--tree', '--text'], {
+    encoding: 'utf8',
+    env: cleanEnv(),
+    input: 'awx\n',
+  });
+  assert.strictEqual(result.status, 2, result.stdout + result.stderr);
   assert.match(result.stderr, /usage/);
 });
 

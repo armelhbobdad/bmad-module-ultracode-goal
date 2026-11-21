@@ -32,13 +32,18 @@
  * and title.
  * --tree checks every tracked file in the working tree, and its path, instead:
  * a sweep of the current state.
+ * --text checks the text on standard input, with the same matcher and the
+ * same finding lines as --tree (the source is named "stdin"): pipe text through
+ * it before posting it on GitHub, and post only on exit 0.
  *
  * Exit codes: 0 when nothing matched or there is no list, 1 when a token
- * matched, 2 when the check cannot run.
+ * matched, 2 when the check cannot run. --text exits 2 when there is no list
+ * as well: a check that gates posting must not pass on a missing list.
  *
  * Usage:
  *   node tools/check-private-tokens.js --pre-push < refs   # what the hook runs
  *   node tools/check-private-tokens.js --tree              # sweep the working tree
+ *   node tools/check-private-tokens.js --text < body.md    # check text before posting it
  *   node tools/check-private-tokens.js --list <file> ...   # use another list
  *   node tools/check-private-tokens.js --root <dir> ...    # check another checkout (its tests use this)
  */
@@ -51,6 +56,7 @@ const LIST_NAME = '.private-tokens';
 const ZERO_SHA = /^0+$/;
 const ALNUM = /[\dA-Za-z]/;
 const HINT = 'Remove each one (git commit --amend, or a rebase for an older commit) and push again.';
+const TEXT_HINT = 'Reword each one and check the text again before posting it.';
 
 function argValue(argv, flag) {
   const index = argv.indexOf(flag);
@@ -296,19 +302,42 @@ function checkTree(root, git, matcher, tokens) {
   return { findings, files: files.length };
 }
 
+/**
+ * Check a text, line by line, with the finding lines of --tree.
+ *
+ * @param {string} text
+ * @param {RegExp|null} matcher - From buildMatcher
+ * @param {string[]} tokens - The list the matcher was built from
+ * @param {string} [source] - The name the finding lines give the text
+ * @returns {{findings: string[], lines: number}}
+ */
+function checkText(text, matcher, tokens, source = 'stdin') {
+  const findings = [];
+  const lines = text === '' ? [] : text.replace(/\r?\n$/, '').split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    for (const token of findTokens(line, matcher, tokens)) findings.push(`${source}:${index + 1}: ${token}`);
+  }
+  return { findings, lines: lines.length };
+}
+
+const MODES = { '--pre-push': 'pre-push', '--tree': 'tree', '--text': 'text' };
+
 function main(argv = process.argv.slice(2), stdin = () => fs.readFileSync(0, 'utf8')) {
   const root = path.resolve(argValue(argv, '--root') || process.cwd());
-  const mode = argv.includes('--tree') ? 'tree' : argv.includes('--pre-push') ? 'pre-push' : null;
-  if (!mode) {
-    console.error('usage: check-private-tokens.js --pre-push | --tree [--list <file>] [--root <dir>]');
+  const modes = Object.keys(MODES).filter((flag) => argv.includes(flag));
+  if (modes.length !== 1) {
+    console.error('usage: check-private-tokens.js --pre-push | --tree | --text [--list <file>] [--root <dir>]');
     return 2;
   }
+  const mode = MODES[modes[0]];
   const git = makeGit(root);
   const explicit = argValue(argv, '--list');
   const listFile = findList(root, git, explicit);
   if (!listFile || !fs.existsSync(listFile)) {
-    if (!explicit) return 0;
-    console.error(`error: token list ${explicit} not found.`);
+    if (!explicit && mode !== 'text') return 0;
+    console.error(
+      explicit ? `error: token list ${explicit} not found.` : `error: no ${LIST_NAME} list found, so the text was not checked.`,
+    );
     return 2;
   }
   const tokens = parseTokens(fs.readFileSync(listFile, 'utf8'));
@@ -320,6 +349,9 @@ function main(argv = process.argv.slice(2), stdin = () => fs.readFileSync(0, 'ut
     if (mode === 'tree') {
       result = checkTree(root, git, matcher, tokens);
       scope = `${result.files} tracked file(s)`;
+    } else if (mode === 'text') {
+      result = checkText(stdin(), matcher, tokens);
+      scope = `${result.lines} line(s) of standard input`;
     } else {
       result = checkPush(git, parsePushedRefs(stdin()), matcher, tokens);
       scope = `${result.commits} new commit(s)`;
@@ -337,6 +369,7 @@ function main(argv = process.argv.slice(2), stdin = () => fs.readFileSync(0, 'ut
   console.log(`Private token check: ${result.findings.length} finding(s) from ${listName} in ${scope}:`);
   for (const finding of result.findings) console.log(`  ${finding}`);
   if (mode === 'pre-push') console.log(HINT);
+  if (mode === 'text') console.log(TEXT_HINT);
   return 1;
 }
 
@@ -344,4 +377,4 @@ if (require.main === module) {
   process.exitCode = main();
 }
 
-module.exports = { parseTokens, buildMatcher, findTokens, parseAddedLines, parsePushedRefs, main };
+module.exports = { parseTokens, buildMatcher, findTokens, parseAddedLines, parsePushedRefs, checkText, main };
