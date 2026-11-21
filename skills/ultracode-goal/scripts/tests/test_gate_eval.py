@@ -529,32 +529,32 @@ def write_trace_report(dir_path, name, gate_decision_file):
 
 def test_story_selector_picks_current_not_oldest_in_shared_dir(tmp_path):
     # Two stories share one trace dir. The lexically-first (oldest) report is the
-    # FAILing story 11-1; the current story 11-6 PASSes.
-    write_trace_report(tmp_path, "trace-11-1.md", "gate-decision-11-1.json")
-    write_named_slim(tmp_path, "gate-decision-11-1.json", "FAIL", p0="NOT_MET")
-    write_trace_report(tmp_path, "trace-11-6.md", "gate-decision-11-6.json")
-    write_named_slim(tmp_path, "gate-decision-11-6.json", "PASS")
+    # FAILing story 61-1; the current story 61-6 PASSes.
+    write_trace_report(tmp_path, "trace-61-1.md", "gate-decision-61-1.json")
+    write_named_slim(tmp_path, "gate-decision-61-1.json", "FAIL", p0="NOT_MET")
+    write_trace_report(tmp_path, "trace-61-6.md", "gate-decision-61-6.json")
+    write_named_slim(tmp_path, "gate-decision-61-6.json", "PASS")
 
-    # Bug repro: with no --story the unscoped glob resolves the oldest (11-1).
+    # Bug repro: with no --story the unscoped glob resolves the oldest (61-1).
     unscoped = run_gate(tmp_path, profile="light")
     assert unscoped["gate_status"] == "FAIL"
 
     # Fix: --story scopes resolution to the current story's artifacts.
-    scoped = run_gate(tmp_path, profile="light", story="11-6")
+    scoped = run_gate(tmp_path, profile="light", story="61-6")
     assert scoped["gate_status"] == "PASS"
     assert scoped["verdict"] == "advance"
 
 
 def test_story_selector_disambiguates_epic_from_story(tmp_path):
-    # Epic-level (11) and a story (11-6) coexist; end-anchored matching keeps them
-    # apart so --story 11 never resolves the 11-6 report and vice versa.
-    write_trace_report(tmp_path, "trace-11.md", "gate-decision-11.json")
-    write_named_slim(tmp_path, "gate-decision-11.json", "FAIL", p0="NOT_MET")
-    write_trace_report(tmp_path, "trace-11-6.md", "gate-decision-11-6.json")
-    write_named_slim(tmp_path, "gate-decision-11-6.json", "PASS")
+    # Epic-level (61) and a story (61-6) coexist; end-anchored matching keeps them
+    # apart so --story 61 never resolves the 61-6 report and vice versa.
+    write_trace_report(tmp_path, "trace-61.md", "gate-decision-61.json")
+    write_named_slim(tmp_path, "gate-decision-61.json", "FAIL", p0="NOT_MET")
+    write_trace_report(tmp_path, "trace-61-6.md", "gate-decision-61-6.json")
+    write_named_slim(tmp_path, "gate-decision-61-6.json", "PASS")
 
-    assert run_gate(tmp_path, profile="light", story="11-6")["gate_status"] == "PASS"
-    assert run_gate(tmp_path, profile="light", story="11")["gate_status"] == "FAIL"
+    assert run_gate(tmp_path, profile="light", story="61-6")["gate_status"] == "PASS"
+    assert run_gate(tmp_path, profile="light", story="61")["gate_status"] == "FAIL"
 
 
 def test_story_selector_epic_id_not_confused_with_child_story(tmp_path):
@@ -710,15 +710,15 @@ def test_own_slim_wins_over_a_neighbours_frontmatter_hint(tmp_path):
     # Observed in the field: `--story` matched no `trace-*.md`, so scoping left
     # every report in play and the hint loop returned an unrelated epic's gate.
     # The wrong answer was a PASS, which is the verdict nobody re-reads.
-    write_trace_report(tmp_path, "trace-11-0.md", "gate-decision-11-0.json")
-    write_named_slim(tmp_path, "gate-decision-11-0.json", "PASS")
+    write_trace_report(tmp_path, "trace-61-0.md", "gate-decision-61-0.json")
+    write_named_slim(tmp_path, "gate-decision-61-0.json", "PASS")
     write_named_slim(tmp_path, "gate-decision-52-6c.json", "CONCERNS")
 
     result = run_gate(tmp_path, profile="light", story="52-6c")
     assert result["gate_status"] == "CONCERNS"
     assert result["verdict"] == "defer"
     assert any("gate-decision-52-6c.json" in r for r in result["reasons"])
-    assert not any("gate-decision-11-0.json" in r for r in result["reasons"])
+    assert not any("gate-decision-61-0.json" in r for r in result["reasons"])
 
 
 def test_the_shipped_epic_level_invocation_passes_the_flag():
@@ -896,11 +896,11 @@ def test_mutant_without_own_slim_clause_reports_another_epics_pass(tmp_path):
     so a story with a slim gate file but no trace report falls through with
     `reports` still holding every report in the directory, AND stop the
     `gateDecisionFile` hint from being ownership-checked. The hint loop then
-    hands back epic 11's gate (a PASS) as story 52-6c's verdict, which is
+    hands back epic 61's gate (a PASS) as story 52-6c's verdict, which is
     exactly the field failure.
 
     As with the twin above, the reversion alone no longer reproduces it: the hint
-    check refuses epic 11's file for story 52-6c on its own, so both guards have
+    check refuses epic 61's file for story 52-6c on its own, so both guards have
     to go before the historical verdict comes back. If CONCERNS survived both,
     neither clause would be what produces it.
     """
@@ -912,8 +912,8 @@ def test_mutant_without_own_slim_clause_reports_another_epics_pass(tmp_path):
     )
     trace = tmp_path / "trace"
     trace.mkdir(parents=True)
-    write_trace_report(trace, "trace-11-0.md", "gate-decision-11-0.json")
-    write_named_slim(trace, "gate-decision-11-0.json", "PASS")
+    write_trace_report(trace, "trace-61-0.md", "gate-decision-61-0.json")
+    write_named_slim(trace, "gate-decision-61-0.json", "PASS")
     write_named_slim(trace, "gate-decision-52-6c.json", "CONCERNS")
 
     proc = subprocess.run(
@@ -927,7 +927,7 @@ def test_mutant_without_own_slim_clause_reports_another_epics_pass(tmp_path):
     # The pre-fix fail-open, reproduced against the mutant: a neighbour's PASS.
     assert result["gate_status"] == "PASS"
     assert result["verdict"] == "advance"
-    assert any("gate-decision-11-0.json" in r for r in result["reasons"])
+    assert any("gate-decision-61-0.json" in r for r in result["reasons"])
 
 
 if __name__ == "__main__":

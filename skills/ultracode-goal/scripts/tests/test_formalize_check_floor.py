@@ -57,8 +57,8 @@ EPIC_OF = {
     "leaked_tea_clean": "9",
     "orphaned_index": "10",
     "orphaned_index_resolved": "10",
-    "invented_threshold": "11",
-    "sourced_threshold": "11",
+    "invented_threshold": "61",
+    "sourced_threshold": "61",
     "unclassified_signal": "12",
     "unclassified_signal_removed": "12",
 }

@@ -40,9 +40,9 @@ Artifact resolution:
     Pass --story <id> and resolution is scoped to that story's artifacts: the
     trace report whose filename carries the id (then its frontmatter hint), else
     a conventionally-named gate-decision-<id>.json / e2e-trace-summary-<id>.json.
-    Matching is on id components (11-6 == 11.6 == 11_6) anchored to the stem's
+    Matching is on id components (61-6 == 61.6 == 61_6) anchored to the stem's
     trailing components, so epic id 1 resolves trace-1 (never child story 1-1)
-    and 11-6 is never confused with 1-11-6.
+    and 61-6 is never confused with 1-61-6.
 
     With no per-story artifact found, what happens next depends on how the dir
     is NAMED — FAIL-CLOSED, deliberately. If any artifact there is named for SOME
@@ -65,7 +65,7 @@ Artifact resolution:
     and then to the fail-closed rule above. Following one verbatim let a story
     advance on a neighbour's gate, and on files outside the directory entirely.
 
-    python3 gate_eval.py --trace-output DIR --profile production --story 11-6 \
+    python3 gate_eval.py --trace-output DIR --profile production --story 61-6 \
         --nfr DIR/nfr-assessment.md --test-review DIR/test-review.md
 """
 
@@ -145,10 +145,10 @@ def _frontmatter(text: str) -> dict[str, str]:
 def _story_variants(story: str | None) -> list[str]:
     """Separator-insensitive variants of a story id for filename matching.
 
-    A story id like ``11-6`` is written into per-story artifact names with any of
+    A story id like ``61-6`` is written into per-story artifact names with any of
     ``-`` / ``.`` / ``_`` as the separator depending on the producing tool; treat
-    them as equal so ``--story 11-6`` matches ``trace-11.6.md`` and
-    ``gate-decision-11_6.json`` alike. Order is stable and de-duplicated.
+    them as equal so ``--story 61-6`` matches ``trace-61.6.md`` and
+    ``gate-decision-61_6.json`` alike. Order is stable and de-duplicated.
     """
     if not story or not story.strip():
         return []
@@ -161,14 +161,14 @@ def _story_variants(story: str | None) -> list[str]:
 def _stem_matches_story(stem: str, story: str) -> bool:
     """True iff a filename stem's trailing id-components equal the story's.
 
-    Components are the maximal ``[-._]``-separated runs (so ``11-6`` == ``11.6``
-    == ``11_6``). The story's components must be a suffix of the stem's, AND the
+    Components are the maximal ``[-._]``-separated runs (so ``61-6`` == ``61.6``
+    == ``61_6``). The story's components must be a suffix of the stem's, AND the
     stem component immediately preceding that suffix (if any) must be
     non-numeric — a filename prefix like ``trace`` / ``gate-decision`` qualifies,
     a longer numeric id does not. This keeps epic id ``1`` (matches ``trace-1``,
-    not child story ``trace-1-1``) apart from story ``1-1``, and story ``11-6``
-    apart from ``1-11-6``. Component matching also rejects ``trace-211`` for id
-    ``11`` (``211`` != ``11``).
+    not child story ``trace-1-1``) apart from story ``1-1``, and story ``61-6``
+    apart from ``1-61-6``. Component matching also rejects ``trace-161`` for id
+    ``61`` (``161`` != ``61``).
     """
     story_parts = [p for p in re.split(r"[-._]", story.strip()) if p]
     stem_parts = [p for p in re.split(r"[-._]", stem) if p]

@@ -1,10 +1,10 @@
 ---
-story_id: 11-1-threshold
-epic: 11
+story_id: 61-1-threshold
+epic: 61
 gate_ability: ci-machine
 ---
 
-# Story 11.1 — Threshold
+# Story 61.1: Threshold
 
 **Gate-ability:** `ci-machine`
 
