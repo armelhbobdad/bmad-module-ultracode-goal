@@ -148,7 +148,10 @@ _PROSE_HEDGE_RE = re.compile(
 # An NFR threshold is a bare number with a unit (ms, s, %, rps, MB) in an
 # NFR/threshold context. It is "unsourced" when the same line carries no
 # citation (no path:line, no http, no FR/ADR id) and is not explicitly marked
-# UNKNOWN / CONCERNS / deferred.
+# UNKNOWN / CONCERNS / deferred. A story key's number is not a threshold: a
+# hyphen is a word boundary, so the lettered story number in `61-1s-sample-story`
+# or its stem `61-1s` would read as 1s. `_unsourced_nfr_number` blanks out the
+# sprint-status keys and stems `_story_key_mask` finds before it searches a line.
 _NFR_NUMBER_RE = re.compile(
     r"\b\d+(?:\.\d+)?\s*(?:ms|s|%|rps|qps|MB|GB|KB|seconds?|minutes?)\b",
     re.IGNORECASE,
@@ -460,6 +463,72 @@ def _parent_stem(stem: str) -> str | None:
         return "-".join(parts[:-1])
     lettered = re.match(r"^(\d+)[a-z]+$", parts[1])
     return "%s-%s" % (parts[0], lettered.group(1)) if lettered else None
+
+
+# A story number that carries letters (`1s`, `2ms`), decimal or not (`1.5s`):
+# the story number shape `_NFR_NUMBER_RE` can read as a number with a unit.
+_LETTERED_STORY_SEGMENT = re.compile(r"^\d+(?:\.\d+)?[a-z]+$")
+
+
+def _story_key_mask(keys: list[str], epic: str) -> re.Pattern[str] | None:
+    """A pattern that finds two kinds of token in a line.
+
+    - A key whose story number carries letters and that has more than its
+      Epic and story number (`61-1s-sample-story`, `61-1s-a`,
+      `61-1.5s-sample-story`), any Epic's row. It may sit inside a longer
+      name, as a story's artifacts are named
+      (`atdd-checklist-61-1s-sample-story.md`,
+      `automation-summary-61-1s-sample-story-<sha>.md`): only a letter or a
+      digit right next to it rules it out.
+    - For the rows of `epic` alone, a stem: the key's id stem and each parent
+      stem that still carries letters (`61-1s-a`, `61-1s`, `61-1.5s`, never
+      `61-1`), and a key that is only its Epic and story number (`1-5s`). A
+      stem must stand alone: a `_` or hyphen right after it rules it out too
+      (`61-1s-b` is not `61-1s`).
+
+    Neither kind is found right after a digit and a hyphen (`2-61-1s`).
+
+    A stem can read the same as a range: `Retries every 1-5s.` is not
+    searched when a row of `epic` is `1-5s-retry-story`, and is when only
+    another Epic has that row. A key, stem or parent that is all digits
+    (`2-5`, `61-1`) is never found, so `Retries every 2-5 seconds.` is
+    searched even with a row `2-5-sample-story`. None when nothing is found.
+    """
+    titled: set[str] = set()
+    stems: set[str] = set()
+    for key in keys:
+        lowered = key.lower()
+        segments = lowered.split("-")
+        if len(segments) < 2 or not (
+            _EPIC_SEGMENT.match(segments[0]) and _LETTERED_STORY_SEGMENT.match(segments[1])
+        ):
+            continue
+        if len(segments) > 2:
+            titled.add(lowered)
+        if segments[0] != epic:
+            continue
+        # `_story_stem` cuts a name at its first `.`: a decimal story number
+        # is its own stem.
+        stem = "-".join(segments[:2]) if "." in segments[1] else _story_stem(lowered)
+        while stem is not None and _LETTERED_STORY_SEGMENT.match(stem.split("-")[1]):
+            stems.add(stem)
+            stem = _parent_stem(stem)
+    # Keys before stems, each longest first, so the longest token wins.
+    found = [
+        r"(?:%s)%s" % ("|".join(map(re.escape, sorted(tokens, key=len, reverse=True))), after)
+        for tokens, after in ((titled, r"(?![^\W_])"), (stems, r"(?![\w-])"))
+        if tokens
+    ]
+    if not found:
+        return None
+    return re.compile(r"(?<![^\W_])(?<!\d-)(?:%s)" % "|".join(found), re.IGNORECASE)
+
+
+def _unsourced_nfr_number(line: str, key_mask: re.Pattern[str] | None) -> bool:
+    """True when `line` holds a number with a unit once the story keys
+    `key_mask` finds are blanked out, and the whole line cites no source."""
+    searched = key_mask.sub(" ", line) if key_mask is not None else line
+    return bool(_NFR_NUMBER_RE.search(searched)) and not _SOURCE_CITATION_RE.search(line)
 
 
 def _in_scope_story_files(
@@ -961,13 +1030,16 @@ def _risk_columns(header: list[str]) -> dict[str, int] | None:
     return {"P": p, "I": i, "Score": score}
 
 
-def _scan_test_design(text: str, rel: str) -> tuple[list[dict], list[dict]]:
+def _scan_test_design(
+    text: str, rel: str, key_mask: re.Pattern[str] | None = None
+) -> tuple[list[dict], list[dict]]:
     """Risk-matrix P×I provenance: blank-cell recompute (mechanical) vs disagreement
     (judgment), plus an unsourced NFR threshold (judgment). Reader-only, blank-cell-only.
 
     Each table is read under its own header row (the first of a run of
     consecutive lines holding a `|`, outer pipes optional), and only a table
-    whose header names a P, an I and a Score column is read at all.
+    whose header names a P, an I and a Score column is read at all. The story
+    keys `key_mask` finds (`_story_key_mask`) are no threshold.
     """
     gaps: list[dict] = []
     candidates: list[dict] = []
@@ -1002,7 +1074,7 @@ def _scan_test_design(text: str, rel: str) -> tuple[list[dict], list[dict]]:
                 "(%s×%s=%d); requires TEA reconciliation" % (score, p, i, product),
             })
     for line_no, line in enumerate(text.splitlines(), start=1):
-        if _NFR_NUMBER_RE.search(line) and not _SOURCE_CITATION_RE.search(line):
+        if _unsourced_nfr_number(line, key_mask):
             candidates.append({
                 "source": "%s:%d" % (rel, line_no),
                 "kind": "invented_nfr_threshold",
@@ -1237,6 +1309,10 @@ def build_verdict(
     # The sprint-status rows (`key: status`): the uncovered-key check reads
     # them for decomposed parents, which are `done` and keep the story file.
     rows: dict[str, str] = {}
+    # The lettered story keys every NFR threshold search blanks out: built from
+    # every story row, any Epic's, since a line may name another Epic's story;
+    # bare stems from this Epic's rows only (`_story_key_mask`).
+    key_mask: re.Pattern[str] | None = None
     if sprint_status is None or sprint_text is None:
         story_keys: list[str] = []
         mechanical_gaps.append(
@@ -1285,6 +1361,9 @@ def build_verdict(
             for key, status in _parse_development_status(sprint_text).items()
             if _epic_id_of(key) == str(epic)
         }
+        key_mask = _story_key_mask(
+            [key for key in _parse_development_status(sprint_text) if _is_story_key(key)], str(epic)
+        )
 
     # The in-scope keys: every not-done story row, or the operator-scoped
     # subset `--story` names. A named key that is not a not-done story row of
@@ -1508,7 +1587,7 @@ def build_verdict(
             # same AC line is a number whose benchmark the kernel CANNOT decide
             # -> JUDGMENT (never auto-remediated).
             for nfr_line_no, nfr_line in enumerate(block.splitlines(), start=line_no):
-                if _NFR_NUMBER_RE.search(nfr_line) and not _SOURCE_CITATION_RE.search(nfr_line):
+                if _unsourced_nfr_number(nfr_line, key_mask):
                     nfr_thresholds_unsourced += 1
                     judgment_candidates.append(
                         {
@@ -1667,7 +1746,7 @@ def build_verdict(
             continue
         tea_artifacts_read += 1
         texts_by_rel[td_rel] = td_text
-        td_gaps, td_candidates = _scan_test_design(td_text, td_rel)
+        td_gaps, td_candidates = _scan_test_design(td_text, td_rel, key_mask)
         mechanical_gaps.extend(td_gaps)
         judgment_candidates.extend(td_candidates)
     if test_designs:

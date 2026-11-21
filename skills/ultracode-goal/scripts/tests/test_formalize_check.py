@@ -1826,3 +1826,214 @@ def test_story_reaches_ready_once_its_candidates_are_answered(tmp_path):
     scan.write_text(json.dumps({"reds": [], "concerns": concerns}), encoding="utf-8")
     out = _scoped_verdict(root, "--story", "7-1-kernel", "--scan", str(scan))
     assert out["verdict"] == "ready", out
+
+
+# --- NFR threshold vs story keys -----------------------------------------------
+#
+# `_NFR_NUMBER_RE` anchors the number on `\b`, and a hyphen is a word boundary,
+# so the lettered story number in `61-1s-sample-story`, or its bare stem
+# `61-1s`, read as one second: every uncited line naming such a row raised an
+# `invented_nfr_threshold` candidate no fix could remove, and the verdict stayed
+# blocked (issue #255). Before the search, the kernel blanks out every
+# sprint-status key whose story number carries letters and that has more than
+# its Epic and story number, any Epic's, also inside a story's artifact names,
+# and the stems of the checked Epic's rows only. A numeric key or stem never
+# is, so `2-5 seconds` is still flagged with a row `2-5-*`, and so is `1-5s`
+# with a row `1-5s-*` of another Epic. The one range left out is one that
+# reads the same as a lettered stem of the checked Epic.
+
+_LETTERED_ROWS = ("61-1s-sample-story", "61-2ms-sample-story", "61-3-sample-story")
+
+
+def _keyed_project(tmp_path: Path, epic: str, rows: tuple[str, ...], line: str | None,
+                   test_design: str | None = None, extra_rows: str = "") -> Path:
+    """Sound backlog stories for `rows`; the last one's AC gains `line`.
+    `extra_rows` (sprint-status lines) needs no story file. With
+    `test_design`, a TEA config and the Epic's own `ta/test-design-epic-<epic>.md`."""
+    root = tmp_path / "keyed"
+    planning = root / "planning-artifacts"
+    impl = root / "impl-artifacts"
+    planning.mkdir(parents=True)
+    impl.mkdir(parents=True)
+    (planning / "prd-fixture.md").write_text("# PRD\n", encoding="utf-8")
+    (planning / "architecture-fixture.md").write_text("# Architecture\n", encoding="utf-8")
+    (impl / "sprint-status.yaml").write_text(
+        f"generated: fixture\ndevelopment_status:\n  epic-{epic}: in-progress\n"
+        + "".join(f"  {key}: backlog\n" for key in rows)
+        + extra_rows,
+        encoding="utf-8",
+    )
+    for key in rows:
+        extra = f"   {line}\n" if line is not None and key == rows[-1] else ""
+        (impl / f"{key}.md").write_text(_story_body(key) + extra, encoding="utf-8")
+    if test_design is not None:
+        (root / "tea").mkdir()
+        (root / "tea" / "config.yaml").write_text("test_artifacts: {project-root}/ta\n", encoding="utf-8")
+        (root / "ta").mkdir()
+        (root / "ta" / f"test-design-epic-{epic}.md").write_text(test_design, encoding="utf-8")
+    return root
+
+
+def _nfr_candidates(out: dict) -> list[str]:
+    """The source of every invented_nfr_threshold candidate, with `/` between parts."""
+    candidates = out["judgment_candidates"]
+    return [c["source"].replace("\\", "/") for c in candidates if c["kind"] == "invented_nfr_threshold"]
+
+
+# Done rows, needing no story file: another Epic's, a decimal story number
+# (the case of pull request #259), and a split parent's children with no
+# parent row, whose stem `61-4s` only the parent walk finds.
+_SHIPPED_ROWS = (
+    "  61-0s-shipped: done\n  61-1.5s-sample-story: done\n"
+    "  61-4s-a-sample-story: done\n  61-4s-b-sample-story: done\n"
+    "  epic-52: done\n  52-1s-sample-story: done\n"
+)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "It builds on 61-1s-sample-story.",
+        "Owner 61-1s).",
+        "It reads what 61-2MS-sample-story writes, after 61-2ms and 61-1s.",
+        "Its red phase is atdd-checklist-61-1s-sample-story.md; the gate reads trace-61-1s-sample-story.md.",
+        "Answers within 20 s, as measured at 61-1s-sample-story:12.",
+        "It reuses 52-1s-sample-story and 61-0s-shipped.",
+        "Cover the handler in 61-1.5s-sample-story.",
+        "Owner 61-1.5s).",
+        "Split from 61-4s, like 61-0s.",
+    ],
+    ids=["full-key", "bare-stem", "ms-key-and-stems", "artifact-names", "citation-is-a-key",
+         "done-row-and-another-epics-row", "decimal-story-number", "decimal-stem", "split-parent-stem"],
+)
+def test_an_ac_naming_a_lettered_story_row_raises_no_nfr_candidate(tmp_path, line):
+    root = _keyed_project(tmp_path, "61", _LETTERED_ROWS, line, extra_rows=_SHIPPED_ROWS)
+    out = _run_root(root, "61")
+    assert out["judgment_candidates"] == [], out["judgment_candidates"]
+    assert out["checks"]["nfr_thresholds_unsourced"] == 0
+    assert out["verdict"] == "ready", out
+
+
+@pytest.mark.parametrize(
+    ("epic", "rows", "extra_rows", "line"),
+    [
+        ("61", _LETTERED_ROWS, "", "The page answers within 20 s."),
+        ("61", _LETTERED_ROWS, "", "61-1s-sample-story answers within a 20 s timeout."),
+        ("61", _LETTERED_ROWS, "", "p95 latency under 100-200ms."),
+        ("2", ("2-5-sample-story", "2-6-sample-story"), "", "Retries every 2-5 seconds."),
+        ("61", _LETTERED_ROWS, "  epic-1: done\n  1-5s-retry-story: done\n", "Retries every 1-5s."),
+    ],
+    ids=["duration", "key-beside-a-duration", "unspaced-range", "range-equal-to-a-numeric-story-id",
+         "range-equal-to-another-epics-lettered-stem"],
+)
+def test_a_real_threshold_beside_the_story_keys_is_still_flagged(tmp_path, epic, rows, extra_rows, line):
+    # The anti-vacuous twins: the mask blanks out the lettered keys only, never
+    # the line, never a numeric id such as `2-5`, and another Epic's row only
+    # as its full key, so these ranges still read as thresholds.
+    out = _run_root(_keyed_project(tmp_path, epic, rows, line, extra_rows=extra_rows), epic)
+    assert _nfr_candidates(out) == ["impl-artifacts/%s.md:8" % rows[-1]], out["judgment_candidates"]
+    assert out["checks"]["nfr_thresholds_unsourced"] == 1
+    assert out["verdict"] == "blocked"
+
+
+def test_a_range_that_reads_as_a_lettered_stem_of_the_checked_epic_is_masked(tmp_path):
+    # The one collision, pinned so that changing it is a decision: with a row
+    # `1-5s-retry-story` in the checked Epic, `1-5s` is that story's stem, and
+    # the line is not searched for it.
+    rows = ("1-5s-retry-story", "1-6-sample-story")
+    out = _run_root(_keyed_project(tmp_path, "1", rows, "Retries every 1-5s."), "1")
+    assert out["judgment_candidates"] == [], out["judgment_candidates"]
+    assert out["verdict"] == "ready", out
+
+
+def test_with_no_sprint_status_a_lettered_stem_is_still_flagged(tmp_path):
+    # No rows to read, so nothing is blanked out: the search fails closed.
+    root = _keyed_project(tmp_path, "61", _LETTERED_ROWS, "Owner 61-1s).")
+    (root / "impl-artifacts" / "sprint-status.yaml").unlink()
+    out = _run_root(root, "61")
+    assert "sprint_status_absent" in {g["id"] for g in out["mechanical_gaps"]}
+    assert _nfr_candidates(out) == ["impl-artifacts/61-3-sample-story.md:8"], out["judgment_candidates"]
+
+
+def test_a_test_design_line_naming_a_lettered_story_row_raises_no_nfr_candidate(tmp_path):
+    plan = (
+        "# Test design: Epic 61\n\n"
+        "The sender path is owned by 61-1s-sample-story.\n"
+        "Owner 61-1s), reviewer 61-2ms.\n"
+        "Its checklist is atdd-checklist-61-2ms-sample-story.md.\n"
+        "The page answers within 20 s.\n"
+    )
+    out = _run_root(_keyed_project(tmp_path, "61", _LETTERED_ROWS, None, test_design=plan), "61")
+    assert _nfr_candidates(out) == ["ta/test-design-epic-61.md:6"], out["judgment_candidates"]
+
+
+def test_the_test_design_scan_blanks_out_only_what_the_mask_finds():
+    text = "Owned by 61-1s-sample-story.\nOwner 61-1s).\na 20 s timeout\n"
+    mask = fc._story_key_mask(["61-1s-sample-story", "61-3-sample-story"], "61")
+    _, masked = fc._scan_test_design(text, "td.md", mask)
+    assert [c["source"] for c in masked] == ["td.md:3"]
+    # The two-argument call still reads every line as before.
+    _, unmasked = fc._scan_test_design(text, "td.md")
+    assert [c["source"] for c in unmasked] == ["td.md:1", "td.md:2", "td.md:3"]
+
+
+def test_the_story_key_mask_finds_lettered_keys_and_stems_only():
+    numeric = ["2-5-sample-story", "61-1-sample-story", "61-1-a-sample-story", "ex-6-foo"]
+    assert fc._story_key_mask(numeric, "61") is None
+    mask = fc._story_key_mask(["61-1s-a-sample-story"], "61")
+    text = "61-1s-a-sample-story 61-1s-a (61-1S) 61-1 61-1s-b a61-1s 2-61-1s 61-1s.md"
+    assert mask.sub("_", text) == "_ _ (_) 61-1 61-1s-b a61-1s 2-61-1s _.md"
+    # After a hyphen or `_` that follows no digit, a key or stem is found too.
+    text = "story-61-1s checklist-61-1s-a-sample-story.md test_61-1s-a-sample-story"
+    assert mask.sub("_", text) == "story-_ checklist-_.md test__"
+    # Another Epic's row is found as its full key only.
+    other = fc._story_key_mask(["61-1s-a-sample-story"], "52")
+    text = "61-1s-a-sample-story 61-1s-a 61-1s"
+    assert other.sub("_", text) == "_ 61-1s-a 61-1s"
+    # A row with more than its Epic and story number is a key, any Epic's, in
+    # an artifact name too; one with no more reads as a stem, of the checked
+    # Epic only.
+    other = fc._story_key_mask(["52-1s-a"], "61")
+    text = "automation-summary-52-1s-a-3fa9c21.md 52-1s"
+    assert other.sub("_", text) == "automation-summary-_-3fa9c21.md 52-1s"
+    assert fc._story_key_mask(["1-5s", "1-6.5s"], "61") is None
+    assert fc._story_key_mask(["61-1s"], "61").sub("_", "61-1s 61-1s-b") == "_ 61-1s-b"
+
+
+# Names gate.md, define-done.md and execute.md give a story's files, each
+# holding the sprint-status key verbatim.
+_ARTIFACT_NAMES = (
+    "{key}.md",
+    ".split-{key}.json",
+    "atdd-checklist-{key}.md",
+    "trace-{key}.md",
+    "gate-decision-{key}.json",
+    "e2e-trace-summary-{key}.json",
+    "nfr-assessment-{key}.md",
+    "test-review-{key}.md",
+    "automation-summary-{key}-3fa9c21.md",
+    "automation-summary-{key}-3fa9c21-stale-2.md",
+    "live-verification-results-{key}.json",
+    "escalation-{key}.json",
+    ".escalation-{key}.md",
+    ".tests-ran-{key}",
+    ".baseline-{key}",
+    ".budget-{key}.json",
+    ".commit-{key}",
+    ".moved-{key}",
+    ".regate-{key}",
+    ".evidence-owed-{key}",
+    ".gate-worktree-{key}",
+    ".scratch-{key}/message.txt",
+    ".scratch-{key}/gate-build",
+    "evidence-{key}/trace-{key}-cycle-1.md",
+    "{key}-LIVE-001",
+)
+
+
+@pytest.mark.parametrize("name", _ARTIFACT_NAMES)
+def test_a_story_artifact_name_is_no_threshold(name):
+    line = "Written to %s." % name.format(key="61-1s-sample-story")
+    mask = fc._story_key_mask(list(_LETTERED_ROWS), "61")
+    assert fc._unsourced_nfr_number(line, None), "the unmasked line must read as one"
+    assert not fc._unsourced_nfr_number(line, mask)
