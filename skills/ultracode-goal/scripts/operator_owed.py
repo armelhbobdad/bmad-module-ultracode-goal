@@ -14,19 +14,22 @@ maps that FAIL to `reloop`, and no re-loop can produce the record: a real run
 re-looped such a story with every test green. This script answers the one
 question the conductor needs before it spends a re-loop: is every criterion TEA
 holds open an operator AC still owed its evidence? `references/gate.md` routes
-`owed: true` to an `operator-evidence-owed` escalation instead.
+`owed: true` to an `operator-evidence-owed` escalation instead, and
+`evaluated: false`, an answer the script could not give, to one too.
 
 gate_eval.py is not changed and no verdict is added. This script imports its
 readers, so the gate artifacts resolve here exactly as the gate resolved them.
 
 FAIL-CLOSED. `owed` is true only when ALL of these hold, and anything this
-script cannot read gives false, which leaves the re-loop route as it was:
+script cannot read gives false:
 
   - the gate reads gate_status FAIL (gate_eval.load_gate, same resolution);
   - the gate was the full instrument: no `--cycle-profile delta`, and the
     sweep-scope AND (and, under `--profile production`, the NFR and test-review
     ANDs) would leave an advance an advance, so nothing a re-loop can change
     failed beside the coverage;
+  - the story file can be read and tags at least one AC operator-evidence (it
+    is read before the matrix);
   - the story's trace report is exactly `trace-<story id>.md`, declares itself a
     trace report, and its frontmatter `tempCoverageMatrixPath` names (by an
     absolute path) TEA's Phase 1 coverage matrix, a JSON object whose `phase`
@@ -44,6 +47,20 @@ script cannot read gives false, which leaves the re-loop route as it was:
   - the summary names the commit it measured (`source_sha`), which is the
     commit the record must be made at.
 
+`evaluated` tells the two kinds of `owed: false` apart. It is false only when
+the gate is a full-instrument FAIL, the story file tags at least one AC
+operator-evidence, and the matrix cannot be read for any reason `read_matrix`
+refuses (there is no trace report, or it names no absolute
+`tempCoverageMatrixPath`, the file is gone, or the matrix or the summary is
+not this gate's or names no commit): the script then cannot say whether only
+operator evidence is owed, `owed` stays false, and `references/gate.md`
+escalates instead of re-looping, save for a hand-authored trace and a
+decomposed child that claims no tagged AC. It is true in every other case, so
+`owed: false` with `evaluated: true` leaves the re-loop route as it was. A
+story that tags no AC operator-evidence is answered without reading the matrix,
+so an unreadable matrix never stops the re-loop of a story that can owe an
+operator nothing.
+
 An open AC with a live record TEA classified `counted` (a pass at the traced
 commit that TEA still holds below FULL) is still owed: the record covers only
 part of the criterion, and no re-loop can record the rest or narrow the AC,
@@ -56,11 +73,13 @@ gate places in gate_status. The cross-checks catch a stale or foreign matrix,
 not a criterion TEA classified wrongly. `read_matrix` holds them, apart from
 the FAIL-only check above, so moved_ac_check.py reads the matrix the same way.
 
-Prints one JSON object and exits 0: `owed`, `open` (the requirement ids below
-FULL), `operator` (the open ones owed operator evidence), `evidence` (each of
-those ACs' live record dispositions, or `none`), `partial` (each of those ACs
-with a `counted` record, mapped to the sorted ids of the records TEA counted
-for it), `assessed_commit` and `reasons`. An argument error exits 2.
+Prints one JSON object and exits 0: `owed`, `evaluated`, `open` (the
+requirement ids below FULL, empty when the matrix was not read), `operator`
+(the open ones owed operator evidence), `evidence` (each of those ACs' live
+record dispositions, or `none`), `partial` (each of those ACs with a `counted`
+record, mapped to the sorted ids of the records TEA counted for it),
+`assessed_commit` and `reasons`. When `evaluated` is false, the last reason is
+the one that says why the matrix could not be read. An argument error exits 2.
 
     uv run operator_owed.py --trace-output DIR --story 61-6 \\
         --story-file STORY.md --profile production --nfr NFR.md \\
@@ -271,6 +290,7 @@ def evaluate(args: argparse.Namespace) -> dict:
     reasons: list[str] = []
     out: dict = {
         "owed": False,
+        "evaluated": True,
         "open": [],
         "operator": [],
         "evidence": {},
@@ -281,16 +301,27 @@ def evaluate(args: argparse.Namespace) -> dict:
     if not _gate_reads_owed(args, reasons):
         return out
 
-    trace = read_matrix(Path(args.trace_output), args.story, reasons)
-    if trace is None:
-        return out
-    requirements, live_records, commit = trace.requirements, trace.live_records, trace.commit
+    # The story's tags come first: a story with no operator-evidence AC has no
+    # evidence to owe, so its answer never waits on the matrix.
     story_text = gate_eval._read_text(Path(args.story_file))
     if story_text is None:
         reasons.append(f"story file {args.story_file} could not be read")
         return out
-
     tagged = operator_acs(story_text)
+    if not tagged:
+        reasons.append(
+            f"story file {args.story_file} tags no AC **Gate-ability:** operator-evidence, "
+            "so a re-loop can change every open criterion"
+        )
+        return out
+
+    trace = read_matrix(Path(args.trace_output), args.story, reasons)
+    if trace is None:
+        # read_matrix's own reason stays last: it says why the matrix was not read.
+        out["evaluated"] = False
+        return out
+    requirements, live_records, commit = trace.requirements, trace.live_records, trace.commit
+
     dispositions: dict[str, list[str]] = {}
     counted_ids: dict[str, list[object]] = {}
     for record in live_records:

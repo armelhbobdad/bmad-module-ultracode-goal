@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  When the gate delegates TEA's trace for a decomposed child, which has no story file of its own, it now names the parent's story file as the file trace reads the child's criteria from, and the parent acceptance criteria the child's `sprint-status.yaml` row claims as the only criteria trace scores. The siblings' criteria stand in that file too, and none of them is a row of the child's coverage matrix or a part of its scores. Before, the delegation forbade asking trace for anything beyond the per-story file names, so nothing kept trace to the claimed criteria, and a sibling's criterion scored as uncovered could fail or hold the child's gate over work it does not owe.
+issues: [249]

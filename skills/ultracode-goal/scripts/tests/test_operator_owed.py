@@ -27,7 +27,11 @@ closed direction is therefore pinned here:
   still owed; a counted one TEA still holds below FULL covers only part of the
   criterion, and only the operator can record the rest or narrow the AC, so it
   is still owed, with `partial` naming the records TEA counted;
-- anything unreadable gives false.
+- anything unreadable gives false, and `evaluated` tells an unread matrix
+  apart: it is false only when a full-instrument FAIL of a story that tags an
+  operator-evidence AC meets a matrix the script cannot read, which gate.md
+  escalates rather than re-loops (issue #250). A story that tags none is
+  answered without the matrix, so an unread one never diverts its re-loop.
 
 Run: uv run --with pytest pytest skills/ultracode-goal/scripts/tests/test_operator_owed.py -v
 """
@@ -174,11 +178,14 @@ def test_only_an_open_operator_ac_is_owed(project):
     before = _tree(project.root)
     result = run(project.argv())
     assert result["owed"] is True, result["reasons"]
+    assert result["evaluated"] is True
     assert result["open"] == result["operator"] == ["AC-10"]
     assert result["assessed_commit"] == SHA
     assert result["evidence"] == {"AC-10": "none"}
     assert result["partial"] == {}
-    assert set(result) == {"owed", "open", "operator", "evidence", "partial", "assessed_commit", "reasons"}
+    assert set(result) == {
+        "owed", "evaluated", "open", "operator", "evidence", "partial", "assessed_commit", "reasons"
+    }
     assert _tree(project.root) == before, "the check must read, never write"
 
 
@@ -186,7 +193,7 @@ def test_main_prints_the_json_and_exits_zero(project, capsys):
     project.write()
     assert owed_mod.main(project.argv()) == 0
     printed = json.loads(capsys.readouterr().out)
-    assert printed["owed"] is True
+    assert printed["owed"] is True and printed["evaluated"] is True
 
 
 def test_a_missing_required_argument_is_a_usage_error(project):
@@ -205,6 +212,8 @@ def test_a_ci_machine_ac_also_open_is_not_owed(tmp_path):
     project = Project(tmp_path, reqs=reqs).write()
     result = run(project.argv())
     assert result["owed"] is False
+    # The matrix was read: buildable work beside an owed AC is an answer, never "not evaluated".
+    assert result["evaluated"] is True
     assert result["open"] == ["AC-4", "AC-10"]
     assert result["operator"] == ["AC-10"]
     assert any(r.startswith("AC-4 is open") for r in result["reasons"]), result["reasons"]
@@ -234,23 +243,34 @@ def test_the_real_run_shape_is_not_owed(tmp_path):
     """The cycle-1 matrix of the field case, before any split: three ACs open.
 
     AC-4 was a real test gap and AC-2 needed a ruling, so the re-loop route was
-    right for this one, and no AC is tagged operator-evidence.
+    right for this one, and no AC is tagged operator-evidence: the story's tags
+    answer it before the matrix is read, so `open` stays empty.
     """
     open_ids = {"AC-2": "PARTIAL", "AC-4": "PARTIAL", "AC-9": "PARTIAL"}
     reqs = [(rid, prio, open_ids.get(rid, cov)) for rid, prio, cov in CLEAN if rid != "AC-10"]
     tags = {n: "ci-machine" for n in range(1, 10) if n != 2}
     project = Project(tmp_path, reqs=reqs, tags=tags).write()
     result = run(project.argv())
-    assert result["owed"] is False
-    assert result["open"] == ["AC-2", "AC-4", "AC-9"]
+    assert result["owed"] is False and result["evaluated"] is True
+    assert result["open"] == []
     assert result["operator"] == []
+    assert any("tags no AC **Gate-ability:** operator-evidence" in r for r in result["reasons"])
+    # Twin: the same matrix for a story that tags a covered AC operator-evidence is
+    # read, and lists the three open ACs as it did before the tags came first.
+    tagged = Project(tmp_path / "tagged", reqs=reqs, tags=tags | {1: "operator-evidence"}).write()
+    read = run(tagged.argv())
+    assert read["owed"] is False and read["evaluated"] is True
+    assert read["open"] == ["AC-2", "AC-4", "AC-9"]
+    assert read["operator"] == []
+    for rid in read["open"]:
+        assert any(r.startswith(f"{rid} is open") for r in read["reasons"]), (rid, read["reasons"])
 
 
 def test_a_fail_with_no_open_criterion_is_not_owed(tmp_path):
     reqs = [(rid, prio, "FULL") for rid, prio, _ in CLEAN]
     project = Project(tmp_path, reqs=reqs).write()
     result = run(project.argv())
-    assert result["owed"] is False
+    assert result["owed"] is False and result["evaluated"] is True
     assert result["open"] == []
 
 
@@ -302,7 +322,7 @@ def test_an_open_id_that_is_not_an_ac_is_not_owed(tmp_path):
     reqs = [("REQ-10" if rid == "AC-10" else rid, prio, cov) for rid, prio, cov in CLEAN]
     project = Project(tmp_path, reqs=reqs).write()
     result = run(project.argv())
-    assert result["owed"] is False
+    assert result["owed"] is False and result["evaluated"] is True
     assert result["open"] == ["REQ-10"]
 
 
@@ -342,7 +362,9 @@ def test_a_plain_operator_ac_is_never_owed(tmp_path):
     """The review's run: four plain-operator ACs open, AC 7's gap a missing pin a script checks.
 
     Read as owed evidence, the story would stop for a person to record a result
-    for work a re-loop builds. The plain tag keeps the re-loop for every one.
+    for work a re-loop builds. The plain tag keeps the re-loop for every one:
+    the story tags no AC operator-evidence, so the answer comes before the
+    matrix is read, and an unread matrix could not divert it either.
     """
     reqs = j_reqs({"AC-6": "PARTIAL", "AC-7": "NONE", "AC-10": "NONE", "AC-12": "NONE"})
     project = Project(tmp_path, reqs=reqs, tags=J_TAGS)
@@ -350,15 +372,14 @@ def test_a_plain_operator_ac_is_never_owed(tmp_path):
     project.write()
     assert "`npm run lint:docs` green" in project.story_file.read_text(encoding="utf-8")
     result = run(project.argv(profile="light"))
-    assert result["owed"] is False
-    assert result["open"] == ["AC-6", "AC-7", "AC-10", "AC-12"]
+    assert result["owed"] is False and result["evaluated"] is True
+    assert result["open"] == []
     assert result["operator"] == []
     assert result["assessed_commit"] is None
-    for rid in result["open"]:
-        assert any(
-            r.startswith(f"{rid} is open") and "operator-evidence, so a re-loop can change it" in r
-            for r in result["reasons"]
-        ), (rid, result["reasons"])
+    assert any(
+        "tags no AC **Gate-ability:** operator-evidence, so a re-loop can change every open criterion" in r
+        for r in result["reasons"]
+    ), result["reasons"]
 
 
 def test_a_plain_operator_ac_open_beside_operator_evidence_ones_keeps_the_reloop(tmp_path):
@@ -372,7 +393,7 @@ def test_a_plain_operator_ac_open_beside_operator_evidence_ones_keeps_the_reloop
     project.story = j_story(tags)
     project.write()
     result = run(project.argv(profile="light"))
-    assert result["owed"] is False
+    assert result["owed"] is False and result["evaluated"] is True
     assert result["open"] == ["AC-7", "AC-10", "AC-12"]
     assert result["operator"] == ["AC-10", "AC-12"]
     assert any(r.startswith("AC-7 is open") for r in result["reasons"]), result["reasons"]
@@ -397,6 +418,7 @@ def test_a_failed_record_is_a_finding_and_a_stale_one_is_still_owed(tmp_path, di
     project = Project(tmp_path, live=live).write()
     result = run(project.argv())
     assert result["owed"] is owed, result["reasons"]
+    assert result["evaluated"] is True
     if owed:
         assert result["evidence"] == {"AC-10": disposition}
     else:
@@ -439,11 +461,13 @@ def test_a_counted_record_trace_still_holds_partial_stays_with_the_operator(tmp_
     project.write()
     failed = run(project.argv())
     assert failed["owed"] is False and failed["operator"] == [] and failed["partial"] == {}
+    assert failed["evaluated"] is True
     # Twin: a counted record with no id cannot be named, so the check fails closed.
     project.matrix["live_records"] = [record(1, "counted"), {**record(2, "counted"), "id": None}]
     project.write()
     nameless = run(project.argv())
     assert nameless["owed"] is False and nameless["operator"] == [] and nameless["partial"] == {}
+    assert nameless["evaluated"] is True
     # Twin: the same AC with its record made at another commit is owed, with nothing counted.
     project.matrix["live_records"] = [record(1, "stale")]
     project.write()
@@ -601,6 +625,8 @@ def test_a_matrix_or_summary_that_is_not_this_gates_is_not_owed(project, mutate)
     result = run(project.argv())
     assert result["owed"] is False
     assert result["assessed_commit"] is None
+    # The story tags AC 10 operator-evidence, so a refused matrix is an answer not given.
+    assert result["evaluated"] is False
 
 
 def test_a_relative_matrix_path_is_not_followed(project, monkeypatch):
@@ -619,21 +645,23 @@ def test_a_relative_matrix_path_is_not_followed(project, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "damage",
+    ("damage", "evaluated"),
     [
-        pytest.param(lambda p: p.matrix_path.unlink(), id="matrix-missing"),
-        pytest.param(lambda p: p.matrix_path.write_text("[]", encoding="utf-8"), id="matrix-not-an-object"),
-        pytest.param(lambda p: p.matrix_path.write_text("{", encoding="utf-8"), id="matrix-not-json"),
-        pytest.param(lambda p: (p.trace / f"e2e-trace-summary-{STORY}.json").unlink(), id="summary-missing"),
-        pytest.param(lambda p: p.story_file.unlink(), id="story-file-missing"),
-        pytest.param(lambda p: (p.trace / f"trace-{STORY}.md").unlink(), id="trace-report-missing"),
+        pytest.param(lambda p: p.matrix_path.unlink(), False, id="matrix-missing"),
+        pytest.param(lambda p: p.matrix_path.write_text("[]", encoding="utf-8"), False, id="matrix-not-an-object"),
+        pytest.param(lambda p: p.matrix_path.write_text("{", encoding="utf-8"), False, id="matrix-not-json"),
+        pytest.param(lambda p: (p.trace / f"e2e-trace-summary-{STORY}.json").unlink(), False, id="summary-missing"),
+        # No story file, no tag read: the re-loop route stands, as it did.
+        pytest.param(lambda p: p.story_file.unlink(), True, id="story-file-missing"),
+        pytest.param(lambda p: (p.trace / f"trace-{STORY}.md").unlink(), False, id="trace-report-missing"),
     ],
 )
-def test_an_unreadable_input_is_not_owed(project, damage):
+def test_an_unreadable_input_is_not_owed(project, damage, evaluated):
     project.write()
     damage(project)
     result = run(project.argv())
     assert result["owed"] is False
+    assert result["evaluated"] is evaluated
 
 
 def test_a_shorter_ids_trace_report_is_never_read(project):
@@ -648,3 +676,110 @@ def test_a_shorter_ids_trace_report_is_never_read(project):
     # The same report under the story's own name is owed, so the name alone decided it.
     sibling.rename(own)
     assert run(project.argv())["owed"] is True
+
+
+# --- an unread matrix is an answer not given, never a re-loop (#250) ---------------
+
+
+def _relative_matrix_hint(p: Project) -> None:
+    p.frontmatter["tempCoverageMatrixPath"] = "scratch/tea-trace-coverage-matrix.json"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "damage", "needle"),
+    [
+        pytest.param(_drop_matrix_hint, None, "names no absolute tempCoverageMatrixPath", id="hint-missing"),
+        pytest.param(_relative_matrix_hint, None, "names no absolute tempCoverageMatrixPath", id="hint-relative"),
+        pytest.param(
+            None, lambda p: p.matrix_path.unlink(), "is not a readable PHASE_1_COMPLETE coverage matrix",
+            id="matrix-file-gone",
+        ),
+        pytest.param(_summary_disagrees, None, "it is not this gate's matrix", id="summary-mismatch"),
+        pytest.param(_matrix_of_another_commit, None, "the matrix measured", id="another-commit"),
+        pytest.param(
+            None, lambda p: (p.trace / f"trace-{STORY}.md").unlink(), "no trace report named", id="no-trace-report"
+        ),
+    ],
+)
+def test_an_unread_matrix_is_not_evaluated(project, mutate, damage, needle):
+    """The field case: trace's report kept only the two keys the delegation
+    named, so the script could not reach TEA's matrix and printed `owed: false`
+    with nothing open, the same shape as "a re-loop can change it", and the
+    story re-looped over evidence only a person can record. Every refusal of
+    `read_matrix` on a full-instrument FAIL of a story that tags an
+    operator-evidence AC now prints `evaluated: false`, `owed` stays false, and
+    the last reason is the refusal, which gate.md's escalation quotes."""
+    if mutate:
+        mutate(project)
+    project.write()
+    if damage:
+        damage(project)
+    result = run(project.argv())
+    assert result["evaluated"] is False, result["reasons"]
+    assert result["owed"] is False
+    assert result["open"] == result["operator"] == []
+    assert result["assessed_commit"] is None
+    assert needle in result["reasons"][-1], result["reasons"]
+    refused: list[str] = []
+    assert owed_mod.read_matrix(project.trace, STORY, refused) is None
+    assert result["reasons"][-1] == refused[-1], "the refusal must be the last reason"
+    # Twin: the same story with its matrix readable is owed, so the matrix alone decided it.
+    owed = run(Project(project.root / "healthy").write().argv())
+    assert owed["evaluated"] is True and owed["owed"] is True
+
+
+def test_a_story_with_no_operator_evidence_ac_is_answered_without_the_matrix(tmp_path, monkeypatch):
+    """A story that tags no operator-evidence AC can owe a person nothing, so
+    its FAIL keeps the re-loop whatever trace left of its matrix, and the
+    matrix is never read."""
+    project = Project(tmp_path, tags=SPLIT_TAGS | {10: "ci-machine"})
+    _drop_matrix_hint(project)
+    project.write()
+
+    def _no_read(*_args, **_kwargs):
+        raise AssertionError("the matrix was read for a story that tags no operator-evidence AC")
+
+    monkeypatch.setattr(owed_mod, "read_matrix", _no_read)
+    result = run(project.argv())
+    assert result["evaluated"] is True and result["owed"] is False
+    assert result["open"] == [] and result["assessed_commit"] is None
+    assert "tags no AC **Gate-ability:** operator-evidence" in result["reasons"][-1]
+    monkeypatch.undo()
+    # Twin: tag AC 10 operator-evidence, same unreadable matrix: now the answer is not given.
+    project.story = story_text(SPLIT_TAGS)
+    project.write()
+    twin = run(project.argv())
+    assert twin["evaluated"] is False and twin["owed"] is False
+
+
+@pytest.mark.parametrize("case", ["gate-pass", "gate-not-evaluated", "delta", "scoped-sweep", "nfr-fail"])
+def test_only_a_full_instrument_fail_can_go_unevaluated(tmp_path, case):
+    """The gate reads first: a gate that is not a full-instrument FAIL is
+    answered `evaluated: true`, whatever the matrix, as it is answered today."""
+    gate = {"gate-pass": "PASS", "gate-not-evaluated": "NOT_EVALUATED"}.get(case, "FAIL")
+    project = Project(tmp_path, gate=gate)
+    _drop_matrix_hint(project)
+    if case == "scoped-sweep":
+        project.tests_ran_text = f"baseline={SHA}\nscope=scoped\npackages=a\n"
+    if case == "nfr-fail":
+        project.nfr_text = "**Overall Status:** FAIL\n"
+    project.write()
+    argv = project.argv(cycle_profile="delta") if case == "delta" else project.argv()
+    result = run(argv)
+    assert result["evaluated"] is True and result["owed"] is False
+    # Twin: the full-instrument FAIL of the same story, same matrix, is not evaluated.
+    full = Project(tmp_path / "full")
+    _drop_matrix_hint(full)
+    full.write()
+    assert run(full.argv())["evaluated"] is False
+
+
+def test_an_unreadable_story_file_keeps_the_reloop(project):
+    """No story file, no tag read: the settled scope keeps `evaluated: true`,
+    so the re-loop route stands even with the matrix unread."""
+    _drop_matrix_hint(project)
+    project.write()
+    project.story_file.unlink()
+    result = run(project.argv())
+    assert result["evaluated"] is True and result["owed"] is False
+    assert result["reasons"][-1].endswith("could not be read")

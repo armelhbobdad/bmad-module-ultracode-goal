@@ -102,6 +102,50 @@ def test_naming_predicate_rejects_a_paragraph_without_provenance_limit():
     assert not _names_per_story_paths(mutant)
 
 
+def _trace_report_keys(para: str) -> str:
+    """The frontmatter keys the paragraph says `trace-<story_id>.md` carries: its parenthetical."""
+    head = "`trace-<story_id>.md` (frontmatter "
+    if head not in para:
+        return ""
+    start = para.index(head) + len(head)
+    depth, i = 1, start
+    while i < len(para) and depth:
+        depth += {"(": 1, ")": -1}.get(para[i], 0)
+        i += 1
+    return para[start : i - 1]
+
+
+def _keeps_the_matrix_key(para: str) -> bool:
+    """Issue #250: TEA's step 5 can rewrite the report without the key its step 4
+    recorded, and `operator_owed.py` then cannot reach the coverage matrix."""
+    keys = _trace_report_keys(para)
+    return bool(
+        "`tempCoverageMatrixPath`" in keys
+        and re.search(r"absolute path of the coverage matrix TEA's own step 4 records", keys)
+        and re.search(r"still carry after step 5", keys)
+        and "Ask for nothing beyond those names, those frontmatter keys" in para
+    )
+
+
+def test_gate_asks_trace_to_keep_the_matrix_key():
+    assert _keeps_the_matrix_key(_naming_paragraph())
+
+
+def test_matrix_key_predicate_rejects_the_key_named_outside_the_frontmatter():
+    """The key named elsewhere in the paragraph is not a key trace is told to keep."""
+    para = _naming_paragraph()
+    keys = _trace_report_keys(para)
+    outside = para.replace(
+        keys, "`workflowType: testarch-trace` and `gateDecisionFile: gate-decision-<story_id>.json`"
+    )
+    outside += (
+        " The report may name `tempCoverageMatrixPath`, the absolute path of the coverage matrix TEA's own "
+        "step 4 records, which the report must still carry after step 5."
+    )
+    assert outside != para
+    assert not _keeps_the_matrix_key(outside)
+
+
 def test_preflight_points_at_the_naming_step():
     assert re.search(
         r"On TEA 1\.27\.2 trace does not read `trace_output`", _read("preflight.md")

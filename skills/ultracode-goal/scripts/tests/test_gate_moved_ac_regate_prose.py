@@ -175,7 +175,10 @@ _GATE_EDITS = (
     _OWNED_ROW, _CARRY_ROW,
 )
 # The `owed: false` route as the bullet ends it: nothing after it in the bullet.
-_OWED_FALSE_ENDS = "On `owed: false`, the `reloop` route below stands; log the script's `reasons`."
+# Issue #250 scoped it to `evaluated: true`, since an unread matrix escalates.
+_OWED_FALSE_ENDS = (
+    "On `evaluated: true` and `owed: false`, the `reloop` route below stands; log the script's `reasons`."
+)
 
 _EXECUTE_EDITS = (
     (

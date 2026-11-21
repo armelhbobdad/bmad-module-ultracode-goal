@@ -22,7 +22,10 @@ reads it:
     TEA still holds below FULL with the operator, naming the records counted,
     parks an owed AC on advance or defer without claiming a P2 or P3 one
     cannot fail the gate, and deletes the re-gate marker once a verdict is
-    logged;
+    logged; an unread coverage matrix (`evaluated: false`) moves the cycle's
+    trace files aside and escalates with an opening phrase of its own that
+    ucg-resolve keys on, never re-loops, except a hand-authored FAIL or a
+    decomposed child that claims no tagged AC, which keep the re-loop (#250);
   - execute.md names the kind as a live one, keeps it off ucg-dev-story's
     plate, says to get an AC narrowed before pinning a stated bound, and
     re-gates (never re-drives) a story whose escalation /ucg-resolve closed,
@@ -45,6 +48,8 @@ import importlib.util
 import re
 import shlex
 from pathlib import Path
+
+import pytest
 
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _REFS = _SKILL_ROOT / "references"
@@ -113,7 +118,9 @@ _ROUTE_CHECKS = {
     "names /ucg-resolve as the close": lambda s: "`/ucg-resolve` closes it" in s,
     "spends no re-loop and no correct-course": lambda s: "run no `bmad-correct-course`, spend no re-loop" in s,
     "commits nothing after the assessed commit": lambda s: "commit nothing after the assessed commit" in s,
-    "keeps the reloop route on owed: false": lambda s: "On `owed: false`, the `reloop` route below stands" in s,
+    "keeps the reloop route on owed: false once evaluated": lambda s: (
+        "On `evaluated: true` and `owed: false`, the `reloop` route below stands" in s
+    ),
     "passes the cycle profile as the gate took it": lambda s: "pass `--cycle-profile` exactly as the gate took it" in s,
 }
 
@@ -138,6 +145,159 @@ def test_the_documented_command_parses_with_the_scripts_own_parser():
 def test_the_escalate_bullet_names_the_case():
     bullet = next(ln for ln in GATE.splitlines() if ln.startswith("- **`escalate`**"))
     assert "a FAIL only operator evidence can change" in bullet
+
+
+# --- an unread coverage matrix escalates, never re-loops (#250) -------------------
+
+_UNREAD_OPENING = "The operator-evidence check could not read trace's coverage matrix"
+_UNREAD_HEAD = "On `evaluated: false`, the story file tags an operator-evidence AC"
+
+_UNREAD_CHECKS = {
+    "routes evaluated: false before the reloop sentence": lambda s: (
+        _UNREAD_HEAD in s
+        and "On `evaluated: true` and `owed: false`" in s
+        and s.index(_UNREAD_HEAD) < s.index("On `evaluated: true` and `owed: false`")
+    ),
+    "names what could not be read": lambda s: (
+        "there is no trace report, or it names no absolute `tempCoverageMatrixPath`, the file it names is gone or "
+        "unreadable, or the matrix or the summary is not this gate's, names no commit or measured another one" in s
+    ),
+    "keeps the hand-authored fallback's reloop": lambda s: (
+        "Two such FAILs keep the `reloop` route below, as they did before the script could tell them apart" in s
+        and "one in the hand-authored trace files (\"Non-web stack\" above), logged `gate-provenance: hand-authored`, "
+        "which hold no coverage matrix by design" in s
+    ),
+    "keeps a decomposed child off a sibling's tag": lambda s: (
+        "a decomposed child's when no parent AC its sprint-status row claims carries that tag, since a sibling's tag "
+        "owes it nothing" in s
+    ),
+    "escalates with the kind": lambda s: "Otherwise take `escalate` with `kind` `operator-evidence-owed`." in s
+    and "`source` is the trace report's path as moved aside (with no report, the gate decision's, or else the "
+    "summary's), `evidence` is the script's last reason" in s,
+    "moves the trace files aside before the sidecar": lambda s: (
+        "Before you write its sidecar, move whichever of the story's `trace-<story_id>.md`, "
+        "`gate-decision-<story_id>.json` and `e2e-trace-summary-<story_id>.json` exist aside, all in one step" in s
+        and "so the re-gate its close owes runs trace again and never reads this cycle's report" in s
+        and "a resume that finds them moved aside routes `gate-owed` as that paragraph says" in s
+    ),
+    "opens decision_needed with its own phrase": lambda s: f'`decision_needed` opens with "{_UNREAD_OPENING}"' in s,
+    "names the run, the number, the commit and an earlier one": lambda s: (
+        "then names this run's id, its number among this story's escalations with that opening" in s
+        and "the commit under assessment as the assessed commit, in full as `git rev-parse` prints it" in s
+        and "whether one of this story at this commit came before" in s
+    ),
+    "says what is wrong and what the close waits on": lambda s: (
+        "why the matrix could not be read, whether one of this story at this commit came before, and what the close "
+        "waits on: nothing for the first at that commit, whose re-gate runs trace again, and for a later one the "
+        "operator's written word that trace can leave a coverage matrix the check can read there" in s
+    ),
+    "names the close": lambda s: "`/ucg-resolve` keys its close on that opening phrase. Log the script's" in s,
+    "logs what the next one counts from": lambda s: (
+        "Log the script's JSON and the `decision_needed` you write, since the next such escalation takes its number, "
+        "and whether one came before at this commit, from the log." in s
+    ),
+    "spends no re-loop": lambda s: "Write no `class:` line, run no `bmad-correct-course`, spend no re-loop, since "
+    "what kept the check from the matrix is the files trace left" in s,
+    "commits nothing after the assessed commit": lambda s: (
+        "commit nothing after the assessed commit, since the re-gate its close owes measures that commit" in s
+    ),
+}
+
+
+def test_an_unread_matrix_escalates_rather_than_reloops():
+    """The field case (#250): the trace report lost `tempCoverageMatrixPath`,
+    `operator_owed.py` printed `owed: false` with nothing open, and the route
+    re-looped a story whose only open criterion was evidence a person records.
+    An unread matrix is now `evaluated: false`, which escalates with an opening
+    phrase of its own, after moving the cycle's trace files aside so the
+    re-gate really re-traces; only `evaluated: true`, a hand-authored FAIL and a
+    decomposed child that claims no tagged AC keep the reloop route."""
+    route = _norm(_operator_route())
+    assert sorted(name for name, check in _UNREAD_CHECKS.items() if not check(route)) == []
+    # Twin: the same checks find nothing in the rest of the file.
+    rest = _norm(GATE.replace(_operator_route(), ""))
+    assert sorted(name for name, check in _UNREAD_CHECKS.items() if not check(rest)) == sorted(_UNREAD_CHECKS)
+    # Twin: the bullet as it stood on main, which re-looped every `owed: false`, meets none of them.
+    new_end = "On `evaluated: true` and `owed: false`, the `reloop` route below stands; log the script's `reasons`."
+    start, end = route.index(" " + _UNREAD_HEAD), route.index(new_end) + len(new_end)
+    old_end = " On `owed: false`, the `reloop` route below stands; log the script's `reasons`."
+    main = route[:start] + old_end + route[end:]
+    assert _UNREAD_OPENING not in main and "`evaluated: false`" not in main
+    assert sorted(name for name, check in _UNREAD_CHECKS.items() if not check(main)) == sorted(_UNREAD_CHECKS)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "lost"),
+    [
+        pytest.param(
+            "Two such FAILs keep the `reloop` route below", "Two such FAILs escalate the same way",
+            "keeps the hand-authored fallback's reloop", id="hand-authored-escalates",
+        ),
+        pytest.param(
+            "a decomposed child's when no parent AC its sprint-status row claims carries that tag",
+            "a decomposed child's when its parent's story file tags no AC",
+            "keeps a decomposed child off a sibling's tag", id="child-judged-by-parent-file",
+        ),
+        pytest.param(
+            "Before you write its sidecar, move whichever of", "Before you write its sidecar, keep whichever of",
+            "moves the trace files aside before the sidecar", id="stale-report-kept",
+        ),
+        pytest.param(
+            " (with no report, the gate decision's, or else the summary's)", "",
+            "escalates with the kind", id="source-undefined-without-a-report",
+        ),
+        pytest.param(
+            "Log the script's JSON and the `decision_needed` you write,", "Log the script's `reasons`,",
+            "logs what the next one counts from", id="count-unrecorded",
+        ),
+        pytest.param(
+            ", and what the close waits on: nothing for the first at that commit, whose re-gate runs trace again, and "
+            "for a later one the operator's written word that trace can leave a coverage matrix the check can read "
+            "there", "",
+            "says what is wrong and what the close waits on", id="close-unexplained",
+        ),
+        pytest.param(
+            ", and commit nothing after the assessed commit, since the re-gate its close owes measures that commit", "",
+            "commits nothing after the assessed commit", id="commit-allowed",
+        ),
+    ],
+)
+def test_the_unread_matrix_pin_rejects_a_mutant(old, new, lost):
+    route = _norm(_operator_route())
+    assert route.count(old) == 1, "the mutant must change the one clause it names"
+    mutant = route.replace(old, new)
+    assert not _UNREAD_CHECKS[lost](mutant)
+
+
+def test_the_escalate_bullet_names_the_unread_matrix():
+    bullet = next(ln for ln in GATE.splitlines() if ln.startswith("- **`escalate`**"))
+    case = "a FAIL whose operator-evidence check could not read trace's coverage matrix, `evaluated: false` above"
+    assert case in bullet
+    assert bullet.index("gate_status NOT_EVALUATED") < bullet.index(case) < bullet.index("budget exhausted")
+
+
+def test_the_close_keys_on_the_phrase_the_gate_opens_with():
+    """Cross-file: the opening phrase gate.md writes is the one `/ucg-resolve` keys on."""
+    close = re.search(r"- \*\*`close`\*\*.*?(?=\n- \*\*`|\n\n)", RESOLVE, re.DOTALL)
+    assert close is not None
+    assert f'One that opens with "{_UNREAD_OPENING}"' in _norm(close.group(0))
+    assert f'opens with "{_UNREAD_OPENING}"' in _norm(_operator_route())
+
+
+def test_the_gate_model_doc_states_both_closes_and_the_reloops_it_keeps():
+    """docs/gate-model.md describes the unread-matrix route as gate.md runs it:
+    the move aside, the first close at once, a repeat only on the operator's
+    written word, and the two FAILs that keep the re-loop."""
+    model = _norm(GATE_MODEL)
+    for clause in (
+        "The gate moves that cycle's trace files aside first, so `/ucg-resolve` closes the first such escalation at a "
+        "commit at once and its re-gate runs trace again",
+        "and closes a later one at that commit only on the operator's written word that trace can leave a matrix the "
+        "check can read there",
+        "A hand-authored trace, which holds no matrix by design, keeps the re-loop, and so does a decomposed child "
+        "none of whose claimed criteria carries the tag",
+    ):
+        assert clause in model, clause
 
 
 def test_the_backfill_section_names_the_live_results_input():

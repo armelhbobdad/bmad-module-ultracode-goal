@@ -816,8 +816,10 @@ def render_triage(triage: dict) -> list[str]:
 # Sidecar `kind` values that mean "durable work, no row advanced" rather than
 # "something went wrong": a split, a definition authored but not driven, or a
 # story delivered and gated except the evidence only a person can record
-# (`operator-evidence-owed`, which `references/gate.md` writes only on
-# `operator_owed.py`'s fail-closed `owed: true`). Open vocabulary by design
+# (`operator-evidence-owed`, which `references/gate.md` writes on
+# `operator_owed.py`'s fail-closed `owed: true`, and also when the gate could
+# not check that: `operator_owed.py`'s `evaluated: false`, an unread coverage
+# matrix, or a refusal of `moved_ac_check.py`). Open vocabulary by design
 # (`references/execute.md`), so an unrecognised kind is simply not a handoff -
 # never an error.
 HANDOFF_KINDS = frozenset({"story-decomposed", "defined-not-driven", "operator-evidence-owed"})
