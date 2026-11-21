@@ -509,9 +509,13 @@ While `main` carries such a version, a `minor` or `major` dispatch is refused, a
 
 Two steps follow every publish (a resumed cut's included), within an hour of it.
 
-**1. The install smoke test.** Dispatch [`install-smoke.yaml`](../../.github/workflows/install-smoke.yaml) with the exact version just published, not `latest`: right after a publish, `npm view` and `npx` can both still read the previous version from the registry, and a run for `latest` then passes on it.
+**1. The install smoke test.** Dispatch [`install-smoke.yaml`](../../.github/workflows/install-smoke.yaml) with the exact version just published, not `latest`: right after a publish, `npm view` and `npx` can both still read the previous version from the registry, and a run for `latest` then passes on it. Wait until the registry serves that version before you dispatch. npm accepts a publish minutes before it serves it (the publish log says "Your package is being processed and may take a few minutes to become available"; the window was about two to four minutes at 3.0.0-rc.1, 7.3.0 and 8.0.0), and a run dispatched in it fails every leg with `npm has no bmad-module-ultracode-goal@<version>: smoke failed`, its job that attaches the record to the Release included.
 
 ```bash
+# Wait until the registry serves the version: a dispatch before that fails every leg.
+until [ "$(npm view bmad-module-ultracode-goal@<version> version 2>/dev/null)" = "<version>" ]; do
+  sleep 20
+done
 gh workflow run install-smoke.yaml --ref main -f version=<version>
 # A new run takes a few seconds to be listed, so find it by its title, not
 # as the newest run, which can still be the previous one.
@@ -525,7 +529,7 @@ else
 fi
 ```
 
-On `ubuntu-latest`, `windows-latest` and `macos-latest`, with Node's minimum, each leg runs `npx --yes bmad-module-ultracode-goal@<version> --version` and fails unless it prints the version `npm view` resolves the input to. A failing leg routes through [§ Scenario B](#scenario-b-bad-version-live-for-hoursdays-users-may-be-installing-it) (deprecate and ship forward). Two dispatches with the same input queue instead of running side by side; the queue is per input, so a `latest` dispatch and one for the version it points at do not queue against each other.
+On `ubuntu-latest`, `windows-latest` and `macos-latest`, with Node's minimum, each leg runs `npx --yes bmad-module-ultracode-goal@<version> --version` and fails unless it prints the version `npm view` resolves the input to. A failing leg routes through [§ Scenario B](#scenario-b-bad-version-live-for-hoursdays-users-may-be-installing-it) (deprecate and ship forward), except a run whose legs all fail with `npm has no bmad-module-ultracode-goal@<version>`: that version is not served yet, not a bad one, so confirm the publish in the release run's "Publish to npm via OIDC trusted publishing" step and dispatch again once the wait above ends. Two dispatches with the same input queue instead of running side by side; the queue is per input, so a `latest` dispatch and one for the version it points at do not queue against each other.
 
 **Where the record lives.** GitHub deletes a run's logs after 90 days, so the workflow's last job attaches `install-smoke.json` (per OS: Node, npm, the version expected and the one `--version` printed, and the result) to the GitHub Release `v<version>`, which does not expire. The run's title (`Install smoke <version>`) and its summary table name the version too. When there is no Release `v<version>` (see [§ Scenario E](#scenario-e-npm-publish-succeeded-but-github-release--tag-push-failed)) or the legs did not resolve the input to one version, that job fails and says so. Read the record without the logs:
 
