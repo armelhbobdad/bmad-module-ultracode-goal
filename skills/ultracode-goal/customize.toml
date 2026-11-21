@@ -41,7 +41,14 @@ parallel_max_concurrency = 8
 # a `Bash(<entry>:*)` allow rule, which matches only a command that starts with the entry, so
 # the stage references call their scripts with `uv run`, never `python3`. A test keeps every
 # git and `uv run` command the references prescribe covered by this list.
-allowlist_commands = ["git status", "git add", "git commit", "git rev-parse", "git diff", "git check-ignore", "git worktree", "npm test", "npm run lint", "npm run build", "pytest", "uv run", "date"]
+# In a workspace monorepo the gate gives its worktree an offline install, so each workspace
+# package resolves to the commit's copy and not the main tree's: `npm ci --offline`,
+# `bun install --frozen-lockfile --offline` and `pnpm install --offline --frozen-lockfile`. Each
+# entry is that offline, frozen-lockfile form only, so a bare or online install still asks, and
+# the same test keeps every install the references prescribe covered. Like every entry, each
+# matches by its start: it also allows that install in another folder, the main tree included,
+# or with a flag after it that undoes the offline or frozen form, which the gate never adds.
+allowlist_commands = ["git status", "git add", "git commit", "git rev-parse", "git diff", "git check-ignore", "git worktree", "npm test", "npm run lint", "npm run build", "pytest", "uv run", "date", "npm ci --offline", "bun install --frozen-lockfile --offline", "pnpm install --offline --frozen-lockfile"]
 
 # --- Gate backfill sweep (opt-in) ---
 # The sweep the gate runs before it commits a test bmad-testarch-automate
