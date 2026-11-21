@@ -5,6 +5,7 @@ Rules for an agent working in this repository. [CONTRIBUTING.md](CONTRIBUTING.md
 - Branch off `main` and open a pull request against `main`. Never commit or push on `main`: the maintainer merges.
 - Commit messages use conventional-commit prefixes, scoped to a subsystem where one fits (`fix(health-check): ...`, `docs(readme): ...`; `chore: ...` needs no scope); match `git log --oneline -20`.
 - Write no em dashes (U+2014) in anything you add, commit messages included: use a colon, a comma, parentheses or a new sentence.
+- Public text written from this repository (files, commit messages, pull requests, issues, comments, release notes) names no project that uses the module, and its examples use invented keys.
 - `npm run quality` must pass before you push, and the pre-push hook runs it. Fix the cause; never bypass a hook.
 - A change a user or a pipeline can notice takes a change fragment in `changes/`. A change to the shipped code that nobody can notice takes a `Changelog: none (<reason>)` line in a commit message instead. Run `npm run changes:pr` after committing, before you push.
 - Changes to the memory store (`memory/`, `MEMORY.md`, `.iwe/`) go in their own `chore(memory):` commits, never with code or docs.
