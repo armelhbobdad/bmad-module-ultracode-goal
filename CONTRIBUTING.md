@@ -82,7 +82,7 @@ done
    `git log --oneline -20` is the authoritative style guide. Match what you see. The prefix is for the history only: release notes and the version bump come from change fragments (step 7), so the commit type and the merge style do not change what a release says.
 
 3. **Reference issues with `Fixes #NNN`** in the PR body. Use **same-repo GitHub issue numbers only**; internal author notes are not public contracts.
-4. **Pre-commit hooks run automatically** via husky + lint-staged on staged files only.
+4. **Pre-commit hooks run automatically** via husky + lint-staged on staged files only. The pre-push hook runs `npm test`; before it, `tools/check-private-tokens.js` refuses a push whose branch or tag names, tag messages or new commits (messages, added lines and file paths) carry a string from a gitignored `.private-tokens` list at the repository root, one token per line. A maintainer keeps such a list for projects whose details must never land in this public repository; without the file the check passes silently.
 5. **PR description:** explain _why_. What was broken, what does this change, and how did you verify it? Keep it honest and short.
 6. **If you used Claude (or any AI assistant)** to write a non-trivial chunk of the change, add a `Co-Authored-By:` trailer to the commit. Not mandatory, but we prefer accurate attribution over silent ghostwriting.
 7. **Add a change fragment** in the same pull request for each change a user or a pipeline can notice, and run `npm run changes:pr` before you push: see [Change fragments](#change-fragments).

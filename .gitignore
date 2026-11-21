@@ -24,6 +24,10 @@ build/*.txt
 # Environment variables
 .env
 
+# The maintainer's private token list, which tools/check-private-tokens.js
+# reads before a push. It must never be committed.
+.private-tokens
+
 # System files
 .DS_Store
 Thumbs.db

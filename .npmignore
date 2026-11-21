@@ -4,6 +4,11 @@
 .gitattributes
 .github
 
+# The maintainer's private token list (gitignored, read by
+# tools/check-private-tokens.js): npm reads this file instead of .gitignore,
+# so a pack from a working tree would ship it without this line.
+/.private-tokens
+
 # Documentation (root-level .md files except README)
 /*.md
 !/README.md
