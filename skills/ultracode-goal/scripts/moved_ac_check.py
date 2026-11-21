@@ -36,7 +36,7 @@ number, not followed by another digit, in any case and with leading zeros
 7's; `AC-7/AC-8` names both; `AC-70` and `AC-17` name neither). A token that a
 story-key-like prefix (`<digits>-<digits>...-`) directly precedes counts only
 when that prefix is `--story`, or the run of digit groups `--story` opens with:
-`11-5-AC-7` is a sibling story's AC 7, never this one's. `--moved` takes
+`61-5-AC-7` is a sibling story's AC 7, never this one's. `--moved` takes
 `AC-<n>` stripped, in any case and with leading zeros, and each AC once;
 `--commit` takes the full sha `git rev-parse` prints, 40 or 64 hex digits, and
 never a prefix, which could match another commit's matrix. Prints one JSON object, a usage error or a failure the
@@ -50,7 +50,7 @@ Exit 0: no row is a moved AC. Exit 1: a row is. Exit 2: the trace files could
 not be read, are not this trace's or measured another commit, an argument
 error, or any other failure of the check.
 
-    uv run moved_ac_check.py --trace-output DIR --story 11-6 --commit SHA \\
+    uv run moved_ac_check.py --trace-output DIR --story 61-6 --commit SHA \\
         --moved AC-7 [--moved AC-9 ...]
 """
 

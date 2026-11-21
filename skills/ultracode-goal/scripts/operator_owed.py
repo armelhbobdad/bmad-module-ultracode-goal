@@ -62,9 +62,9 @@ those ACs' live record dispositions, or `none`), `partial` (each of those ACs
 with a `counted` record, mapped to the sorted ids of the records TEA counted
 for it), `assessed_commit` and `reasons`. An argument error exits 2.
 
-    uv run operator_owed.py --trace-output DIR --story 11-6 \\
+    uv run operator_owed.py --trace-output DIR --story 61-6 \\
         --story-file STORY.md --profile production --nfr NFR.md \\
-        --test-review REVIEW.md --tests-ran IMPL/.tests-ran-11-6
+        --test-review REVIEW.md --tests-ran IMPL/.tests-ran-61-6
 """
 
 from __future__ import annotations

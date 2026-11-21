@@ -384,10 +384,10 @@ EPIC_OF = {
     "vacuous_ac": "8",
     "leaked_tea": "9",
     "orphaned_index": "10",
-    "invented_threshold": "11",
+    "invented_threshold": "61",
     "all_clean": "7",
-    "sourced_threshold": "11",
-    "invented_threshold_unknown": "11",
+    "sourced_threshold": "61",
+    "invented_threshold_unknown": "61",
 }
 
 

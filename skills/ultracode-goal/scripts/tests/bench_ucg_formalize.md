@@ -82,7 +82,7 @@ Leave rows `PENDING` until actually run — do not pre-fill.
 | 2026-06-25 | `vacuous_ac` | `blocked` | `vacuous_ac` at `8-1-vacuous.md:13` — live JUDGMENT subagent confirmed the `assert True` tautology as a red | PASS |
 | 2026-06-25 | `leaked_tea` | `complete` (after mechanical remediation) | kernel verdict `remediable` (leaked_tea_artifact, machine-derivable MOVE) → clears → complete | PASS¹ |
 | 2026-06-25 | `orphaned_index` | `complete` (after mechanical remediation) | kernel verdict `remediable` (orphaned_index, regenerable) → clears → complete | PASS¹ |
-| 2026-06-25 | `invented_threshold` | `blocked` | `invented_nfr_threshold` at `11-1-threshold.md:15` — live JUDGMENT subagent confirmed the unsourced "under 200 ms" as a red | PASS |
+| 2026-06-25 | `invented_threshold` | `blocked` | `invented_nfr_threshold` at `61-1-threshold.md:15`: live JUDGMENT subagent confirmed the unsourced "under 200 ms" as a red | PASS |
 | 2026-06-25 | `all_clean` | `complete` | sound fixture, kernel verdict `ready` | PASS |
 | 2026-06-25 | `invented_threshold_unknown` (negative) | `complete` | UNKNOWN-marked threshold → no invented-threshold red → flips blocked→complete (false-positive guard) | PASS |
 

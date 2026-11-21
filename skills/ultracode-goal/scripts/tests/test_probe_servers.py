@@ -207,7 +207,7 @@ def test_the_folder_is_read_only_from_a_listening_socket(tmp_path):
         except OSError:
             pytest.skip("these symlinks cannot be made here")
     assert probe_servers._cwd_of_listener(5173, proc) == os.readlink(proc / "20" / "cwd")
-    assert probe_servers._cwd_of_listener(3002, proc) is None
+    assert probe_servers._cwd_of_listener(5174, proc) is None
 
 
 def _proc_hex(family: int, address: str) -> str:
@@ -272,31 +272,31 @@ def test_the_folder_is_the_one_of_the_socket_the_connection_reached(tmp_path):
     ("listeners", "reached", "expected"),
     [
         # `::` takes IPv4 connections too, unless a socket sets IPV6_V6ONLY.
-        ([(socket.AF_INET6, "::", 3002, "444", "/dual")], _V4, "/dual"),
-        ([(socket.AF_INET6, "::ffff:127.0.0.1", 3002, "444", "/mapped")], _V4, "/mapped"),
-        ([(socket.AF_INET, "0.0.0.0", 3002, "444", "/any")], _V4, "/any"),
+        ([(socket.AF_INET6, "::", 5174, "444", "/dual")], _V4, "/dual"),
+        ([(socket.AF_INET6, "::ffff:127.0.0.1", 5174, "444", "/mapped")], _V4, "/mapped"),
+        ([(socket.AF_INET, "0.0.0.0", 5174, "444", "/any")], _V4, "/any"),
         # 0.0.0.0 takes no IPv6 connection, and 127.0.0.2 none for 127.0.0.1.
-        ([(socket.AF_INET, "0.0.0.0", 3002, "444", "/any")], _V6, None),
-        ([(socket.AF_INET, "127.0.0.2", 3002, "444", "/other")], _V4, None),
+        ([(socket.AF_INET, "0.0.0.0", 5174, "444", "/any")], _V6, None),
+        ([(socket.AF_INET, "127.0.0.2", 5174, "444", "/other")], _V4, None),
         # Two sockets that could both have taken it (SO_REUSEPORT), from two folders.
-        ([(socket.AF_INET, "127.0.0.1", 3002, "444", "/a"), (socket.AF_INET, "127.0.0.1", 3002, "555", "/b")],
+        ([(socket.AF_INET, "127.0.0.1", 5174, "444", "/a"), (socket.AF_INET, "127.0.0.1", 5174, "555", "/b")],
          _V4, None),
-        ([(socket.AF_INET, "0.0.0.0", 3002, "444", "/a"), (socket.AF_INET, "0.0.0.0", 3002, "555", "/b")],
+        ([(socket.AF_INET, "0.0.0.0", 5174, "444", "/a"), (socket.AF_INET, "0.0.0.0", 5174, "555", "/b")],
          _V4, None),
         # The same, from one folder: a server's forked workers.
-        ([(socket.AF_INET, "127.0.0.1", 3002, "444", "/a"), (socket.AF_INET, "127.0.0.1", 3002, "555", "/a")],
+        ([(socket.AF_INET, "127.0.0.1", 5174, "444", "/a"), (socket.AF_INET, "127.0.0.1", 5174, "555", "/a")],
          _V4, "/a"),
         # A socket no readable process holds (another user's server) could be the one that answered.
-        ([(socket.AF_INET, "127.0.0.1", 3002, "444", "/a"), (socket.AF_INET, "127.0.0.1", 3002, "555", None)],
+        ([(socket.AF_INET, "127.0.0.1", 5174, "444", "/a"), (socket.AF_INET, "127.0.0.1", 5174, "555", None)],
          _V4, None),
-        ([(socket.AF_INET6, "::", 3002, "444", "/a"), (socket.AF_INET6, "::", 3002, "555", None)], _V4, None),
+        ([(socket.AF_INET6, "::", 5174, "444", "/a"), (socket.AF_INET6, "::", 5174, "555", None)], _V4, None),
     ],
     ids=["v6-wildcard", "v4-mapped", "v4-wildcard", "v4-wildcard-for-v6", "other-address", "two-folders",
          "two-folders-at-the-wildcard", "one-folder", "unread-holder", "unread-holder-at-the-v6-wildcard"],
 )
 def test_a_folder_is_named_only_when_every_socket_that_could_answer_shares_it(tmp_path, listeners, reached, expected):
     proc = _fake_proc(tmp_path, listeners)
-    assert probe_servers._cwd_of_listener(3002, proc, reached) == expected
+    assert probe_servers._cwd_of_listener(5174, proc, reached) == expected
 
 
 # Which socket Linux gives a connection to, measured on Linux 6.12 with real sockets, with
@@ -332,11 +332,11 @@ def test_the_folder_is_the_one_of_the_socket_linux_gives_the_connection_to(tmp_p
     proc = _fake_proc(
         tmp_path,
         [
-            (socket.AF_INET6 if ":" in host else socket.AF_INET, host, 3002, str(400 + at), folder)
+            (socket.AF_INET6 if ":" in host else socket.AF_INET, host, 5174, str(400 + at), folder)
             for at, (host, folder) in enumerate(listeners)
         ],
     )
-    assert probe_servers._cwd_of_listener(3002, proc, reached) == expected
+    assert probe_servers._cwd_of_listener(5174, proc, reached) == expected
 
 
 def _bound(host: str, port: int, v6only: bool) -> socket.socket:

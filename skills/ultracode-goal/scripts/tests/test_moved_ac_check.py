@@ -20,7 +20,7 @@ every closed direction is pinned here:
   `ac-7`, `AC7`, `AC 7`, `AC: 7`, `AC#7`, `AC.7`, a dash, `AC-7.1`, `AC-7_1`,
   `AC-7: login`, `AC-7/AC-8`, the story's own `56-0-AC-7`), naming each such
   row and where trace says it read its criteria, while `AC-70`, `AC-17` and a
-  sibling story's `11-5-AC-7` name no moved AC;
+  sibling story's `61-5-AC-7` name no moved AC;
 - exit 2 when the report, the matrix or the summary cannot be read or do not
   agree, through operator_owed.read_matrix, whose FAIL-only route is untouched,
   when they measured a commit other than `--commit` (the summary's or the
@@ -181,7 +181,7 @@ def test_another_spelling_of_the_moved_id_is_the_same_row(tmp_path, spelling):
 
 @pytest.mark.parametrize(
     "other",
-    ["AC-70", "AC-17", "AC-71.1", "REQ-7", "7", "AC-", "AC-x7", "TRAC-7", "AC-070", "11-5-AC-7", "11-6-AC-7",
+    ["AC-70", "AC-17", "AC-71.1", "REQ-7", "7", "AC-", "AC-x7", "TRAC-7", "AC-070", "61-5-AC-7", "61-6-AC-7",
      "56-1-AC-7", "AC--7"],
 )
 def test_a_row_that_is_another_criterion_is_not_the_moved_ac(tmp_path, other):
@@ -340,10 +340,10 @@ def test_a_closed_pipe_exits_2_not_1(tmp_path, monkeypatch):
 
 
 def test_a_story_prefix_counts_only_for_this_story():
-    assert check._named_numbers("11-5-AC-7", "11-6") == set()
-    assert check._named_numbers("11-6-AC-7", "11-6") == {7}
-    assert check._named_numbers("11-6-AC-7", "11-6-the-login-page") == {7}
-    assert check._named_numbers("11-5-AC-7 / AC-8", "11-6") == {8}
+    assert check._named_numbers("61-5-AC-7", "61-6") == set()
+    assert check._named_numbers("61-6-AC-7", "61-6") == {7}
+    assert check._named_numbers("61-6-AC-7", "61-6-the-login-page") == {7}
+    assert check._named_numbers("61-5-AC-7 / AC-8", "61-6") == {8}
 
 
 def test_a_row_naming_two_acs_is_a_row_of_each(tmp_path):

@@ -27,8 +27,8 @@ layout declares which story owns each filename it writes, and the assertions loo
 the resolved path up in that map. Asking `gate_eval._stem_matches_story` whether
 the resolved file belongs to the story would make the test circular: a matcher
 that answered "yes" to everything would pass its own test. The only production
-knowledge this file reproduces is separator equivalence (`11-6` == `11.6` ==
-`11_6`), which is an independent fact about the id spelling and not the rule
+knowledge this file reproduces is separator equivalence (`61-6` == `61.6` ==
+`61_6`), which is an independent fact about the id spelling and not the rule
 under test.
 
 THE PROPERTY IS A SAFETY PROPERTY, SO IT IS NOT ENOUGH ON ITS OWN. "Return None"
@@ -96,8 +96,8 @@ JSON_TEMPLATES = [t for t in TEMPLATES if t[0].endswith(".json")]
 # Owner ids written INTO layouts. Deliberately mixed: a plain child id, a second
 # child of the same epic, the bare EPIC id (the roll-up, whose artifacts a child
 # story must never resolve), an alphanumeric split id, a slugged id, and an id
-# whose components are a suffix-collision trap with another (`11-6` / `1-11-6`).
-OWNERS = ["4-1", "4-2", "52", "52-0a", "11-6", "7-3-some-title-slug"]
+# whose components are a suffix-collision trap with another (`61-6` / `1-61-6`).
+OWNERS = ["4-1", "4-2", "52", "52-0a", "61-6", "7-3-some-title-slug"]
 
 # Story ids RESOLUTION IS PROBED WITH. Every owner above, plus ids that own
 # nothing in any generated layout - the never-driven stories whose resolution
@@ -119,9 +119,9 @@ NEVER_DRIVEN = [
     # Prefix collapses to the bare epic `52`, which is a DIFFERENT artifact set
     # (the roll-up), never a shorter spelling of this story.
     "52-7f-never-driven",
-    "1-11-6",
+    "1-61-6",
     "4-01",
-    "116",
+    "616",
     "8-8-some-title-slug",
 ]
 PROBES = OWNERS + NEVER_DRIVEN
@@ -188,7 +188,7 @@ class Layout:
 
 
 def _norm(story: str) -> str:
-    """Separator-insensitive spelling of an id: `11.6` and `11_6` are `11-6`.
+    """Separator-insensitive spelling of an id: `61.6` and `61_6` are `61-6`.
 
     This is the ONLY piece of id knowledge the oracle reproduces, and it is not
     the rule under test - it is an equivalence between spellings of one id.
