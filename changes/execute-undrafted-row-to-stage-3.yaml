@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  Execute's sizing now says what to do with an in-scope row that is not a decomposed child and has no story file, which a resume can meet: it has not been drafted, so that row alone goes back to Stage 3, whose `ucg-create-story` drafts it (and, in production on a stack ATDD can run on, `bmad-testarch-atdd` scaffolds its red phase) before step 0 writes the `.current-story` pointer or the `.baseline-<story_id>` marker, and sizing then counts the draft's acceptance criteria. The rule rests on Stage 3's exit condition, which holds in every profile. The story loop's step 1 now runs `ucg-create-story` only as a refinement of the file Stage 3 drafted, never to draft a missing one after step 0.
+issues: [247]
