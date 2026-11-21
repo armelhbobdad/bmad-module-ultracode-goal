@@ -416,7 +416,7 @@ def _story_files(impl_artifacts: Path, epic: str, story_keys: list[str]) -> list
 # The id part of a story key or a story file's name: the Epic number, the
 # story number (which may carry letters, `2a`), then any child segments a
 # decomposition added: a single letter or a roman numeral up to x, and, after
-# one of those, a number (`94-7-b-1`).
+# one of those, a number (`54-7-b-1`).
 _EPIC_SEGMENT = re.compile(r"^\d+$")
 _STORY_SEGMENT = re.compile(r"^\d+[a-z]*$")
 _CHILD_SEGMENT = re.compile(r"^(?:[a-z]|i{1,3}|iv|vi{0,3}|ix|x)$")
@@ -426,8 +426,8 @@ _NUMBERED_CHILD_SEGMENT = re.compile(r"^\d+$")
 def _story_stem(name: str) -> str | None:
     """The id stem of a story key or file name, or None for an alpha-keyed one.
 
-    `95-0-a-i-the-scanner-spine` gives `95-0-a-i`, `94-2a-the-thing` gives
-    `94-2a`, `2-4-kebab-title.md` and `2-4.md` both give `2-4`. A file name is
+    `55-0-a-i-the-login-form` gives `55-0-a-i`, `54-2a-the-thing` gives
+    `54-2a`, `2-4-kebab-title.md` and `2-4.md` both give `2-4`. A file name is
     cut at its first `.` or `_` first, so `1-1_draft.md` gives `1-1`. A title
     word that is itself a single letter or a roman numeral reads as a child
     segment (`2-4-a-new-thing` gives `2-4-a`). A story file named after its
@@ -454,7 +454,7 @@ def _story_stem(name: str) -> str | None:
 
 
 def _parent_stem(stem: str) -> str | None:
-    """The stem one level up: `95-0-a-i` to `95-0-a`, `92-7f` to `92-7`, `7-1` to None."""
+    """The stem one level up: `55-0-a-i` to `55-0-a`, `52-7f` to `52-7`, `7-1` to None."""
     parts = stem.split("-")
     if len(parts) > 2:
         return "-".join(parts[:-1])
@@ -522,15 +522,15 @@ def _story_coverage(
     """Which in-scope keys have a story file, and which a parent's file covers.
 
     A file covers a key when the two share the same id stem (`_story_stem`):
-    the Epic number, the story number with any letters (`94-2a`), and every
-    child segment a decomposition added (`95-0-a-i`). The stem, not the whole
+    the Epic number, the story number with any letters (`54-2a`), and every
+    child segment a decomposition added (`55-0-a-i`). The stem, not the whole
     slug, because the slug is not a contract: `ucg-create-story` writes
     `{story_key}.md` from whatever the operator supplied, so an operator who
     asked for story `2-4` gets `2-4.md` while sprint-planning's generated key
     is `2-4-<kebab-title>`; both have the stem `2-4`. The full stem, not its
     first two numbers, because a shorter match lets a sibling cover a key: a
-    child `95-0-a-i` with no file of its own would read covered by
-    `95-0-a-audit.md`, and `95-0-b` by the same file. Comparing whole stems
+    child `55-0-a-i` with no file of its own would read covered by
+    `55-0-a-build.md`, and `55-0-b` by the same file. Comparing whole stems
     also keeps a HIGHER-numbered story from covering a lower one (`1-10` is
     not `1-1`).
 
@@ -539,7 +539,7 @@ def _story_coverage(
     no story file and must never get one"), insert the child rows above the
     parent row, set the parent row to `done` once its children exist, and
     keep the parent's file as the text the children cite. So walking up from
-    the key's stem (`95-0-a-i` to `95-0-a`, `92-7f` to `92-7`), a parent with
+    the key's stem (`55-0-a-i` to `55-0-a`, `52-7f` to `52-7`), a parent with
     a file covers the key when its row is `done` and the key's row sits above
     it, or when it has no row at all: a split that removed the parent's row
     instead of setting it `done` still leaves the parent's file as the text
@@ -576,7 +576,7 @@ def _story_coverage(
     position = {key: index for index, key in enumerate(rows or {})}
     for index, (key, status) in enumerate((rows or {}).items()):
         stem = _story_stem(key)
-        # Several rows can share a stem (`92-7e-i`, `92-7e-i-scan`): done only
+        # Several rows can share a stem (`52-7e-i`, `52-7e-i-sync`): done only
         # when every one of them is.
         if stem:
             row_status[stem] = status if row_status.get(stem, "done") == "done" else row_status[stem]
@@ -628,7 +628,7 @@ def _split_ac_blocks(text: str) -> list[tuple[int, str]]:
     than the first item's indent plus its marker width (`1. ` is three). So a
     right-aligned ` 9.` before `10.` and an item that slipped one space still
     open their own AC. A wrapped line that happens to begin with a number
-    (`   1. All four...` under an item's text) and a nested numbered sub-list
+    (`   1. Both halves...` under an item's text) and a nested numbered sub-list
     start at or right of that text, so they stay part of the AC above them:
     reading either as a new AC splits one criterion in two, and the first half
     then reports a missing verification and a missing twin it does have.

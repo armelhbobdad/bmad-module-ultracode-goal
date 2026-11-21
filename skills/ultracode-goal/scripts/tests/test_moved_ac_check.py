@@ -18,7 +18,7 @@ every closed direction is pinned here:
 - exit 0 only when the matrix reads as this trace's and no row is a moved AC;
 - exit 1 when an AC token anywhere in a row id names a moved AC (`AC-07`,
   `ac-7`, `AC7`, `AC 7`, `AC: 7`, `AC#7`, `AC.7`, a dash, `AC-7.1`, `AC-7_1`,
-  `AC-7: login`, `AC-7/AC-8`, the story's own `96-0-AC-7`), naming each such
+  `AC-7: login`, `AC-7/AC-8`, the story's own `56-0-AC-7`), naming each such
   row and where trace says it read its criteria, while `AC-70`, `AC-17` and a
   sibling story's `11-5-AC-7` name no moved AC;
 - exit 2 when the report, the matrix or the summary cannot be read or do not
@@ -56,10 +56,10 @@ def _load(name: str):
 check = _load("moved_ac_check")
 owed = _load("operator_owed")
 
-STORY = "96-0-g-the-landing"
-SHA = "a14e48a79010dd124366db59af51d8586e85ab33"
+STORY = "56-0-g-the-sample"
+SHA = "3c7e1f0a9b2d4e6f8a0c1b3d5e7f9a2b4c6d8e0f"
 PRIORITIES = ("P0", "P1", "P2", "P3")
-ORACLE_SOURCES = ["_bmad-output/implementation-artifacts/96-0-g-the-landing.md", "_bmad-output/planning/epics.md"]
+ORACLE_SOURCES = ["_bmad-output/implementation-artifacts/56-0-g-the-sample.md", "_bmad-output/planning/epics.md"]
 
 # AC 7 moved out of the story; AC 8 is an operator-evidence AC still owed.
 WITHOUT_AC7 = [(f"AC-{n}", "P0", "FULL") for n in range(1, 7)] + [("AC-8", "P1", "NONE")]
@@ -170,7 +170,7 @@ def test_a_covered_row_for_the_moved_ac_refuses_too(tmp_path):
     "spelling",
     ["AC-07", "ac-7", " AC-7 ", "AC-7.1", "AC-7a", "AC-7-b", "ac-07.2", "AC7", "AC 7", "AC-7: login", "AC-7_1",
      "AC-7 (a)", "AC_7", "story AC-7", "AC: 7", "AC#7", "AC.7", "AC  7", "AC\u20137", "AC\u20147", "AC \u2014 7",
-     "AC\u20107", "96-0-AC-7", STORY + "-AC-7"],
+     "AC\u20107", "56-0-AC-7", STORY + "-AC-7"],
 )
 def test_another_spelling_of_the_moved_id_is_the_same_row(tmp_path, spelling):
     reqs = WITHOUT_AC7[:6] + [(spelling, "P1", "NONE")] + WITHOUT_AC7[6:]
@@ -182,7 +182,7 @@ def test_another_spelling_of_the_moved_id_is_the_same_row(tmp_path, spelling):
 @pytest.mark.parametrize(
     "other",
     ["AC-70", "AC-17", "AC-71.1", "REQ-7", "7", "AC-", "AC-x7", "TRAC-7", "AC-070", "11-5-AC-7", "11-6-AC-7",
-     "96-1-AC-7", "AC--7"],
+     "56-1-AC-7", "AC--7"],
 )
 def test_a_row_that_is_another_criterion_is_not_the_moved_ac(tmp_path, other):
     reqs = WITHOUT_AC7[:6] + [(other, "P1", "NONE")] + WITHOUT_AC7[6:]
@@ -417,7 +417,7 @@ def _report_missing(t: Trace) -> None:
 
 
 def _a_siblings_report_only(t: Trace) -> None:
-    (t.trace / f"trace-{STORY}.md").rename(t.trace / "trace-96-0-g.md")
+    (t.trace / f"trace-{STORY}.md").rename(t.trace / "trace-56-0-g.md")
 
 
 @pytest.mark.parametrize(

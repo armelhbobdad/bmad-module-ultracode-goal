@@ -136,7 +136,7 @@ each entry where `remediable: true`. The remediation per kind:
   decomposed child is never scaffolded: it has no story file by design, and the kernel
   already counts it covered by its parent's file when its row sits above the parent's
   row and the parent row is `done`, or when the split removed the parent's row. So a
-  listed key whose id extends a parent's (`95-0-a-i` of `95-0-a`) is a story of its own,
+  listed key whose id extends a parent's (`55-0-a-i` of `55-0-a`) is a story of its own,
   or a child the kernel found under a parent row that is not `done` or below a `done`
   parent's row (the `detail` names each key below a `done` parent's row, with that row;
   for a parent row that is not `done`, find the parent from the key's id). The split

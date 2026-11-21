@@ -297,7 +297,7 @@ def test_the_gate_rebuilds_its_worktree_with_commands_the_allowlist_runs():
         # Issue #240: an escalation empties the stash.
         "uv run /s/scripts/carry_build_cache.py drop --stash /p/.scratch-4-2/gate-build",
         # Issue #182: the check for a server the runner would reuse, at setup and after the rebuild.
-        "uv run /s/scripts/probe_servers.py --url http://localhost:3001 --url http://127.0.0.1:3199",
+        "uv run /s/scripts/probe_servers.py --url http://localhost:5173 --url http://127.0.0.1:4173",
         "git status --porcelain --untracked-files=all",
         "git add tests/unit/a.test.ts",
         # The backfill resume tells a committed backfill from an uncommitted one.

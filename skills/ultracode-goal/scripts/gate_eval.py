@@ -219,14 +219,14 @@ def _has_trailing_id(stem: str) -> bool:
 
     NOT "the last component is numeric". That was the original rule and it is
     wrong for every id this module actually produces once a story is split or
-    slugged: ``trace-92-0a`` ends in ``0a`` and ``trace-5-8-some-slug`` ends in
+    slugged: ``trace-52-0a`` ends in ``0a`` and ``trace-5-8-some-slug`` ends in
     ``slug``, so both read as GENERIC. A directory full of them therefore
     reported itself as not-per-story-named, which switches OFF the fail-closed
     branch in :func:`_resolve_gate_file` - and an artifact-less story then
     resolved a neighbour's gate and advanced on it.
 
     Measured before the fix, in a directory holding only
-    ``trace-92-0a-alpha.md`` + its PASS gate file: ``--story 92-7f-never-driven``
+    ``trace-52-0a-alpha.md`` + its PASS gate file: ``--story 52-7f-never-driven``
     returned ``PASS``. That story wrote nothing at all.
 
     The rule is now structural: match a known artifact prefix, then require the

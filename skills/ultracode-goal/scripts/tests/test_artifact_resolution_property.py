@@ -97,7 +97,7 @@ JSON_TEMPLATES = [t for t in TEMPLATES if t[0].endswith(".json")]
 # child of the same epic, the bare EPIC id (the roll-up, whose artifacts a child
 # story must never resolve), an alphanumeric split id, a slugged id, and an id
 # whose components are a suffix-collision trap with another (`11-6` / `1-11-6`).
-OWNERS = ["4-1", "4-2", "92", "92-0a", "11-6", "7-3-some-title-slug"]
+OWNERS = ["4-1", "4-2", "52", "52-0a", "11-6", "7-3-some-title-slug"]
 
 # Story ids RESOLUTION IS PROBED WITH. Every owner above, plus ids that own
 # nothing in any generated layout - the never-driven stories whose resolution
@@ -116,9 +116,9 @@ OWNERS = ["4-1", "4-2", "92", "92-0a", "11-6", "7-3-some-title-slug"]
 # reference that should have pinned it.
 NEVER_DRIVEN = [
     "9-9",
-    # Prefix collapses to the bare epic `92`, which is a DIFFERENT artifact set
+    # Prefix collapses to the bare epic `52`, which is a DIFFERENT artifact set
     # (the roll-up), never a shorter spelling of this story.
-    "92-7f-never-driven",
+    "52-7f-never-driven",
     "1-11-6",
     "4-01",
     "116",
@@ -258,7 +258,7 @@ def _layouts() -> list[Layout]:
         for js_b, js_b_generic, _ in JSON_TEMPLATES:
             if js_a == js_b:
                 continue
-            for owner in ("4-1", "92-0a"):
+            for owner in ("4-1", "52-0a"):
                 out.append(
                     Layout(
                         f"two-json[{js_a.split('-{')[0]}@{owner}+{js_b_generic}]",
@@ -338,7 +338,7 @@ def _layouts() -> list[Layout]:
             out.append(
                 Layout(
                     f"rollup-only[{md.split('-{')[0]}]",
-                    {md.format(id="92"): "92", js.format(id="92"): "92"},
+                    {md.format(id="52"): "52", js.format(id="52"): "52"},
                 )
             )
 

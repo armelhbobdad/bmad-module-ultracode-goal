@@ -276,7 +276,7 @@ CLEAN_STOPS = frozenset({STOP_ALL_DONE, STOP_LIMIT, STOP_DRY_RUN})
 
 # `build_rollup` keys epics by their bare numeric prefix (`7`), because that is
 # how sprint-status.yaml keys stories (`7-3-...`). An operator types `epic-7`.
-# Both resolve here; an alpha-keyed track (`epic-st-5`) resolves to nothing,
+# Both resolve here; an alpha-keyed track (`epic-sb-5`) resolves to nothing,
 # which is the same limit `references/ingest-and-scope.md` documents for every
 # other number-keyed reader in the module.
 EPIC_KEY_PATTERN = re.compile(r"^(?:epic[-_ ]?)?(\d+)")

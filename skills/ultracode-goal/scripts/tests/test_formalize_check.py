@@ -1213,14 +1213,14 @@ def test_a_dangling_story_key_still_takes_the_mechanical_arm(tmp_path):
 
 
 def test_a_wrapped_line_starting_with_a_number_stays_in_its_ac():
-    # The live sighting: the AC's prose wrapped so that "Recorded decision 1."
+    # The live sighting: the AC's prose wrapped so that a cited item number
     # fell across a line break, and the continuation line began "1. ". Read as
     # a new AC, it cut the real AC in two, and the first half reported no
     # verification and no twin that it carried a few lines further down.
     body = (
         "# Story 7-1\n\n## Acceptance Criteria\n\n"
-        "1. **The schema lands in one diff.** `packages/db/schema/x.surql` per Recorded decision\n"
-        "   1. All four mechanisms land together: the file appended to the schema.\n"
+        "1. **The table lands in one change.** `db/schema/items.sql` per note\n"
+        "   1. Both halves land together: the table and the index it needs.\n"
         "   **Verification:** `pytest tests/test_schema.py::test_lands` exits 0.\n"
         "   **Anti-vacuous twin:** `test_schema_missing_reds` fails when the file is removed.\n"
         "2. Running `pytest tests/test_two.py::test_it` exits 0, and the twin `test_two_reds` fails.\n"
@@ -1228,7 +1228,7 @@ def test_a_wrapped_line_starting_with_a_number_stays_in_its_ac():
     blocks = fc._split_ac_blocks(body)
     assert [line for line, _ in blocks] == [5, 9]
     first = blocks[0][1]
-    assert "All four mechanisms" in first
+    assert "Both halves" in first
     assert "**Verification:**" in first
     assert "**Anti-vacuous twin:**" in first
 
@@ -1298,17 +1298,17 @@ def test_a_new_acceptance_criteria_heading_resets_the_indent():
 @pytest.mark.parametrize(
     ("name", "stem"),
     [
-        ("95-0-a-i-the-scanner-spine", "95-0-a-i"),
-        ("95-0-a-audit-the-guard-substrate.md", "95-0-a"),
-        ("94-2a-the-thing.md", "94-2a"),
-        ("92-7e-i-scan", "92-7e-i"),
+        ("55-0-a-i-the-login-form", "55-0-a-i"),
+        ("55-0-a-build-the-base-layer.md", "55-0-a"),
+        ("54-2a-the-thing.md", "54-2a"),
+        ("52-7e-i-sync", "52-7e-i"),
         ("2-4-kebab-title", "2-4"),
         ("2-4.md", "2-4"),
         ("1-1_draft.md", "1-1"),
         ("1-10-foo.md", "1-10"),
-        ("94-7-b-1-the-season-door", "94-7-b-1"),
+        ("54-7-b-1-the-front-page", "54-7-b-1"),
         ("2-4-3-foo", "2-4"),
-        ("lp-6-foo", None),
+        ("ex-6-foo", None),
         ("epic-7", None),
     ],
 )
@@ -1321,22 +1321,22 @@ def test_a_child_key_is_not_covered_by_a_file_of_another_id():
     # covered by their parent's file when only the first two numbers counted.
     # With no sprint rows nothing says the parent is a container, so its file
     # covers nothing but itself.
-    keys = ["95-0-a-i-the-scanner-spine", "95-0-a-ii-the-turbo-inputs", "95-0-a-iii-the-cli-gate"]
-    assert fc._uncovered_story_keys([Path("95-0-a-audit-the-guard-substrate.md")], keys) == keys
+    keys = ["55-0-a-i-the-login-form", "55-0-a-ii-the-export-step", "55-0-a-iii-the-first-batch"]
+    assert fc._uncovered_story_keys([Path("55-0-a-build-the-base-layer.md")], keys) == keys
     # A true sibling's file covers nothing either, at any depth.
-    assert fc._uncovered_story_keys([Path("95-0-a-ii-the-turbo-inputs.md")], ["95-0-a-i-the-scanner-spine"]) == [
-        "95-0-a-i-the-scanner-spine"
+    assert fc._uncovered_story_keys([Path("55-0-a-ii-the-export-step.md")], ["55-0-a-i-the-login-form"]) == [
+        "55-0-a-i-the-login-form"
     ]
-    assert fc._uncovered_story_keys([Path("95-0-a-audit.md")], ["95-0-b-red-phase"]) == ["95-0-b-red-phase"]
-    rows = {"94-7-b-1-the-season-door": "backlog", "94-7-b-2-the-other": "backlog"}
-    assert fc._uncovered_story_keys([Path("94-7-b-2-the-other.md")], ["94-7-b-1-the-season-door"], rows) == [
-        "94-7-b-1-the-season-door"
+    assert fc._uncovered_story_keys([Path("55-0-a-build.md")], ["55-0-b-next-step"]) == ["55-0-b-next-step"]
+    rows = {"54-7-b-1-the-front-page": "backlog", "54-7-b-2-the-other": "backlog"}
+    assert fc._uncovered_story_keys([Path("54-7-b-2-the-other.md")], ["54-7-b-1-the-front-page"], rows) == [
+        "54-7-b-1-the-front-page"
     ]
 
 
 def test_a_letter_suffixed_key_is_covered_by_its_own_file():
-    # Arm B of the filing: `94-2a` read uncovered against its own file.
-    assert fc._uncovered_story_keys([Path("94-2a-the-thing.md")], ["94-2a-the-thing"]) == []
+    # Arm B of the filing: `54-2a` read uncovered against its own file.
+    assert fc._uncovered_story_keys([Path("54-2a-the-thing.md")], ["54-2a-the-thing"]) == []
 
 
 def test_a_higher_numbered_file_still_does_not_cover_a_lower_key():
@@ -1350,58 +1350,58 @@ def test_a_bare_number_file_still_covers_its_kebab_key():
 def test_a_decomposed_child_is_covered_by_its_done_parent_file():
     # execute.md: a decomposed child has no story file and must never get one;
     # the parent row is set to done and keeps the file the children cite.
-    rows = {"95-0-a-i-the-scanner-spine": "backlog", "95-0-a-audit-the-guard-substrate": "done"}
-    assert fc._uncovered_story_keys([Path("95-0-a-audit-the-guard-substrate.md")], ["95-0-a-i-the-scanner-spine"], rows) == []
-    # A lettered child of a story number (92-7f of 92-7), through a level with no row (92-7e).
-    rows = {"92-7f-the-departure": "backlog", "92-7e-i-the-scan": "backlog", "92-7-per-profile": "done"}
-    files = [Path("92-7-per-profile.md")]
-    assert fc._uncovered_story_keys(files, ["92-7f-the-departure", "92-7e-i-the-scan"], rows) == []
+    rows = {"55-0-a-i-the-login-form": "backlog", "55-0-a-build-the-base-layer": "done"}
+    assert fc._uncovered_story_keys([Path("55-0-a-build-the-base-layer.md")], ["55-0-a-i-the-login-form"], rows) == []
+    # A lettered child of a story number (52-7f of 52-7), through a level with no row (52-7e).
+    rows = {"52-7f-the-cart-page": "backlog", "52-7e-i-the-sync": "backlog", "52-7-user-settings": "done"}
+    files = [Path("52-7-user-settings.md")]
+    assert fc._uncovered_story_keys(files, ["52-7f-the-cart-page", "52-7e-i-the-sync"], rows) == []
     # Every child is listed, each with the parent's file and row.
-    assert fc._story_coverage(files, ["92-7f-the-departure", "92-7e-i-the-scan"], rows).children == [
-        ("92-7f-the-departure", Path("92-7-per-profile.md"), "92-7-per-profile"),
-        ("92-7e-i-the-scan", Path("92-7-per-profile.md"), "92-7-per-profile"),
+    assert fc._story_coverage(files, ["52-7f-the-cart-page", "52-7e-i-the-sync"], rows).children == [
+        ("52-7f-the-cart-page", Path("52-7-user-settings.md"), "52-7-user-settings"),
+        ("52-7e-i-the-sync", Path("52-7-user-settings.md"), "52-7-user-settings"),
     ]
 
 
 def test_a_parent_that_is_not_done_covers_no_child():
     # Not a container yet: its file is its own story, not the children's text.
     # Each child sits above its parent's row, so the status alone decides.
-    rows = {"92-7f-the-departure": "backlog", "92-7-per-profile": "in-progress"}
-    assert fc._uncovered_story_keys([Path("92-7-per-profile.md")], ["92-7f-the-departure"], rows) == ["92-7f-the-departure"]
+    rows = {"52-7f-the-cart-page": "backlog", "52-7-user-settings": "in-progress"}
+    assert fc._uncovered_story_keys([Path("52-7-user-settings.md")], ["52-7f-the-cart-page"], rows) == ["52-7f-the-cart-page"]
     # Stopped by an open parent, not placed below a done one.
-    assert fc._story_coverage([Path("92-7-per-profile.md")], ["92-7f-the-departure"], rows).below_parent == {}
+    assert fc._story_coverage([Path("52-7-user-settings.md")], ["52-7f-the-cart-page"], rows).below_parent == {}
     # Nor does a done parent with no file of its own.
-    rows = {"92-7f-the-departure": "backlog", "92-7-per-profile": "done"}
-    assert fc._uncovered_story_keys([Path("92-6-other.md")], ["92-7f-the-departure"], rows) == ["92-7f-the-departure"]
+    rows = {"52-7f-the-cart-page": "backlog", "52-7-user-settings": "done"}
+    assert fc._uncovered_story_keys([Path("52-6-other.md")], ["52-7f-the-cart-page"], rows) == ["52-7f-the-cart-page"]
 
 
 def test_a_parent_whose_row_the_split_removed_still_covers_with_its_file():
     # A split that dropped the parent row instead of setting it done: the
     # parent's file is still the text its children cite.
-    rows = {"94-8-a-the-first": "backlog", "94-8-b-the-second": "backlog"}
-    files = [Path("94-8-season-learner.md")]
-    assert fc._uncovered_story_keys(files, ["94-8-a-the-first", "94-8-b-the-second"], rows) == []
+    rows = {"54-8-a-the-first": "backlog", "54-8-b-the-second": "backlog"}
+    files = [Path("54-8-sample-story.md")]
+    assert fc._uncovered_story_keys(files, ["54-8-a-the-first", "54-8-b-the-second"], rows) == []
 
 
 def test_a_parent_still_being_worked_stops_the_walk_even_under_a_done_grandparent():
-    rows = {"92-7e-i-the-scan": "backlog", "92-7e-the-umbrella": "in-progress", "92-7-per-profile": "done"}
-    files = [Path("92-7-per-profile.md")]
-    assert fc._uncovered_story_keys(files, ["92-7e-i-the-scan"], rows) == ["92-7e-i-the-scan"]
-    assert fc._story_coverage(files, ["92-7e-i-the-scan"], rows).below_parent == {}
-    # The same tree with 92-7e set done is a container chain, and 92-7's file covers.
-    rows["92-7e-the-umbrella"] = "done"
-    assert fc._uncovered_story_keys(files, ["92-7e-i-the-scan"], rows) == []
+    rows = {"52-7e-i-the-sync": "backlog", "52-7e-the-wrapper": "in-progress", "52-7-user-settings": "done"}
+    files = [Path("52-7-user-settings.md")]
+    assert fc._uncovered_story_keys(files, ["52-7e-i-the-sync"], rows) == ["52-7e-i-the-sync"]
+    assert fc._story_coverage(files, ["52-7e-i-the-sync"], rows).below_parent == {}
+    # The same tree with 52-7e set done is a container chain, and 52-7's file covers.
+    rows["52-7e-the-wrapper"] = "done"
+    assert fc._uncovered_story_keys(files, ["52-7e-i-the-sync"], rows) == []
 
 
 def test_a_stem_shared_by_several_rows_is_done_only_when_every_row_is():
-    # 92-7e-i and 92-7e-i-scan share the stem 92-7e-i; as a parent it is a
+    # 52-7e-i and 52-7e-i-sync share the stem 52-7e-i; as a parent it is a
     # container only once both rows are done, whichever comes first in the file.
-    files = [Path("92-7e-i-the-scan.md")]
+    files = [Path("52-7e-i-the-sync.md")]
     for rows in (
-        {"92-7e-i-a-child": "backlog", "92-7e-i-the-scan": "done", "92-7e-i-scan": "in-progress"},
-        {"92-7e-i-a-child": "backlog", "92-7e-i-scan": "in-progress", "92-7e-i-the-scan": "done"},
+        {"52-7e-i-a-child": "backlog", "52-7e-i-the-sync": "done", "52-7e-i-sync": "in-progress"},
+        {"52-7e-i-a-child": "backlog", "52-7e-i-sync": "in-progress", "52-7e-i-the-sync": "done"},
     ):
-        assert fc._uncovered_story_keys(files, ["92-7e-i-a-child"], rows) == ["92-7e-i-a-child"]
+        assert fc._uncovered_story_keys(files, ["52-7e-i-a-child"], rows) == ["52-7e-i-a-child"]
 
 
 def test_a_story_inserted_below_a_done_parent_row_is_reported():
@@ -1440,15 +1440,15 @@ def test_the_order_is_read_against_the_parent_that_holds_the_file():
 
 
 def test_a_child_must_sit_above_the_first_row_of_its_parents_stem():
-    # 92-7e-i-the-scan and 92-7e-i-scan share the stem 92-7e-i: a child between
+    # 52-7e-i-the-sync and 52-7e-i-sync share the stem 52-7e-i: a child between
     # the two sits below the first, so it does not read as one.
-    files = [Path("92-7e-i-the-scan.md")]
-    rows = {"92-7e-i-the-scan": "done", "92-7e-i-a-child": "backlog", "92-7e-i-scan": "done"}
-    assert fc._uncovered_story_keys(files, ["92-7e-i-a-child"], rows) == ["92-7e-i-a-child"]
-    assert fc._story_coverage(files, ["92-7e-i-a-child"], rows).below_parent == {"92-7e-i-a-child": "92-7e-i-the-scan"}
-    rows = {"92-7e-i-a-child": "backlog", "92-7e-i-the-scan": "done", "92-7e-i-scan": "done"}
-    assert fc._story_coverage(files, ["92-7e-i-a-child"], rows).children == [
-        ("92-7e-i-a-child", Path("92-7e-i-the-scan.md"), "92-7e-i-the-scan")
+    files = [Path("52-7e-i-the-sync.md")]
+    rows = {"52-7e-i-the-sync": "done", "52-7e-i-a-child": "backlog", "52-7e-i-sync": "done"}
+    assert fc._uncovered_story_keys(files, ["52-7e-i-a-child"], rows) == ["52-7e-i-a-child"]
+    assert fc._story_coverage(files, ["52-7e-i-a-child"], rows).below_parent == {"52-7e-i-a-child": "52-7e-i-the-sync"}
+    rows = {"52-7e-i-a-child": "backlog", "52-7e-i-the-sync": "done", "52-7e-i-sync": "done"}
+    assert fc._story_coverage(files, ["52-7e-i-a-child"], rows).children == [
+        ("52-7e-i-a-child", Path("52-7e-i-the-sync.md"), "52-7e-i-the-sync")
     ]
 
 
@@ -1464,23 +1464,23 @@ def test_a_parent_with_two_files_is_named_by_the_first():
 
 def test_a_key_with_no_row_is_covered_by_no_parent():
     # Without its row there is no place to compare, so only its own file covers it.
-    files = [Path("92-7-per-profile.md")]
-    for rows in ({"92-7-per-profile": "done"}, {"92-6-other": "done"}):
-        coverage = fc._story_coverage(files, ["92-7f-the-departure"], rows)
-        assert coverage.uncovered == ["92-7f-the-departure"]
+    files = [Path("52-7-user-settings.md")]
+    for rows in ({"52-7-user-settings": "done"}, {"52-6-other": "done"}):
+        coverage = fc._story_coverage(files, ["52-7f-the-cart-page"], rows)
+        assert coverage.uncovered == ["52-7f-the-cart-page"]
         assert coverage.children == [] and coverage.below_parent == {}
 
 
 def test_a_parent_whose_row_was_removed_is_listed_with_no_row():
-    rows = {"94-8-a-the-first": "backlog"}
-    files = [Path("94-7-other.md"), Path("94-8-season-learner.md")]
-    coverage = fc._story_coverage(files, ["94-8-a-the-first"], rows)
+    rows = {"54-8-a-the-first": "backlog"}
+    files = [Path("54-7-other.md"), Path("54-8-sample-story.md")]
+    coverage = fc._story_coverage(files, ["54-8-a-the-first"], rows)
     assert coverage.uncovered == []
-    assert coverage.children == [("94-8-a-the-first", Path("94-8-season-learner.md"), None)]
+    assert coverage.children == [("54-8-a-the-first", Path("54-8-sample-story.md"), None)]
 
 
 def test_an_alpha_keyed_story_falls_back_to_the_whole_key():
-    assert fc._uncovered_story_keys([Path("lp-6-foo.md")], ["lp-6-foo", "lp-7-bar"]) == ["lp-7-bar"]
+    assert fc._uncovered_story_keys([Path("ex-6-foo.md")], ["ex-6-foo", "ex-7-bar"]) == ["ex-7-bar"]
 
 
 def test_kernel_reads_a_done_parent_as_the_container_of_its_children(tmp_path):

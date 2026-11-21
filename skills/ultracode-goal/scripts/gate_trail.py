@@ -156,7 +156,7 @@ _OVERRIDE_AC_HEADERS = frozenset(_AC_HEADERS - {"id", "acs"})
 
 # A heading whose first word is `Story`, with the id after it and the rest of the
 # line. Which of these name a story is `_story_heading_id`'s call: most are prose
-# (`### Story ORDER: one deviation`), and a prose heading must not end a story's
+# (`### Story SCOPE: one step moved`), and a prose heading must not end a story's
 # entries.
 _STORY_HEADING = re.compile(
     r"^(#{2,4})[ \t]+story[ \t]+([\w.\-]*\w)(.*)$", re.IGNORECASE | re.MULTILINE
@@ -430,8 +430,8 @@ def _prefix_scope(story: str) -> str | None:
     `numeric_prefix` keeps only LEADING numeric components, so it treats two very
     different ids identically. For `4-1-some-slug` it yields `4-1` — the same
     story minus a slug, which is the fallback this scope exists for. For
-    `92-7f-never-driven`, whose SECOND component is alphanumeric (the shape every
-    split story takes), it yields `92`: the bare EPIC id. That is not a shorter
+    `52-7f-never-driven`, whose SECOND component is alphanumeric (the shape every
+    split story takes), it yields `52`: the bare EPIC id. That is not a shorter
     spelling of the story, it is a DIFFERENT artifact set — the epic roll-up —
     so a never-driven child story resolved the epic's PASS as its own verdict.
 
@@ -454,8 +454,8 @@ def _has_own_trace_report(trace_output: Path, story: str) -> bool:
     authorizes accepting an artifact that is NOT named for this story, so every
     leniency fails the trail OPEN:
 
-    - matching through `numeric_prefix` let a child story (`92-7f-…`) match the
-      EPIC's `trace-92.md`; and
+    - matching through `numeric_prefix` let a child story (`52-7f-…`) match the
+      EPIC's `trace-52.md`; and
     - falling back to any id-matching `*.md` let a story that wrote only its
       `nfr-assessment-<id>.md` — which `references/gate.md` ORDERS the non-web
       author to write into this same directory — claim a trace report it never
@@ -486,11 +486,11 @@ def trace_report_path(trace_output: Path | None, story: str) -> Path | None:
 
     THE PREFIX FALLBACK IS `_prefix_scope`, NOT `numeric_prefix`, and the
     difference is the whole epic-versus-child distinction. `_has_own_trace_report`
-    was fixed to make exactly this swap - raw `numeric_prefix('92-7f-...')` is
-    `'92'`, the BARE EPIC id, so a never-driven child story matched the epic's
+    was fixed to make exactly this swap - raw `numeric_prefix('52-7f-...')` is
+    `'52'`, the BARE EPIC id, so a never-driven child story matched the epic's
     roll-up report - but this function kept the raw call and stayed wrong in the
-    same way. Measured: every child of epic 92 (`92-0a`, `92-4b-<slug>`,
-    `92-7f-never-driven`) resolved `trace-92.md`, and `criterion_rows` then
+    same way. Measured: every child of epic 52 (`52-0a`, `52-4b-<slug>`,
+    `52-7f-never-driven`) resolved `trace-52.md`, and `criterion_rows` then
     rendered the EPIC's per-AC row under the child story's own heading in the
     evidence trail. `_prefix_scope` offers the fallback only while it still
     carries an epic AND a story component, which is the slug-suffix case it
@@ -644,11 +644,11 @@ def _story_heading_id(match: re.Match[str], keys: set[str]) -> str | None:
     """The story id a `_STORY_HEADING` match names, or None for a prose heading.
 
     Three shapes name a story: an id that starts with a digit, as a numeric
-    sprint key does (`7-1`, `92-0a`), the shape this reader has always read; an
+    sprint key does (`7-1`, `52-0a`), the shape this reader has always read; an
     id that is one of `keys`, the keys sprint-status lists, so a letter-prefixed
-    key (`lp-0-1-...`) is read too; and the gate-cycle heading
+    key (`ex-0-1-...`) is read too; and the gate-cycle heading
     (`_is_gate_heading`), whatever its id. Any other heading
-    (`### Story committed and re-verified`) is prose, and ends no story's
+    (`### Story checks rerun after the fix`) is prose, and ends no story's
     entries.
     """
     ident = match.group(2)
@@ -732,7 +732,7 @@ def recorded_verdicts(decision_log: Path | None, keys: set[str] | None = None) -
 
     Keyed by the heading's id VERBATIM. It used to be keyed by
     `numeric_prefix(...)`, which collapsed every alphanumeric child id of one
-    epic (`92-0a`, `92-3b`, `92-7f`) into the single bucket `92` — so one story's
+    epic (`52-0a`, `52-3b`, `52-7f`) into the single bucket `52`, so one story's
     verdict was rendered as the verdict of every sibling in the `--story` list,
     including stories the invocation never drove. Matching a heading id to a
     story id is `resolve_recorded_verdicts`' job, because it needs the story list
@@ -765,9 +765,9 @@ def _components(story: str) -> list[str]:
 def _heading_matches_story(heading: str, story: str) -> bool:
     """True iff a decision-log heading id names this story.
 
-    Headings in a real log carry the SHORT id (`### Story 92-0a - the five
-    confirmed defects`) while `--story` carries the full slugged id
-    (`92-0a-the-five-confirmed-defects`), so an equality test would find nothing
+    Headings in a real log carry the SHORT id (`### Story 52-0a - the first
+    batch`) while `--story` carries the full slugged id
+    (`52-0a-the-first-batch`), so an equality test would find nothing
     and blank the column. The heading's components must be a leading run of the
     story's.
     """
@@ -780,15 +780,15 @@ def resolve_recorded_verdicts(recorded: dict[str, str], stories: list[str]) -> d
 
     THE UNIQUENESS RULE IS THE WHOLE POINT, so do not "simplify" it away: a
     heading that matches more than one story in the list names none of them, and
-    every story it touches renders `n/a`. A bare `## Story 92` heading in an epic
+    every story it touches renders `n/a`. A bare `## Story 52` heading in an epic
     of seventy-six children matches all of them, and rendering its verdict on all
     of them is exactly the fabrication this function exists to prevent — the
     trail's header promises that an absent verdict reads `n/a`, and a reader who
     trusts that promise therefore trusts every cell that is not `n/a`.
 
     Where several headings match one story, the most specific (longest component
-    run) wins, since a run that logged both `92-3` and `92-3b` meant the latter
-    for `92-3b-the-minting-primitives`.
+    run) wins, since a run that logged both `52-3` and `52-3b` meant the latter
+    for `52-3b-the-export-step`.
     """
     out: dict[str, str] = {}
     for story in stories:

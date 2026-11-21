@@ -328,8 +328,8 @@ def test_two_decomposed_parents_are_counted_in_the_summary(tmp_path: Path) -> No
 
 
 def test_slugged_keys_are_read_by_their_sprint_status_key(tmp_path: Path) -> None:
-    """The shape a consumer's project shipped: `95-0-a-i/ii/iii` above the
-    `95-0-a` parent, every key carrying its title slug, the record named for
+    """The shape a consumer's project shipped: `55-0-a-i/ii/iii` above the
+    `55-0-a` parent, every key carrying its title slug, the record named for
     the parent's key byte for byte."""
     trace = tmp_path / "trace"
     children = ("7-0-a-i-the-spine", "7-0-a-ii-the-inputs", "7-0-a-iii-the-gate")
