@@ -1860,10 +1860,12 @@ def test_the_clock_slack_is_wide_enough_for_a_real_write(tmp_path):
 def test_operator_evidence_owed_is_a_handoff_only_when_this_spawn_wrote_it(tmp_path):
     """A story stopped on evidence only a person can record is named as a handoff.
 
-    `references/gate.md` writes the kind only on `operator_owed.py`'s
-    fail-closed `owed: true`, so the label is earned there. It still has to be
-    run-scoped like every other kind: a stale one would dress a later, real
-    failure as a scheduled handoff. A budget overrun is not a handoff.
+    `references/gate.md` writes the kind on `operator_owed.py`'s fail-closed
+    `owed: true`, and also when the gate could not check that (its
+    `evaluated: false`, or a refusal of `moved_ac_check.py`), each a stop that
+    waits on the operator. It still has to be run-scoped like every other kind:
+    a stale one would dress a later, real failure as a scheduled handoff. A
+    budget overrun is not a handoff.
     """
     impl = tmp_path / "impl"
     impl.mkdir()

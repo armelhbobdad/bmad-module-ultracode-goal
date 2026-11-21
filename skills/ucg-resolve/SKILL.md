@@ -308,7 +308,14 @@ The two dispositions are genuinely different things, not two names for one:
   opens with "The moved-AC check refused (exit 2)" closes at once when it is the story's
   first exit-2 refusal at that commit; when it says one came before at that commit, it
   closes only once the operator confirms in writing that trace can write its files there,
-  and until then record `defer`. An AC the escalation names as partly recorded, with the
+  and until then record `defer`. One that opens with "The operator-evidence check could not
+  read trace's coverage matrix" lists no AC and waits on no record: it closes at once when
+  it is the story's first such escalation at that commit, and the re-gate it owes runs
+  trace again, since the gate moved that cycle's trace files aside; when it says one came
+  before at that commit, it closes only once the operator confirms in writing that trace
+  can leave a coverage matrix the check can read there, with what its `evidence` names
+  fixed, and until then record `defer`.
+  An AC the escalation names as partly recorded, with the
   ids of the records TEA
   already counted for it, closes only on a `pass` record at that commit whose `id` is not
   among the ones the escalation names, or on the operator's written narrowing or move of

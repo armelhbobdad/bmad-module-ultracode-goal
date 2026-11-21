@@ -949,3 +949,72 @@ def test_the_path_spellings_are_the_ones_the_resume_reads(tmp_path):
         encoding="utf-8",
     )
     assert preflight_check._escalation_of(link, "7-1", root)["state"] == "closed"
+
+
+# --- the escalation an unread coverage matrix takes (#250) --------------------------
+
+_UNREAD_OPENING = "The operator-evidence check could not read trace's coverage matrix"
+_UNREAD_HEAD = f'One that opens with "{_UNREAD_OPENING}"'
+
+
+def _close_bullet(text: str) -> str:
+    close = re.search(r"- \*\*`close`\*\*.*?(?=\n- \*\*`|\n\n)", text, re.DOTALL)
+    return _norm(close.group(0)) if close else ""
+
+
+def _closes_the_unread_matrix_escalation(close: str) -> bool:
+    """It lists no AC, so the evidence rule has nothing to wait on: the first one
+    at a commit closes at once and its re-gate runs trace again, the gate having
+    moved that cycle's trace files aside; a later one at the same commit waits
+    for the operator's written word that trace's matrix can be read there, with
+    whatever the sidecar's `evidence` names fixed, never the matrix path alone,
+    since the refusal may be a missing summary or report."""
+    if _UNREAD_HEAD not in close:
+        return False
+    sentence = close[close.index(_UNREAD_HEAD) :].split(". ")[0]
+    marker = "**That close also writes the story's re-gate marker"
+    return bool(
+        "lists no AC and waits on no record" in sentence
+        and "closes at once when it is the story's first such escalation at that commit" in sentence
+        and "the re-gate it owes runs trace again, since the gate moved that cycle's trace files aside" in sentence
+        and "when it says one came before at that commit, it closes only once the operator confirms in writing"
+        in sentence
+        and "with what its `evidence` names fixed" in sentence
+        and "tempCoverageMatrixPath" not in sentence
+        and sentence.endswith("until then record `defer`")
+        and marker in close
+        and close.index(_UNREAD_HEAD) < close.index(marker)
+    )
+
+
+def test_close_closes_the_unread_matrix_escalation_like_a_refused_re_trace():
+    assert _closes_the_unread_matrix_escalation(_close_bullet(_text()))
+    # Cross-file: the phrase is the one gate.md's escalation opens with.
+    gate = _norm((_SKILL_ROOT / "references" / "gate.md").read_text(encoding="utf-8"))
+    assert f'`decision_needed` opens with "{_UNREAD_OPENING}"' in gate
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param(_UNREAD_HEAD, "One that says the matrix was unread", id="unkeyed"),
+        pytest.param(" lists no AC and waits on no record:", "", id="waits-for-records"),
+        pytest.param(
+            "closes at once when it is the story's first such escalation at that commit",
+            "closes only on the operator's written word", id="first-one-waits",
+        ),
+        pytest.param(
+            "it closes only once the operator confirms in writing that trace can leave a coverage matrix",
+            "it closes at once too, as trace can leave a coverage matrix", id="repeats-close-unread",
+        ),
+        pytest.param(
+            "with what its `evidence` names fixed",
+            "its report naming it by an absolute `tempCoverageMatrixPath`", id="repeat-keys-on-the-path-alone",
+        ),
+        pytest.param(", since the gate moved that cycle's trace files aside", "", id="re-trace-unexplained"),
+    ],
+)
+def test_the_unread_matrix_close_pin_rejects_a_mutant(old, new):
+    close = _close_bullet(_text())
+    assert close.count(old) == 1
+    assert not _closes_the_unread_matrix_escalation(close.replace(old, new))
