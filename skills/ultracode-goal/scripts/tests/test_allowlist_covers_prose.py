@@ -291,6 +291,11 @@ def test_the_gate_rebuilds_its_worktree_with_commands_the_allowlist_runs():
         "git worktree remove --force /p/_bmad-output/implementation-artifacts/.gate-worktree-4-2",
         "git worktree add /p/_bmad-output/implementation-artifacts/.gate-worktree-4-2 0123abc",
         "uv run /s/scripts/link_worktree_deps.py --project-root /p --worktree /w",
+        # Issue #253: a workspace monorepo's offline install, which the script runs itself, and the
+        # fallback when none can serve.
+        "uv run /s/scripts/link_worktree_deps.py --project-root /p --worktree /w --install "
+        "--impl-artifacts /p/_bmad-output/implementation-artifacts",
+        "uv run /s/scripts/link_worktree_deps.py --project-root /p --worktree /w --link-workspace",
         # Issue #240: the build folders carried out before the removal and back after the add.
         "uv run /s/scripts/carry_build_cache.py out --worktree /w --stash /p/.scratch-4-2/gate-build",
         "uv run /s/scripts/carry_build_cache.py back --worktree /w --stash /p/.scratch-4-2/gate-build",
@@ -306,6 +311,15 @@ def test_the_gate_rebuilds_its_worktree_with_commands_the_allowlist_runs():
         assert _covered(command, entries), command
     assert not _covered("git -C /p/.gate-worktree-4-2 status --porcelain", entries)
     assert "git -C" not in entries
+    # No entry runs a package manager's install: a rule matches by its start, so it would also let
+    # the install run in the main tree, where `npm ci` empties and rebuilds `node_modules`. The gate
+    # installs only through `link_worktree_deps.py --install`, which refuses any other folder.
+    for command in (
+        "npm ci --offline --prefix /p",
+        "bun install --frozen-lockfile --offline --cwd /p",
+        "pnpm install --offline --frozen-lockfile --dir /p",
+    ):
+        assert not _covered(command, entries), command
 
 
 def test_the_extraction_on_the_shapes_the_prose_uses():
