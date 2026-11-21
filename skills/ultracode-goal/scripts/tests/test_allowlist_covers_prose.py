@@ -39,13 +39,6 @@ What it ignores, and why:
   - A bare `git` with no subcommand, which names the program.
   - The git subcommands in NOT_RUN_UNDER_THE_ALLOWLIST, each with its reason.
 
-Package-manager installs are read apart (issue #253): in a workspace monorepo
-the gate gives its worktree an offline install, so a segment led by `npm ci`,
-`npm install`, `bun install`, `pnpm install` or `yarn` (or an alias of one)
-is an install the prose gives, every one must be covered by the default list,
-and no entry may cover an install that does not start offline and frozen to
-its lockfile.
-
 Stdlib + pytest only.
 """
 
@@ -298,6 +291,11 @@ def test_the_gate_rebuilds_its_worktree_with_commands_the_allowlist_runs():
         "git worktree remove --force /p/_bmad-output/implementation-artifacts/.gate-worktree-4-2",
         "git worktree add /p/_bmad-output/implementation-artifacts/.gate-worktree-4-2 0123abc",
         "uv run /s/scripts/link_worktree_deps.py --project-root /p --worktree /w",
+        # Issue #253: a workspace monorepo's offline install, which the script runs itself, and the
+        # fallback when none can serve.
+        "uv run /s/scripts/link_worktree_deps.py --project-root /p --worktree /w --install "
+        "--impl-artifacts /p/_bmad-output/implementation-artifacts",
+        "uv run /s/scripts/link_worktree_deps.py --project-root /p --worktree /w --link-workspace",
         # Issue #240: the build folders carried out before the removal and back after the add.
         "uv run /s/scripts/carry_build_cache.py out --worktree /w --stash /p/.scratch-4-2/gate-build",
         "uv run /s/scripts/carry_build_cache.py back --worktree /w --stash /p/.scratch-4-2/gate-build",
@@ -313,123 +311,15 @@ def test_the_gate_rebuilds_its_worktree_with_commands_the_allowlist_runs():
         assert _covered(command, entries), command
     assert not _covered("git -C /p/.gate-worktree-4-2 status --porcelain", entries)
     assert "git -C" not in entries
-
-
-# --- package-manager installs (#253) ------------------------------------------------
-
-# Every command that installs into a folder, npm's aliases included (`npm cit` runs `npm ci`, then the
-# tests), and a bare `yarn`, which installs.
-_INSTALL = re.compile(
-    r"^(?:npm (?:ci|clean-install|ic|install-clean|isntall-clean|cit|install-ci-test|clean-install-test"
-    r"|sit|install|i|in|ins|inst|insta|instal|isnt|isnta|isntal|isntall|add|it|install-test)"
-    r"|bun (?:install|i|add|a)|pnpm (?:install|i|add)|yarn(?: install| add)?)(?:\s|$)"
-)
-# The gate's offline installs, one per lockfile kind it measured
-# (gate.md, "Dependency directories do not follow the commit").
-GATE_INSTALLS = (
-    "npm ci --offline --prefix <tmp-path>",
-    "bun install --frozen-lockfile --offline --cwd <tmp-path>",
-    "pnpm install --offline --frozen-lockfile --dir <tmp-path>",
-)
-# Installs that are online, not frozen to the lockfile, or both: none may run unasked.
-_NOT_OFFLINE_AND_FROZEN = (
-    "npm ci",
-    "npm ci --prefix /w",
-    "npm ci --prefer-offline --prefix /w",
-    "npm install",
-    "npm install --offline --prefix /w",
-    "npm i --offline",
-    "bun install",
-    "bun install --cwd /w",
-    "bun install --offline --cwd /w",
-    "bun install --frozen-lockfile --cwd /w",
-    "bun install --frozen-lockfile --prefer-offline --cwd /w",
-    "bun i --frozen-lockfile --offline",
-    "pnpm install",
-    "pnpm install --dir /w",
-    "pnpm install --offline --dir /w",
-    "pnpm install --frozen-lockfile --dir /w",
-    "pnpm i --offline --frozen-lockfile",
-    "yarn install --offline --frozen-lockfile",
-    "yarn",
-    "npm clean-install --offline",
-    "npm cit --offline",
-    "pnpm add ex-left",
-    "bun add ex-left",
-)
-
-
-def _installs() -> dict[str, list[str]]:
-    """Each install the scanned prose gives, whitespace-normalized, with the files that give it."""
-    found: dict[str, list[str]] = {}
-    for path in SCANNED:
-        label = f"{path.parent.name}/{path.name}"
-        for candidate in _candidates(path):
-            for segment in _SEPARATORS.split(candidate):
-                command = " ".join(_STRIPPED_WRAPPERS.sub("", segment.strip()).split())
-                if _INSTALL.match(command):
-                    files = found.setdefault(command, [])
-                    if label not in files:
-                        files.append(label)
-    return found
-
-
-def _filled(command: str) -> str:
-    """The command as the run issues it, each `<placeholder>` replaced by a path."""
-    return re.sub(r"<[^>]+>", "/p/_bmad-output/implementation-artifacts/.gate-worktree-61-3", command)
-
-
-def test_the_prose_gives_the_gate_installs():
-    found = _installs()
-    missing = [command for command in GATE_INSTALLS if command not in found]
-    assert not missing, f"the gate's offline installs the prose no longer gives: {missing}"
-    assert "references/gate.md" in found[GATE_INSTALLS[0]]
-
-
-def test_every_install_the_prose_gives_is_on_the_default_allowlist():
-    found = _installs()
-    assert set(GATE_INSTALLS) <= set(found)
-    entries = _allowlist()
-    uncovered = {command: files for command, files in found.items() if not _covered(_filled(command), entries)}
-    assert not uncovered, (
-        f"installs the prose gives that no `Bash(<entry>:*)` rule covers, so an unattended gate "
-        f"stops for approval there: {uncovered}"
-    )
-
-
-def test_no_entry_covers_an_install_that_does_not_start_offline_and_frozen():
-    """What a rule can hold: it matches a command by its start, so an entry
-    that starts offline and frozen keeps a bare, online or unfrozen install
-    asking. It also matches that install in another folder, or with a flag
-    after it that undoes either form; preflight.md and customize.toml say so,
-    and the gate never runs those."""
-    entries = _allowlist()
-    installs = [entry for entry in entries if _INSTALL.match(entry)]
-    assert installs == [
-        "npm ci --offline",
-        "bun install --frozen-lockfile --offline",
-        "pnpm install --offline --frozen-lockfile",
-    ]
-    for entry in installs:
-        # `npm ci` installs only what its lockfile pins, or fails; the others need the flag.
-        assert "--offline" in entry.split() and (entry.startswith("npm ci") or "--frozen-lockfile" in entry.split())
-    for command in _NOT_OFFLINE_AND_FROZEN:
+    # No entry runs a package manager's install: a rule matches by its start, so it would also let
+    # the install run in the main tree, where `npm ci` empties and rebuilds `node_modules`. The gate
+    # installs only through `link_worktree_deps.py --install`, which refuses any other folder.
+    for command in (
+        "npm ci --offline --prefix /p",
+        "bun install --frozen-lockfile --offline --cwd /p",
+        "pnpm install --offline --frozen-lockfile --dir /p",
+    ):
         assert not _covered(command, entries), command
-
-
-def test_the_install_extraction():
-    assert _INSTALL.match("npm ci --offline --prefix /w")
-    assert _INSTALL.match("bun i")
-    for alias in ("npm cit", "npm clean-install", "npm ic", "npm install-clean", "npm add x", "yarn", "pnpm add x"):
-        assert _INSTALL.match(alias), alias
-    assert not _INSTALL.match("npm run build")
-    assert not _INSTALL.match("npm test")
-    assert not _INSTALL.match("npm citation")
-    assert not _INSTALL.match("bunx install")
-    assert not _INSTALL.match("yarnpkg")
-    assert _filled("npm ci --offline --prefix <tmp-path>") == (
-        "npm ci --offline --prefix /p/_bmad-output/implementation-artifacts/.gate-worktree-61-3"
-    )
 
 
 def test_the_extraction_on_the_shapes_the_prose_uses():

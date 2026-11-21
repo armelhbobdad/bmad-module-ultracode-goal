@@ -45,16 +45,43 @@ itself. It reads the folder's entries and each `@scope`'s, and the same for
 and `.pnpm/<pkg>/node_modules`, and nothing deeper, so a large folder stays
 quick. A workspace package a package manager copies in rather than links
 (pnpm's injected dependencies) leaves no link to find, and the scan does not
-see it. A folder that holds a workspace link is never linked: the gate gives the worktree an
-offline install instead. An install writes through a linked folder into the
-main tree (npm's and pnpm's do), so when any folder holds one, the call links
-nothing at all and holds every other folder back (`install-first`), and it
-fails a folder the worktree already holds as a link, which the install would
-write through. Once the install has run, the same call with `--installed`
-links whole each folder the worktree still lacks, never one that holds a
+see it. A folder that holds a workspace link is never linked: the worktree
+gets an offline install instead. An install writes through a linked folder
+into the main tree (npm's and pnpm's do), so when any folder holds one, the
+call links nothing at all and holds every other folder back (`install-first`),
+and it fails a folder the worktree already holds as a link, which the install
+would write through. The same call with `--install` then runs that install
+and links whole each folder the worktree still lacks, never one that holds a
 workspace link. When no install can serve, the same call with
 `--link-workspace` links every folder whole, those included, as before: the
 gate then reads the main tree's copy of each package such a link points to.
+
+The install. No allowlist entry runs a package manager, since a rule matches a
+command by its start only and would let the same install run in any folder,
+the main tree included, where npm's clean install empties and rebuilds
+`node_modules` and every install runs lifecycle scripts. So
+`--install` is the one way the gate installs, and it runs only into the gate's
+own worktree. It refuses (exit 3, its reason under `refused`, nothing run or
+linked) unless the worktree is one `git worktree list --porcelain` gives for
+the project root, is not the main worktree or the project root, and is a
+folder named `.gate-worktree-<story_id>` right inside `--impl-artifacts`,
+where the gate builds it (references/gate.md); unless every folder under
+`workspace` has exactly one lockfile, of npm, bun or pnpm (a `yarn.lock`, two
+lockfiles or none are refused, so the gate takes its fallback); unless each
+lockfile's folder resolves, through any link, inside the worktree; and unless
+each dependency folder the install would write (each folder of the call at or
+under that folder, and that folder's own `node_modules`) resolves inside the
+worktree too, so none is a link into the main tree. Then it runs, once per
+lockfile, in the worktree's copy of the lockfile's folder, as an argument
+list with no shell, only the offline, frozen-lockfile form the lockfile
+names: `npm ci --offline --prefix <folder>` for `package-lock.json` or
+`npm-shrinkwrap.json`, `bun install --frozen-lockfile --offline --cwd
+<folder>` for `bun.lock` or `bun.lockb`, and `pnpm install --offline
+--frozen-lockfile --dir <folder>` for `pnpm-lock.yaml`. Each runs the
+packages' lifecycle scripts, as the main tree's install did, so a workspace
+package whose `prepare` builds its entry point gets it built from the
+commit's source. When an install exits non-zero, or cannot start, it stops,
+links nothing and exits 1.
 
 How each link is made. A directory symlink to the main tree's folder, at the
 same relative path in the worktree. On Windows, where a symlink needs a
@@ -66,7 +93,7 @@ tracked folder of that name).
 
 Usage:
     uv run link_worktree_deps.py --project-root <main tree> --worktree <path>
-        [--dir <relpath> ...] [--installed | --link-workspace]
+        [--dir <relpath> ...] [--install --impl-artifacts <path> | --link-workspace]
 
 Output: JSON on stdout, `{"linked": [...], "skipped": [{"path", "reason"}],
 "failed": [{"path", "error"}], "workspace": [{"path", "lockfiles",
@@ -79,9 +106,16 @@ parent the worktree has that holds a workspace link, with each link and the
 folder it resolves to (`to`), and the lockfiles (`package-lock.json`,
 `npm-shrinkwrap.json`, `bun.lock`, `bun.lockb`, `pnpm-lock.yaml`,
 `yarn.lock`) in the nearest folder of the worktree, at or above that folder's
-parent, that holds any, `[]` when none does. Exit 0 when every link was made
-or skipped, 1 when any failed, and 2 when the project root or the worktree is
-not a folder, or a `--dir` is absolute or leaves the project root.
+parent, that holds any, `[]` when none does. With `--install` it also prints
+`installs`, one `{"lockfile", "command", "exit", "error"}` per install it ran
+(`command` the argument list, `exit` null when it could not start, `error`
+the last line it printed that names an error, npm's pointer to its log aside,
+when it failed, `""` otherwise), and, when it
+refused, `refused`, the reason. Exit 0 when every install ran and every link
+was made or skipped, 1 when an install or a link failed, 2 when the project
+root or the worktree is not a folder, a `--dir` is absolute or leaves the
+project root, or `--install` comes without `--impl-artifacts`, and 3 when
+`--install` refused.
 """
 
 from __future__ import annotations
@@ -89,7 +123,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -115,6 +152,20 @@ LOCKFILES = (
     "pnpm-lock.yaml",
     "yarn.lock",
 )
+# The one install `--install` runs for each lockfile it serves, the folder appended: offline and
+# frozen to the lockfile, so it installs only what the lockfile pins, from the local cache, or fails.
+INSTALLS = {
+    "package-lock.json": ("npm", "ci", "--offline", "--prefix"),
+    "npm-shrinkwrap.json": ("npm", "ci", "--offline", "--prefix"),
+    "bun.lock": ("bun", "install", "--frozen-lockfile", "--offline", "--cwd"),
+    "bun.lockb": ("bun", "install", "--frozen-lockfile", "--offline", "--cwd"),
+    "pnpm-lock.yaml": ("pnpm", "install", "--offline", "--frozen-lockfile", "--dir"),
+}
+# The name of the gate's worktree, right inside the implementation artifacts folder (gate.md).
+GATE_WORKTREE_PREFIX = ".gate-worktree-"
+# A line that names an error, and npm's last one, which only points to its log.
+_ERROR_LINE = re.compile(r"\berror\b|\bERR[_!]", re.IGNORECASE)
+_NPM_LOG_POINTER = "A complete log of this run can be found in"
 
 
 def discover(project_root: Path) -> list[str]:
@@ -303,7 +354,25 @@ _WRITES_THROUGH = (
 )
 
 
-def link_all(project_root: Path, worktree: Path, rel_dirs: list[str], mode: str = "default") -> dict:
+def workspace_folders(project_root: Path, worktree: Path, rel_dirs: list[str]) -> list[dict]:
+    """The `workspace` entries: each folder whose parent the worktree has that holds a workspace link."""
+    workspace = []
+    for rel in rel_dirs:
+        if not (worktree / rel).parent.is_dir():
+            continue
+        links = workspace_links(project_root, rel)
+        if links:
+            workspace.append({"path": rel, "lockfiles": lockfiles(worktree, rel), "links": links})
+    return workspace
+
+
+def link_all(
+    project_root: Path,
+    worktree: Path,
+    rel_dirs: list[str],
+    mode: str = "default",
+    workspace: list[dict] | None = None,
+) -> dict:
     """Link each folder whole, holding back the ones an offline install has to make.
 
     mode is `default` (no install has run yet), `installed` (it has) or
@@ -312,15 +381,9 @@ def link_all(project_root: Path, worktree: Path, rel_dirs: list[str], mode: str 
     linked: list[str] = []
     skipped: list[dict] = []
     failed: list[dict] = []
-    workspace: list[dict] = []
-    held: set[str] = set()
-    for rel in rel_dirs:
-        if not (worktree / rel).parent.is_dir():
-            continue
-        links = workspace_links(project_root, rel)
-        if links:
-            held.add(rel)
-            workspace.append({"path": rel, "lockfiles": lockfiles(worktree, rel), "links": links})
+    if workspace is None:
+        workspace = workspace_folders(project_root, worktree, rel_dirs)
+    held = {entry["path"] for entry in workspace}
     hold_all = bool(held) and mode == "default"
     for rel in rel_dirs:
         target = project_root / rel
@@ -349,6 +412,157 @@ def link_all(project_root: Path, worktree: Path, rel_dirs: list[str], mode: str 
     return {"linked": linked, "skipped": skipped, "failed": failed, "workspace": workspace}
 
 
+def _same(a: str | Path, b: str | Path) -> bool:
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _inside(path: str | Path, folder: Path) -> bool:
+    """Whether path resolves, through any link, to folder or inside it."""
+    real = os.path.normcase(os.path.realpath(path))
+    real_folder = os.path.normcase(os.path.realpath(folder))
+    return real == real_folder or real.startswith(real_folder.rstrip(os.sep) + os.sep)
+
+
+def _listed_worktrees(project_root: Path) -> tuple[list[str], str]:
+    """The worktrees `git worktree list --porcelain` gives for project_root, main first, or why not."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(project_root), "worktree", "list", "--porcelain"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            stdin=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        return [], f"git could not run: {exc}"
+    if proc.returncode:
+        lines = proc.stderr.strip().splitlines()
+        return [], lines[-1] if lines else f"git worktree list exited {proc.returncode}"
+    return [line[len("worktree ") :] for line in proc.stdout.splitlines() if line.startswith("worktree ")], ""
+
+
+def not_the_gate_worktree(project_root: Path, worktree: Path, impl_artifacts: Path) -> str | None:
+    """Why worktree is not the gate's own worktree of project_root, or None when it is."""
+    if _same(worktree, project_root):
+        return f"the worktree is the project root, the main tree: {worktree}"
+    listed, error = _listed_worktrees(project_root)
+    if error:
+        return f"`git worktree list` cannot list the project root's worktrees: {error}"
+    if listed and _same(worktree, listed[0]):
+        return f"the worktree is the main worktree: {worktree}"
+    if not any(_same(worktree, path) for path in listed):
+        return f"the worktree is not one `git worktree list` gives for the project root: {worktree}"
+    real = Path(os.path.realpath(worktree))
+    if not (
+        real.name.startswith(GATE_WORKTREE_PREFIX)
+        and len(real.name) > len(GATE_WORKTREE_PREFIX)
+        and _same(real.parent, impl_artifacts)
+    ):
+        return (
+            f"the worktree is not `{GATE_WORKTREE_PREFIX}<story_id>` right inside the implementation "
+            f"artifacts folder, where the gate builds it: {worktree}"
+        )
+    return None
+
+
+def install_plan(
+    worktree: Path, rel_dirs: list[str], workspace: list[dict]
+) -> tuple[list[tuple[str, list[str]]], str | None]:
+    """Each lockfile to install for, with its argument list, or why `--install` refuses.
+
+    One install per lockfile, in the order `workspace` first names it.
+    """
+    plan: dict[str, list[str]] = {}
+    for entry in workspace:
+        names = [lockfile.rsplit("/", 1)[-1] for lockfile in entry["lockfiles"]]
+        if len(names) != 1 or names[0] not in INSTALLS:
+            found = ", ".join(entry["lockfiles"]) or "none"
+            return [], (
+                f"`{entry['path']}` holds a workspace link and its lockfiles are {found}: an offline "
+                f"install runs only for exactly one of {', '.join(INSTALLS)}"
+            )
+        lockfile = entry["lockfiles"][0]
+        if lockfile in plan:
+            continue
+        rel_folder = lockfile.rsplit("/", 1)[0] if "/" in lockfile else ""
+        folder = worktree / rel_folder
+        if not _inside(folder, worktree):
+            return [], f"`{lockfile}`'s folder resolves outside the worktree: {os.path.realpath(folder)}"
+        writes = [Path(rel_folder, DEPENDENCY_DIR).as_posix()] + [
+            rel for rel in rel_dirs if not rel_folder or rel.startswith(rel_folder + "/")
+        ]
+        for rel in writes:
+            if not _inside(worktree / rel, worktree):
+                return [], (
+                    f"`{rel}`, which the install of `{lockfile}` would write, resolves outside the worktree "
+                    f"(into the main tree, or another folder), and the install would write through it: "
+                    f"{os.path.realpath(worktree / rel)}"
+                )
+        plan[lockfile] = [*INSTALLS[lockfile.rsplit("/", 1)[-1]], os.path.realpath(folder)]
+    return list(plan.items()), None
+
+
+def _error_line(*outputs: str) -> str:
+    """The last line that names an error (npm's pointer to its log aside), else the last line printed."""
+    for output in outputs:
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        named = [line for line in lines if _ERROR_LINE.search(line) and _NPM_LOG_POINTER not in line]
+        if named:
+            return named[-1]
+    for output in outputs:
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if lines:
+            return lines[-1]
+    return ""
+
+
+def run_install(lockfile: str, command: list[str]) -> dict:
+    """Run one install, its program found on PATH, as an argument list with no shell."""
+    record = {"lockfile": lockfile, "command": command, "exit": None, "error": ""}
+    program = shutil.which(command[0])
+    if program is None:
+        record["error"] = f"{command[0]} is not on PATH"
+        return record
+    try:
+        proc = subprocess.run(
+            [program, *command[1:]],
+            cwd=command[-1],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            stdin=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        record["error"] = str(exc)
+        return record
+    record["exit"] = proc.returncode
+    if proc.returncode:
+        record["error"] = _error_line(proc.stderr, proc.stdout)
+    return record
+
+
+def install(
+    project_root: Path, worktree: Path, impl_artifacts: Path, rel_dirs: list[str]
+) -> tuple[dict, int]:
+    """`--install`: the checks, each offline install, then the links the install did not make."""
+    workspace = workspace_folders(project_root, worktree, rel_dirs)
+    refused = not_the_gate_worktree(project_root, worktree, impl_artifacts)
+    plan: list[tuple[str, list[str]]] = []
+    if refused is None:
+        plan, refused = install_plan(worktree, rel_dirs, workspace)
+    if refused is not None:
+        result = {"linked": [], "skipped": [], "failed": [], "workspace": workspace}
+        return {**result, "installs": [], "refused": refused}, 3
+    installs = []
+    for lockfile, command in plan:
+        installs.append(run_install(lockfile, command))
+        if installs[-1]["exit"] != 0:
+            result = {"linked": [], "skipped": [], "failed": [], "workspace": workspace}
+            return {**result, "installs": installs}, 1
+    result = link_all(project_root, worktree, rel_dirs, "installed", workspace)
+    return {**result, "installs": installs}, 1 if result["failed"] else 0
+
+
 def _relative_dir(raw: str, project_root: Path) -> str | None:
     """`raw` as a `/` path relative to project_root, or None when it leaves it."""
     if os.path.isabs(raw) or Path(raw).drive:
@@ -375,10 +589,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
-        "--installed",
+        "--install",
         action="store_true",
-        help="the worktree has had its offline install: link whole each folder it still "
-        "lacks, never one that holds a workspace link",
+        help="give the gate's worktree the offline, frozen-lockfile install each lockfile "
+        "names, then link whole each folder it still lacks, never one that holds a "
+        "workspace link; refused (exit 3) for any other worktree or lockfile",
     )
     mode.add_argument(
         "--link-workspace",
@@ -386,7 +601,13 @@ def main(argv: list[str] | None = None) -> int:
         help="no install can serve: link every folder whole, one that holds a workspace "
         "link included, so a run reads the main tree's copy of each workspace package",
     )
+    parser.add_argument(
+        "--impl-artifacts",
+        help="with --install: the implementation artifacts folder, where the gate builds its worktree",
+    )
     args = parser.parse_args(argv)
+    if args.install and not args.impl_artifacts:
+        parser.error("--install needs --impl-artifacts")
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     project_root = Path(args.project_root).resolve()
@@ -408,10 +629,14 @@ def main(argv: list[str] | None = None) -> int:
             rel_dirs.append(rel)
     else:
         rel_dirs = discover(project_root)
-    mode_name = "installed" if args.installed else "link-workspace" if args.link_workspace else "default"
-    result = link_all(project_root, worktree, rel_dirs, mode_name)
+    if args.install:
+        result, code = install(project_root, worktree, Path(args.impl_artifacts), rel_dirs)
+    else:
+        mode_name = "link-workspace" if args.link_workspace else "default"
+        result = link_all(project_root, worktree, rel_dirs, mode_name)
+        code = 1 if result["failed"] else 0
     print(json.dumps(result, indent=2, ensure_ascii=False))
-    return 1 if result["failed"] else 0
+    return code
 
 
 if __name__ == "__main__":
