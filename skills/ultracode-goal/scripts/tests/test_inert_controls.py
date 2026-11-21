@@ -531,6 +531,31 @@ def test_execute_resume_relatches_and_never_inherits():
     assert "claude_mem" not in resume and "never-synthesize" not in resume
 
 
+def test_a_resume_into_execute_makes_no_filter_call():
+    """#256: Finalize passed no `--advisory` on a resume routed into Execute
+    "which makes no filter call", but no file that defines a resume said so,
+    and execute.md's heartbeat listed recall among the work such a resume does
+    before the loop. A resume that ran the filter then met two rules: one
+    advisory per record its filter call consumed, and none on that resume.
+    The resume rule now states it, the heartbeat no longer lists recall, and
+    Finalize's no-advisory sentence cites the rule instead of asserting it."""
+    execute = _read(_EXECUTE).splitlines()
+    resume = next(ln for ln in execute if ln.startswith("**On resume,"))
+    assert "The resume re-runs that latch step alone, never Stage 1's filter call" in resume
+    assert "this invocation consumes no record and Finalize passes no `--advisory` for it" in resume
+    assert resume.index("`mem_recall.py latch` command") < resume.index("re-runs that latch step alone")
+    heartbeat = next(ln for ln in execute if ln.startswith("**A resume writes its first heartbeat"))
+    assert "(branch and hook re-assertion, the latch, a grounding read)" in heartbeat
+    assert not re.search(r"\brecall\b", heartbeat, re.I)
+    skill_resume = next(ln for ln in _read(_SKILL).splitlines() if ln.startswith("**Resume.**"))
+    assert "`mem_recall.py latch` step with it (that step alone, never Stage 1's filter call)" in skill_resume
+    assert re.search(
+        r"Pass no `--advisory` on a resume routed into Execute, which makes no filter call "
+        r"under `references/execute\.md`'s resume rule \(that resume re-runs Stage 1's latch step alone\)",
+        _write_step(),
+    )
+
+
 def test_a_resume_mints_its_own_run_id():
     """AC-18 and decision 1: each invocation, a resume or a drive_epic spawn
     included, is its own run with its own run id. A resume that reused the id

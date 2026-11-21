@@ -24,6 +24,7 @@ _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _EXECUTE = _SKILL_ROOT / "references" / "execute.md"
 _FINALIZE = _SKILL_ROOT / "references" / "finalize.md"
 _GATE = _SKILL_ROOT / "references" / "gate.md"
+_DEFINE_DONE = _SKILL_ROOT / "references" / "define-done.md"
 _DRIVER = _SKILL_ROOT / "scripts" / "drive_epic.py"
 _PREFLIGHT_CHECK = _SKILL_ROOT / "scripts" / "preflight_check.py"
 
@@ -90,6 +91,35 @@ _CHECKS = {
     # criteria over the ceiling, and the summed `load` is gone.
     "says the sizing call's ratio is the criteria over the ceiling": lambda s: bool(
         re.search(r"returning `ratio` \(the criteria count over the ceiling\)", s)
+    ),
+    # #247: a row that is not a decomposed child and has no story file has no
+    # criteria to count. A resume can meet one, and step 1's draft comes after
+    # step 0's markers, so the section sends that row alone back to Stage 3,
+    # resting on Stage 3's exit condition, which binds every profile (on a
+    # non-web stack the preconditions above name nothing such a row fails).
+    # "Any other" is read against the decomposed child, the one row that
+    # legitimately has no story file, so the two sentences stay together.
+    "sends an undrafted row alone back to Stage 3": lambda s: bool(
+        re.search(
+            r"A decomposed child has no story file of its own by the convention below, so its contract exists "
+            r"solely as the criteria its row cites\. Any other row with no story file has not been drafted",
+            s,
+        )
+        and re.search(r"Send that row alone back to Stage 3, never every in-scope story", s)
+    ),
+    "rests that route on Stage 3's exit condition, which binds every profile": lambda s: bool(
+        re.search(
+            r"Stage 3's exit condition, which binds every profile \(`references/define-done\.md`: "
+            r"every in-scope story has a story file with clear acceptance criteria\)",
+            s,
+        )
+    ),
+    "drafts that row before step 0 and counts the draft's criteria": lambda s: bool(
+        re.search(
+            r"Stage 3's `ucg-create-story` drafts its story file[^.]*before step 0 writes any marker, "
+            r"and the draft's criteria are then the set this section counts",
+            s,
+        )
     ),
     "says do not start the story": lambda s: bool(re.search(r"do not start the story", s, re.I)),
     "calls decomposition a legitimate terminal": lambda s: bool(
@@ -239,6 +269,37 @@ def test_the_route_precedes_the_loop_it_is_an_alternative_to():
     assert text.index("### Sizing: a story too large to drive") < text.index("\n0. "), (
         "the sizing section must come before step 0"
     )
+
+
+def test_step_1_drafts_no_missing_story_file():
+    """#247: "`ucg-create-story` (if not already current)" read as drafting a
+    row's missing story file at step 1, after step 0 had written the
+    `.current-story` pointer and the baseline marker, leaving a baseline behind
+    a story sizing might then decompose. Step 1 now refines the file Stage 3
+    drafted and points a missing one back at sizing's route."""
+    text = _EXECUTE.read_text(encoding="utf-8")
+    step1 = next(ln for ln in text.splitlines() if ln.startswith("1. `ucg-create-story`"))
+    assert "`ucg-create-story` (if not already current)" not in step1
+    assert "as a refinement of the story file Stage 3 drafted" in step1
+    assert (
+        "never to draft a missing one: sizing, above, sends a row with no story file back to Stage 3 before step 0"
+        in step1
+    )
+
+
+def test_the_exit_condition_the_sizing_route_cites_is_stage_3s():
+    """The sizing route for an undrafted row rests on define-done.md's exit
+    condition, so that condition must still say what the route quotes, for
+    every profile."""
+    text = _DEFINE_DONE.read_text(encoding="utf-8")
+    start = text.index("## Exit condition")
+    end = text.find("\n## ", start + 1)
+    exit_condition = text[start:] if end == -1 else text[start:end]
+    bullet = (
+        "- **Every in-scope story** has a story file with clear acceptance criteria. A recorded decomposed child, "
+        "which has none of its own, meets this through its parent's story file, which holds the parent ACs it claims."
+    )
+    assert bullet in exit_condition.splitlines()
 
 
 def test_the_checks_are_anchored_to_the_sizing_section():

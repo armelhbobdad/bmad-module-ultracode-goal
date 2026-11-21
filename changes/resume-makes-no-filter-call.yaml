@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  A resume routed straight into Execute now states that it re-runs Stage 1's `mem_recall.py latch` step alone and never its `mem_recall.py filter` call, so it reads no prior run, consumes no record and gets no `--advisory` in Finalize's record write. Execute's run-status heartbeat no longer lists recall among the work such a resume does before the loop, and Finalize's no-advisory rule now cites that resume rule instead of asserting it. Before, a resume that followed the heartbeat's list ran the filter and then met one rule asking for an advisory per consumed record and another asking for none.
+issues: [256]
