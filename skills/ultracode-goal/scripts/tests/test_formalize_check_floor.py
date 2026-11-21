@@ -287,6 +287,17 @@ def test_invented_nfr_threshold_hard_blocks():
     )
 
 
+@pytest.mark.parametrize("story_key", ["61-1s-sample-story", "61-1.5s-sample-story", "61-1s"])
+def test_threshold_scan_ignores_durations_inside_story_keys(story_key):
+    _, candidates = fc._scan_test_design(
+        f"Cover the handler in {story_key}.\nCheck the latency against an uncited 20 s timeout.",
+        "test-design.md",
+    )
+    assert [c["source"] for c in candidates if c["kind"] == "invented_nfr_threshold"] == [
+        "test-design.md:2"
+    ]
+
+
 def test_sourced_or_unknown_threshold_is_not_flagged():
     # Anti-vacuous twin: the same NFR with the threshold citing an upstream
     # path:line (or marked UNKNOWN) yields nfr_thresholds_unsourced == 0 and zero
