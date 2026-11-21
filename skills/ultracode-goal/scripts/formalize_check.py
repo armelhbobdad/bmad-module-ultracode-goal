@@ -148,9 +148,10 @@ _PROSE_HEDGE_RE = re.compile(
 # An NFR threshold is a bare number with a unit (ms, s, %, rps, MB) in an
 # NFR/threshold context. It is "unsourced" when the same line carries no
 # citation (no path:line, no http, no FR/ADR id) and is not explicitly marked
-# UNKNOWN / CONCERNS / deferred.
+# UNKNOWN / CONCERNS / deferred. A story key can contain a unit-like segment;
+# also avoid matching only the fractional tail of such a segment.
 _NFR_NUMBER_RE = re.compile(
-    r"\b\d+(?:\.\d+)?\s*(?:ms|s|%|rps|qps|MB|GB|KB|seconds?|minutes?)\b",
+    r"(?<![\w-])(?<!\d\.)\d+(?:\.\d+)?\s*(?:ms|s|%|rps|qps|MB|GB|KB|seconds?|minutes?)\b",
     re.IGNORECASE,
 )
 _SOURCE_CITATION_RE = re.compile(

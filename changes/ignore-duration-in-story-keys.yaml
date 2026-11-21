@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The formalize readiness check no longer treats a duration-like segment of a story key as an unsourced threshold. Real uncited durations still require a source.
