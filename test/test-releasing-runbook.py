@@ -576,6 +576,13 @@ def test_the_install_smoke_test_is_dispatched_with_an_exact_version():
     assert """select(.displayTitle=="Install smoke <version>")""" in dispatch
     assert 'if [ -z "$RUN_ID" ]; then' in dispatch
     assert "--limit 1" not in dispatch
+    # npm accepts a publish minutes before it serves it, and a dispatch in that
+    # window fails every leg: the block waits for the version before it
+    # dispatches, and a leg that cannot see the version is no bad version.
+    wait = 'until [ "$(npm view bmad-module-ultracode-goal@<version> version 2>/dev/null)" = "<version>" ]; do'
+    assert wait in dispatch
+    assert dispatch.index(wait) < dispatch.index("gh workflow run install-smoke.yaml")
+    assert "except a run whose legs all fail with `npm has no bmad-module-ultracode-goal@<version>`" in after
     assert load_run_name() == "Install smoke ${{ inputs.version }}"
     assert "version=latest" not in text()
     assert "install-smoke.json" in after
