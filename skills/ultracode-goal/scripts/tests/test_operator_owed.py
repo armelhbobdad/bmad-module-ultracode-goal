@@ -53,8 +53,8 @@ def _load(name: str, path: Path):
 
 owed_mod = _load("operator_owed", SCRIPT)
 
-STORY = "96-0-g-the-landing"
-SHA = "a14e48a79010dd124366db59af51d8586e85ab33"
+STORY = "56-0-g-the-sample"
+SHA = "3c7e1f0a9b2d4e6f8a0c1b3d5e7f9a2b4c6d8e0f"
 PRIORITIES = ("P0", "P1", "P2", "P3")
 
 # Five P0 and four P1 criteria covered, and the split operator half (AC 10) open.
@@ -315,14 +315,14 @@ def test_operator_acs_reads_only_the_ac_section():
 
 # --- a plain `operator` tag is built work, never owed evidence --------------------
 
-# GMC 96-0-j's shape. Six ACs carry the older plain `operator` tag, for work the
+# A consumer project's story shape. Six ACs carry the older plain `operator` tag, for work the
 # dev agent builds and a person or a script verifies (doc fixes, a CLAUDE.md pin,
 # ledger closures, a checklist run on a real build). AC 7 is the pin, and its own
 # verification is a machine check. Priorities as its test design set them.
 J_PRIORITY = {n: "P0" for n in (1, 2, 3, 4, 10, 11, 12)} | {5: "P1", 13: "P1"} | {n: "P2" for n in (6, 7, 8, 9)}
 J_TAGS = {n: "ci-machine" for n in (1, 2, 3, 4, 5, 11, 13)} | {n: "operator" for n in (6, 7, 8, 9, 10, 12)}
-J_AC7 = """7. **The pin lands where the next session will read it.**
-   **Verification:** `bun run check:claude-size` green; `check:no-emdash` green.
+J_AC7 = """7. **The pin is written to the instructions file.**
+   **Verification:** `npm run lint:docs` green; `check:links` green.
    **Gate-ability:** {tag}.
 """
 
@@ -348,7 +348,7 @@ def test_a_plain_operator_ac_is_never_owed(tmp_path):
     project = Project(tmp_path, reqs=reqs, tags=J_TAGS)
     project.story = j_story(J_TAGS)
     project.write()
-    assert "`bun run check:claude-size` green" in project.story_file.read_text(encoding="utf-8")
+    assert "`npm run lint:docs` green" in project.story_file.read_text(encoding="utf-8")
     result = run(project.argv(profile="light"))
     assert result["owed"] is False
     assert result["open"] == ["AC-6", "AC-7", "AC-10", "AC-12"]
@@ -640,7 +640,7 @@ def test_a_shorter_ids_trace_report_is_never_read(project):
     """Resolution is by the exact story id: a sibling's `trace-<prefix>.md` is not this story's."""
     project.write()
     own = project.trace / f"trace-{STORY}.md"
-    sibling = project.trace / "trace-96-0-g.md"
+    sibling = project.trace / "trace-56-0-g.md"
     own.rename(sibling)
     result = run(project.argv())
     assert result["owed"] is False

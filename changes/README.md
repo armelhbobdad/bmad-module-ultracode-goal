@@ -2,7 +2,7 @@
 
 Each change a user or a pipeline can notice gets one short YAML file in this folder, `changes/<topic>.yaml`, added by the pull request that makes the change. At release, `tools/changes.js` renders the fragments added since the last stable release into the new CHANGELOG.md block and the GitHub Release notes, and their types set the smallest version bump the release may take.
 
-Fragments stay here after a release. A release takes only the fragments that did not exist at the last stable tag, so nothing is deleted when a version ships. A release never renders a released fragment again (only the markdownlint check still lints it), so every new change, and each release's lead, needs a file with a new name (for a lead, for example `lead-2-4-0.yaml`). A released fragment that was edited, renamed or copied is refused, and the check names the file.
+Fragments stay here after a release. A release takes only the fragments that did not exist at the last stable tag, so nothing is deleted when a version ships. A release never renders a released fragment again (only the markdownlint check still lints it), so every new change, and each release's lead, needs a file with a new name (for a lead, for example `lead-2-4-0.yaml`). A released fragment that was edited, renamed or copied is refused, and the check names the file. The only fragment ever deleted is a released one the maintainer withdraws; a deletion changes no release, and the change keeps its CHANGELOG.md entry and its GitHub Release.
 
 ## When to add one
 

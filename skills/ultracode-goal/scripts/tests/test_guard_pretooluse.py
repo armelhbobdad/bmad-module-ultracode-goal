@@ -2144,7 +2144,7 @@ def test_unskip_listed_files_leave_input_documents_unread(tmp_path: Path) -> Non
             id="project-root",
         ),
         pytest.param(
-            f"\n  - 'src/sync/mod.rs (#[cfg(test)] mod tests)'\n  - '{_ACCEPTANCE_REL}'",
+            f"\n  - 'src/client.rs (#[cfg(test)] mod tests)'\n  - '{_ACCEPTANCE_REL}'",
             [_ACCEPTANCE_REL],
             id="non-js-entry-beside",
         ),
@@ -2412,7 +2412,7 @@ def test_unskip_malformed_listed_files_denies(
     "value",
     [
         pytest.param(" []", id="empty"),
-        pytest.param("\n  - 'src/sync/mod.rs (#[cfg(test)] mod tests)'", id="no-js-test"),
+        pytest.param("\n  - 'src/client.rs (#[cfg(test)] mod tests)'", id="no-js-test"),
     ],
 )
 def test_unskip_listed_files_naming_no_test_file_fall_back_to_scan(
@@ -6616,16 +6616,16 @@ def test_mutant_without_the_file_name_lets_a_cd_reach_the_latch(
 # read the command without it. Every shape where bash can run the body, or
 # where the reading cannot vouch for where a body ends, is read as before.
 
-# A gate report appended from the latch's own folder. `(ledger row 6).**` holds
+# A gate report appended from the latch's own folder. `(rule 2).**` holds
 # `.**`, a dot glob that matches the latch there; the table's `|` made the
 # command count as piped; the apostrophes do not tokenize.
 _REPORT_BODY = (
-    "### (2) Reading the two cases\n"
+    "### (2) What the parser checks\n"
     "\n"
-    "- **Both halves, on the real paths.** The paste half drives `handle_paste`, "
-    "the link half drives `handle_link`. Neither calls a step directly.\n"
-    "- **Each asserts the required precondition (ledger row 6).** The answer's "
-    "shape is `Rejected`, which `map_status` builds from the server's 401.\n"
+    "- **Two inputs, one parser.** The file form goes through `read_file`, "
+    "the text form goes through `read_text`. Neither skips the parser.\n"
+    "- **Each checks the header first (rule 2).** The reply's "
+    "type is `Refused`, which `check_header` returns for the service's 403.\n"
     "\n"
     "| # | Mutant | Result |\n"
     "| --- | --- | --- |\n"

@@ -110,7 +110,7 @@ def test_each_url_is_reported_answering_or_free(capsys):
 
 @pytest.mark.skipif(not socket.has_ipv6, reason="no IPv6")
 def test_localhost_answers_when_the_server_listens_on_ipv6_only(capsys):
-    """The main tree's vite server in #182 listened on [::1]:3001 alone."""
+    """The main tree's vite server in #182 listened on [::1] alone."""
     try:
         sock = _listener(socket.AF_INET6, "::1")
     except OSError:
@@ -193,10 +193,10 @@ def test_the_folder_is_read_only_from_a_listening_socket(tmp_path):
     header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
     (proc / "net" / "tcp").write_text(
         header
-        # 127.0.0.1:3001 connected (01) to a client, inode 111.
-        + "   0: 0100007F:0BB9 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1000        0 111\n"
-        # 127.0.0.1:3001 listening (0A), inode 222.
-        + "   1: 0100007F:0BB9 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 222\n",
+        # 127.0.0.1:5173 connected (01) to a client, inode 111.
+        + "   0: 0100007F:1435 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1000        0 111\n"
+        # 127.0.0.1:5173 listening (0A), inode 222.
+        + "   1: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 222\n",
         encoding="ascii",
     )
     for pid, inode, cwd in (("10", "111", "/elsewhere"), ("20", "222", "/main/tree")):
@@ -206,7 +206,7 @@ def test_the_folder_is_read_only_from_a_listening_socket(tmp_path):
             os.symlink(cwd, proc / pid / "cwd")
         except OSError:
             pytest.skip("these symlinks cannot be made here")
-    assert probe_servers._cwd_of_listener(3001, proc) == os.readlink(proc / "20" / "cwd")
+    assert probe_servers._cwd_of_listener(5173, proc) == os.readlink(proc / "20" / "cwd")
     assert probe_servers._cwd_of_listener(3002, proc) is None
 
 
@@ -258,14 +258,14 @@ def test_the_folder_is_the_one_of_the_socket_the_connection_reached(tmp_path):
     proc = _fake_proc(
         tmp_path,
         [
-            (socket.AF_INET6, "::1", 3001, "333", "/stale/worktree"),
-            (socket.AF_INET, "127.0.0.1", 3001, "222", "/main/tree"),
+            (socket.AF_INET6, "::1", 5173, "333", "/stale/worktree"),
+            (socket.AF_INET, "127.0.0.1", 5173, "222", "/main/tree"),
         ],
     )
-    assert probe_servers._cwd_of_listener(3001, proc, _V4) == "/main/tree"
-    assert probe_servers._cwd_of_listener(3001, proc, _V6) == "/stale/worktree"
+    assert probe_servers._cwd_of_listener(5173, proc, _V4) == "/main/tree"
+    assert probe_servers._cwd_of_listener(5173, proc, _V6) == "/stale/worktree"
     # With no address to match, two folders on the port are no answer at all.
-    assert probe_servers._cwd_of_listener(3001, proc) is None
+    assert probe_servers._cwd_of_listener(5173, proc) is None
 
 
 @pytest.mark.parametrize(
@@ -1186,21 +1186,21 @@ _CALLER = probe_servers._Caller(uid=1000, pgrp=500, session=500, lineage=frozens
 # The server the run left up: `bun run dev` (40) leading its process group, the server under it (41) holding the
 # socket, both in the session the runner's start command (30, gone) led, started 200 seconds after boot.
 _RUN_LEFT_UP = (
-    {"pid": 40, "ppid": 1, "pgrp": 40, "session": 30, "tty": 0, "start": 20_000, "uid": 1000, "cwd": "/p/apps/web"},
-    {"pid": 41, "ppid": 40, "pgrp": 40, "session": 30, "tty": 0, "start": 20_100, "uid": 1000, "cwd": "/p/apps/web",
+    {"pid": 40, "ppid": 1, "pgrp": 40, "session": 30, "tty": 0, "start": 20_000, "uid": 1000, "cwd": "/p/web"},
+    {"pid": 41, "ppid": 40, "pgrp": 40, "session": 30, "tty": 0, "start": 20_100, "uid": 1000, "cwd": "/p/web",
      "holds": True},
 )
 
 
 def _proc_with(tmp_path: Path, processes, listening: str = "0100007F") -> Path:
-    """`processes` in a /proc whose one listening socket, port 3001 at `listening` (127.0.0.1 unless given, as
+    """`processes` in a /proc whose one listening socket, port 5173 at `listening` (127.0.0.1 unless given, as
     /proc/net/tcp prints it), inode 777, the ones marked `holds` hold."""
     proc = tmp_path / "proc"
     (proc / "net").mkdir(parents=True)
     (proc / "stat").write_text(f"cpu  1 2 3\nbtime {_BOOT}\n", encoding="ascii")
     header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
     (proc / "net" / "tcp").write_text(
-        header + f"   0: {listening}:0BB9 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 777\n",
+        header + f"   0: {listening}:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 777\n",
         encoding="ascii",
     )
     (proc / "net" / "tcp6").write_text(header, encoding="ascii")
@@ -1233,7 +1233,7 @@ def _add_process(proc: Path, p: dict) -> None:
 def _verdict(tmp_path: Path, processes, roots=("/p",)) -> str | None:
     proc = _proc_with(tmp_path, processes)
     stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, tuple(roots))
-    reason, members = probe_servers._not_the_runs(proc, 3001, _V4, stop, _CALLER, _TICKS)
+    reason, members = probe_servers._not_the_runs(proc, 5173, _V4, stop, _CALLER, _TICKS)
     assert (reason is None) == bool(members)
     return reason
 
@@ -1245,7 +1245,7 @@ def _changed(index: int, **fields) -> tuple[dict, ...]:
 def test_a_server_whose_every_process_passes_is_the_runs(tmp_path):
     proc = _proc_with(tmp_path, _RUN_LEFT_UP)
     stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
-    reason, members = probe_servers._not_the_runs(proc, 3001, _V4, stop, _CALLER, _TICKS)
+    reason, members = probe_servers._not_the_runs(proc, 5173, _V4, stop, _CALLER, _TICKS)
     assert reason is None
     assert sorted(member.pid for member in members) == [40, 41]
 
@@ -1266,8 +1266,8 @@ def test_a_server_whose_every_process_passes_is_the_runs(tmp_path):
         (_RUN_LEFT_UP + ({"pid": 30, "ppid": 1, "pgrp": 30, "session": 30, "tty": 0, "start": 19_000, "uid": 1000,
                           "cwd": "/p"},), ("/p",), "process 30, which leads its session, still runs"),
         # Outside every root, and a root that is only a prefix of its folder's name.
-        (_RUN_LEFT_UP, ("/q",), "it runs from /p/apps/web, outside every --root"),
-        (_RUN_LEFT_UP, ("/p/apps/we",), "it runs from /p/apps/web, outside every --root"),
+        (_RUN_LEFT_UP, ("/q",), "it runs from /p/web, outside every --root"),
+        (_RUN_LEFT_UP, ("/p/we",), "it runs from /p/web, outside every --root"),
         # The probe's own group, session or lineage.
         (tuple({**p, "pgrp": 500} for p in _RUN_LEFT_UP), ("/p",), "process group 500 is this probe's own"),
         (tuple({**p, "session": 500} for p in _RUN_LEFT_UP), ("/p",),
@@ -1287,7 +1287,7 @@ def test_a_server_whose_workers_share_its_socket_and_group_is_the_runs(tmp_path)
     worker = {**_RUN_LEFT_UP[1], "pid": 42, "ppid": 41, "start": 20_200}
     proc = _proc_with(tmp_path, _RUN_LEFT_UP + (worker,))
     stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
-    reason, members = probe_servers._not_the_runs(proc, 3001, _V4, stop, _CALLER, _TICKS)
+    reason, members = probe_servers._not_the_runs(proc, 5173, _V4, stop, _CALLER, _TICKS)
     assert reason is None
     assert sorted(member.pid for member in members) == [40, 41, 42]
 
@@ -1327,7 +1327,7 @@ def test_a_server_reparented_to_a_reaper_in_another_session_is_the_runs(tmp_path
     the server's session started during the sweep."""
     proc = _proc_with(tmp_path, _TURBO_LEFT_UP)
     stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
-    reason, members = probe_servers._not_the_runs(proc, 3001, _V4, stop, _CALLER, _TICKS)
+    reason, members = probe_servers._not_the_runs(proc, 5173, _V4, stop, _CALLER, _TICKS)
     assert reason is None
     assert sorted(member.pid for member in members) == [40, 41]
 
@@ -1391,7 +1391,7 @@ def test_the_stop_signals_the_group_and_reads_the_url_again(tmp_path, monkeypatc
     assert sent == [(40, signal.SIGTERM)]
     assert out["answering"] == [] and out["left"] == []
     assert out["stopped"] == [
-        {"url": f"http://127.0.0.1:{port}", "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": [40, 41],
+        {"url": f"http://127.0.0.1:{port}", "port": port, "cwd": "/p/web", "process_groups": [40], "pids": [40, 41],
          "partial": False, "running": []}
     ]
 
@@ -1446,12 +1446,12 @@ def test_a_group_stopped_only_in_part_names_the_processes_that_exited(tmp_path, 
         out = probe_servers.probe([url], stop, proc=proc, kill=kill)
     assert sent == [(40, signal.SIGTERM), (40, getattr(signal, "SIGKILL", signal.SIGTERM))]
     assert out["stopped"] == [
-        {"url": url, "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": [40], "partial": True,
+        {"url": url, "port": port, "cwd": "/p/web", "process_groups": [40], "pids": [40], "partial": True,
          "running": [41]}
     ]
     assert [entry["url"] for entry in out["answering"]] == [url]
     assert out["left"] == [
-        {"url": url, "port": port, "cwd": "/p/apps/web",
+        {"url": url, "port": port, "cwd": "/p/web",
          "reason": "some of its processes still ran after SIGTERM and SIGKILL to process group 40 (pid 41)"}
     ]
 
@@ -1491,7 +1491,7 @@ def test_a_url_nothing_answers_after_a_partial_stop_is_free(tmp_path, monkeypatc
         "answering": [],
         "free": [url],
         "stopped": [
-            {"url": url, "port": port, "cwd": "/p/apps/web", "process_groups": [40], "pids": pids, "partial": True,
+            {"url": url, "port": port, "cwd": "/p/web", "process_groups": [40], "pids": pids, "partial": True,
              "running": running}
         ],
         "left": [],
@@ -1571,7 +1571,7 @@ def test_a_server_that_answers_after_a_partial_stop_gets_a_verdict_of_its_own(tm
     tcp6 = proc / "net" / "tcp6"
     tcp6.write_text(
         tcp6.read_text(encoding="ascii")
-        + f"   0: {_proc_hex(socket.AF_INET6, '::1')}:0BB9 {'0' * 32}:0000 0A 00000000:00000000 00:00000000 "
+        + f"   0: {_proc_hex(socket.AF_INET6, '::1')}:1435 {'0' * 32}:0000 0A 00000000:00000000 00:00000000 "
         "00000000  1000        0 888\n",
         encoding="ascii",
     )
@@ -1591,10 +1591,10 @@ def test_a_server_that_answers_after_a_partial_stop_gets_a_verdict_of_its_own(tm
             with contextlib.suppress(FileNotFoundError):
                 (proc / str(pid) / "stat").unlink()
 
-    url = "http://localhost:3001"
+    url = "http://localhost:5173"
     stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
     out = probe_servers.probe([url], stop, proc=proc, kill=kill)
-    stopped_in_part = {"url": url, "port": 3001, "cwd": "/p/apps/web", "process_groups": [40], "pids": [41],
+    stopped_in_part = {"url": url, "port": 5173, "cwd": "/p/web", "process_groups": [40], "pids": [41],
                        "partial": True, "running": [40]}
     if left is None:
         assert sent == [(40, _TERM), (40, _KILL), (50, _TERM)]
@@ -1603,7 +1603,7 @@ def test_a_server_that_answers_after_a_partial_stop_gets_a_verdict_of_its_own(tm
             "free": [url],
             "stopped": [
                 stopped_in_part,
-                {"url": url, "port": 3001, "cwd": cwd, "process_groups": [50], "pids": [50, 51], "partial": False,
+                {"url": url, "port": 5173, "cwd": cwd, "process_groups": [50], "pids": [50, 51], "partial": False,
                  "running": []},
             ],
             "left": [],
@@ -1611,10 +1611,10 @@ def test_a_server_that_answers_after_a_partial_stop_gets_a_verdict_of_its_own(tm
         return
     assert sent == [(40, _TERM), (40, _KILL)]
     assert out == {
-        "answering": [{"url": url, "port": 3001, "cwd": cwd}],
+        "answering": [{"url": url, "port": 5173, "cwd": cwd}],
         "free": [],
         "stopped": [stopped_in_part],
-        "left": [{"url": url, "port": 3001, "cwd": cwd, "reason": left}],
+        "left": [{"url": url, "port": 5173, "cwd": cwd, "reason": left}],
     }
 
 
@@ -1650,7 +1650,7 @@ def test_a_url_read_before_a_later_urls_stop_is_read_again(tmp_path, monkeypatch
             with contextlib.suppress(FileNotFoundError):
                 (proc / str(pid) / "stat").unlink()
 
-    urls = ["http://127.0.0.1:3001", "http://localhost:3001"]
+    urls = ["http://127.0.0.1:5173", "http://localhost:5173"]
     stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
     out = probe_servers.probe(urls, stop, proc=proc, kill=kill)
     if its_leader_exits:
@@ -1658,12 +1658,12 @@ def test_a_url_read_before_a_later_urls_stop_is_read_again(tmp_path, monkeypatch
         assert out == {
             "answering": [],
             "free": urls,
-            "stopped": [{"url": urls[1], "port": 3001, "cwd": "/p/apps/web", "process_groups": [40], "pids": [40, 41],
+            "stopped": [{"url": urls[1], "port": 5173, "cwd": "/p/web", "process_groups": [40], "pids": [40, 41],
                          "partial": False, "running": []}],
             "left": [],
         }
         return
-    entries = [{"url": url, "port": 3001, "cwd": "/p/apps/web"} for url in urls]
+    entries = [{"url": url, "port": 5173, "cwd": "/p/web"} for url in urls]
     assert sent == []
     assert out == {
         "answering": entries,
@@ -1816,7 +1816,7 @@ def test_a_url_that_reached_another_hosts_address_stops_no_server_here(tmp_path,
             (proc / str(pid) / "stat").unlink()
         answers[0] = False
 
-    url = "http://192.0.2.1:3001"
+    url = "http://192.0.2.1:5173"
     stop = probe_servers._Stop(Path("/p/.baseline-1-1"), _SINCE, ("/p",))
     out = probe_servers.probe([url], stop, proc=proc, kill=kill)
     if stops:
@@ -1824,28 +1824,28 @@ def test_a_url_that_reached_another_hosts_address_stops_no_server_here(tmp_path,
         assert [entry["pids"] for entry in out["stopped"]] == [[40, 41]]
         return
     assert sent == [] and out["stopped"] == []
-    assert out["answering"] == [{"url": url, "port": 3001, "cwd": None}]
+    assert out["answering"] == [{"url": url, "port": 5173, "cwd": None}]
     assert out["left"] == [
-        {"url": url, "port": 3001, "cwd": None,
+        {"url": url, "port": 5173, "cwd": None,
          "reason": "it answered at 192.0.2.1, which is not an address of this host, so no process here took the "
                    "connection"}
     ]
 
 
-@pytest.mark.parametrize(("reached", "cwd"), [(_ELSEWHERE, None), (_V4, "/p/apps/web")], ids=["elsewhere", "here"])
+@pytest.mark.parametrize(("reached", "cwd"), [(_ELSEWHERE, None), (_V4, "/p/web")], ids=["elsewhere", "here"])
 def test_a_url_that_reached_another_hosts_address_names_no_folder_here(tmp_path, monkeypatch, reached, cwd):
     """Without the stop flags too: the folder of a server here listening on
     every address is not the folder of the one that answered elsewhere."""
     proc = _proc_with(tmp_path, _RUN_LEFT_UP, listening="00000000")
     monkeypatch.setattr(probe_servers, "_reached", lambda _host, _port: reached)
-    out = probe_servers.probe(["http://192.0.2.1:3001"], proc=proc)
-    assert out == {"answering": [{"url": "http://192.0.2.1:3001", "port": 3001, "cwd": cwd}], "free": []}
+    out = probe_servers.probe(["http://192.0.2.1:5173"], proc=proc)
+    assert out == {"answering": [{"url": "http://192.0.2.1:5173", "port": 5173, "cwd": cwd}], "free": []}
 
 
 def _proc_listing(tmp_path: Path, lists: str) -> Path:
     """A /proc that lists nothing (macOS, Windows), a socket at that port no connection to 127.0.0.1 reaches, one
     that could have taken it whose holder this probe cannot read, or one that could have taken it, held from
-    /p/apps/web."""
+    /p/web."""
     if lists == "nothing":
         return tmp_path / "no-proc"
     if lists == "another-address":
@@ -1865,7 +1865,7 @@ def _asked(monkeypatch) -> list:
 
 @pytest.mark.parametrize(
     ("lists", "cwd"),
-    [("nothing", None), ("another-address", None), ("an-unread-holder", None), ("the-address", "/p/apps/web")],
+    [("nothing", None), ("another-address", None), ("an-unread-holder", None), ("the-address", "/p/web")],
 )
 def test_without_the_stop_flags_it_listens_on_the_address_only_for_a_folder_proc_names(tmp_path, monkeypatch, lists,
                                                                                       cwd):
@@ -1875,8 +1875,8 @@ def test_without_the_stop_flags_it_listens_on_the_address_only_for_a_folder_proc
     then. Before, it listened at every answering URL's address, on every
     system. The twin: a /proc that names the folder."""
     calls = _asked(monkeypatch)
-    out = probe_servers.probe(["http://127.0.0.1:3001"], proc=_proc_listing(tmp_path, lists))
-    assert out["answering"] == [{"url": "http://127.0.0.1:3001", "port": 3001, "cwd": cwd}]
+    out = probe_servers.probe(["http://127.0.0.1:5173"], proc=_proc_listing(tmp_path, lists))
+    assert out["answering"] == [{"url": "http://127.0.0.1:5173", "port": 5173, "cwd": cwd}]
     assert calls == ([_V4] if cwd else [])
 
 
@@ -1885,7 +1885,7 @@ def test_without_the_stop_flags_it_listens_on_the_address_only_for_a_folder_proc
     [
         ("nothing", "this system has no Linux /proc to read the server's processes from, so it stops nothing"),
         ("another-address", "/proc lists no socket here that could have taken the connection at 127.0.0.1"),
-        ("the-address", "it runs from /p/apps/web, outside every --root"),
+        ("the-address", "it runs from /p/web, outside every --root"),
     ],
     ids=["nothing", "another-address", "the-address"],
 )
@@ -1904,7 +1904,7 @@ def test_with_the_stop_flags_it_listens_on_the_address_only_when_proc_lists_a_so
     if lists != "nothing":
         _stop_mode(monkeypatch)
     stop = probe_servers._Stop(Path("/q/.baseline-1-1"), _SINCE, ("/q",))
-    out = probe_servers.probe(["http://127.0.0.1:3001"], stop, proc=proc, kill=lambda *_: pytest.fail("signalled"))
+    out = probe_servers.probe(["http://127.0.0.1:5173"], stop, proc=proc, kill=lambda *_: pytest.fail("signalled"))
     assert out["stopped"] == []
     assert [entry["reason"] for entry in out["left"]] == [reason]
     assert calls == ([_V4] if lists == "the-address" else [])

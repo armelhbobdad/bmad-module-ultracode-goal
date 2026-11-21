@@ -631,7 +631,7 @@ def test_the_documented_command_parses_with_the_scripts_own_parser():
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     line = next(ln for ln in _read(_GATE).splitlines() if ln.startswith("uv run {skill-root}/scripts/moved_ac_check"))
-    sha = "a14e48a79010dd124366db59af51d8586e85ab33"
+    sha = "3c7e1f0a9b2d4e6f8a0c1b3d5e7f9a2b4c6d8e0f"
     line = line.replace("AC-<n>", "AC-7").replace("<the full sha git rev-parse prints for the commit under assessment>", sha)
     argv = shlex.split(re.sub(r"\{[^}]+\}|<[^>]+>", "x", line))[3:]
     args = module.build_parser().parse_args(argv)

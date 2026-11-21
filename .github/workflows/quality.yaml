@@ -327,6 +327,11 @@ jobs:
       - name: Check tool versions against tools/tool-requirements.yaml
         run: npm run validate:tool-requirements
 
+      # The check itself runs only in the pre-push hook, against a token list
+      # that is never committed, so CI tests the tool and nothing more.
+      - name: Test the private token check
+        run: npm run test:private-tokens-tool
+
       # The owner of an action can move its tag to other code, and the next
       # run executes that code with this repository's tokens; a commit SHA
       # cannot move. So each `uses:` names a 40-character commit SHA followed

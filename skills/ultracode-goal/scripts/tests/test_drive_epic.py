@@ -618,7 +618,7 @@ def test_unknown_epic_stops_without_spawning(project, monkeypatch):
 def test_epic_id_accepts_both_spellings():
     assert drive_epic.normalise_epic("epic-7") == "7"
     assert drive_epic.normalise_epic("7") == "7"
-    assert drive_epic.normalise_epic("epic-st-5") is None
+    assert drive_epic.normalise_epic("epic-sb-5") is None
 
 
 def test_exit_code_splits_finished_from_fail_closed(project, monkeypatch):

@@ -219,7 +219,7 @@ _RETAG_CHECKS = {
 def test_define_done_retags_in_place_only_an_ac_that_asks_for_no_change():
     """Who can check an AC does not decide its tag; whether it asks for a change does.
 
-    GMC 96-0-j AC 6 asks for comment fixes that only a reviewer's read can
+    AC 6 of a consumer project's story asks for comment fixes that only a reviewer's read can
     check. Retagged `operator-evidence`, Execute would have ucg-dev-story build
     nothing for it and the gate would route the unbuilt fixes to a person. It
     keeps its plain tag. AC 10, a checklist a person runs on a real build and
@@ -294,7 +294,7 @@ _SENTENCE = re.compile(r"(?<=[.:;])\s+(?=[A-Z*`(])")
 
 
 def test_every_surface_keys_the_owed_class_on_operator_evidence():
-    """Stories UCG already wrote tag built work `operator` (GMC 96-0-j: code-comment fixes, a
+    """Stories UCG already wrote tag built work `operator` (a consumer project's story: code-comment fixes, a
     CLAUDE.md pin a script checks, ledger closures). A rule keyed on that tag would tell
     ucg-dev-story to build nothing for them and route their gaps to a person. So every
     surface that names the owed class names `operator-evidence`, and the plain tag appears

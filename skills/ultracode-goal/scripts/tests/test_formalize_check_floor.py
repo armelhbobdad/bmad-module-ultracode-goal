@@ -222,7 +222,7 @@ def test_leaked_tea_excludes_a_lettered_story_file(tmp_path):
     impl = tmp_path / "impl-artifacts"
     impl.mkdir()
     (impl / "3-2a-trace-export.md").write_text("# Story 3.2a: Trace export\n", encoding="utf-8")
-    (impl / "94-7bc-test-review-board.md").write_text("# Story 94.7bc\n", encoding="utf-8")
+    (impl / "54-7bc-test-review-board.md").write_text("# Story 54.7bc\n", encoding="utf-8")
     # The genuine leak beside them is still flagged.
     (impl / "test-design-9-1.md").write_text("# Test Design\n", encoding="utf-8")
 

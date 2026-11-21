@@ -302,7 +302,7 @@ def test_it_sits_after_the_narrowing_rule_which_still_escalates():
             "that authorizes moving",
             "takes an Operator notes entry naming both stories as the ruling",
         ),
-        # A standing delegation read as the ruling (the GMC case).
+        # A standing delegation read as the ruling (a case seen in a consumer project).
         (
             "and neither is a general or standing delegation",
             "but a general or standing delegation is",
@@ -643,12 +643,12 @@ def _load(name: str):
     return module
 
 
-_STORY = "96-0-i-the-earlier"
+_STORY = "56-0-i-the-earlier"
 _SIDECAR = {
-    "source": "impl/coupled-96-0-i.md",
+    "source": "impl/coupled-56-0-i.md",
     "kind": "coupled-stories",
-    "decision_needed": "Move AC 7 (a) from 96-0-i to 96-0-j as measured, or re-plan the rows.",
-    "evidence": "AC 7 (a): the handler it needs lands only in 96-0-j's build.",
+    "decision_needed": "Move AC 7 (a) from 56-0-i to 56-0-j as measured, or re-plan the rows.",
+    "evidence": "AC 7 (a): the handler it needs lands only in 56-0-j's build.",
 }
 
 

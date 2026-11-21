@@ -5,5 +5,10 @@
 # inherit it and write into this repository's config and index instead.
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_COMMON_DIR
 
+# Refuse a push whose new commits carry a token from the maintainer's
+# private token list (.private-tokens, which git ignores). Without that list
+# this passes silently, so it asks nothing of other contributors.
+node tools/check-private-tokens.js --pre-push
+
 # Validate everything before commits leave the machine
 npm test

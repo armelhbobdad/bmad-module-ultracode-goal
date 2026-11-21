@@ -712,12 +712,12 @@ def test_own_slim_wins_over_a_neighbours_frontmatter_hint(tmp_path):
     # The wrong answer was a PASS, which is the verdict nobody re-reads.
     write_trace_report(tmp_path, "trace-11-0.md", "gate-decision-11-0.json")
     write_named_slim(tmp_path, "gate-decision-11-0.json", "PASS")
-    write_named_slim(tmp_path, "gate-decision-92-6c.json", "CONCERNS")
+    write_named_slim(tmp_path, "gate-decision-52-6c.json", "CONCERNS")
 
-    result = run_gate(tmp_path, profile="light", story="92-6c")
+    result = run_gate(tmp_path, profile="light", story="52-6c")
     assert result["gate_status"] == "CONCERNS"
     assert result["verdict"] == "defer"
-    assert any("gate-decision-92-6c.json" in r for r in result["reasons"])
+    assert any("gate-decision-52-6c.json" in r for r in result["reasons"])
     assert not any("gate-decision-11-0.json" in r for r in result["reasons"])
 
 
@@ -896,11 +896,11 @@ def test_mutant_without_own_slim_clause_reports_another_epics_pass(tmp_path):
     so a story with a slim gate file but no trace report falls through with
     `reports` still holding every report in the directory, AND stop the
     `gateDecisionFile` hint from being ownership-checked. The hint loop then
-    hands back epic 11's gate — a PASS — as story 92-6c's verdict, which is
+    hands back epic 11's gate (a PASS) as story 52-6c's verdict, which is
     exactly the field failure.
 
     As with the twin above, the reversion alone no longer reproduces it: the hint
-    check refuses epic 11's file for story 92-6c on its own, so both guards have
+    check refuses epic 11's file for story 52-6c on its own, so both guards have
     to go before the historical verdict comes back. If CONCERNS survived both,
     neither clause would be what produces it.
     """
@@ -914,11 +914,11 @@ def test_mutant_without_own_slim_clause_reports_another_epics_pass(tmp_path):
     trace.mkdir(parents=True)
     write_trace_report(trace, "trace-11-0.md", "gate-decision-11-0.json")
     write_named_slim(trace, "gate-decision-11-0.json", "PASS")
-    write_named_slim(trace, "gate-decision-92-6c.json", "CONCERNS")
+    write_named_slim(trace, "gate-decision-52-6c.json", "CONCERNS")
 
     proc = subprocess.run(
         [sys.executable, str(mutant), "--trace-output", str(trace),
-         "--profile", "light", "--story", "92-6c"],
+         "--profile", "light", "--story", "52-6c"],
         capture_output=True, text=True, check=False,
     )
     assert proc.returncode == 0, proc.stderr
@@ -1016,9 +1016,9 @@ def test_an_undeclared_trace_report_no_longer_suppresses_fail_closed(tmp_path):
         # The shapes the ORIGINAL last-component-is-numeric rule called generic.
         # Every one of them is what this module writes once a story is split or
         # slugged, which is the normal case in any real epic.
-        ("trace-92-0a", True),
+        ("trace-52-0a", True),
         ("trace-5-8-some-slug", True),
-        ("gate-decision-92-7f-the-departure-record", True),
+        ("gate-decision-52-7f-the-export-step", True),
         ("nfr-assessment-1-2", True),
         # Genuinely generic: the single-story dir whose unscoped fallback is
         # documented and must keep working.
@@ -1043,16 +1043,16 @@ def test_an_artifact_less_story_cannot_advance_on_a_slugged_neighbours_gate(tmp_
     artifacts reported itself generic, the branch never fired, and an
     artifact-less story resolved a neighbour's gate.
 
-    Measured before the fix: `--story 92-7f-never-driven` against a directory
-    holding only 92-0a's artifacts returned PASS. That story wrote nothing.
+    Measured before the fix: `--story 52-7f-never-driven` against a directory
+    holding only 52-0a's artifacts returned PASS. That story wrote nothing.
     """
-    write_trace_report(tmp_path, "trace-92-0a-alpha.md", "gate-decision-92-0a-alpha.json")
-    write_named_slim(tmp_path, "gate-decision-92-0a-alpha.json", "PASS")
+    write_trace_report(tmp_path, "trace-52-0a-alpha.md", "gate-decision-52-0a-alpha.json")
+    write_named_slim(tmp_path, "gate-decision-52-0a-alpha.json", "PASS")
 
-    result = run_gate(tmp_path, profile="light", story="92-7f-never-driven")
+    result = run_gate(tmp_path, profile="light", story="52-7f-never-driven")
     assert result["gate_status"] == "NOT_EVALUATED"
     assert result["verdict"] == "escalate"
-    assert not any("92-0a" in r for r in result["reasons"]), "resolved a neighbour's gate"
+    assert not any("52-0a" in r for r in result["reasons"]), "resolved a neighbour's gate"
 
 
 def test_production_nfr_not_assessed_downgrades_advance_to_reloop(tmp_path):

@@ -486,57 +486,57 @@ def test_alphanumeric_sibling_ids_do_not_share_one_recorded_verdict(tmp_path):
     """One driven story's verdict must not bleed onto undriven siblings.
 
     The recorded-verdict map used to be keyed by `numeric_prefix`, which keeps
-    only the LEADING numeric components — so `92-0a`, `92-3b` and `92-7f` all
-    collapsed to the bucket `92` and every sibling in the `--story` list rendered
+    only the LEADING numeric components, so `52-0a`, `52-3b` and `52-7f` all
+    collapsed to the bucket `52` and every sibling in the `--story` list rendered
     whatever verdict the log last recorded. Measured against a real epic's
     artifacts: 63 of 76 stories rendered a `defer` that only one of them had
     actually reached.
 
-    The `92-8` control matters. Its second component IS numeric, so it never
+    The `52-8` control matters. Its second component IS numeric, so it never
     collided and always rendered correctly — which is why the defect read as
     "sometimes" and was twice diagnosed wrongly.
     """
-    stories = ["92-0a-alpha", "92-3b-beta", "92-7f-gamma", "92-8-numeric"]
-    recorded = gate_trail.recorded_verdicts(_log_with_verdict(tmp_path, "92-3b", "defer"))
+    stories = ["52-0a-alpha", "52-3b-beta", "52-7f-gamma", "52-8-numeric"]
+    recorded = gate_trail.recorded_verdicts(_log_with_verdict(tmp_path, "52-3b", "defer"))
 
-    assert recorded == {"92-3b": "defer"}, "the heading id is keyed verbatim"
+    assert recorded == {"52-3b": "defer"}, "the heading id is keyed verbatim"
     resolved = gate_trail.resolve_recorded_verdicts(recorded, stories)
-    assert resolved == {"92-3b-beta": "defer"}, "exactly the story that was driven"
+    assert resolved == {"52-3b-beta": "defer"}, "exactly the story that was driven"
 
 
 def test_a_heading_matching_every_story_records_none_of_them(tmp_path):
     """An epic-wide heading names no single story, so no story inherits it.
 
-    This is the uniqueness rule doing its job: rendering `## Story 92`'s verdict
-    on all of 92's children is the fabrication the trail's `n/a` promise forbids.
+    This is the uniqueness rule doing its job: rendering `## Story 52`'s verdict
+    on all of 52's children is the fabrication the trail's `n/a` promise forbids.
     """
-    stories = ["92-1-one", "92-2-two", "92-3-three"]
-    recorded = gate_trail.recorded_verdicts(_log_with_verdict(tmp_path, "92", "advance"))
+    stories = ["52-1-one", "52-2-two", "52-3-three"]
+    recorded = gate_trail.recorded_verdicts(_log_with_verdict(tmp_path, "52", "advance"))
 
-    assert recorded == {"92": "advance"}
+    assert recorded == {"52": "advance"}
     assert gate_trail.resolve_recorded_verdicts(recorded, stories) == {}
 
 
 def test_a_short_heading_id_still_matches_its_full_slugged_story(tmp_path):
     """Headings carry the short id; `--story` carries the full slug.
 
-    A real log writes `### Story 92-0a - the five confirmed defects` while the
-    trail is invoked with `92-0a-the-five-confirmed-defects`. Requiring equality
+    A real log writes `### Story 52-0a - the first batch` while the
+    trail is invoked with `52-0a-the-first-batch`. Requiring equality
     would blank the verdict column on every real run, which is the failure mode
     the obvious "key it by the full id" fix would have introduced.
     """
-    recorded = gate_trail.recorded_verdicts(_log_with_verdict(tmp_path, "92-0a", "defer"))
+    recorded = gate_trail.recorded_verdicts(_log_with_verdict(tmp_path, "52-0a", "defer"))
     resolved = gate_trail.resolve_recorded_verdicts(
-        recorded, ["92-0a-the-five-confirmed-defects"]
+        recorded, ["52-0a-the-first-batch"]
     )
-    assert resolved == {"92-0a-the-five-confirmed-defects": "defer"}
+    assert resolved == {"52-0a-the-first-batch": "defer"}
 
 
 def test_gate_artifact_resolves_for_an_alphanumeric_story_id(tmp_path):
     """The trail resolves the same gate file `gate_eval.py` resolves.
 
-    `gate_status_for` scoped by `numeric_prefix`, so `92-3b-…` truncated to `92`,
-    nothing in a per-story directory is named `92`, and the cell read
+    `gate_status_for` scoped by `numeric_prefix`, so `52-3b-…` truncated to `52`,
+    nothing in a per-story directory is named `52`, and the cell read
     `Gate artifact: n/a` for a file sitting right there under its correct name.
     Reported at least six times across one epic. The assertion that matters is
     the AGREEMENT: both readers, same directory, same id, same file.
@@ -549,7 +549,7 @@ def test_gate_artifact_resolves_for_an_alphanumeric_story_id(tmp_path):
     """
     trace = tmp_path / "traceability"
     trace.mkdir()
-    story = "92-3b-the-minting-primitives-secrets-and-escrow"
+    story = "52-3b-the-export-step-and-its-retries"
     (trace / f"gate-decision-{story}.json").write_text(
         json.dumps({"gate_status": "CONCERNS"}), encoding="utf-8"
     )
@@ -578,8 +578,8 @@ def test_a_story_with_its_own_gate_never_renders_a_neighbours_status(tmp_path):
     trace = tmp_path / "traceability"
     trace.mkdir()
     for story, status in (
-        ("92-1a-the-neighbour-story", "PASS"),
-        ("92-9a-the-rehearsal-constant", "CONCERNS"),
+        ("52-1a-the-sample-story", "PASS"),
+        ("52-9a-the-login-form", "CONCERNS"),
     ):
         (trace / f"trace-{story}.md").write_text(
             f"---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision-{story}.json\n---\n# t\n",
@@ -589,15 +589,15 @@ def test_a_story_with_its_own_gate_never_renders_a_neighbours_status(tmp_path):
             json.dumps({"gate_status": status}), encoding="utf-8"
         )
 
-    status, source = gate_trail.gate_status_for(trace, "92-9a-the-rehearsal-constant")
+    status, source = gate_trail.gate_status_for(trace, "52-9a-the-login-form")
     assert (status, source) == (
         "CONCERNS",
-        "gate-decision-92-9a-the-rehearsal-constant.json",
+        "gate-decision-52-9a-the-login-form.json",
     )
     # The oracle is agreement with the reader that actually decides.
     reasons: list[str] = []
     assert (
-        gate_eval.load_gate(trace, reasons, "92-9a-the-rehearsal-constant")["gate_status"]
+        gate_eval.load_gate(trace, reasons, "52-9a-the-login-form")["gate_status"]
         == status
     )
 
@@ -606,7 +606,7 @@ def test_gate_artifact_resolves_when_the_trace_report_carries_a_hint(tmp_path):
     """The hint path that every field workaround relied on still resolves."""
     trace = tmp_path / "traceability"
     trace.mkdir()
-    story = "92-3b-the-minting-primitives-secrets-and-escrow"
+    story = "52-3b-the-export-step-and-its-retries"
     (trace / f"trace-{story}.md").write_text(
         f"---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision-{story}.json\n---\n# t\n",
         encoding="utf-8",
@@ -630,7 +630,7 @@ def test_trace_report_is_the_declared_one_not_the_alphabetical_first(tmp_path):
     """
     trace = tmp_path / "traceability"
     trace.mkdir()
-    story = "92-3b-the-minting"
+    story = "52-3b-the-export"
     (trace / f"nfr-assessment-{story}.md").write_text(
         "# NFR\n\n**Overall Status:** CONCERNS\n", encoding="utf-8"
     )
@@ -665,7 +665,7 @@ def test_generic_named_single_story_dir_resolves_its_gate(tmp_path):
     (trace / "gate-decision.json").write_text(
         json.dumps({"gate_status": "CONCERNS"}), encoding="utf-8"
     )
-    assert gate_trail.gate_status_for(trace, "92-9a-the-rehearsal-constant") == (
+    assert gate_trail.gate_status_for(trace, "52-9a-the-login-form") == (
         "CONCERNS",
         "gate-decision.json",
     )
@@ -685,22 +685,22 @@ def test_a_shared_generic_summary_is_not_inherited_by_an_undriven_story(tmp_path
     """
     trace = tmp_path / "traceability"
     trace.mkdir()
-    (trace / "trace-92-1.md").write_text(
-        "---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision-92-1.json\n---\n# t\n",
+    (trace / "trace-52-1.md").write_text(
+        "---\nworkflowType: testarch-trace\ngateDecisionFile: gate-decision-52-1.json\n---\n# t\n",
         encoding="utf-8",
     )
-    (trace / "gate-decision-92-1.json").write_text(
+    (trace / "gate-decision-52-1.json").write_text(
         json.dumps({"gate_status": "PASS"}), encoding="utf-8"
     )
     (trace / "e2e-trace-summary.json").write_text(
         json.dumps({"gate_status": "PASS"}), encoding="utf-8"
     )
 
-    assert gate_trail.gate_status_for(trace, "92-2-never-driven") == (None, None)
+    assert gate_trail.gate_status_for(trace, "52-2-never-driven") == (None, None)
     reasons: list[str] = []
-    assert gate_eval.load_gate(trace, reasons, "92-2-never-driven")["gate_status"] == "NOT_EVALUATED"
+    assert gate_eval.load_gate(trace, reasons, "52-2-never-driven")["gate_status"] == "NOT_EVALUATED"
     # The story that DID write artifacts still resolves its own.
-    assert gate_trail.gate_status_for(trace, "92-1")[1] == "gate-decision-92-1.json"
+    assert gate_trail.gate_status_for(trace, "52-1")[1] == "gate-decision-52-1.json"
 
 
 def test_a_scopes_summary_fallback_never_preempts_another_scopes_gate_file(tmp_path):
@@ -878,32 +878,32 @@ def test_tea_columns_are_picked_by_name_not_position():
 
 # Production acceptance checklists keep "the first criterion-keyed table wins":
 # their first such table is the AC table, and later tables are inventories or
-# case lists. Both shapes below are real checklists the tested-table preference
-# misread when it applied to checklists too.
+# case lists. Both shapes below are those of real checklists the tested-table
+# preference misread when it applied to checklists too.
 _CHECKLIST_WITH_INVENTORY = """
 | AC | Pri | Risk ids | Level | Acceptance test file(s) |
 |----|-----|----------|-------|--------------------------|
-| 1. org context carried | P1 | DATA-03 | schema-source | `org-context.test.ts` |
+| 1. the export keeps its filter | P1 | R-01 | unit | `export-filter.test.ts` |
 
 | # | File | Tests | Level | ACs |
 |---|------|-------|-------|-----|
-| 1 | `org-context.test.ts` | 7 | schema-source | 1 |
+| 1 | `export-filter.test.ts` | 7 | unit | 1 |
 """
 
 _CHECKLIST_WITH_CASE_TABLES = """
 | AC | Claim | Priority | Planned assertion | Where |
 |---|---|---|---|---|
-| 1 | both schemes registered | **P0** | repo scan + twin | G1.1, G1.2 |
+| 1 | both formats offered | **P0** | unit test + fixture | C1.1, C1.2 |
 
 | id | Test | Pri | RED because |
 |---|---|---|---|
-| G1.1 | the repo scan returns zero violations | **P0** | the scanner does not exist |
+| C1.1 | the export lists every format | **P0** | the exporter does not exist |
 """
 
 
 def test_a_checklist_keeps_its_ac_table_over_an_inventory():
     assert gate_trail.criterion_rows(_CHECKLIST_WITH_INVENTORY) == [
-        ("1. org context carried", "n/a", "n/a")
+        ("1. the export keeps its filter", "n/a", "n/a")
     ]
 
 
@@ -922,7 +922,7 @@ def test_a_trace_never_lets_a_case_list_or_inventory_replace_its_ac_table():
     rows_ = gate_trail.criterion_rows(case_list, prefer_tested=True)
     assert [row[0] for row in rows_] == ["AC1", "AC2", "AC3"]
     assert gate_trail.criterion_rows(_CHECKLIST_WITH_INVENTORY, prefer_tested=True) == [
-        ("1. org context carried", "n/a", "n/a")
+        ("1. the export keeps its filter", "n/a", "n/a")
     ]
 
 
@@ -1303,23 +1303,23 @@ def _slim(trace: Path, story: str, status: str) -> None:
 
 
 def test_alphanumeric_child_story_never_inherits_the_epic_rollups_pass(tmp_path):
-    """`numeric_prefix('92-7f-never-driven')` is `92` — the EPIC id, not a shorter
+    """`numeric_prefix('52-7f-never-driven')` is `52`: the EPIC id, not a shorter
     spelling of the story.
 
-    The epic roll-up writes `trace-92.md` / `gate-decision-92.json` into the same
+    The epic roll-up writes `trace-52.md` / `gate-decision-52.json` into the same
     shared directory, so the truncated scope matched a real artifact set and a
     story nobody ever drove rendered the epic's PASS as its own verdict.
     """
     trace = tmp_path / "traceability"
     trace.mkdir()
     # the epic roll-up, PASS
-    _declared_trace(trace, "92")
-    _slim(trace, "92", "PASS")
+    _declared_trace(trace, "52")
+    _slim(trace, "52", "PASS")
     # a genuinely driven sibling, so the directory is per-story-named
-    _declared_trace(trace, "92-1a")
-    _slim(trace, "92-1a", "CONCERNS")
+    _declared_trace(trace, "52-1a")
+    _slim(trace, "52-1a", "CONCERNS")
 
-    status, source = gate_trail.gate_status_for(trace, "92-7f-never-driven")
+    status, source = gate_trail.gate_status_for(trace, "52-7f-never-driven")
 
     assert (status, source) == (None, None), (
         "an undriven child story resolved %r from %r" % (status, source)
@@ -1332,15 +1332,15 @@ def test_the_epic_rollup_still_resolves_its_own_gate(tmp_path):
     also pass on a build that simply stopped resolving anything."""
     trace = tmp_path / "traceability"
     trace.mkdir()
-    _declared_trace(trace, "92")
-    _slim(trace, "92", "PASS")
-    _declared_trace(trace, "92-1a")
-    _slim(trace, "92-1a", "CONCERNS")
+    _declared_trace(trace, "52")
+    _slim(trace, "52", "PASS")
+    _declared_trace(trace, "52-1a")
+    _slim(trace, "52-1a", "CONCERNS")
 
-    assert gate_trail.gate_status_for(trace, "92") == ("PASS", "gate-decision-92.json")
-    assert gate_trail.gate_status_for(trace, "92-1a") == (
+    assert gate_trail.gate_status_for(trace, "52") == ("PASS", "gate-decision-52.json")
+    assert gate_trail.gate_status_for(trace, "52-1a") == (
         "CONCERNS",
-        "gate-decision-92-1a.json",
+        "gate-decision-52-1a.json",
     )
 
 
@@ -1375,14 +1375,14 @@ def test_a_story_with_only_an_nfr_file_does_not_claim_a_trace_report(tmp_path):
         json.dumps({"gate_status": "PASS"}), encoding="utf-8"
     )
     # a driven sibling, so the directory is not the isolated single-story shape
-    _declared_trace(trace, "92-1a")
-    _slim(trace, "92-1a", "CONCERNS")
+    _declared_trace(trace, "52-1a")
+    _slim(trace, "52-1a", "CONCERNS")
     # the undriven story wrote ONLY its NFR file - no workflowType frontmatter
-    (trace / "nfr-assessment-92-7f.md").write_text(
+    (trace / "nfr-assessment-52-7f.md").write_text(
         "# NFR\n\n**Overall Status:** PASS\n", encoding="utf-8"
     )
 
-    status, source = gate_trail.gate_status_for(trace, "92-7f")
+    status, source = gate_trail.gate_status_for(trace, "52-7f")
 
     assert (status, source) == (None, None), (
         "a story with only an NFR file resolved %r from %r" % (status, source)
@@ -1401,12 +1401,12 @@ def test_a_trace_report_does_not_buy_a_story_the_shared_summarys_verdict(tmp_pat
     filename". So the two readers disagreed about one file, which this module's
     own `gate_status_for` docstring calls a defect, and the disagreement ran in
     the dangerous direction: measured on this very fixture, `gate_eval` returned
-    `escalate` for 92-7f while the rendered trail printed `advance`.
+    `escalate` for 52-7f while the rendered trail printed `advance`.
 
-    The directory here is the reason. It holds 92-1a's per-story artifacts too,
-    so `e2e-trace-summary.json` is the run-wide file and provably not 92-7f's
-    alone - and 92-7f, which wrote no gate artifact, would otherwise outrank
-    92-1a, which wrote its own CONCERNS. The isolated all-generic directory,
+    The directory here is the reason. It holds 52-1a's per-story artifacts too,
+    so `e2e-trace-summary.json` is the run-wide file and provably not 52-7f's
+    alone - and 52-7f, which wrote no gate artifact, would otherwise outrank
+    52-1a, which wrote its own CONCERNS. The isolated all-generic directory,
     where a generic summary DOES belong to the one story being driven, is
     unaffected and keeps its own test.
     """
@@ -1415,14 +1415,14 @@ def test_a_trace_report_does_not_buy_a_story_the_shared_summarys_verdict(tmp_pat
     (trace / "e2e-trace-summary.json").write_text(
         json.dumps({"gate_status": "PASS"}), encoding="utf-8"
     )
-    _declared_trace(trace, "92-1a")
-    _slim(trace, "92-1a", "CONCERNS")
+    _declared_trace(trace, "52-1a")
+    _slim(trace, "52-1a", "CONCERNS")
     # this story DID write a declared trace report, but no slim gate file
-    (trace / "trace-92-7f.md").write_text(
+    (trace / "trace-52-7f.md").write_text(
         "---\nworkflowType: testarch-trace\n---\n# t\n", encoding="utf-8"
     )
 
-    status, source = gate_trail.gate_status_for(trace, "92-7f")
+    status, source = gate_trail.gate_status_for(trace, "52-7f")
 
     assert (status, source) == (None, None), (
         "a story with a trace report but no gate artifact resolved %r from %r" % (status, source)
@@ -1430,7 +1430,7 @@ def test_a_trace_report_does_not_buy_a_story_the_shared_summarys_verdict(tmp_pat
 
     # The two readers now agree about this file, which is the whole point.
     reasons: list[str] = []
-    assert gate_eval.load_gate(trace, reasons, "92-7f")["gate_status"] == "NOT_EVALUATED", reasons
+    assert gate_eval.load_gate(trace, reasons, "52-7f")["gate_status"] == "NOT_EVALUATED", reasons
 
 
 # ---------------------------------------------------------------------------
@@ -1985,9 +1985,9 @@ def _read_from(gate_file: str, payload: dict) -> dict:
 
 
 def test_a_verdict_naming_another_storys_gate_file_is_not_this_storys(tmp_path):
-    """Measured on a real epic: a planning note headed `### Story 92-3b` opened a
+    """Measured on a real epic: a planning note headed `### Story 52-3b` opened a
     span nine thousand lines long, whose first verdict objects were two later
-    stories' gates (`gate read from gate-decision-92-8d-...json`), and the trail
+    stories' gates (`gate read from gate-decision-52-8d-...json`), and the trail
     showed one of them as the story's. 7-2's own gate file reads FAIL."""
     body = _trail_over(
         tmp_path,
@@ -2016,7 +2016,7 @@ def test_a_verdict_naming_the_storys_own_gate_file_is_read(tmp_path, gate_file):
 
 
 # ---------------------------------------------------------------------------
-# A letter-prefixed sprint key (`lp-0-1-...`) names a story as a numeric one
+# A letter-prefixed sprint key (`ex-0-1-...`) names a story as a numeric one
 # does, while a heading that only starts with the word `Story` stays prose.
 # ---------------------------------------------------------------------------
 
@@ -2026,11 +2026,11 @@ def test_a_letter_prefixed_key_under_the_prescribed_heading_is_read(tmp_path):
     log.write_text(
         "# Decision log\n\n### Story 7-1: gate\n\n"
         + _fenced(_PASS)
-        + "### Story lp-7-2-a-letter-key: gate\n\n"
+        + "### Story ex-7-2-a-letter-key: gate\n\n"
         + _fenced(_FAIL),
         encoding="utf-8",
     )
-    assert gate_trail.recorded_verdicts(log) == {"7-1": "advance", "lp-7-2-a-letter-key": "reloop"}
+    assert gate_trail.recorded_verdicts(log) == {"7-1": "advance", "ex-7-2-a-letter-key": "reloop"}
 
 
 def test_a_heading_naming_a_listed_letter_key_is_read(tmp_path):
@@ -2039,10 +2039,10 @@ def test_a_heading_naming_a_listed_letter_key_is_read(tmp_path):
     log = tmp_path / "decision-log.md"
     log.write_text(
         "# Decision log\n\n### Story 7-1 - a numeric key\n\nGate notes only.\n\n"
-        "### Story lp-7-2-a-letter-key - a letter key\n\n" + _fenced(_FAIL),
+        "### Story ex-7-2-a-letter-key - a letter key\n\n" + _fenced(_FAIL),
         encoding="utf-8",
     )
-    assert gate_trail.recorded_verdicts(log, {"7-1", "lp-7-2-a-letter-key"}) == {"lp-7-2-a-letter-key": "reloop"}
+    assert gate_trail.recorded_verdicts(log, {"7-1", "ex-7-2-a-letter-key"}) == {"ex-7-2-a-letter-key": "reloop"}
     assert gate_trail.recorded_verdicts(log) == {"7-1": "reloop"}
 
 
@@ -2055,7 +2055,7 @@ def test_the_render_reads_letter_keys_from_sprint_status(tmp_path):
     trace.mkdir()
     impl = tmp_path / "impl"
     impl.mkdir()
-    first, second, third, fourth = (f"lp-7-{n}-story-{n}" for n in range(1, 5))
+    first, second, third, fourth = (f"ex-7-{n}-story-{n}" for n in range(1, 5))
     for story in (first, third):
         (trace / f"gate-decision-{story}.json").write_text(json.dumps({"gate_status": "PASS"}), encoding="utf-8")
     _sprint(impl, {key: "done" for key in (first, second, third, fourth)})
@@ -2089,17 +2089,17 @@ def test_the_render_reads_letter_keys_from_sprint_status(tmp_path):
 @pytest.mark.parametrize(
     "prose",
     [
-        "### Story committed and re-verified",
-        "### Story ORDER: one deviation from the named sequence, and why",
-        "#### Story lp-7-2-a-letter-key: gate",
-        "### Story line ranges in `epics.md` (for the drafting pass)",
+        "### Story checks rerun after the fix",
+        "### Story SCOPE: one step moved to a later pass, and why",
+        "#### Story ex-7-2-a-letter-key: gate",
+        "### Story notes on `epics.md` (for the review pass)",
     ],
 )
 def test_a_prose_heading_ends_no_storys_entries(tmp_path, prose):
-    """Headings a real project's logs hold under the word `Story`. Between a
-    story's heading and its verdict, each leaves the verdict the story's. The
-    third is the prescribed heading at another level, for a key sprint-status
-    does not list."""
+    """Headings like those a real project's logs hold under the word `Story`.
+    Between a story's heading and its verdict, each leaves the verdict the
+    story's. The third is the prescribed heading at another level, for a key
+    sprint-status does not list."""
     log = tmp_path / "decision-log.md"
     log.write_text(
         "# Decision log\n\n### Story 7-1: gate\n\n" + prose + "\n\n" + _fenced(_FAIL),
@@ -2226,7 +2226,7 @@ def _log_in_the_prescribed_shape(template: str, path: Path) -> Path:
     sweep re-looped it, then a letter-prefixed key, then the epic roll-up, which
     takes no story heading. The stories' own section headings are the shape a
     real project's logs use."""
-    first, second, third = "7-2-the-slugged-key", "7-3-another-key", "lp-7-4-a-letter-key"
+    first, second, third = "7-2-the-slugged-key", "7-3-another-key", "ex-7-4-a-letter-key"
 
     def fence(payload: dict) -> str:
         return "```json\n" + json.dumps(payload) + "\n```\n\n"
@@ -2244,7 +2244,7 @@ def _log_in_the_prescribed_shape(template: str, path: Path) -> Path:
         + template.replace("<story_id>", second)
         + "\n\n"
         + fence({"verdict": "reloop", "reasons": ["the backfill sweep went red"]})
-        + "### lp-7-4-a-letter-key (story 3 of 3)\n\n"
+        + "### ex-7-4-a-letter-key (story 3 of 3)\n\n"
         + template.replace("<story_id>", third)
         + "\n\n"
         + fence({"verdict": "defer", "gate_status": "CONCERNS", "reasons": []})
@@ -2261,10 +2261,10 @@ def _heading_rule_failures(text: str, tmp_path: Path) -> list[str]:
         return ["gate.md names no heading to write before a gate cycle"]
     failures = []
     log = _log_in_the_prescribed_shape(template, tmp_path / "prescribed-log.md")
-    stories = ["7-2-the-slugged-key", "7-3-another-key", "lp-7-4-a-letter-key"]
+    stories = ["7-2-the-slugged-key", "7-3-another-key", "ex-7-4-a-letter-key"]
     # No sprint-status keys: the prescribed shape alone names the letter key.
     recorded = gate_trail.resolve_recorded_verdicts(gate_trail.recorded_verdicts(log), stories)
-    if recorded != {"7-2-the-slugged-key": "advance", "7-3-another-key": "reloop", "lp-7-4-a-letter-key": "defer"}:
+    if recorded != {"7-2-the-slugged-key": "advance", "7-3-another-key": "reloop", "ex-7-4-a-letter-key": "defer"}:
         failures.append(f"the trail reads {recorded} from a log in the prescribed shape")
     paragraph = _heading_paragraph(text)
     for clause in (
@@ -2399,12 +2399,18 @@ def test_each_heading_gate_md_names_as_no_cycle_keeps_the_verdict(tmp_path):
 
 # ---------------------------------------------------------------------------
 # The release notes. A change fragment becomes the CHANGELOG, so the two the
-# trail's fixes added say what it reads, and what it read before, no more.
+# trail's fixes added say what it reads, and what it read before, no more. The
+# 4.0.0 one is read from that release's block of CHANGELOG.md, which holds its
+# sentences verbatim: its fragment, `changes/gate-story-heading.yaml`, was
+# removed after the release. The block is read at test time, never copied here.
 # ---------------------------------------------------------------------------
 
 _CHANGES = SCRIPTS.parents[2] / "changes"
+_CHANGELOG = SCRIPTS.parents[2] / "CHANGELOG.md"
+# The 4.0.0 entry, keyed like a fragment but read from CHANGELOG.md.
+_RELEASE_4_0_0 = "CHANGELOG.md [4.0.0]"
 _FRAGMENT_CLAUSES = {
-    "gate-story-heading.yaml": (
+    _RELEASE_4_0_0: (
         # Main read any `Story` heading with a digit-led id, at levels 2 to 4.
         "the trail found no recorded verdict for a story whose verdict JSON stood under no heading of its own "
         "reading `Story` and then an id starting with a digit",
@@ -2418,6 +2424,18 @@ _FRAGMENT_CLAUSES = {
 }
 
 
+def _release_notes(name: str) -> str:
+    """The text a pin reads: the fragment `name` in `changes/`, or, for the
+    4.0.0 entry, that release's block of CHANGELOG.md, from its heading to the
+    next release's."""
+    if name != _RELEASE_4_0_0:
+        return (_CHANGES / name).read_text(encoding="utf-8")
+    text = _CHANGELOG.read_text(encoding="utf-8")
+    block = re.search(r"^## \[4\.0\.0\].*?(?=^## \[|\Z)", text, re.MULTILINE | re.DOTALL)
+    assert block, "CHANGELOG.md has no `## [4.0.0]` block"
+    return block.group(0)
+
+
 def _fragment_failures(name: str, text: str) -> list[str]:
     flat = re.sub(r"\s+", " ", text)
     return [clause for clause in _FRAGMENT_CLAUSES[name] if clause not in flat]
@@ -2425,20 +2443,20 @@ def _fragment_failures(name: str, text: str) -> list[str]:
 
 @pytest.mark.parametrize("name", sorted(_FRAGMENT_CLAUSES))
 def test_the_trail_fragments_say_what_the_trail_reads(name):
-    assert _fragment_failures(name, (_CHANGES / name).read_text(encoding="utf-8")) == []
+    assert _fragment_failures(name, _release_notes(name)) == []
 
 
 @pytest.mark.parametrize(
     ("name", "claim", "replaced"),
     [
         (
-            "gate-story-heading.yaml",
+            _RELEASE_4_0_0,
             "the trail found no recorded verdict for a story whose verdict JSON stood under no heading of its own "
             "reading `Story` and then an id starting with a digit",
             "a log whose stories were headed any other way gave the trail no recorded verdict at all",
         ),
         (
-            "gate-story-heading.yaml",
+            _RELEASE_4_0_0,
             "A later `### Story <story_id>: gate` heading for the same story",
             "A later cycle's heading for the same story",
         ),
@@ -2452,6 +2470,6 @@ def test_the_trail_fragments_say_what_the_trail_reads(name):
 )
 def test_the_fragment_pin_reds_on_the_claim_it_replaced(name, claim, replaced):
     """Twin: each fragment with the claim it carried before reds the pin."""
-    text = (_CHANGES / name).read_text(encoding="utf-8")
+    text = _release_notes(name)
     assert claim in text
     assert _fragment_failures(name, text.replace(claim, replaced))
