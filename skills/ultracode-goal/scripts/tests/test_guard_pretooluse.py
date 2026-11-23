@@ -316,9 +316,9 @@ _RUN_FOLDER_EXEMPTION = (
 def test_the_no_story_pin_rejects_a_guard_that_exempts_the_run_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, armed_by: str, branch: str
 ) -> None:
-    """Twin: the exemption issue #270 asked for, a guard that lets a commit
-    through with no story set when every staged path sits in the
-    implementation-artifacts folder, must fail the pin above."""
+    """Twin: a run-folder exemption of the kind issue #270 suggested, a guard
+    that lets a commit through with no story set when every staged path sits
+    in the implementation-artifacts folder, must fail the pin above."""
     for var in _RUN_ENV:
         monkeypatch.delenv(var, raising=False)
     source = HOOK.read_text(encoding="utf-8")
