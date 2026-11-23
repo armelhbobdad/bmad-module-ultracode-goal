@@ -311,8 +311,8 @@ _CANNOT_START_IS_NOT_THE_CLASSIFIER = (
     "start\" instead."
 )
 _UNNEEDED_DISARM = (
-    "Any other refused write of a disarm the pass does not need (the paragraph above) is no stop: skip that disarm, "
-    "log it, and go on."
+    'Any other refused write of a disarm the pass does not need (see "When the disarm applies" above) is no stop: '
+    "skip that disarm, log it, and go on."
 )
 # The #211 review's wording: the unneeded disarm's "go on" came first, and the
 # carve-out did not say it held for the disarm.
