@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  Preflight now covers UCG hooks that are already armed for this run when the session starts, whether an earlier invocation armed them before it stopped or you added them to `.claude/settings.local.json` yourself. With no story current, the guard refuses preflight's remediation commit whoever armed it, and the stage described only a prior run's hooks, so such a run had no stated way forward. Preflight now handles them as it handles a prior run's: it removes both entries, makes the commit and merges them back when it arms the environment, and the session runs without the guard in between, as on any first run. When the removal is refused, or the file shows it while the session's guard still refuses the commit, the run takes the existing route for a refused removal, which ends, attended, in a commit command you run in a terminal outside the session. Arming the hooks by hand before a run is not needed.
+issues: [270]
