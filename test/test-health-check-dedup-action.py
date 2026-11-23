@@ -35,6 +35,16 @@ Covers:
     `possible-duplicate` label, then one "Possible duplicate" comment, and is
     never closed or upvoted; the earlier issue's own run, an issue already
     flagged, and one sharing nothing get no call
+  - With no earlier open issue, a report whose Environment table gives a
+    Module Version lower than the latest release (compared number by number,
+    with mutant twins for a comparison as text and for an equal version), of a
+    fingerprint an earlier issue was closed as completed for, is commented on
+    in the agreed words, labeled `duplicate` and closed as not planned, never
+    as completed; every doubt (no single plain X.Y.Z version, no completed
+    earlier issue, no release, a tag that is not X.Y.Z, a close after the
+    release, a failed call) and an equal or newer version leave it open and
+    go on to the possible-duplicate flag; the workflow grants `contents: read`
+    and nothing broader for the release, and its script holds no `${{ }}`
   - Runs for one issue share a concurrency group, so they never overlap; a
     newer pending run may replace an older pending one
   - The title and the body header `health_check_fp.py fingerprint` prints
@@ -62,6 +72,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "health-check-dedup.yaml"
 HEALTH_CHECK_MD = REPO_ROOT / "skills" / "ultracode-goal" / "references" / "health-check.md"
 ISSUE_TEMPLATE = REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "workflow-health-check.md"
+DOCS_MD = REPO_ROOT / "docs" / "health-check.md"
 FP_SCRIPT = REPO_ROOT / "skills" / "ultracode-goal" / "scripts" / "health_check_fp.py"
 GITHUB_SCRIPT_PIN = "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0"
 
@@ -72,15 +83,30 @@ const [scriptPath, scenarioPath] = process.argv.slice(2);
 const script = fs.readFileSync(scriptPath, 'utf8');
 const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'));
 const calls = [];
+// Every read call too, in order, kept apart from the writes.
+const reads = [];
 const withLabels = i => ({ ...i, labels: (i.labels || []).map(name => ({ name })) });
 const current = { state: 'open', ...withLabels(scenario.issue) };
 const open = scenario.open.map(withLabels).filter(i => i.number !== current.number);
 if (current.state === 'open') open.push(current);
+const closed = (scenario.closed || []).map(withLabels).map(i => ({ state: 'closed', ...i }));
+const failure = status => Object.assign(new Error(`HTTP ${status}`), { status });
 // GitHub matches a label name in any letter case, as it holds one label per name in any case.
 const listForRepo = async ({ labels, state }) => {
-  if (state !== 'open') throw new Error(`listForRepo asked for state ${state}`);
+  reads.push(['list', state, labels]);
   const want = labels.split(',').map(w => w.toLowerCase());
-  return { data: open.filter(i => want.every(w => i.labels.some(l => l.name.toLowerCase() === w))) };
+  const matches = i => want.every(w => i.labels.some(l => l.name.toLowerCase() === w));
+  if (state === 'open') return { data: open.filter(matches) };
+  if (state !== 'closed') throw new Error(`listForRepo asked for state ${state}`);
+  if (scenario.closedError) throw failure(scenario.closedError);
+  return { data: closed.filter(matches) };
+};
+// No release is a 404, as GitHub answers for a repository that has none; a `status` is that failure.
+const getLatestRelease = async p => {
+  reads.push(['release', p.owner, p.repo]);
+  if (!scenario.release) throw failure(404);
+  if (scenario.release.status) throw failure(scenario.release.status);
+  return { data: scenario.release };
 };
 const github = {
   paginate: async (fn, params) => (await fn(params)).data,
@@ -100,6 +126,7 @@ const github = {
       },
     },
     reactions: { createForIssue: async p => { calls.push(['react', p.issue_number, p.content]); } },
+    repos: { getLatestRelease },
   },
 };
 // The payload is the snapshot the event carried: open, with no labels. The Action must read the issue itself.
@@ -109,7 +136,7 @@ const context = { payload, repo: { owner: 'o', repo: 'r' } };
 const core = { info: () => {} };
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 new AsyncFunction('github', 'context', 'core', script)(github, context, core)
-  .then(() => process.stdout.write(JSON.stringify(calls)))
+  .then(() => process.stdout.write(JSON.stringify({ calls, reads })))
   .catch(e => { process.stderr.write(String(e && e.stack || e)); process.exit(1); });
 """
 
@@ -144,13 +171,15 @@ def _bare(number: int, title: str, body: str, *labels: str) -> dict:
     return {"number": number, "state": "open", "labels": list(labels), "title": title, "body": body}
 
 
-def _template(fp: str | None = None, severity: str | None = None, section_fp: str | None = None) -> str:
+def _template(fp: str | None = None, severity: str | None = None, section_fp: str | None = None,
+              version: str | None = None) -> str:
     """The issue template's body as a reporter submits it, with the given fields filled in."""
     text = ISSUE_TEMPLATE.read_text(encoding="utf-8").split("---\n", 2)[2]
     for value, old, new in (
         (fp, "`fp-XXXXXXX`\n\nSection fingerprint:", f"`{fp}`\n\nSection fingerprint:"),
         (section_fp, "Section fingerprint: `fp-XXXXXXX`", f"Section fingerprint: `{section_fp}`"),
         (severity, "covered at all -->\n", f"covered at all -->\n`{severity}`\n"),
+        (version, "| Module Version |  |", f"| Module Version | {version} |"),
     ):
         if value:
             assert text.count(old) == 1, old
@@ -158,18 +187,27 @@ def _template(fp: str | None = None, severity: str | None = None, section_fp: st
     return text
 
 
-def _run(tmp_path: Path, issue: dict, others: list[dict], label_exists: bool = False, event: str = "opened",
-         label: str | None = None) -> list:
-    (tmp_path / "script.js").write_text(_script(), encoding="utf-8")
+def _run_full(tmp_path: Path, issue: dict, others: list[dict], label_exists: bool = False, event: str = "opened",
+              label: str | None = None, closed: list[dict] | None = None, release: dict | None = None,
+              closed_error: int | None = None, script: str | None = None) -> tuple[list, list]:
+    """The write calls and the read calls of one run. `closed` are the repository's closed issues, `release` its
+    latest release (None: it has none), and `script` stands in for the Action's own (a mutant)."""
+    (tmp_path / "script.js").write_text(_script() if script is None else script, encoding="utf-8")
     (tmp_path / "runner.js").write_text(_NODE_RUNNER, encoding="utf-8")
-    scenario = {"issue": issue, "open": others, "labelExists": label_exists, "event": event, "label": label}
+    scenario = {"issue": issue, "open": others, "labelExists": label_exists, "event": event, "label": label,
+                "closed": closed or [], "release": release, "closedError": closed_error}
     (tmp_path / "scenario.json").write_text(json.dumps(scenario), encoding="utf-8")
     done = subprocess.run(
         ["node", str(tmp_path / "runner.js"), str(tmp_path / "script.js"), str(tmp_path / "scenario.json")],
         capture_output=True, text=True, encoding="utf-8", timeout=60,
     )
     assert done.returncode == 0, done.stderr
-    return json.loads(done.stdout)
+    out = json.loads(done.stdout)
+    return out["calls"], out["reads"]
+
+
+def _run(tmp_path: Path, issue: dict, others: list[dict], **kwargs) -> list:
+    return _run_full(tmp_path, issue, others, **kwargs)[0]
 
 
 # --- exact fingerprint match ------------------------------------------------
@@ -562,6 +600,282 @@ def test_no_shared_section_fingerprint_makes_no_call(tmp_path):
 def test_a_pull_request_is_never_flagged_against(tmp_path):
     pr = {**_issue(9, FP_S, None), "pull_request": {"url": "https://example.invalid/pr/9"}}
     assert _run(tmp_path, _issue(12, FP_B, FP_S), [pr]) == []
+
+
+# --- a report from a copy older than the fix -------------------------------------
+
+LATEST = {"tag_name": "v8.0.0", "published_at": "2026-11-02T10:00:00Z"}
+FIXED_AT = "2026-11-02T09:00:00Z"
+RELEASE_READ = ["release", "o", "r"]
+CLOSE = ["update", 12, "closed", "not_planned"]
+
+
+def _env_body(version: str | None) -> str:
+    """A filed body whose `## Environment` table gives this Module Version, or has no such row for None."""
+    row = "" if version is None else f"| Module Version | {version} |\n"
+    return _body(FP_S) + f"\n## Environment\n| Field | Value |\n|-------|-------|\n| Date | 2026-11-02 |\n{row}"
+
+
+def _reported(version: str | None = "5.0.0", fp: str = FP_A, body: str | None = None) -> dict:
+    return _issue(12, fp, FP_S, body=_env_body(version) if body is None else body)
+
+
+def _closed(number: int, fp: str = FP_A, reason: str | None = "completed", closed_at: str | None = FIXED_AT,
+            **extra) -> dict:
+    return {"number": number, "state": "closed", "state_reason": reason, "closed_at": closed_at,
+            "labels": ["health-check", fp], "body": _body(FP_S), **extra}
+
+
+def _release(tag: str, published_at: str = LATEST["published_at"]) -> dict:
+    return {"tag_name": tag, "published_at": published_at}
+
+
+def _comment(fp: str, number: int, version: str, tag: str) -> str:
+    return (f"Auto-deduped: same fingerprint `{fp}` as #{number}, which was fixed. This report names Module Version "
+            f"{version}, older than the latest release, {tag}. Please update to {tag}, and if the behaviour is still "
+            "there on that release, report it again.")
+
+
+@needs_node
+def test_an_outdated_copys_report_of_a_fixed_defect_is_closed_as_not_planned(tmp_path):
+    calls, reads = _run_full(tmp_path, _reported("5.0.0"), [], closed=[_closed(10)], release=LATEST)
+    assert calls == [["comment", 12, _comment(FP_A, 10, "5.0.0", "v8.0.0")], ["label", 12, ["duplicate"]], CLOSE]
+    # The open search found nothing, then the closed issues of the same labels were read, then the release.
+    assert reads == [["list", "open", f"health-check,{FP_A}"], ["list", "closed", f"health-check,{FP_A}"],
+                     RELEASE_READ]
+    # The comment is public and permanent: it says the earlier issue was fixed, never that this report's behaviour is.
+    comment = calls[0][2]
+    assert "#10, which was fixed." in comment and "report it again." in comment
+    assert chr(0x2014) not in comment and "completed" not in comment and "is fixed" not in comment
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "issue",
+    [
+        _reported(body=_env_body("`5.0.0`")),
+        _reported(body=_env_body("v5.0.0")),
+        _reported(body=_env_body("5.0.0").replace("| Module Version |", "| **Module Version** |")),
+        _reported(body=_env_body("5.0.0").replace("| Module Version | 5.0.0 |", "|Module Version|5.0.0")),
+        # The issue template's own table, filled in, and as the web files it with CRLF line endings.
+        _reported(body=_template(fp=FP_A, severity="bug", section_fp=FP_S, version="5.0.0")),
+        _reported(body=_template(fp=FP_A, severity="bug", section_fp=FP_S, version="5.0.0").replace("\n", "\r\n")),
+    ],
+    ids=["backticks", "leading-v", "bold-field", "no-outer-pipes-spacing", "issue-template", "issue-template-crlf"],
+)
+def test_the_module_version_is_read_from_the_environment_table(tmp_path, issue):
+    calls = _run(tmp_path, issue, [], closed=[_closed(10)], release=LATEST)
+    assert calls == [["comment", 12, _comment(FP_A, 10, "5.0.0", "v8.0.0")], ["label", 12, ["duplicate"]], CLOSE]
+
+
+@needs_node
+def test_an_unlabeled_outdated_report_is_labeled_then_closed(tmp_path):
+    issue = _bare(12, f"[health-check][bug][{FP_A}] ultracode-goal/gate: x", _env_body("7.3.0"))
+    calls = _run(tmp_path, issue, [], closed=[_closed(10)], release=LATEST)
+    assert calls == [["createLabel", FP_A], _labeled(12, "health-check", "workflow-improvement", "bug", FP_A),
+                     ["comment", 12, _comment(FP_A, 10, "7.3.0", "v8.0.0")], ["label", 12, ["duplicate"]], CLOSE]
+
+
+@needs_node
+def test_the_latest_fix_is_the_one_linked(tmp_path):
+    fixes = [_closed(4, closed_at="2026-10-01T00:00:00Z"), _closed(9), _closed(7, reason="not_planned")]
+    calls = _run(tmp_path, _reported("5.0.0"), [], closed=fixes, release=LATEST)
+    assert calls[0] == ["comment", 12, _comment(FP_A, 9, "5.0.0", "v8.0.0")]
+    assert calls[1:] == [["label", 12, ["duplicate"]], CLOSE]
+
+
+# Versions compared number by number: each pair below is older, then not older, read as numbers. The pairs marked
+# `text` get the other answer when the parts are compared as text, and `equal` when an equal version counts as older.
+OLDER = [
+    ("5.0.0", "v8.0.0", ""), ("7.99.99", "v8.0.0", ""), ("0.0.1", "v8.0.0", ""), ("8.0.0", "v8.0.1", ""),
+    ("8.0.0", "8.0.1", ""), ("9.0.0", "v10.0.0", "text"), ("8.9.0", "v8.10.0", "text"), ("8.0.9", "v8.0.10", "text"),
+]
+NOT_OLDER = [
+    ("8.0.0", "v8.0.0", "equal"), ("8.0.0", "8.0.0", "equal"), ("8.0.1", "v8.0.0", ""), ("8.1.0", "v8.0.0", ""),
+    ("9.0.0", "v8.0.0", ""), ("10.0.0", "v9.0.0", "text"), ("8.10.0", "v8.9.0", "text"),
+    ("8.0.10", "v8.0.9", "text"),
+]
+
+
+def _closes(tmp_path: Path, version: str, tag: str, script: str | None = None) -> bool:
+    calls = _run(tmp_path, _reported(version), [], closed=[_closed(10)], release=_release(tag), script=script)
+    assert all(c[0] != "update" or c[3] == "not_planned" for c in calls), "never a completed close"
+    return CLOSE in calls
+
+
+@needs_node
+@pytest.mark.parametrize("version, tag, _twin", OLDER, ids=[f"{v}<{t}" for v, t, _ in OLDER])
+def test_a_version_older_than_the_latest_release_is_closed(tmp_path, version, tag, _twin):
+    calls = _run(tmp_path, _reported(version), [], closed=[_closed(10)], release=_release(tag))
+    assert calls == [["comment", 12, _comment(FP_A, 10, version, tag)], ["label", 12, ["duplicate"]], CLOSE]
+
+
+@needs_node
+@pytest.mark.parametrize("version, tag, _twin", NOT_OLDER, ids=[f"{v}>={t}" for v, t, _ in NOT_OLDER])
+def test_a_version_equal_to_or_newer_than_the_latest_release_stays_open(tmp_path, version, tag, _twin):
+    calls, reads = _run_full(tmp_path, _reported(version), [], closed=[_closed(10)], release=_release(tag))
+    assert calls == []
+    # It got as far as the comparison: the release was read.
+    assert reads[-2:] == [RELEASE_READ, ["list", "open", "health-check"]]
+
+
+# The Action's comparison, and two mutants of it the tables above must catch.
+_IS_OLDER = "return n !== undefined && a[n] < b[n];"
+_MUTANTS = {
+    "text": "return a.join('.') < b.join('.');",
+    "equal": "return n === undefined || a[n] < b[n];",
+}
+
+
+@needs_node
+@pytest.mark.parametrize("mutant", sorted(_MUTANTS))
+def test_mutant_comparisons_are_caught(tmp_path, mutant):
+    """Twin: the same cases run against a mutant of the comparison, and every case marked for it changes answer."""
+    script = _script()
+    assert script.count(_IS_OLDER) == 1, "the comparison the mutants replace is in the script, once"
+    mutated = script.replace(_IS_OLDER, _MUTANTS[mutant])
+    marked = [(v, t, True) for v, t, m in OLDER if m == mutant] + [(v, t, False) for v, t, m in NOT_OLDER if m == mutant]
+    assert marked, "each mutant has cases that tell it apart"
+    for version, tag, older in marked:
+        assert _closes(tmp_path, version, tag) is older, (version, tag)
+        assert _closes(tmp_path, version, tag, script=mutated) is not older, (mutant, version, tag)
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "body",
+    [
+        _body(FP_S),
+        _env_body(None),
+        _env_body(""),
+        _env_body("N/A"),
+        _env_body("5.0"),
+        _env_body("5"),
+        _env_body("5.0.0.1"),
+        _env_body("5.0.0-beta.1"),
+        _env_body("5.0.0+build.7"),
+        _env_body("05.0.0"),
+        _env_body("V5.0.0"),
+        _env_body("5.0.0 (plugin)"),
+        _env_body("5.0.0 | 4.0.0"),
+        # Two rows, even of one value, are not one Module Version.
+        _env_body("5.0.0") + "| Module Version | 5.0.0 |\n",
+        # A row outside the Environment section, or inside a comment, is not the table's.
+        _body(FP_S) + "\n## Evidence\n| Module Version | 5.0.0 |\n\n## Environment\n| Date | 2026-11-02 |\n",
+        _env_body(None) + "<!-- | Module Version | 5.0.0 | -->\n",
+        # The template as filed, its Module Version left blank.
+        _template(fp=FP_A, severity="bug", section_fp=FP_S),
+    ],
+    ids=["no-environment", "no-row", "empty", "n-a", "two-parts", "one-part", "four-parts", "prerelease", "build",
+         "leading-zero", "capital-v", "trailing-words", "three-cells", "two-rows", "outside-environment",
+         "in-a-comment", "template-blank"],
+)
+def test_no_single_plain_module_version_leaves_the_issue_open_with_no_lookup(tmp_path, body):
+    calls, reads = _run_full(tmp_path, _reported(body=body), [], closed=[_closed(10)], release=LATEST)
+    assert calls == []
+    assert reads == [["list", "open", f"health-check,{FP_A}"], ["list", "open", "health-check"]]
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "closed",
+    [
+        [],
+        [_closed(10, reason="not_planned")],
+        [_closed(10, reason="duplicate")],
+        [_closed(10, reason=None)],
+        # A later issue is never the earlier one, and a pull request is not an issue.
+        [_closed(14)],
+        [_closed(10, pull_request={"url": "https://example.invalid/pr/10"})],
+        # Another fingerprint's fix is not this one's.
+        [_closed(10, fp=FP_B)],
+    ],
+    ids=["none", "not-planned", "duplicate", "no-reason", "later", "pull-request", "other-fingerprint"],
+)
+def test_no_earlier_completed_issue_leaves_the_issue_open_with_no_release_read(tmp_path, closed):
+    calls, reads = _run_full(tmp_path, _reported("5.0.0"), [], closed=closed, release=LATEST)
+    assert calls == []
+    assert RELEASE_READ not in reads and ["list", "closed", f"health-check,{FP_A}"] in reads
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "closed, release, closed_error",
+    [
+        ([_closed(10)], None, None),
+        ([_closed(10)], {"status": 500}, None),
+        ([_closed(10)], {"status": 403}, None),
+        ([_closed(10)], None, 502),
+        ([_closed(10)], _release("v9.0.0-rc.1"), None),
+        ([_closed(10)], _release("latest"), None),
+        ([_closed(10)], {"published_at": LATEST["published_at"]}, None),
+        # The fix closed after the latest release was published may not be in it.
+        ([_closed(10)], _release("v8.0.0", published_at="2026-11-02T08:00:00Z"), None),
+        ([_closed(10)], {"tag_name": "v8.0.0"}, None),
+        ([_closed(10, closed_at=None)], LATEST, None),
+        ([_closed(10), _closed(4, closed_at="2026-11-03T09:00:00Z")], LATEST, None),
+    ],
+    ids=["no-release", "release-500", "release-403", "closed-list-502", "prerelease-tag", "tag-not-a-version",
+         "no-tag", "fix-after-release", "no-publish-date", "no-close-date", "a-fix-after-release"],
+)
+def test_every_doubt_after_the_body_leaves_the_issue_open(tmp_path, closed, release, closed_error):
+    assert _run(tmp_path, _reported("5.0.0"), [], closed=closed, release=release, closed_error=closed_error) == []
+
+
+@needs_node
+def test_a_report_left_open_is_still_flagged_and_one_closed_is_not(tmp_path):
+    keyless = _issue(9, FP_S, None)
+    _assert_flagged(_run(tmp_path, _reported("8.0.0"), [keyless], closed=[_closed(10)], release=LATEST),
+                    12, "#9", FP_S)
+    calls = _run(tmp_path, _reported("5.0.0"), [keyless], closed=[_closed(10)], release=LATEST)
+    assert [c[0] for c in calls] == ["comment", "label", "update"] and calls[-1] == CLOSE
+
+
+@needs_node
+def test_an_earlier_open_issue_still_takes_the_report_with_no_closed_lookup(tmp_path):
+    calls, reads = _run_full(tmp_path, _reported("5.0.0"), [_issue(11, FP_A, FP_S)], closed=[_closed(10)],
+                             release=LATEST)
+    assert calls[0][2].startswith(f"Auto-deduped: same fingerprint `{FP_A}` as #11.")
+    assert calls[1:] == [["label", 12, ["duplicate"]], CLOSE, ["react", 11, "+1"]]
+    assert reads == [["list", "open", f"health-check,{FP_A}"]]
+
+
+def test_the_action_never_closes_as_completed():
+    """A health check reads a completed close of the issue it filed as a fix, and would report again as a regression."""
+    script = _script()
+    assert re.findall(r"state_reason: '(\w+)'", script) == ["not_planned", "not_planned"]
+    # The one `completed` it holds is the state it reads on an earlier issue.
+    assert script.count("'completed'") == 1 and "m.state_reason === 'completed'" in script
+
+
+def test_the_script_takes_no_expression_from_the_event():
+    """The issue text is the reporter's: the script reads it from the API at run time, never through `${{ }}`."""
+    assert "${{" not in _script()
+
+
+def test_the_release_is_read_with_contents_read_and_nothing_broader():
+    workflow = _workflow()
+    assert workflow["permissions"] == {"issues": "write", "contents": "read"}
+    assert "permissions" not in workflow["jobs"]["dedup"]
+
+
+def test_the_header_and_the_docs_say_an_outdated_report_is_closed_as_not_planned():
+    header = WORKFLOW.read_text(encoding="utf-8").split('"on":', 1)[0]
+    flowed = " ".join(re.sub(r"^#\s?", "", header, flags=re.MULTILINE).split())
+    assert "an earlier issue with the same fingerprint that was closed as completed" in flowed
+    assert "adds the `duplicate` label and closes the new issue as not planned. Never as completed" in flowed
+    assert "Any doubt leaves the issue open and goes on to step 5" in flowed
+    docs = " ".join(DOCS_MD.read_text(encoding="utf-8").split())
+    level3 = docs[docs.index("3. **Server-side**"):]
+    level3 = level3[:level3.index("One limit:")]
+    assert ("but an earlier one with it was closed as completed, and the new issue's Environment table gives a Module "
+            "Version lower than the repository's latest release (compared number by number)") in level3
+    assert ("the Action comments that the earlier issue was fixed, names the latest release, and asks the reporter to "
+            "update and to report again if the behaviour is still there on that release, then adds the `duplicate` "
+            "label and closes the issue as not planned. It never closes one as completed") in level3
+    assert ("A Module Version that is missing or not a plain `X.Y.Z`, a repository with no release, a fix closed after "
+            "the latest release was published, or a failed call leaves the issue open for a maintainer.") in level3
+    assert "A copy of the Action compares with the latest release of the repository it runs in" in level3
 
 
 # --- the job ------------------------------------------------------------------
