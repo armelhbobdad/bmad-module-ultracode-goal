@@ -36,19 +36,22 @@ name: Health-Check Dedup
 #      it on later runs.
 #   4. If no earlier open issue exists, it looks for an earlier issue with the
 #      same fingerprint that was closed as completed. When there is one, the new
-#      issue's `## Environment` table gives a Module Version `X.Y.Z` lower than
-#      the repository's latest release (compared number by number, never as
-#      text), and every such close predates that release, the report comes from
-#      a copy older than the fix: it comments that the earlier issue was fixed,
+#      issue's Environment table (under an `Environment` heading, after a bold
+#      `Environment` label, or headed by an `Environment` cell: copies have
+#      written it all three ways) gives a Module Version `X.Y.Z` lower than the
+#      repository's latest release (compared number by number, never as text),
+#      and every such close predates that release, the copy that filed the
+#      report may lack the fix: it comments that the earlier issue was fixed,
 #      names the latest release, asks the reporter to update and to report again
 #      if the behaviour is still there on that release, adds the `duplicate`
 #      label and closes the new issue as not planned. Never as completed: a
 #      health check reads a completed close of the issue it filed as a fix, so
 #      the copy would report its next sighting as a regression of it. Any doubt
-#      leaves the issue open and goes on to step 5: no Module Version, more than
-#      one, or one that is not a plain `X.Y.Z` (a prerelease included), no
-#      release, a release tag that is not a plain `X.Y.Z`, a close after the
-#      release was published, or a failed call.
+#      leaves the issue open and goes on to step 5: a repository other than this
+#      module's (a copy of the Action elsewhere, whose releases are not module
+#      versions), no Module Version, more than one, or one that is not a plain
+#      `X.Y.Z` (a prerelease included), no release, a release tag that is not a
+#      plain `X.Y.Z`, a close after the release was published, or a failed call.
 #   5. Otherwise the new issue becomes canonical. Then,
 #      unless it already carries `possible-duplicate`, it reads the issue's section
 #      fingerprint (the `Section fingerprint:` line of its body; an issue with no
@@ -256,11 +259,36 @@ jobs:
               return n !== undefined && a[n] < b[n];
             }
 
-            // The Module Version row of the body's `## Environment` table, as three numbers. Null when the
-            // section has no such row, more than one, or a value that is not a plain X.Y.Z, alone or in
-            // backticks: the issue text is the reporter's, so anything else is doubt.
+            // The rows of the body's Environment table, comments removed. Copies older than 7.2.0 were asked
+            // only for an Environment table and wrote it three ways: under an `## Environment` heading (as the
+            // issue template and later copies do), after a bold `**Environment:**` line, or as a table whose
+            // header cell reads `Environment`. A row of any other table is not read.
+            function environmentRows(i) {
+              const lines = (i.body || '').replace(/<!--[\s\S]*?(?:-->|$)/g, '').split(/\r?\n/);
+              const isEnvironment = text => text.replace(/[#*_:`\s]/g, '').toLowerCase() === 'environment';
+              const rows = [];
+              let section = false; // inside a section whose heading reads Environment
+              let label = false; // the last line that is not blank, above a table, reads Environment
+              let table = null; // whether the table being read is the Environment table; null outside one
+              for (const line of lines) {
+                if (/^\s*\|/.test(line)) {
+                  if (table === null) table = section || label || isEnvironment(line.split('|')[1] || '');
+                  if (table) rows.push(line);
+                  continue;
+                }
+                table = null;
+                if (line.trim() === '') continue;
+                if (/^#{1,6}\s/.test(line)) section = isEnvironment(line);
+                label = isEnvironment(line);
+              }
+              return rows;
+            }
+
+            // The Module Version row of the body's Environment table, as three numbers. Null when the table
+            // has no such row, more than one, or a value that is not a plain X.Y.Z, alone or in backticks:
+            // the issue text is the reporter's, so anything else is doubt.
             function moduleVersion(i) {
-              const rows = bodySection(i, 'environment')
+              const rows = environmentRows(i)
                 .map(l => /^\s*\|([^|]*)\|([^|]*)\|?\s*$/.exec(l))
                 .filter(m => m && m[1].replace(/[*_`]/g, '').trim().toLowerCase() === 'module version');
               if (rows.length !== 1) return null;
@@ -268,12 +296,18 @@ jobs:
             }
 
             // No earlier open issue carries the fingerprint. A report from a copy older than the latest
-            // release, of a defect an earlier issue was closed as completed for, comes from a copy that
+            // release, of a defect an earlier issue was closed as completed for, may come from a copy that
             // lacks the fix: comment, label it a duplicate and close it as not planned. Never as completed:
             // the copy recorded this issue under the fingerprint and reads a completed close as a fix, so it
             // would report its next sighting as a regression. Any doubt leaves the issue open for a
             // maintainer. True when the issue was closed.
             async function closeOutdatedCopy() {
+              // Only this module's repository releases module versions: a copy of the Action in another
+              // repository would compare the report with release numbers of its own.
+              if (`${context.repo.owner}/${context.repo.repo}`.toLowerCase() !== 'armelhbobdad/bmad-module-ultracode-goal') {
+                core.info(`${context.repo.owner}/${context.repo.repo} does not release this module; leaving #${issue.number} open.`);
+                return false;
+              }
               const reported = moduleVersion(issue);
               if (!reported) {
                 core.info(`#${issue.number} gives no single plain X.Y.Z Module Version; leaving it open.`);
@@ -332,7 +366,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
-                body: `Auto-deduped: same fingerprint \`${fpLabel}\` as #${earlier.number}, which was fixed. This report names Module Version ${reported.join('.')}, older than the latest release, ${tag}. Please update to ${tag}, and if the behaviour is still there on that release, report it again.`,
+                body: `Auto-deduped: same fingerprint \`${fpLabel}\` as #${earlier.number}, which was fixed. This report gives Module Version ${reported.join('.')}, older than the latest release, ${tag}. Please update to ${tag}, and if the behaviour is still there on that release, report it again in a new issue.`,
               });
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,

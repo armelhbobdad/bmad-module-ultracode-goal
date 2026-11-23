@@ -40,11 +40,16 @@ Covers:
     with mutant twins for a comparison as text and for an equal version), of a
     fingerprint an earlier issue was closed as completed for, is commented on
     in the agreed words, labeled `duplicate` and closed as not planned, never
-    as completed; every doubt (no single plain X.Y.Z version, no completed
+    as completed; the Environment table is read under a heading, after a bold
+    label or under its own header cell, as copies have written it; a fixed
+    issue past the first page of closed issues is found (with a one-page
+    mutant twin); every doubt (no single plain X.Y.Z version, no completed
     earlier issue, no release, a tag that is not X.Y.Z, a close after the
     release, a failed call) and an equal or newer version leave it open and
-    go on to the possible-duplicate flag; the workflow grants `contents: read`
-    and nothing broader for the release, and its script holds no `${{ }}`
+    go on to the possible-duplicate flag, each beside a twin run with no
+    doubt that closes it, and a copy of the Action in another repository
+    closes nothing this way; the workflow grants `contents: read` and nothing
+    broader for the release, and its script holds no `${{ }}`
   - Runs for one issue share a concurrency group, so they never overlap; a
     newer pending run may replace an older pending one
   - The title and the body header `health_check_fp.py fingerprint` prints
@@ -91,15 +96,17 @@ const open = scenario.open.map(withLabels).filter(i => i.number !== current.numb
 if (current.state === 'open') open.push(current);
 const closed = (scenario.closed || []).map(withLabels).map(i => ({ state: 'closed', ...i }));
 const failure = status => Object.assign(new Error(`HTTP ${status}`), { status });
-// GitHub matches a label name in any letter case, as it holds one label per name in any case.
-const listForRepo = async ({ labels, state }) => {
+// GitHub matches a label name in any letter case, as it holds one label per name in any case. It serves the
+// newest issue first, one page at a time: `page` (from 1) of `per_page` (30 when not given, 100 at most).
+const listForRepo = async ({ labels, state, page = 1, per_page = 30 }) => {
   reads.push(['list', state, labels]);
   const want = labels.split(',').map(w => w.toLowerCase());
   const matches = i => want.every(w => i.labels.some(l => l.name.toLowerCase() === w));
-  if (state === 'open') return { data: open.filter(matches) };
-  if (state !== 'closed') throw new Error(`listForRepo asked for state ${state}`);
-  if (scenario.closedError) throw failure(scenario.closedError);
-  return { data: closed.filter(matches) };
+  if (state !== 'open' && state !== 'closed') throw new Error(`listForRepo asked for state ${state}`);
+  if (state === 'closed' && scenario.closedError) throw failure(scenario.closedError);
+  const size = Math.min(per_page, 100);
+  const all = (state === 'open' ? open : closed).filter(matches).sort((a, b) => b.number - a.number);
+  return { data: all.slice((page - 1) * size, page * size) };
 };
 // No release is a 404, as GitHub answers for a repository that has none; a `status` is that failure.
 const getLatestRelease = async p => {
@@ -109,7 +116,15 @@ const getLatestRelease = async p => {
   return { data: scenario.release };
 };
 const github = {
-  paginate: async (fn, params) => (await fn(params)).data,
+  // Every page in turn, as octokit's paginate follows the next-page link until there is none.
+  paginate: async (fn, params) => {
+    const all = [];
+    for (let page = 1; ; page++) {
+      const { data } = await fn({ ...params, page });
+      all.push(...data);
+      if (data.length < Math.min(params.per_page || 30, 100)) return all;
+    }
+  },
   rest: {
     issues: {
       get: async p => {
@@ -132,7 +147,9 @@ const github = {
 // The payload is the snapshot the event carried: open, with no labels. The Action must read the issue itself.
 const payload = { action: scenario.event || 'opened', issue: { number: current.number, state: 'open', labels: [] } };
 if (scenario.label) payload.label = { name: scenario.label };
-const context = { payload, repo: { owner: 'o', repo: 'r' } };
+// The module's own repository unless the scenario names another (a copy of the Action).
+const [owner, repo] = (scenario.repo || 'armelhbobdad/bmad-module-ultracode-goal').split('/');
+const context = { payload, repo: { owner, repo } };
 const core = { info: () => {} };
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 new AsyncFunction('github', 'context', 'core', script)(github, context, core)
@@ -189,13 +206,15 @@ def _template(fp: str | None = None, severity: str | None = None, section_fp: st
 
 def _run_full(tmp_path: Path, issue: dict, others: list[dict], label_exists: bool = False, event: str = "opened",
               label: str | None = None, closed: list[dict] | None = None, release: dict | None = None,
-              closed_error: int | None = None, script: str | None = None) -> tuple[list, list]:
+              closed_error: int | None = None, script: str | None = None,
+              repo: str | None = None) -> tuple[list, list]:
     """The write calls and the read calls of one run. `closed` are the repository's closed issues, `release` its
-    latest release (None: it has none), and `script` stands in for the Action's own (a mutant)."""
+    latest release (None: it has none), `script` stands in for the Action's own (a mutant), and `repo` is the
+    OWNER/REPO the run is for (None: the module's own)."""
     (tmp_path / "script.js").write_text(_script() if script is None else script, encoding="utf-8")
     (tmp_path / "runner.js").write_text(_NODE_RUNNER, encoding="utf-8")
     scenario = {"issue": issue, "open": others, "labelExists": label_exists, "event": event, "label": label,
-                "closed": closed or [], "release": release, "closedError": closed_error}
+                "closed": closed or [], "release": release, "closedError": closed_error, "repo": repo}
     (tmp_path / "scenario.json").write_text(json.dumps(scenario), encoding="utf-8")
     done = subprocess.run(
         ["node", str(tmp_path / "runner.js"), str(tmp_path / "script.js"), str(tmp_path / "scenario.json")],
@@ -606,7 +625,7 @@ def test_a_pull_request_is_never_flagged_against(tmp_path):
 
 LATEST = {"tag_name": "v8.0.0", "published_at": "2026-11-02T10:00:00Z"}
 FIXED_AT = "2026-11-02T09:00:00Z"
-RELEASE_READ = ["release", "o", "r"]
+RELEASE_READ = ["release", "armelhbobdad", "bmad-module-ultracode-goal"]
 CLOSE = ["update", 12, "closed", "not_planned"]
 
 
@@ -631,9 +650,15 @@ def _release(tag: str, published_at: str = LATEST["published_at"]) -> dict:
 
 
 def _comment(fp: str, number: int, version: str, tag: str) -> str:
-    return (f"Auto-deduped: same fingerprint `{fp}` as #{number}, which was fixed. This report names Module Version "
+    return (f"Auto-deduped: same fingerprint `{fp}` as #{number}, which was fixed. This report gives Module Version "
             f"{version}, older than the latest release, {tag}. Please update to {tag}, and if the behaviour is still "
-            "there on that release, report it again.")
+            "there on that release, report it again in a new issue.")
+
+
+def _assert_the_twin_closes(tmp_path: Path) -> None:
+    """Twin of a doubt case: the same run with no doubt (5.0.0, #10 fixed before v8.0.0) closes the issue."""
+    calls = _run(tmp_path, _reported("5.0.0"), [], closed=[_closed(10)], release=LATEST)
+    assert calls == [["comment", 12, _comment(FP_A, 10, "5.0.0", "v8.0.0")], ["label", 12, ["duplicate"]], CLOSE]
 
 
 @needs_node
@@ -645,7 +670,7 @@ def test_an_outdated_copys_report_of_a_fixed_defect_is_closed_as_not_planned(tmp
                      RELEASE_READ]
     # The comment is public and permanent: it says the earlier issue was fixed, never that this report's behaviour is.
     comment = calls[0][2]
-    assert "#10, which was fixed." in comment and "report it again." in comment
+    assert "#10, which was fixed." in comment and "report it again in a new issue." in comment
     assert chr(0x2014) not in comment and "completed" not in comment and "is fixed" not in comment
 
 
@@ -660,12 +685,36 @@ def test_an_outdated_copys_report_of_a_fixed_defect_is_closed_as_not_planned(tmp
         # The issue template's own table, filled in, and as the web files it with CRLF line endings.
         _reported(body=_template(fp=FP_A, severity="bug", section_fp=FP_S, version="5.0.0")),
         _reported(body=_template(fp=FP_A, severity="bug", section_fp=FP_S, version="5.0.0").replace("\n", "\r\n")),
+        # Copies older than 7.2.0 were asked only for an Environment table: after a bold label, or under its own
+        # header cell, as well as under a heading.
+        _reported(body=_body(FP_S) + "\n**Environment:**\n\n| Field | Value |\n|---|---|\n| Module Version | 5.0.0 |\n"),
+        _reported(body=_body(FP_S) + "\n| Environment | |\n|---|---|\n| Date | 2026-11-02 |\n| Module Version | 5.0.0 |\n"),
+        _reported(body=_body(FP_S) + "\n### Environment\nAs the script printed it.\n\n| Module Version | 5.0.0 |\n"),
     ],
-    ids=["backticks", "leading-v", "bold-field", "no-outer-pipes-spacing", "issue-template", "issue-template-crlf"],
+    ids=["backticks", "leading-v", "bold-field", "no-outer-pipes-spacing", "issue-template", "issue-template-crlf",
+         "bold-label", "header-cell", "heading-then-text"],
 )
 def test_the_module_version_is_read_from_the_environment_table(tmp_path, issue):
     calls = _run(tmp_path, issue, [], closed=[_closed(10)], release=LATEST)
     assert calls == [["comment", 12, _comment(FP_A, 10, "5.0.0", "v8.0.0")], ["label", 12, ["duplicate"]], CLOSE]
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "table",
+    ["\n**Environment:**\n\n| Field | Value |\n|---|---|\n| Module Version | 5.0.0 |\n",
+     "\n| Environment | |\n|---|---|\n| Module Version | 5.0.0 |\n"],
+    ids=["bold-label", "header-cell"],
+)
+def test_a_reader_of_the_heading_alone_misses_an_older_copys_table(tmp_path, table):
+    """Mutant twin: read under an `## Environment` heading only, an older copy's table gives no version."""
+    script = _script()
+    reader = "const rows = environmentRows(i)"
+    assert script.count(reader) == 1
+    heading_only = script.replace(reader, "const rows = bodySection(i, 'environment')")
+    issue = _reported(body=_body(FP_S) + table)
+    assert _run(tmp_path, issue, [], closed=[_closed(10)], release=LATEST)[-1] == CLOSE
+    assert _run(tmp_path, issue, [], closed=[_closed(10)], release=LATEST, script=heading_only) == []
 
 
 @needs_node
@@ -763,17 +812,23 @@ def test_mutant_comparisons_are_caught(tmp_path, mutant):
         # A row outside the Environment section, or inside a comment, is not the table's.
         _body(FP_S) + "\n## Evidence\n| Module Version | 5.0.0 |\n\n## Environment\n| Date | 2026-11-02 |\n",
         _env_body(None) + "<!-- | Module Version | 5.0.0 | -->\n",
+        # A table after another bold label, or under another header cell, is not the Environment table.
+        _body(FP_S) + "\n**Evidence:**\n\n| Module Version | 5.0.0 |\n",
+        _body(FP_S) + "\n| Evidence | |\n|---|---|\n| Module Version | 5.0.0 |\n",
+        # A row in each of two Environment tables is two rows.
+        _env_body("5.0.0") + "\n**Environment:**\n\n| Module Version | 4.0.0 |\n",
         # The template as filed, its Module Version left blank.
         _template(fp=FP_A, severity="bug", section_fp=FP_S),
     ],
     ids=["no-environment", "no-row", "empty", "n-a", "two-parts", "one-part", "four-parts", "prerelease", "build",
          "leading-zero", "capital-v", "trailing-words", "three-cells", "two-rows", "outside-environment",
-         "in-a-comment", "template-blank"],
+         "in-a-comment", "other-label", "other-header-cell", "two-tables", "template-blank"],
 )
 def test_no_single_plain_module_version_leaves_the_issue_open_with_no_lookup(tmp_path, body):
     calls, reads = _run_full(tmp_path, _reported(body=body), [], closed=[_closed(10)], release=LATEST)
     assert calls == []
     assert reads == [["list", "open", f"health-check,{FP_A}"], ["list", "open", "health-check"]]
+    _assert_the_twin_closes(tmp_path)
 
 
 @needs_node
@@ -820,6 +875,20 @@ def test_no_earlier_completed_issue_leaves_the_issue_open_with_no_release_read(t
 )
 def test_every_doubt_after_the_body_leaves_the_issue_open(tmp_path, closed, release, closed_error):
     assert _run(tmp_path, _reported("5.0.0"), [], closed=closed, release=release, closed_error=closed_error) == []
+    _assert_the_twin_closes(tmp_path)
+
+
+@needs_node
+@pytest.mark.parametrize("repo", ["o/r", "armelhbobdad/bmad-module-ultracode-goal-fork", "someone/bmad-module-ultracode-goal"])
+def test_a_copy_of_the_action_in_another_repository_closes_nothing_this_way(tmp_path, repo):
+    """Another repository's releases are not module versions: the report stays open, and nothing is looked up."""
+    calls, reads = _run_full(tmp_path, _reported("5.0.0"), [], closed=[_closed(10)], release=LATEST, repo=repo)
+    assert calls == []
+    assert reads == [["list", "open", f"health-check,{FP_A}"], ["list", "open", "health-check"]]
+    # Twin: in the module's repository, named in any letter case, the same report is closed.
+    calls = _run(tmp_path, _reported("5.0.0"), [], closed=[_closed(10)], release=LATEST,
+                 repo="ArmelHBobdad/BMAD-Module-UltraCode-Goal")
+    assert calls == [["comment", 12, _comment(FP_A, 10, "5.0.0", "v8.0.0")], ["label", 12, ["duplicate"]], CLOSE]
 
 
 @needs_node
@@ -838,6 +907,28 @@ def test_an_earlier_open_issue_still_takes_the_report_with_no_closed_lookup(tmp_
     assert calls[0][2].startswith(f"Auto-deduped: same fingerprint `{FP_A}` as #11.")
     assert calls[1:] == [["label", 12, ["duplicate"]], CLOSE, ["react", 11, "+1"]]
     assert reads == [["list", "open", f"health-check,{FP_A}"]]
+    # Twin: with no earlier open issue, the same report is closed against the fixed one.
+    _assert_the_twin_closes(tmp_path)
+
+
+def _closed_pages(fixed_number: int) -> list[dict]:
+    """A full first page of later closed duplicates, then the fixed issue alone on page 2 (newest first)."""
+    return [_closed(n, reason="not_planned") for n in range(400, 500)] + [_closed(fixed_number)]
+
+
+@needs_node
+def test_a_fixed_issue_past_the_first_page_of_closed_issues_is_found(tmp_path):
+    report = _issue(600, FP_A, FP_S, body=_env_body("5.0.0"))
+    calls, reads = _run_full(tmp_path, report, [], closed=_closed_pages(3), release=LATEST)
+    assert calls == [["comment", 600, _comment(FP_A, 3, "5.0.0", "v8.0.0")], ["label", 600, ["duplicate"]],
+                     ["update", 600, "closed", "not_planned"]]
+    assert reads.count(["list", "closed", f"health-check,{FP_A}"]) == 2
+    # Mutant twin: a reader of the first page alone misses the fixed issue and leaves the report open.
+    script = _script()
+    paged = "closed = await github.paginate("
+    assert script.count(paged) == 1
+    one_page = script.replace(paged, "closed = await (async (fn, p) => (await fn(p)).data)(")
+    assert _run(tmp_path, report, [], closed=_closed_pages(3), release=LATEST, script=one_page) == []
 
 
 def test_the_action_never_closes_as_completed():
@@ -848,9 +939,16 @@ def test_the_action_never_closes_as_completed():
     assert script.count("'completed'") == 1 and "m.state_reason === 'completed'" in script
 
 
-def test_the_script_takes_no_expression_from_the_event():
-    """The issue text is the reporter's: the script reads it from the API at run time, never through `${{ }}`."""
+@needs_node
+def test_the_reporters_text_reaches_no_expression_and_no_comment(tmp_path):
+    """The issue text is the reporter's: the script reads it from the API at run time, never through `${{ }}`, and
+    the comment it posts holds only the checked fingerprint, issue number, version numbers and release tag."""
     assert "${{" not in _script()
+    hostile = "${{ secrets.GITHUB_TOKEN }} `$(touch pwned)` [link](https://example.invalid)"
+    body = _body(FP_S) + f"\n## Environment\n| Field | Value |\n|---|---|\n| OS | {hostile} |\n| Module Version | 5.0.0 |\n"
+    issue = {**_reported(body=body), "title": f"[health-check][bug][{FP_A}] {hostile}"}
+    calls = _run(tmp_path, issue, [], closed=[_closed(10, title=hostile)], release=LATEST)
+    assert calls == [["comment", 12, _comment(FP_A, 10, "5.0.0", "v8.0.0")], ["label", 12, ["duplicate"]], CLOSE]
 
 
 def test_the_release_is_read_with_contents_read_and_nothing_broader():
@@ -865,17 +963,23 @@ def test_the_header_and_the_docs_say_an_outdated_report_is_closed_as_not_planned
     assert "an earlier issue with the same fingerprint that was closed as completed" in flowed
     assert "adds the `duplicate` label and closes the new issue as not planned. Never as completed" in flowed
     assert "Any doubt leaves the issue open and goes on to step 5" in flowed
+    assert ("Environment table (under an `Environment` heading, after a bold `Environment` label, or headed by an "
+            "`Environment` cell: copies have written it all three ways)") in flowed
     docs = " ".join(DOCS_MD.read_text(encoding="utf-8").split())
     level3 = docs[docs.index("3. **Server-side**"):]
     level3 = level3[:level3.index("One limit:")]
     assert ("but an earlier one with it was closed as completed, and the new issue's Environment table gives a Module "
-            "Version lower than the repository's latest release (compared number by number)") in level3
+            "Version lower than the repository's latest release (compared number by number), the copy that filed it "
+            "may lack the fix") in level3
     assert ("the Action comments that the earlier issue was fixed, names the latest release, and asks the reporter to "
             "update and to report again if the behaviour is still there on that release, then adds the `duplicate` "
             "label and closes the issue as not planned. It never closes one as completed") in level3
-    assert ("A Module Version that is missing or not a plain `X.Y.Z`, a repository with no release, a fix closed after "
-            "the latest release was published, or a failed call leaves the issue open for a maintainer.") in level3
-    assert "A copy of the Action compares with the latest release of the repository it runs in" in level3
+    assert ("A Module Version that is missing, given twice or not a plain `X.Y.Z`, a repository with no release or whose "
+            "latest release's tag is not a plain `X.Y.Z`, a fix closed after the latest release was published, or a "
+            "failed call leaves the issue open for a maintainer.") in level3
+    assert ("A copy of the Action in another repository closes nothing this way, since only this module's repository "
+            "releases module versions.") in level3
+    assert "a repository other than this module's (a copy of the Action elsewhere" in flowed
 
 
 # --- the job ------------------------------------------------------------------
