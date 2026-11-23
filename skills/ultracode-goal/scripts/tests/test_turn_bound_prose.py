@@ -378,16 +378,17 @@ def test_troubleshooting_predicate_rejects_the_section_without_it():
 
 
 # Issue 269 read a run's high counts as workflow agents' stops. The hook books
-# every stop it is handed to the current story, and what the troubleshooting
-# guide did not say is what that takes in besides the story's work: each
-# response of the conductor, report-backs included, and the stops of any other
-# session that runs the project's hooks. The section now says so, and what to
-# do about each.
+# the stops of every session that runs it to the current story, and what the
+# troubleshooting guide did not say is what that takes in besides the story's
+# work: each response of the conductor, report-backs included, and the stops of
+# any other session that runs the project's hooks. The section now says so, and
+# what to do about each. It says nothing of whether an agent's own finish
+# reaches the hook.
 _TROUBLE_COUNT_PARTS = (
-    "**What the count includes.** The hook books every stop it is handed to the story `.current-story` names and "
-    "never asks whose stop it is",
-    "**Every response of the conductor.** Each report-back of a workflow or a background task starts a response, "
-    "and that response ends in a stop the hook counts.",
+    "**What the count includes.** The hook books the stops of every session that runs it to the story "
+    "`.current-story` names, not only the conductor's",
+    "**Every response of the conductor.** Each report-back of a workflow or a background task that lands while "
+    "the session is idle starts a response, and that response ends in a stop the hook counts.",
     "**The stops of any other Claude Code session on the project while a story is current.**",
     "A second window counts, and so does a session that an agent or a skill starts as its own process",
     "every session that loads that file runs it and books its stops to the current story",
