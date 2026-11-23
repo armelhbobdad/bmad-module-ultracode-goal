@@ -131,7 +131,14 @@ def test_the_disarm_binds_a_commit_only():
     refused = next(p for p in step2.split("\n\n") if p.startswith("**A refused settings write.**"))
     # "Any other": a guard that cannot start, which the sentence before it
     # routes to step 5 whatever it refuses, is no unneeded disarm (#211 review 2).
-    assert "Any other refused write of a disarm the pass does not need (the paragraph above) is no stop" in refused
+    assert 'Any other refused write of a disarm the pass does not need (see "When the disarm applies" above) is no stop' in refused
+    # The reference names its paragraph, which must stand above: a bare "the
+    # paragraph above" pointed at whatever paragraph came to sit there.
+    paragraphs = step2.split("\n\n")
+    named = next(i for i, p in enumerate(paragraphs) if p.startswith("**When the disarm applies.**"))
+    referring = next(i for i, p in enumerate(paragraphs) if p.startswith("**A refused settings write.**"))
+    assert named < referring
+    assert "(the paragraph above)" not in refused
     # Every other refusal still stops.
     assert "Treat any other refusal of the write" in refused and "as a stop" in refused
 
