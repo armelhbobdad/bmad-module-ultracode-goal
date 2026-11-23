@@ -120,6 +120,19 @@ If you need the session working before you can fix the cause, remove the guard's
 
 **Its documented limitation.** A Stop hook fires only when Claude is *already* trying to stop: it **cannot interrupt a `/goal` condition mid-turn**. So at this layer the ceiling is advisory; what can stop the story is the conductor's re-loop budget checked against this count, plus the in-condition turn clause when you started a `/goal`. In a single attended or `-H` session with no `/goal` of yours, nothing bounds re-loops spent inside one response; only `drive_epic.py` spawns have a hard backstop, their `--session-timeout` (unless set to `0`). If a story keeps consuming budget, that is the signal to re-scope, split, or hand it off, not to raise the budget and hope.
 
+**What the count includes.** The hook books the stops of every session that runs it to the story `.current-story` names, not only the conductor's, so the count holds more than the story's own work:
+
+- **Every response of the conductor.** Each report-back of a workflow or a background task that lands while the session is idle starts a response, and that response ends in a stop the hook counts. An Epic whose stages each run as a workflow spends a turn on every stage's report-back, on top of the responses that launch the work.
+- **The stops of any other Claude Code session on the project while a story is current.** A second window counts, and so does a session that an agent or a skill starts as its own process (a headless `claude -p` run, say). Preflight writes the hook into the project's `.claude/settings.local.json`, so every session that loads that file runs it and books its stops to the current story.
+
+**What you do.**
+
+- For an Epic whose stages run as workflows, raise `max_turns_per_story` (25 by default) in your project's `_bmad/custom/ultracode-goal.toml`, or for yourself alone in `ultracode-goal.user.toml` beside it, under the `[workflow]` table header. Set it before the Epic's preflight, which writes the ceiling into the hook's command. A value raised mid-Epic reaches the conductor's checks at the next invocation, while the hook's overrun message and marker keep the ceiling preflight wrote until the hooks are written again.
+- Keep other Claude Code sessions on the project closed while a story is current.
+- Close a `budget-overrun` escalation with `/ucg-resolve`. Closing it resets that story's turn counter, so the resume drives the story instead of escalating it again before it does any work.
+
+Raising the ceiling for these turns is not raising the budget and hoping: it makes room for turns that are not the story's work. A story that still runs past a raised ceiling on its own work is the signal to re-scope, split or hand it off.
+
 ## Resume after an interruption
 
 **Symptom.** A run was interrupted (Ctrl-C, a crash, a compaction) and you want to continue rather than restart.

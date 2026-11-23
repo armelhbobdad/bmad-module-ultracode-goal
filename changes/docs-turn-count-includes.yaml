@@ -1,0 +1,4 @@
+type: docs
+summary: |
+  Troubleshooting's "Budget exhausted mid-story" entry now says what the Stop hook's turn count includes besides the story's own work. The hook books the stops of every session that runs it to the story `.current-story` names, so the count takes in every response of the conductor, each report-back of a workflow or a background task that lands while the session is idle starting one, and the stops of any other Claude Code session on the project while a story is current: a second window, or a session that an agent or a skill starts as its own process. The entry also says what to do: raise `max_turns_per_story` for an Epic whose stages run as workflows, before the Epic's preflight writes the ceiling into the hook's command; keep other sessions on the project closed while a story is current; and close a `budget-overrun` escalation with `/ucg-resolve`, which resets that story's turn counter.
+issues: [269]
