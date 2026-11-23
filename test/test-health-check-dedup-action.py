@@ -35,21 +35,32 @@ Covers:
     `possible-duplicate` label, then one "Possible duplicate" comment, and is
     never closed or upvoted; the earlier issue's own run, an issue already
     flagged, and one sharing nothing get no call
-  - With no earlier open issue, a report whose Environment table gives a
-    Module Version lower than the latest release (compared number by number,
-    with mutant twins for a comparison as text and for an equal version), of a
-    fingerprint an earlier issue was closed as completed for, is commented on
-    in the agreed words, labeled `duplicate` and closed as not planned, never
-    as completed; the Environment table is read under a heading, after a bold
-    label or under its own header cell, as copies have written it; a fixed
-    issue past the first page of closed issues is found (with a one-page
-    mutant twin); every doubt (no single plain X.Y.Z version, no completed
-    earlier issue, no release, a tag that is not X.Y.Z, a close after the
-    release, a failed call) and an equal or newer version leave it open and
-    go on to the possible-duplicate flag, each beside a twin run with no
+  - With no earlier open issue, a report of a fingerprint an earlier issue was
+    closed as completed for is measured against the release that carried the
+    fix: the earliest stable release published after the most recent
+    completed close (drafts and prereleases skipped, the release list read
+    page by page, with a one-page mutant twin, and mutant twins for the latest
+    release in its place, for the latest release after the close and for a
+    prerelease counted). A report whose Environment table gives a Module
+    Version older than that release (compared number by number, with mutant
+    twins for a comparison as text and for an equal version) is commented on
+    in the agreed words, naming that release and the latest one, labeled
+    `duplicate` and closed as not planned, never as completed; one as new as
+    that release, or newer, stays open and goes on to the possible-duplicate
+    flag. On issue #250's timeline (closed as completed shortly before v8.0.0
+    was published) a report from 5.0.0 is closed and one from 8.0.0 stays
+    open. The Environment table is read under a heading, after a bold label or
+    under its own header cell, as copies have written it; a fixed issue past
+    the first page of closed issues is found (with a one-page mutant twin);
+    every doubt (no single plain X.Y.Z version, no completed earlier issue, a
+    close with no time, no stable release after it, a release list that
+    cannot be read, a stable release with no publish time or published at
+    the instant of the close, two at one instant, a tag that is not X.Y.Z, a
+    latest release that may lack the fix, a failed call) leaves it open and
+    goes on to the possible-duplicate flag, each beside a twin run with no
     doubt that closes it, and a copy of the Action in another repository
     closes nothing this way; the workflow grants `contents: read` and nothing
-    broader for the release, and its script holds no `${{ }}`
+    broader for the releases, and its script holds no `${{ }}`
   - Runs for one issue share a concurrency group, so they never overlap; a
     newer pending run may replace an older pending one
   - The title and the body header `health_check_fp.py fingerprint` prints
@@ -115,6 +126,14 @@ const getLatestRelease = async p => {
   if (scenario.release.status) throw failure(scenario.release.status);
   return { data: scenario.release };
 };
+// The repository's releases in the scenario's order (newest first, as GitHub lists them), one page at a time as
+// issues are; a `releasesError` is the listing failing with that status.
+const listReleases = async ({ owner, repo, page = 1, per_page = 30 }) => {
+  reads.push(['releases', owner, repo]);
+  if (scenario.releasesError) throw failure(scenario.releasesError);
+  const size = Math.min(per_page, 100);
+  return { data: scenario.releases.slice((page - 1) * size, page * size) };
+};
 const github = {
   // Every page in turn, as octokit's paginate follows the next-page link until there is none.
   paginate: async (fn, params) => {
@@ -141,7 +160,7 @@ const github = {
       },
     },
     reactions: { createForIssue: async p => { calls.push(['react', p.issue_number, p.content]); } },
-    repos: { getLatestRelease },
+    repos: { getLatestRelease, listReleases },
   },
 };
 // The payload is the snapshot the event carried: open, with no labels. The Action must read the issue itself.
@@ -207,14 +226,19 @@ def _template(fp: str | None = None, severity: str | None = None, section_fp: st
 def _run_full(tmp_path: Path, issue: dict, others: list[dict], label_exists: bool = False, event: str = "opened",
               label: str | None = None, closed: list[dict] | None = None, release: dict | None = None,
               closed_error: int | None = None, script: str | None = None,
-              repo: str | None = None) -> tuple[list, list]:
+              repo: str | None = None, releases: list[dict] | None = None,
+              releases_error: int | None = None) -> tuple[list, list]:
     """The write calls and the read calls of one run. `closed` are the repository's closed issues, `release` its
-    latest release (None: it has none), `script` stands in for the Action's own (a mutant), and `repo` is the
-    OWNER/REPO the run is for (None: the module's own)."""
+    latest release (None: it has none), `releases` its release list, newest first (None: the latest release alone,
+    or no release when reading the latest one fails), `script` stands in for the Action's own (a mutant), and
+    `repo` is the OWNER/REPO the run is for (None: the module's own)."""
+    if releases is None:
+        releases = [release] if release and "status" not in release else []
     (tmp_path / "script.js").write_text(_script() if script is None else script, encoding="utf-8")
     (tmp_path / "runner.js").write_text(_NODE_RUNNER, encoding="utf-8")
     scenario = {"issue": issue, "open": others, "labelExists": label_exists, "event": event, "label": label,
-                "closed": closed or [], "release": release, "closedError": closed_error, "repo": repo}
+                "closed": closed or [], "release": release, "closedError": closed_error, "repo": repo,
+                "releases": releases, "releasesError": releases_error}
     (tmp_path / "scenario.json").write_text(json.dumps(scenario), encoding="utf-8")
     done = subprocess.run(
         ["node", str(tmp_path / "runner.js"), str(tmp_path / "script.js"), str(tmp_path / "scenario.json")],
@@ -626,6 +650,7 @@ def test_a_pull_request_is_never_flagged_against(tmp_path):
 LATEST = {"tag_name": "v8.0.0", "published_at": "2026-11-02T10:00:00Z"}
 FIXED_AT = "2026-11-02T09:00:00Z"
 RELEASE_READ = ["release", "armelhbobdad", "bmad-module-ultracode-goal"]
+RELEASES_READ = ["releases", "armelhbobdad", "bmad-module-ultracode-goal"]
 CLOSE = ["update", 12, "closed", "not_planned"]
 
 
@@ -649,10 +674,12 @@ def _release(tag: str, published_at: str = LATEST["published_at"]) -> dict:
     return {"tag_name": tag, "published_at": published_at}
 
 
-def _comment(fp: str, number: int, version: str, tag: str) -> str:
-    return (f"Auto-deduped: same fingerprint `{fp}` as #{number}, which was fixed. This report gives Module Version "
-            f"{version}, older than the latest release, {tag}. Please update to {tag}, and if the behaviour is still "
-            "there on that release, report it again in a new issue.")
+def _comment(fp: str, number: int, version: str, fix: str, latest: str | None = None) -> str:
+    """The agreed words: the fix release `fix` names the release that carried the fix, `latest` (None: `fix`) the
+    latest release the reporter is asked to update to."""
+    return (f"Auto-deduped: same fingerprint `{fp}` as #{number}, fixed in {fix}. This report gives Module Version "
+            f"{version}, older than {fix}. Please update to the latest release, {latest or fix}, and if the behaviour "
+            "is still there on that release, report it again in a new issue.")
 
 
 def _assert_the_twin_closes(tmp_path: Path) -> None:
@@ -665,12 +692,13 @@ def _assert_the_twin_closes(tmp_path: Path) -> None:
 def test_an_outdated_copys_report_of_a_fixed_defect_is_closed_as_not_planned(tmp_path):
     calls, reads = _run_full(tmp_path, _reported("5.0.0"), [], closed=[_closed(10)], release=LATEST)
     assert calls == [["comment", 12, _comment(FP_A, 10, "5.0.0", "v8.0.0")], ["label", 12, ["duplicate"]], CLOSE]
-    # The open search found nothing, then the closed issues of the same labels were read, then the release.
+    # The open search found nothing, then the closed issues of the same labels were read, then the releases, to find
+    # the one that carried the fix, then the latest release, which the comment names.
     assert reads == [["list", "open", f"health-check,{FP_A}"], ["list", "closed", f"health-check,{FP_A}"],
-                     RELEASE_READ]
+                     RELEASES_READ, RELEASE_READ]
     # The comment is public and permanent: it says the earlier issue was fixed, never that this report's behaviour is.
     comment = calls[0][2]
-    assert "#10, which was fixed." in comment and "report it again in a new issue." in comment
+    assert "#10, fixed in v8.0.0." in comment and "report it again in a new issue." in comment
     assert chr(0x2014) not in comment and "completed" not in comment and "is fixed" not in comment
 
 
@@ -735,6 +763,7 @@ def test_the_latest_fix_is_the_one_linked(tmp_path):
 
 # Versions compared number by number: each pair below is older, then not older, read as numbers. The pairs marked
 # `text` get the other answer when the parts are compared as text, and `equal` when an equal version counts as older.
+# Each tag is the repository's only release, published after the fix: the release that carried it and the latest.
 OLDER = [
     ("5.0.0", "v8.0.0", ""), ("7.99.99", "v8.0.0", ""), ("0.0.1", "v8.0.0", ""), ("8.0.0", "v8.0.1", ""),
     ("8.0.0", "8.0.1", ""), ("9.0.0", "v10.0.0", "text"), ("8.9.0", "v8.10.0", "text"), ("8.0.9", "v8.0.10", "text"),
@@ -747,25 +776,30 @@ NOT_OLDER = [
 
 
 def _closes(tmp_path: Path, version: str, tag: str, script: str | None = None) -> bool:
-    calls = _run(tmp_path, _reported(version), [], closed=[_closed(10)], release=_release(tag), script=script)
+    """Whether a report from `version` is closed when `tag` carried the fix. The latest release is a newer one, so a
+    mutant comparison changes only the report's answer, never the check that the latest release holds the fix."""
+    newest = _release("v99.0.0", published_at="2026-11-02T11:00:00Z")
+    calls = _run(tmp_path, _reported(version), [], closed=[_closed(10)], release=newest,
+                 releases=[newest, _release(tag)], script=script)
     assert all(c[0] != "update" or c[3] == "not_planned" for c in calls), "never a completed close"
     return CLOSE in calls
 
 
 @needs_node
 @pytest.mark.parametrize("version, tag, _twin", OLDER, ids=[f"{v}<{t}" for v, t, _ in OLDER])
-def test_a_version_older_than_the_latest_release_is_closed(tmp_path, version, tag, _twin):
+def test_a_version_older_than_the_fix_release_is_closed(tmp_path, version, tag, _twin):
     calls = _run(tmp_path, _reported(version), [], closed=[_closed(10)], release=_release(tag))
     assert calls == [["comment", 12, _comment(FP_A, 10, version, tag)], ["label", 12, ["duplicate"]], CLOSE]
 
 
 @needs_node
 @pytest.mark.parametrize("version, tag, _twin", NOT_OLDER, ids=[f"{v}>={t}" for v, t, _ in NOT_OLDER])
-def test_a_version_equal_to_or_newer_than_the_latest_release_stays_open(tmp_path, version, tag, _twin):
+def test_a_version_equal_to_or_newer_than_the_fix_release_stays_open(tmp_path, version, tag, _twin):
     calls, reads = _run_full(tmp_path, _reported(version), [], closed=[_closed(10)], release=_release(tag))
     assert calls == []
-    # It got as far as the comparison: the release was read.
-    assert reads[-2:] == [RELEASE_READ, ["list", "open", "health-check"]]
+    # It got as far as the comparison: the releases were read, and the latest release, which only a close names, not.
+    assert reads[-2:] == [RELEASES_READ, ["list", "open", "health-check"]]
+    assert RELEASE_READ not in reads
 
 
 # The Action's comparison, and two mutants of it the tables above must catch.
@@ -850,31 +884,37 @@ def test_no_single_plain_module_version_leaves_the_issue_open_with_no_lookup(tmp
 def test_no_earlier_completed_issue_leaves_the_issue_open_with_no_release_read(tmp_path, closed):
     calls, reads = _run_full(tmp_path, _reported("5.0.0"), [], closed=closed, release=LATEST)
     assert calls == []
-    assert RELEASE_READ not in reads and ["list", "closed", f"health-check,{FP_A}"] in reads
+    assert RELEASE_READ not in reads and RELEASES_READ not in reads
+    assert ["list", "closed", f"health-check,{FP_A}"] in reads
 
 
 @needs_node
 @pytest.mark.parametrize(
-    "closed, release, closed_error",
+    "closed, release, closed_error, releases",
     [
-        ([_closed(10)], None, None),
-        ([_closed(10)], {"status": 500}, None),
-        ([_closed(10)], {"status": 403}, None),
-        ([_closed(10)], None, 502),
-        ([_closed(10)], _release("v9.0.0-rc.1"), None),
-        ([_closed(10)], _release("latest"), None),
-        ([_closed(10)], {"published_at": LATEST["published_at"]}, None),
-        # The fix closed after the latest release was published may not be in it.
-        ([_closed(10)], _release("v8.0.0", published_at="2026-11-02T08:00:00Z"), None),
-        ([_closed(10)], {"tag_name": "v8.0.0"}, None),
-        ([_closed(10, closed_at=None)], LATEST, None),
-        ([_closed(10), _closed(4, closed_at="2026-11-03T09:00:00Z")], LATEST, None),
+        # The release list holds v8.0.0, published after the fix, so the doubt is the latest release's.
+        ([_closed(10)], None, None, [LATEST]),
+        ([_closed(10)], {"status": 500}, None, [LATEST]),
+        ([_closed(10)], {"status": 403}, None, [LATEST]),
+        ([_closed(10)], None, 502, None),
+        ([_closed(10)], _release("v9.0.0-rc.1"), None, [LATEST]),
+        ([_closed(10)], _release("latest"), None, [LATEST]),
+        ([_closed(10)], {"published_at": LATEST["published_at"]}, None, [LATEST]),
+        # The fix closed after the latest release was published may not be in it: no release follows the close.
+        ([_closed(10)], _release("v8.0.0", published_at="2026-11-02T08:00:00Z"), None, None),
+        ([_closed(10)], {"tag_name": "v8.0.0"}, None, [LATEST]),
+        ([_closed(10, closed_at=None)], LATEST, None, None),
+        # Beside a close with a time, one with none still leaves the most recent close unknown.
+        ([_closed(10), _closed(4, closed_at=None)], LATEST, None, None),
+        ([_closed(10), _closed(4, closed_at="2026-11-03T09:00:00Z")], LATEST, None, None),
     ],
     ids=["no-release", "release-500", "release-403", "closed-list-502", "prerelease-tag", "tag-not-a-version",
-         "no-tag", "fix-after-release", "no-publish-date", "no-close-date", "a-fix-after-release"],
+         "no-tag", "fix-after-release", "no-publish-date", "no-close-date", "a-close-with-no-date",
+         "a-fix-after-release"],
 )
-def test_every_doubt_after_the_body_leaves_the_issue_open(tmp_path, closed, release, closed_error):
-    assert _run(tmp_path, _reported("5.0.0"), [], closed=closed, release=release, closed_error=closed_error) == []
+def test_every_doubt_after_the_body_leaves_the_issue_open(tmp_path, closed, release, closed_error, releases):
+    assert _run(tmp_path, _reported("5.0.0"), [], closed=closed, release=release, closed_error=closed_error,
+                releases=releases) == []
     _assert_the_twin_closes(tmp_path)
 
 
@@ -931,6 +971,284 @@ def test_a_fixed_issue_past_the_first_page_of_closed_issues_is_found(tmp_path):
     assert _run(tmp_path, report, [], closed=_closed_pages(3), release=LATEST, script=one_page) == []
 
 
+# --- the release that carried the fix ----------------------------------------------
+
+# A real fix's timeline in this repository, as GitHub gives it: issue #250 was closed as completed twenty minutes
+# before v8.0.0 was published, so v8.0.0 carried its fix, and a report from 8.0.0 may show a regression of it. The
+# releases are the repository's up to v8.0.1, listed newest first as GitHub lists them, its two prereleases among them.
+FIX_250_AT = "2026-11-21T15:39:21Z"
+
+
+def _rel(tag: str, published_at: str | None, draft: bool = False, prerelease: bool = False) -> dict:
+    return {"tag_name": tag, "published_at": published_at, "draft": draft, "prerelease": prerelease}
+
+
+RELEASES_250 = [
+    _rel("v8.0.1", "2026-11-23T07:14:53Z"), _rel("v8.0.0", "2026-11-21T15:59:12Z"),
+    _rel("v7.3.0", "2026-11-17T18:38:35Z"), _rel("v7.2.0", "2026-11-16T17:22:34Z"),
+    _rel("v7.1.0", "2026-11-08T12:58:11Z"), _rel("v7.0.0", "2026-11-07T11:14:27Z"),
+    _rel("v6.0.0", "2026-11-06T09:16:25Z"), _rel("v5.0.0", "2026-11-04T04:46:20Z"),
+    _rel("v4.1.0", "2026-11-02T21:09:15Z"), _rel("v4.0.0", "2026-10-30T20:39:02Z"),
+    _rel("v3.2.0", "2026-10-29T19:31:16Z"), _rel("v3.1.0", "2026-10-27T22:33:53Z"),
+    _rel("v3.0.0", "2026-10-25T23:08:04Z"), _rel("v3.0.0-rc.1", "2026-10-25T19:00:11Z", prerelease=True),
+    _rel("v2.3.0", "2026-10-16T18:54:25Z"), _rel("v2.2.0", "2026-08-15T12:05:58Z"),
+    _rel("v2.1.0", "2026-08-07T07:27:20Z"), _rel("v2.0.0", "2026-08-02T22:01:29Z"),
+    _rel("v1.0.1", "2026-07-28T19:21:08Z"), _rel("v1.0.0", "2026-07-28T15:23:37Z"),
+    _rel("v0.5.1", "2026-07-12T11:43:38Z"), _rel("v0.5.0", "2026-07-12T11:19:01Z"),
+    _rel("v0.4.0", "2026-06-28T07:10:16Z"), _rel("v0.3.0", "2026-06-04T18:40:26Z"),
+    _rel("v0.2.0", "2026-06-04T15:43:37Z"), _rel("v0.1.1-alpha.0", "2026-06-04T09:39:21Z", prerelease=True),
+    _rel("v0.1.0", "2026-06-04T09:19:33Z"),
+]
+LATEST_250 = RELEASES_250[0]
+# The report, numbered after the fixed issue, and an earlier open issue that shares its section fingerprint, so a
+# report left open is seen to reach the possible-duplicate flag.
+N = 281
+KEYLESS = _issue(9, FP_S, None)
+CLOSE_N = ["update", N, "closed", "not_planned"]
+FLAG_READ = ["list", "open", "health-check"]
+
+
+def _run_250(tmp_path: Path, version: str, closed: list[dict] | None = None, releases: list[dict] | None = None,
+             release: dict | None = None, **kwargs) -> tuple[list, list]:
+    """One run for a report giving `version`, on the #250 timeline unless told otherwise."""
+    return _run_full(tmp_path, _issue(N, FP_A, FP_S, body=_env_body(version)), [KEYLESS],
+                     closed=[_closed(250, closed_at=FIX_250_AT)] if closed is None else closed,
+                     release=LATEST_250 if release is None else release,
+                     releases=RELEASES_250 if releases is None else releases, **kwargs)
+
+
+def _close_calls(number: int, version: str, fix: str = "v8.0.0", latest: str = "v8.0.1") -> list:
+    return [["comment", N, _comment(FP_A, number, version, fix, latest)], ["label", N, ["duplicate"]], CLOSE_N]
+
+
+@needs_node
+@pytest.mark.parametrize("version", ["5.0.0", "7.3.0", "7.99.99"])
+def test_a_report_older_than_the_release_that_carried_the_fix_is_closed(tmp_path, version):
+    calls, reads = _run_250(tmp_path, version)
+    assert calls == _close_calls(250, version)
+    # The releases gave the one that carried the fix, then the latest release gave the one the comment names.
+    assert reads[-2:] == [RELEASES_READ, RELEASE_READ]
+
+
+@needs_node
+def test_the_comment_names_the_release_that_carried_the_fix_and_the_latest_one(tmp_path):
+    calls, _ = _run_250(tmp_path, "5.0.0")
+    assert calls[0] == ["comment", N, (
+        "Auto-deduped: same fingerprint `fp-aaaaaaa` as #250, fixed in v8.0.0. This report gives Module Version 5.0.0, "
+        "older than v8.0.0. Please update to the latest release, v8.0.1, and if the behaviour is still there on that "
+        "release, report it again in a new issue.")]
+    assert chr(0x2014) not in calls[0][2]
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "version, releases, latest",
+    [
+        ("8.0.0", RELEASES_250, LATEST_250),
+        # Between the release that carried the fix and the latest one.
+        ("8.1.0", [_rel("v8.2.0", "2026-11-25T09:00:00Z"), _rel("v8.1.0", "2026-11-24T09:00:00Z"), *RELEASES_250],
+         _rel("v8.2.0", "2026-11-25T09:00:00Z")),
+    ],
+    ids=["the-fix-release", "between-the-fix-and-the-latest"],
+)
+def test_a_report_as_new_as_the_release_that_carried_the_fix_stays_open_and_is_flagged(tmp_path, version, releases,
+                                                                                        latest):
+    """A copy that holds the fix and still meets the defect may show a regression of it: it is not outdated."""
+    calls, reads = _run_250(tmp_path, version, releases=releases, release=latest)
+    _assert_flagged(calls, N, "#9", FP_S)
+    assert reads[-2:] == [RELEASES_READ, FLAG_READ]
+    # Twin: a report older than the release that carried the fix, on the same releases, is closed.
+    calls, _ = _run_250(tmp_path, "7.3.0", releases=releases, release=latest)
+    assert calls == _close_calls(250, "7.3.0", latest=latest["tag_name"])
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "skipped",
+    [
+        # GitHub lists a draft with no publish time; one with a time is still no release.
+        _rel("v7.5.0", None, draft=True),
+        _rel("v7.5.0", "2026-11-21T15:45:00Z", draft=True),
+        # A prerelease is no stable release, whether its tag reads as a plain version or not.
+        _rel("v7.5.0", "2026-11-21T15:45:00Z", prerelease=True),
+        _rel("v8.0.0-rc.1", "2026-11-21T15:45:00Z", prerelease=True),
+    ],
+    ids=["draft", "draft-with-a-time", "prerelease-plain-tag", "prerelease-tag"],
+)
+def test_drafts_and_prereleases_are_skipped_when_finding_the_fix_release(tmp_path, skipped):
+    """Published between the close and v8.0.0, the skipped release is never taken for the one that carried the fix."""
+    releases = [*RELEASES_250[:2], skipped, *RELEASES_250[2:]]
+    for version in ("5.0.0", "7.5.0"):
+        calls, _ = _run_250(tmp_path, version, releases=releases)
+        assert calls == _close_calls(250, version), version
+
+
+def _paged_releases() -> list[dict]:
+    """A full first page of releases published after v8.0.0 (newest first), then v8.0.0 and the older ones on page 2."""
+    later = [_rel(f"v9.0.{k}", f"2026-11-22T{k // 60:02d}:{k % 60:02d}:00Z") for k in range(99, -1, -1)]
+    return later + RELEASES_250[1:]
+
+
+@needs_node
+def test_a_fix_release_on_the_second_page_of_releases_is_found(tmp_path):
+    releases = _paged_releases()
+    latest = releases[0]
+    calls, reads = _run_250(tmp_path, "8.0.0", releases=releases, release=latest)
+    _assert_flagged(calls, N, "#9", FP_S)
+    assert reads.count(RELEASES_READ) == 2
+    calls, _ = _run_250(tmp_path, "7.3.0", releases=releases, release=latest)
+    assert calls == _close_calls(250, "7.3.0", latest="v9.0.99")
+    # Mutant twin: a reader of the first page alone takes v9.0.0 for the release that carried the fix, and closes the
+    # report from 8.0.0, which holds the fix.
+    script = _script()
+    paged = "releases = await github.paginate("
+    assert script.count(paged) == 1
+    one_page = script.replace(paged, "releases = await (async (fn, p) => (await fn(p)).data)(")
+    calls, _ = _run_250(tmp_path, "8.0.0", releases=releases, release=latest, script=one_page)
+    assert calls == _close_calls(250, "8.0.0", fix="v9.0.0", latest="v9.0.99")
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "releases, latest",
+    [
+        # Only a draft and a prerelease follow the close, and the latest release predates it.
+        ([_rel("v8.0.0", None, draft=True), _rel("v8.0.0-rc.1", "2026-11-21T15:45:00Z", prerelease=True),
+          *RELEASES_250[2:]], RELEASES_250[2]),
+        # The list shows no release after the close, though the latest release, read apart, was published after it.
+        (RELEASES_250[2:], LATEST_250),
+    ],
+    ids=["a-draft-and-a-prerelease-only", "none-listed"],
+)
+def test_no_release_after_the_close_leaves_the_report_open(tmp_path, releases, latest):
+    """No release holds the fix yet: the report stays open, goes on to the flag, and no latest release is read."""
+    calls, reads = _run_250(tmp_path, "5.0.0", releases=releases, release=latest)
+    _assert_flagged(calls, N, "#9", FP_S)
+    assert reads[-2:] == [RELEASES_READ, FLAG_READ]
+    assert RELEASE_READ not in reads
+    # Twin: once v8.0.0 is listed after the close, the same report is closed.
+    assert _run_250(tmp_path, "5.0.0")[0] == _close_calls(250, "5.0.0")
+
+
+@needs_node
+@pytest.mark.parametrize("status", [403, 404, 500, 502])
+def test_a_release_list_that_cannot_be_read_leaves_the_report_open(tmp_path, status):
+    calls, reads = _run_250(tmp_path, "5.0.0", releases_error=status)
+    _assert_flagged(calls, N, "#9", FP_S)
+    assert reads[-2:] == [RELEASES_READ, FLAG_READ]
+    assert RELEASE_READ not in reads
+    assert _run_250(tmp_path, "5.0.0")[0] == _close_calls(250, "5.0.0")
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "extra",
+    [
+        # A stable release with no publish time could be the first one after the close.
+        _rel("v7.3.1", None),
+        # A stable release published at the very instant of the close may hold the fix or not.
+        _rel("v7.3.2", FIX_250_AT),
+        # Two stable releases published at one instant leave no earliest one.
+        _rel("v7.4.0", "2026-11-21T15:59:12Z"),
+        # The first stable release after the close has a tag that is not a plain X.Y.Z.
+        _rel("v8.0.0-hotfix.1", "2026-11-21T15:45:00Z"),
+        _rel("nightly", "2026-11-21T15:45:00Z"),
+    ],
+    ids=["no-publish-time", "at-the-close", "one-instant", "suffixed-tag", "tag-not-a-version"],
+)
+def test_a_doubt_about_the_fix_release_leaves_the_report_open(tmp_path, extra):
+    calls, reads = _run_250(tmp_path, "5.0.0", releases=[*RELEASES_250[:2], extra, *RELEASES_250[2:]])
+    _assert_flagged(calls, N, "#9", FP_S)
+    assert reads[-2:] == [RELEASES_READ, FLAG_READ]
+    # Twins: a tag that is not a plain X.Y.Z on a release before the close, or after the one that carried the fix,
+    # is no doubt about it.
+    for other in (_rel("nightly", "2026-11-21T15:00:00Z"), _rel("nightly", "2026-11-22T00:00:00Z")):
+        calls, _ = _run_250(tmp_path, "5.0.0", releases=sorted(
+            [*RELEASES_250, other], key=lambda r: r["published_at"], reverse=True))
+        assert calls == _close_calls(250, "5.0.0"), other
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "closed, linked",
+    [
+        # Two fixes: #140 closed before v4.1.0, #190 before v8.0.0.
+        ([_closed(140, closed_at="2026-10-31T00:00:00Z"), _closed(190, closed_at=FIX_250_AT)], 190),
+        # #140 was reopened and closed as completed again after #190: its close is the most recent one.
+        ([_closed(140, closed_at=FIX_250_AT), _closed(190, closed_at="2026-10-31T00:00:00Z")], 140),
+    ],
+    ids=["later-issue-closed-later", "earlier-issue-closed-again-later"],
+)
+def test_the_most_recent_completed_close_is_the_one_measured(tmp_path, closed, linked):
+    """Measured against the earlier fix, released in v4.1.0, a report from 5.0.0 would hold it and stay open."""
+    # A later close as not planned is no fix, so it is never the one measured.
+    closed = [*closed, _closed(211, reason="not_planned", closed_at="2026-11-22T00:00:00Z")]
+    assert _run_250(tmp_path, "5.0.0", closed=closed)[0] == _close_calls(linked, "5.0.0")
+    _assert_flagged(_run_250(tmp_path, "8.0.0", closed=closed)[0], N, "#9", FP_S)
+
+
+# Three mutants of the fix release, each replacing text of the Action's script, and the cases that tell each apart:
+# (version, releases, whether the Action closes the report).
+_FIX_CHECK = "if (!(Date.parse(release.published_at) > fixedAt) || isOlder(latest, fix.version)) {"
+_FIX_MUTANTS = {
+    # The report compared with the latest release instead of the release that carried the fix.
+    "latest-release": [("if (!isOlder(reported, fix.version)) {", "if (false) {"),
+                       (_FIX_CHECK, "if (!isOlder(reported, latest)) {")],
+    # The latest release published after the close taken for the release that carried the fix, not the earliest.
+    "latest-after-the-close": [(".sort((a, b) => Date.parse(a.published_at) - Date.parse(b.published_at));",
+                                ".sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));")],
+    # A prerelease counted as the release that carried the fix.
+    "prerelease": [("releases.filter(r => !r.draft && !r.prerelease)", "releases.filter(r => !r.draft)")],
+}
+_FIX_CASES = {
+    "latest-release": [("8.0.0", RELEASES_250, False)],
+    "latest-after-the-close": [("8.0.0", RELEASES_250, False)],
+    "prerelease": [
+        ("5.0.0", [*RELEASES_250[:2], _rel("v8.0.0-rc.1", "2026-11-21T15:45:00Z", prerelease=True), *RELEASES_250[2:]],
+         True),
+        ("7.5.0", [*RELEASES_250[:2], _rel("v7.5.0", "2026-11-21T15:45:00Z", prerelease=True), *RELEASES_250[2:]],
+         True),
+    ],
+}
+
+
+@needs_node
+@pytest.mark.parametrize("mutant", sorted(_FIX_MUTANTS))
+def test_mutants_of_the_fix_release_are_caught(tmp_path, mutant):
+    """Twin: each case run against the Action and against a mutant of it gets the other answer from the mutant."""
+    script = _script()
+    for old, new in _FIX_MUTANTS[mutant]:
+        assert script.count(old) == 1, old
+        script = script.replace(old, new)
+    for version, releases, closes in _FIX_CASES[mutant]:
+        assert (CLOSE_N in _run_250(tmp_path, version, releases=releases)[0]) is closes, version
+        assert (CLOSE_N in _run_250(tmp_path, version, releases=releases, script=script)[0]) is not closes, version
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "releases, latest",
+    [
+        # The release marked latest was published before the close, though v8.0.0 carried the fix after it.
+        ([*RELEASES_250[:2], _rel("v9.0.0", "2026-11-20T00:00:00Z"), *RELEASES_250[2:]],
+         _rel("v9.0.0", "2026-11-20T00:00:00Z")),
+        # The release marked latest, a patch of an older line, is older than v8.0.0, which carried the fix.
+        ([_rel("v7.3.1", "2026-11-24T00:00:00Z"), *RELEASES_250], _rel("v7.3.1", "2026-11-24T00:00:00Z")),
+    ],
+    ids=["latest-before-the-close", "latest-older-than-the-fix-release"],
+)
+def test_a_latest_release_that_may_lack_the_fix_leaves_the_report_open(tmp_path, releases, latest):
+    """The comment asks the reporter to update to the latest release, so that release must hold the fix too."""
+    calls, reads = _run_250(tmp_path, "5.0.0", releases=releases, release=latest)
+    _assert_flagged(calls, N, "#9", FP_S)
+    assert reads[-3:] == [RELEASES_READ, RELEASE_READ, FLAG_READ]
+    # Mutant twin: without the check, the report is closed and sent to a release that may lack the fix.
+    script = _script()
+    assert script.count(_FIX_CHECK) == 1
+    mutated = script.replace(_FIX_CHECK, "if (false) {")
+    assert _run_250(tmp_path, "5.0.0", releases=releases, release=latest, script=mutated)[0][-1] == CLOSE_N
+
+
 def test_the_action_never_closes_as_completed():
     """A health check reads a completed close of the issue it filed as a fix, and would report again as a regression."""
     script = _script()
@@ -942,12 +1260,14 @@ def test_the_action_never_closes_as_completed():
 @needs_node
 def test_the_reporters_text_reaches_no_expression_and_no_comment(tmp_path):
     """The issue text is the reporter's: the script reads it from the API at run time, never through `${{ }}`, and
-    the comment it posts holds only the checked fingerprint, issue number, version numbers and release tag."""
+    the comment it posts holds only the checked fingerprint, issue number, version numbers and release tags."""
     assert "${{" not in _script()
     hostile = "${{ secrets.GITHUB_TOKEN }} `$(touch pwned)` [link](https://example.invalid)"
     body = _body(FP_S) + f"\n## Environment\n| Field | Value |\n|---|---|\n| OS | {hostile} |\n| Module Version | 5.0.0 |\n"
     issue = {**_reported(body=body), "title": f"[health-check][bug][{FP_A}] {hostile}"}
-    calls = _run(tmp_path, issue, [], closed=[_closed(10, title=hostile)], release=LATEST)
+    # A release's name and notes are free text too: only its checked tag is used.
+    named = {**LATEST, "name": hostile, "body": hostile}
+    calls = _run(tmp_path, issue, [], closed=[_closed(10, title=hostile)], release=named, releases=[named])
     assert calls == [["comment", 12, _comment(FP_A, 10, "5.0.0", "v8.0.0")], ["label", 12, ["duplicate"]], CLOSE]
 
 
@@ -961,24 +1281,38 @@ def test_the_header_and_the_docs_say_an_outdated_report_is_closed_as_not_planned
     header = WORKFLOW.read_text(encoding="utf-8").split('"on":', 1)[0]
     flowed = " ".join(re.sub(r"^#\s?", "", header, flags=re.MULTILINE).split())
     assert "an earlier issue with the same fingerprint that was closed as completed" in flowed
+    assert ("The most recent such close is the one it measures and links, and the release that carried its fix is the "
+            "earliest stable release (neither a draft nor a prerelease) published after it: the first release that "
+            "can hold the fix.") in flowed
+    assert ("gives a Module Version `X.Y.Z` older than the release that carried the fix (compared number by number, "
+            "never as text), the copy that filed the report lacks the fix") in flowed
+    assert "lower than the repository's latest release" not in flowed
+    assert ("asks the reporter to update to the repository's latest release and to report again if the behaviour is "
+            "still there on that release") in flowed
     assert "adds the `duplicate` label and closes the new issue as not planned. Never as completed" in flowed
+    assert ("A Module Version as new as the release that carried the fix, or newer, may report a regression of a "
+            "released fix, so the issue stays open and goes on to step 5.") in flowed
     assert "Any doubt leaves the issue open and goes on to step 5" in flowed
     assert ("Environment table (under an `Environment` heading, after a bold `Environment` label, or headed by an "
             "`Environment` cell: copies have written it all three ways)") in flowed
     docs = " ".join(DOCS_MD.read_text(encoding="utf-8").split())
     level3 = docs[docs.index("3. **Server-side**"):]
     level3 = level3[:level3.index("One limit:")]
-    assert ("but an earlier one with it was closed as completed, and the new issue's Environment table gives a Module "
-            "Version lower than the repository's latest release (compared number by number), the copy that filed it "
-            "may lack the fix") in level3
-    assert ("the Action comments that the earlier issue was fixed, names the latest release, and asks the reporter to "
-            "update and to report again if the behaviour is still there on that release, then adds the `duplicate` "
-            "label and closes the issue as not planned. It never closes one as completed") in level3
-    assert ("A Module Version that is missing, given twice or not a plain `X.Y.Z`, a repository with no release or whose "
-            "latest release's tag is not a plain `X.Y.Z`, a fix closed after the latest release was published, or a "
-            "failed call leaves the issue open for a maintainer.") in level3
+    assert ("but an earlier one with it was closed as completed, the Action looks for the release that carried the "
+            "fix: the earliest stable release, neither a draft nor a prerelease, published after the most recent such "
+            "close. When the new issue's Environment table gives a Module Version older than that release (compared "
+            "number by number), the copy that filed it lacks the fix") in level3
+    assert ("the Action comments that the earlier issue was fixed in that release, and asks the reporter to update to "
+            "the latest release and to report again if the behaviour is still there on that release, then adds the "
+            "`duplicate` label and closes the issue as not planned. It never closes one as completed") in level3
+    assert ("A Module Version as new as the release that carried the fix, or newer, may report a regression of that "
+            "fix, so the issue stays open for a maintainer.") in level3
+    assert ("So does a Module Version that is missing, given twice or not a plain `X.Y.Z`, a repository with no stable "
+            "release published after the fix, a release tag that is not a plain `X.Y.Z`, a latest release published "
+            "before the fix or older than the release that carried it, or a failed call.") in level3
     assert ("A copy of the Action in another repository closes nothing this way, since only this module's repository "
             "releases module versions.") in level3
+    assert "lower than the repository's latest release" not in level3
     assert "a repository other than this module's (a copy of the Action elsewhere" in flowed
 
 
