@@ -35,23 +35,31 @@ name: Health-Check Dedup
 #      issue's own run has labeled it. The client's title search still finds
 #      it on later runs.
 #   4. If no earlier open issue exists, it looks for an earlier issue with the
-#      same fingerprint that was closed as completed. When there is one, the new
-#      issue's Environment table (under an `Environment` heading, after a bold
+#      same fingerprint that was closed as completed. The most recent such close
+#      is the one it measures and links, and the release that carried its fix is
+#      the earliest stable release (neither a draft nor a prerelease) published
+#      after it: the first release that can hold the fix. When the new issue's
+#      Environment table (under an `Environment` heading, after a bold
 #      `Environment` label, or headed by an `Environment` cell: copies have
-#      written it all three ways) gives a Module Version `X.Y.Z` lower than the
-#      repository's latest release (compared number by number, never as text),
-#      and every such close predates that release, the copy that filed the
-#      report may lack the fix: it comments that the earlier issue was fixed,
-#      names the latest release, asks the reporter to update and to report again
-#      if the behaviour is still there on that release, adds the `duplicate`
-#      label and closes the new issue as not planned. Never as completed: a
-#      health check reads a completed close of the issue it filed as a fix, so
-#      the copy would report its next sighting as a regression of it. Any doubt
-#      leaves the issue open and goes on to step 5: a repository other than this
-#      module's (a copy of the Action elsewhere, whose releases are not module
-#      versions), no Module Version, more than one, or one that is not a plain
-#      `X.Y.Z` (a prerelease included), no release, a release tag that is not a
-#      plain `X.Y.Z`, a close after the release was published, or a failed call.
+#      written it all three ways) gives a Module Version `X.Y.Z` older than the
+#      release that carried the fix (compared number by number, never as text),
+#      the copy that filed the report lacks the fix: it comments that the earlier
+#      issue was fixed in that release, asks the reporter to update to the
+#      repository's latest release and to report again if the behaviour is still
+#      there on that release, adds the `duplicate` label and closes the new issue
+#      as not planned. Never as completed: a health check reads a completed close
+#      of the issue it filed as a fix, so the copy would report its next sighting
+#      as a regression of it. A Module Version as new as the release that carried
+#      the fix, or newer, may report a regression of a released fix, so the issue
+#      stays open and goes on to step 5. Any doubt leaves the issue open and goes
+#      on to step 5: a repository other than this module's (a copy of the Action
+#      elsewhere, whose releases are not module versions), no Module Version,
+#      more than one, or one that is not a plain `X.Y.Z` (a prerelease included),
+#      a completed close with no time, a stable release with no publish time or
+#      published at the instant of the close, no stable release published after
+#      it, two published at one instant after it, a release tag that is not a
+#      plain `X.Y.Z`, a latest release published before the close or older than
+#      the release that carried the fix, or a failed call.
 #   5. Otherwise the new issue becomes canonical. Then,
 #      unless it already carries `possible-duplicate`, it reads the issue's section
 #      fingerprint (the `Section fingerprint:` line of its body; an issue with no
@@ -84,7 +92,7 @@ name: Health-Check Dedup
   issues:
     types: [opened, labeled]
 
-# `contents: read` only to read the latest release (step 4).
+# `contents: read` only to read the releases (step 4).
 permissions:
   issues: write
   contents: read
@@ -295,12 +303,13 @@ jobs:
               return parseVersion(rows[0][2].trim().replace(/^`(.*)`$/, '$1'));
             }
 
-            // No earlier open issue carries the fingerprint. A report from a copy older than the latest
-            // release, of a defect an earlier issue was closed as completed for, may come from a copy that
-            // lacks the fix: comment, label it a duplicate and close it as not planned. Never as completed:
-            // the copy recorded this issue under the fingerprint and reads a completed close as a fix, so it
-            // would report its next sighting as a regression. Any doubt leaves the issue open for a
-            // maintainer. True when the issue was closed.
+            // No earlier open issue carries the fingerprint. A report of a defect an earlier issue was closed as
+            // completed for, from a copy older than the release that carried the fix, comes from a copy that
+            // lacks the fix: comment, label it a duplicate and close it as not planned. Never as completed: the
+            // copy recorded this issue under the fingerprint and reads a completed close as a fix, so it would
+            // report its next sighting as a regression. A copy as new as that release, or newer, may be seeing a
+            // regression of a released fix: its report stays open for a maintainer, as on any doubt. True when
+            // the issue was closed.
             async function closeOutdatedCopy() {
               // Only this module's repository releases module versions: a copy of the Action in another
               // repository would compare the report with release numbers of its own.
@@ -326,13 +335,26 @@ jobs:
                 core.info(`Listing closed issues for ${fpLabel} failed (${error.status || error.message}); leaving #${issue.number} open.`);
                 return false;
               }
-              const fixed = closed
-                .filter(m => m.number < issue.number && !m.pull_request && m.state_reason === 'completed')
-                .sort((a, b) => b.number - a.number);
+              const fixed = closed.filter(m => m.number < issue.number && !m.pull_request && m.state_reason === 'completed');
               if (fixed.length === 0) {
                 core.info(`No earlier issue for ${fpLabel} was closed as completed.`);
                 return false;
               }
+              // The most recent completed close is the fix the report is measured against, and the issue the
+              // comment links: a close with no time leaves it unknown.
+              if (fixed.some(m => Number.isNaN(Date.parse(m.closed_at)))) {
+                core.info(`A completed close for ${fpLabel} has no time; leaving #${issue.number} open.`);
+                return false;
+              }
+              const earlier = fixed.sort((a, b) => Date.parse(b.closed_at) - Date.parse(a.closed_at) || b.number - a.number)[0];
+              const fixedAt = Date.parse(earlier.closed_at);
+              const fix = await fixRelease(fixedAt);
+              if (!fix) return false;
+              if (!isOlder(reported, fix.version)) {
+                core.info(`Module Version ${reported.join('.')} is not older than ${fix.tag}, the release that carried the fix of #${earlier.number}: it may report a regression; leaving #${issue.number} open.`);
+                return false;
+              }
+              // The comment asks the reporter to update to the latest release, so that release must hold the fix.
               let release;
               try {
                 ({ data: release } = await github.rest.repos.getLatestRelease({
@@ -350,23 +372,16 @@ jobs:
                 return false;
               }
               const tag = release.tag_name;
-              if (!isOlder(reported, latest)) {
-                core.info(`Module Version ${reported.join('.')} is not older than ${tag}; leaving #${issue.number} open.`);
+              if (!(Date.parse(release.published_at) > fixedAt) || isOlder(latest, fix.version)) {
+                core.info(`The latest release, ${tag}, was published before the fix of #${earlier.number} or is older than ${fix.tag}; leaving #${issue.number} open.`);
                 return false;
               }
-              // A fix closed after the release was published may not be in it.
-              const published = Date.parse(release.published_at);
-              if (!fixed.every(m => Date.parse(m.closed_at) < published)) {
-                core.info(`A completed close for ${fpLabel} does not predate ${tag}; leaving #${issue.number} open.`);
-                return false;
-              }
-              const earlier = fixed[0];
-              core.info(`Closing #${issue.number}: Module Version ${reported.join('.')} is older than ${tag}, and #${earlier.number} was fixed.`);
+              core.info(`Closing #${issue.number}: Module Version ${reported.join('.')} is older than ${fix.tag}, which carried the fix of #${earlier.number}.`);
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
-                body: `Auto-deduped: same fingerprint \`${fpLabel}\` as #${earlier.number}, which was fixed. This report gives Module Version ${reported.join('.')}, older than the latest release, ${tag}. Please update to ${tag}, and if the behaviour is still there on that release, report it again in a new issue.`,
+                body: `Auto-deduped: same fingerprint \`${fpLabel}\` as #${earlier.number}, fixed in ${fix.tag}. This report gives Module Version ${reported.join('.')}, older than ${fix.tag}. Please update to the latest release, ${tag}, and if the behaviour is still there on that release, report it again in a new issue.`,
               });
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
@@ -382,6 +397,52 @@ jobs:
                 state_reason: 'not_planned',
               });
               return true;
+            }
+
+            // The release that carried a fix closed at `fixedAt` (milliseconds): the earliest stable release,
+            // neither a draft nor a prerelease, published after the close, which is the first release that can
+            // hold the fix. Its tag and its three numbers; null on any doubt: a release list that cannot be read,
+            // a stable release with no publish time or published at the instant of the close, none published
+            // after the close, two published at one instant, or a tag that is not a plain X.Y.Z.
+            async function fixRelease(fixedAt) {
+              let releases;
+              try {
+                releases = await github.paginate(github.rest.repos.listReleases, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  per_page: 100,
+                });
+              } catch (error) {
+                core.info(`Listing the releases failed (${error.status || error.message}); leaving #${issue.number} open.`);
+                return null;
+              }
+              const stable = releases.filter(r => !r.draft && !r.prerelease);
+              if (stable.some(r => Number.isNaN(Date.parse(r.published_at)))) {
+                core.info(`A release has no publish time; leaving #${issue.number} open.`);
+                return null;
+              }
+              // A release published at the very instant of the close may hold the fix or not.
+              if (stable.some(r => Date.parse(r.published_at) === fixedAt)) {
+                core.info(`A release was published at the instant of the fix; leaving #${issue.number} open.`);
+                return null;
+              }
+              const after = stable
+                .filter(r => Date.parse(r.published_at) > fixedAt)
+                .sort((a, b) => Date.parse(a.published_at) - Date.parse(b.published_at));
+              if (after.length === 0) {
+                core.info(`No release was published after the fix; leaving #${issue.number} open.`);
+                return null;
+              }
+              if (after.length > 1 && Date.parse(after[1].published_at) === Date.parse(after[0].published_at)) {
+                core.info(`Two releases were published at one instant after the fix; leaving #${issue.number} open.`);
+                return null;
+              }
+              const version = parseVersion(after[0].tag_name);
+              if (!version) {
+                core.info(`The first release after the fix has a tag that is not a plain X.Y.Z; leaving #${issue.number} open.`);
+                return null;
+              }
+              return { tag: after[0].tag_name, version };
             }
 
             // Reports of one defect under different defect keys get different fingerprints, so the
