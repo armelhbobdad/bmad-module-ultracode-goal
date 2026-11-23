@@ -377,6 +377,53 @@ def test_troubleshooting_predicate_rejects_the_section_without_it():
     assert not _TROUBLE_WAITS.search(section[:start] + section[end:])
 
 
+# Issue 269 read a run's high counts as workflow agents' stops. The hook books
+# every stop it is handed to the current story, and what the troubleshooting
+# guide did not say is what that takes in besides the story's work: each
+# response of the conductor, report-backs included, and the stops of any other
+# session that runs the project's hooks. The section now says so, and what to
+# do about each.
+_TROUBLE_COUNT_PARTS = (
+    "**What the count includes.** The hook books every stop it is handed to the story `.current-story` names and "
+    "never asks whose stop it is",
+    "**Every response of the conductor.** Each report-back of a workflow or a background task starts a response, "
+    "and that response ends in a stop the hook counts.",
+    "**The stops of any other Claude Code session on the project while a story is current.**",
+    "A second window counts, and so does a session that an agent or a skill starts as its own process",
+    "every session that loads that file runs it and books its stops to the current story",
+    "**What you do.**",
+    "For an Epic whose stages run as workflows, raise `max_turns_per_story`",
+    "Set it before the Epic's preflight, which writes the ceiling into the hook's command.",
+    "Keep other Claude Code sessions on the project closed while a story is current.",
+    "Close a `budget-overrun` escalation with `/ucg-resolve`. Closing it resets that story's turn counter",
+)
+
+
+def _says_what_the_count_includes(section: str) -> bool:
+    flat = " ".join(section.split())
+    return all(part in flat for part in _TROUBLE_COUNT_PARTS)
+
+
+def test_troubleshooting_says_what_the_count_includes_and_what_to_do():
+    assert _says_what_the_count_includes(_budget_section(_TROUBLESHOOTING.read_text(encoding="utf-8")))
+
+
+def test_count_includes_predicate_rejects_the_section_before_it():
+    """Twin: the section as 8.0.0 shipped it, which ends at its limitation
+    paragraph, fails the predicate."""
+    section = _budget_section(_TROUBLESHOOTING.read_text(encoding="utf-8"))
+    cut = section.index("**What the count includes.**")
+    assert not _says_what_the_count_includes(section[:cut])
+
+
+@pytest.mark.parametrize("drop", _TROUBLE_COUNT_PARTS)
+def test_count_includes_predicate_rejects_a_dropped_part(drop):
+    section = _budget_section(_TROUBLESHOOTING.read_text(encoding="utf-8"))
+    flat = " ".join(section.split())
+    assert flat.count(drop) == 1
+    assert not _says_what_the_count_includes(flat.replace(drop, ""))
+
+
 # A decomposed child's ATDD run (#193). The precondition once ran it "before its
 # step 0", while `.current-story` still named the story before it, so the Stop
 # hook booked those turns to that story, which "Keep another story's work off
