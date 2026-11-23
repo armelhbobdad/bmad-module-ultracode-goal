@@ -17,6 +17,8 @@ which they must reject. Stdlib + pytest only.
 import re
 from pathlib import Path
 
+import pytest
+
 _SKILL_ROOT = Path(__file__).resolve().parents[2]
 _PREFLIGHT = _SKILL_ROOT / "references" / "preflight.md"
 _SKILL = _SKILL_ROOT / "SKILL.md"
@@ -254,6 +256,212 @@ def test_step5_skips_a_no_op_write_and_points_at_the_rule():
     )
     assert '"A refused settings write"' in hooks
     assert "refused write" in _bullet(s5, "- **Allowlist.**")
+
+
+# --- Hooks armed for this run (issue #270) ---------------------------------
+#
+# Step 2 spoke of the hooks it finds armed only as a prior run's. Hooks armed
+# for this run before the session starts (an earlier invocation that stopped
+# after step 5, or the operator's own edit) meet the same guard, which refuses
+# the remediation commit while no story is current, and the stage named no
+# route for them. One added paragraph treats them as a prior run's, and keeps
+# the terminal command behind a refused disarm.
+
+_ARMED_FOR_THIS_RUN = "**Hooks armed for this run.**"
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _armed_for_this_run_paragraph(step2: str) -> str:
+    return next(p for p in step2.split("\n\n") if p.startswith(_ARMED_FOR_THIS_RUN))
+
+
+def _without_the_armed_for_this_run_paragraph(step2: str) -> str:
+    """Step 2 with the added paragraph cut out, which is step 2 as 8.0.0 left it:
+    the paragraph is the only change the fix makes to the stage."""
+    return step2.replace(_armed_for_this_run_paragraph(step2) + "\n\n", "", 1)
+
+
+def _names_the_other_sources(text: str) -> bool:
+    return (
+        "The entries need not be a prior run's" in text
+        and "an earlier invocation of this run that stopped after step 5 armed them" in text
+        and "or the operator's own edit of the file" in text
+    )
+
+
+def _gives_the_guards_reason(text: str) -> bool:
+    return "The guard does not know who armed it: while no story is current it refuses the commit either way" in text
+
+
+def _takes_the_prior_run_route(text: str) -> bool:
+    return (
+        "Treat these entries as the two paragraphs above treat a prior run's: disarm them, assert the disarm, make "
+        "the commit, and let step 5 merge them again" in text
+        and "Do not leave them armed because the operator armed them" in text
+    )
+
+
+def _says_the_session_runs_unguarded(text: str) -> bool:
+    return (
+        "Between the disarm and step 5's re-arm this session runs with neither hook, so no guard reads its commits, "
+        "as on any first run" in text
+    )
+
+
+def _routes_a_refused_disarm(text: str) -> bool:
+    return (
+        'A refused disarm keeps its route, "A refused settings write" below, which ends, attended, in a commit '
+        "command the operator runs in a terminal outside this session" in text
+    )
+
+
+def _routes_a_disarm_the_session_missed(text: str) -> bool:
+    return (
+        "Claude Code's docs say its file watcher can miss a settings edit" in text
+        and "when the guard still refuses the commit after the disarm was asserted, handle that refusal as a "
+        "refused disarm" in text
+    )
+
+
+_ARMED_CLAUSES = (
+    _names_the_other_sources,
+    _gives_the_guards_reason,
+    _takes_the_prior_run_route,
+    _says_the_session_runs_unguarded,
+    _routes_a_refused_disarm,
+    _routes_a_disarm_the_session_missed,
+)
+
+
+def _covers_hooks_armed_for_this_run(step2: str) -> bool:
+    flat = _flat(step2)
+    return all(clause(flat) for clause in _ARMED_CLAUSES)
+
+
+def test_step2_disarm_covers_hooks_armed_for_this_run():
+    assert _covers_hooks_armed_for_this_run(_step2())
+
+
+def test_the_predicate_rejects_step2_as_8_0_0_left_it():
+    """8.0.0's step 2 names only a prior run's hooks, and its disarm, assertion
+    and terminal command must not satisfy the predicate on their own."""
+    before = _without_the_armed_for_this_run_paragraph(_step2())
+    assert before != _step2()
+    assert _ARMED_FOR_THIS_RUN not in before
+    assert "A prior UCG run may have left its PreToolUse guard" in before
+    assert not _covers_hooks_armed_for_this_run(before)
+
+
+@pytest.mark.parametrize(
+    ("clause", "old", "new"),
+    [
+        (_names_the_other_sources, "an earlier invocation of this run that stopped after step 5 armed them, ", ""),
+        (_names_the_other_sources, "or the operator's own edit of the file", "or a prior run"),
+        (_gives_the_guards_reason, "while no story is current it refuses the commit either way",
+         "it lets the commit through when the operator armed it"),
+        (_takes_the_prior_run_route, "disarm them, assert the disarm, make the commit",
+         "leave them armed, make the commit"),
+        (_takes_the_prior_run_route, "Do not leave them armed because the operator armed them",
+         "Leave them armed when the operator armed them"),
+        (_says_the_session_runs_unguarded, " Between the disarm and step 5's re-arm this session runs with neither "
+         "hook, so no guard reads its commits, as on any first run of a project that was never armed.", ""),
+        (_routes_a_refused_disarm, 'keeps its route, "A refused settings write" below',
+         "takes a terminal command at once"),
+        (_routes_a_disarm_the_session_missed, "handle that refusal as a refused disarm", "retry the commit"),
+        (_routes_a_disarm_the_session_missed, "Claude Code's docs say its file watcher can miss a settings edit, so ",
+         ""),
+    ],
+)
+def test_each_armed_for_this_run_clause_rejects_its_one_clause_mutant(clause, old, new):
+    paragraph = _flat(_armed_for_this_run_paragraph(_step2()))
+    assert paragraph.count(old) == 1, "the mutant's anchor must name one place in the paragraph"
+    mutant = paragraph.replace(old, new)
+    assert mutant != paragraph
+    assert clause(paragraph)
+    assert not clause(mutant)
+
+
+def test_the_paragraph_sits_between_the_disarm_scope_and_the_refused_write():
+    step2 = _step2()
+    assert (
+        step2.index("**When the disarm applies.**")
+        < step2.index(_ARMED_FOR_THIS_RUN)
+        < step2.index("**A refused settings write.**")
+    )
+    # A bold run-in label, not a heading: the health check hashes findings
+    # under the enclosing heading, which must stay step 2's.
+    assert not re.search(r"^#+ .*armed for this run", _text(), re.M | re.I)
+
+
+def _opens_no_second_terminal_route(step2: str) -> bool:
+    """The terminal command skips every guard check for its one commit, so the
+    new paragraph may name it only as the end of a refused disarm's route, and
+    must not hand the operator the commit in the disarm's place."""
+    paragraph = _flat(_armed_for_this_run_paragraph(step2))
+    naming = [s for s in re.split(r"(?<=[.!?])\s+", paragraph) if re.search(r"terminal|commit command", s)]
+    return bool(
+        len(naming) == 1
+        and naming[0].startswith('A refused disarm keeps its route, "A refused settings write" below')
+        and "do not hand the operator the commit in the disarm's place" in paragraph
+        and "one more route" not in paragraph
+        and _flat(step2).count("has one more route") == 1
+    )
+
+
+def test_the_new_paragraph_opens_no_second_terminal_route():
+    assert _opens_no_second_terminal_route(_step2())
+    # The route's own bounds are untouched: a refused disarm, the Epic branch,
+    # before Execute, no push.
+    assert _operator_route_is_bounded(_refused_write_rule())
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # A route for an operator who wants the hooks kept armed.
+        (" A refused disarm keeps its route,",
+         " When the operator wants them kept armed, hand them the commit as one command to run in a terminal outside "
+         "this session instead. A refused disarm keeps its route,"),
+        (", and do not hand the operator the commit in the disarm's place", ""),
+    ],
+)
+def test_the_terminal_route_predicate_rejects_a_second_route(old, new):
+    step2 = _step2()
+    paragraph = _armed_for_this_run_paragraph(step2)
+    assert _flat(paragraph).count(old) == 1
+    mutant = step2.replace(paragraph, _flat(paragraph).replace(old, new))
+    assert mutant != step2
+    assert not _opens_no_second_terminal_route(mutant)
+
+
+_GS_NO_HAND_ARMING = (
+    "Arming them by hand before a run is not needed: preflight writes them itself, and when it finds them armed "
+    "already and has a commit to make first, it removes them for that commit and merges them back when it arms the "
+    "environment."
+)
+
+
+def _hook_security(text: str) -> str:
+    return _flat(_between(text, "## Hook security", "**Take a new Epic through preflight attended.**"))
+
+
+def _says_hand_arming_is_not_needed(section: str) -> bool:
+    return _GS_NO_HAND_ARMING in section
+
+
+def test_getting_started_says_the_hooks_need_no_arming_by_hand():
+    assert _says_hand_arming_is_not_needed(_hook_security((_DOCS / "getting-started.md").read_text(encoding="utf-8")))
+
+
+def test_the_hand_arming_predicate_rejects_hook_security_as_8_0_0_left_it():
+    section = _hook_security((_DOCS / "getting-started.md").read_text(encoding="utf-8"))
+    assert section.count(_GS_NO_HAND_ARMING) == 1
+    before = section.replace(" " + _GS_NO_HAND_ARMING, "")
+    assert before != section
+    assert not _says_hand_arming_is_not_needed(before)
 
 
 # --- An unborn HEAD --------------------------------------------------------

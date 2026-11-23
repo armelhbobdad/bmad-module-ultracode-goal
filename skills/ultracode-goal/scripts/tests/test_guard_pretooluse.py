@@ -220,6 +220,126 @@ def test_epic_branch_commit_denied_without_tests_marker(tmp_path: Path) -> None:
     assert "STORY-1" in reason
 
 
+# --- A remediation commit with no current story (issue #270) ----------------
+#
+# Preflight step 2 disarms UCG's hooks before a remediation commit whoever armed
+# them (references/preflight.md, "Hooks armed for this run"), because the guard
+# refuses that commit while no story is current, even when only a run-folder
+# file is staged. These pins hold the guard to that refusal, so the prose route
+# cannot later be traded for a guard exemption for preflight's commits.
+
+_RUN_FOLDER_FILE = "_bmad-output/implementation-artifacts/.decision-log.md"
+_RUN_ENV = (
+    "ULTRACODE_STORY_ID",
+    "ULTRACODE_IMPL_ARTIFACTS",
+    "ULTRACODE_PROTECTED_BRANCHES",
+    "ULTRACODE_EPIC_BRANCH_PREFIX",
+    "ULTRACODE_MAX_TURNS",
+)
+_ARMED_BY = ("this run's step 5", "a hand edit")
+_UNPROTECTED_BRANCHES = ("ultracode/epic-61", "feature/sample-work")
+
+
+def _remediation_commit_project(tmp_path: Path, branch: str) -> Path:
+    """A fresh run's project on `branch` with no `.current-story`, and only the
+    decision log preflight writes in the run folder staged."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo, branch)
+    log = repo / _RUN_FOLDER_FILE
+    log.parent.mkdir(parents=True)
+    log.write_text("- preflight: a remediation this pass logged\n")
+    _git(repo, "add", _RUN_FOLDER_FILE)
+    return repo
+
+
+def _armed_env(repo: Path, armed_by: str) -> dict[str, str]:
+    """The env the guard's command carries. Step 5 injects this run's values;
+    a hand edit may name the script alone, and the guard then falls back to its
+    defaults and to the run folder under the event's cwd."""
+    if armed_by == "a hand edit":
+        return {}
+    return {
+        "ULTRACODE_IMPL_ARTIFACTS": str(repo / "_bmad-output" / "implementation-artifacts"),
+        "ULTRACODE_PROTECTED_BRANCHES": "main,master",
+        "ULTRACODE_EPIC_BRANCH_PREFIX": "ultracode/epic-",
+        "ULTRACODE_TEST_ARTIFACTS": str(repo / "_bmad-output" / "test-artifacts"),
+    }
+
+
+def _refuses_with_no_story(code: int, out: dict | None) -> bool:
+    if code != 2 or out is None:
+        return False
+    decision = out["hookSpecificOutput"]
+    reason = decision["permissionDecisionReason"]
+    return (
+        decision["permissionDecision"] == "deny"
+        and reason.startswith("Tests-ran guard: refusing")
+        and "current story (unknown)" in reason
+    )
+
+
+@pytest.mark.parametrize("branch", _UNPROTECTED_BRANCHES)
+@pytest.mark.parametrize("armed_by", _ARMED_BY)
+def test_a_remediation_commit_with_no_story_is_refused_whoever_armed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, armed_by: str, branch: str
+) -> None:
+    for var in _RUN_ENV:
+        monkeypatch.delenv(var, raising=False)
+    repo = _remediation_commit_project(tmp_path, branch)
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout
+    assert staged == _RUN_FOLDER_FILE + "\n"
+    assert not (repo / "_bmad-output" / "implementation-artifacts" / ".current-story").exists()
+
+    code, out = _run_hook(_commit_event(repo, "git commit -m 'chore: preflight remediation'"), repo,
+                          _armed_env(repo, armed_by))
+
+    assert _refuses_with_no_story(code, out), out
+
+
+_RUN_FOLDER_EXEMPTION = (
+    "        if story is None and impl is not None:\n"
+    "            _top = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=cwd or None,\n"
+    "                                  capture_output=True, text=True).stdout.strip()\n"
+    "            _names = [n for n in subprocess.run(['git', 'diff', '--cached', '--name-only', '-z'],\n"
+    "                                                cwd=cwd or None, capture_output=True,\n"
+    "                                                text=True).stdout.split('\\0') if n]\n"
+    "            if _names and all(Path(_top, n).resolve().is_relative_to(impl.resolve()) for n in _names):\n"
+    "                _allow()\n"
+)
+
+
+@pytest.mark.parametrize("branch", _UNPROTECTED_BRANCHES)
+@pytest.mark.parametrize("armed_by", _ARMED_BY)
+def test_the_no_story_pin_rejects_a_guard_that_exempts_the_run_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, armed_by: str, branch: str
+) -> None:
+    """Twin: a run-folder exemption of the kind issue #270 suggested, a guard
+    that lets a commit through with no story set when every staged path sits
+    in the implementation-artifacts folder, must fail the pin above."""
+    for var in _RUN_ENV:
+        monkeypatch.delenv(var, raising=False)
+    source = HOOK.read_text(encoding="utf-8")
+    anchor = "        if marker is None or baseline is None or not marker.is_file():\n"
+    assert source.count(anchor) == 1
+    mutant = tmp_path / "guard_pretooluse.py"
+    mutant.write_text(source.replace(anchor, _RUN_FOLDER_EXEMPTION + anchor), encoding="utf-8")
+    repo = _remediation_commit_project(tmp_path, branch)
+    event = _commit_event(repo, "git commit -m 'chore: preflight remediation'")
+
+    # The mutant lets the call through, so the check below is not vacuous.
+    code, out = _run_mutant_hook(mutant, event, repo, _armed_env(repo, armed_by))
+    assert (code, out) == (0, None)
+    assert not _refuses_with_no_story(code, out)
+    # Control: with a source file staged beside the log, the mutant still refuses,
+    # so what it adds is the run-folder exemption and nothing wider.
+    (repo / "f.txt").write_text("y")
+    _git(repo, "add", "f.txt")
+    assert _refuses_with_no_story(*_run_mutant_hook(mutant, event, repo, _armed_env(repo, armed_by)))
+
+
 # The SHA the story recorded before any implementation, and a different one
 # standing in for "this marker was written against an earlier code state".
 _BASELINE_SHA = "4f1c0d3a9b6e2f8d5c7a1b0e3d9f6a2c8b4e7d10"
