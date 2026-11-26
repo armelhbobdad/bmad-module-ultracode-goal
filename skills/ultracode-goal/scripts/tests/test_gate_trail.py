@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -1002,6 +1003,390 @@ def test_light_profile_ignores_a_checklist_that_happens_to_exist(tmp_path):
     body = section((run_dir / "gate-trail.md").read_text(encoding="utf-8"), "2-4")
     assert "stale_test" not in body
     assert "`test_step4_has_four_and_clauses`" in body
+
+
+# ---------------------------------------------------------------------------
+# A checklist test column the trail cannot read (#284). `references/define-done.md`
+# has ATDD head the column `Planned test`. The trail also reads define-done's own
+# wording, `Planned test(s)`, and when a production story's criteria come from a
+# checklist table with no test column it reads, the story's section says so on
+# one line instead of leaving `n/a` in every planned-test cell unexplained.
+# ---------------------------------------------------------------------------
+
+# Define-done's ATDD step is read through the one reader its own prose test
+# keeps, loaded under a name of its own, so the step's boundary is spelled once.
+_DEFINE_DONE_PROSE = _load(
+    "define_done_checklist_header_for_gate_trail",
+    Path(__file__).resolve().parent / "test_define_done_checklist_header.py",
+)
+_NOTE_PREFIX = "- Planned tests:"
+_UNREAD_STORY = "61-1-sample-story"
+_READ_STORY = "61-2-sample-story"
+_PLANNED = (
+    "`tests/acceptance/sb-1.spec.ts` -> `the first criterion holds`",
+    "`tests/acceptance/sb-2.spec.ts` -> `the second criterion holds`",
+)
+# The statement in `story_section` that decides the note, as the script spells
+# it. The twins replace it to build a trail that never notes, or always does.
+_NOTE_RULE = "unread_test_column = bool(criteria_source) and not reads_tests"
+
+
+def _checklist_with(header: str | None, cells: tuple[str, str] = _PLANNED) -> str:
+    """A checklist holding TEA 1.27.2's AC table (`| ID | ID source |
+    Acceptance criterion |`), with a fourth column headed `header`, or none
+    when `header` is None. Ids are built, not spelled."""
+    head = "| ID | ID source | Acceptance criterion |"
+    rule = "| -- | --------- | -------------------- |"
+    if header is not None:
+        head += f" {header} |"
+        rule += " --- |"
+    body = ""
+    for n, cell in zip((1, 2), cells):
+        body += f"| AC-{n} | supplied | criterion {n} |" + (f" {cell} |" if header is not None else "") + "\n"
+    return (
+        "---\nworkflowType: 'testarch-atdd'\n---\n\n# ATDD Checklist\n\n"
+        f"## Acceptance Criteria\n\n{head}\n{rule}\n{body}"
+    )
+
+
+def _later_table() -> str:
+    rows_ = "".join(f"| AC-{n} | {cell} |\n" for n, cell in zip((1, 2), _PLANNED))
+    return "\n## Acceptance Criteria Coverage\n\n| AC | Planned test |\n| -- | ------------ |\n" + rows_
+
+
+def _later_list() -> str:
+    return "\n## Red-Phase Test Scaffolds Created\n\n" + "".join(f"- {cell}\n" for cell in _PLANNED)
+
+
+def _write_trace(trace: Path, story: str) -> None:
+    rows_ = "".join(f"| AC-{n} | `test_trace_{n}` | PASS |\n" for n in (1, 2))
+    (trace / f"trace-{story}.md").write_text(
+        "---\nworkflowType: 'testarch-trace'\n---\n\n| AC | Test | Result |\n| -- | ---- | ------ |\n" + rows_,
+        encoding="utf-8",
+    )
+
+
+def _render_stories(
+    tmp_path: Path,
+    checklists: dict[str, str | None],
+    *,
+    traced: tuple[str, ...] = (),
+    profile: str = "production",
+    trail=None,
+) -> str:
+    """Render, in process, one section per story in `checklists`: its checklist
+    text, or no checklist for None, and a trace report for each `traced` id.
+    `trail` is the module to render with, a mutant in the twins."""
+    test_artifacts = tmp_path / "test-artifacts"
+    trace = test_artifacts / "traceability"
+    impl = tmp_path / "impl-artifacts"
+    trace.mkdir(parents=True)
+    impl.mkdir()
+    for story, text in checklists.items():
+        if text is not None:
+            (test_artifacts / f"atdd-checklist-{story}.md").write_text(text, encoding="utf-8")
+    for story in traced:
+        _write_trace(trace, story)
+    return (trail or gate_trail).render(
+        list(checklists),
+        epic="61",
+        profile=profile,
+        impl_artifacts=impl,
+        test_artifacts=test_artifacts,
+        trace_output=trace,
+        decision_log=None,
+        repo=tmp_path,
+    )
+
+
+def _mutant(old: str, new: str) -> types.ModuleType:
+    """gate_trail.py with one statement replaced, loaded as a module of its own."""
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert source.count(old) == 1, f"the mutated statement moved: {old!r}"
+    module = types.ModuleType("gate_trail_mutant")
+    module.__file__ = str(SCRIPT)
+    exec(compile(source.replace(old, new), str(SCRIPT), "exec"), module.__dict__)  # noqa: S102
+    return module
+
+
+def _notes(body: str) -> list[str]:
+    return [line for line in body.splitlines() if line.startswith(_NOTE_PREFIX)]
+
+
+def _define_done_headers() -> list[str]:
+    """The test-column headers define-done's ATDD step names."""
+    return _DEFINE_DONE_PROSE._named_headers(_DEFINE_DONE_PROSE._text())
+
+
+def _note_failures(text: str, story: str) -> list[str]:
+    """What the story's section lacks of the note: exactly one note line, alone
+    on its line, saying every row reads `n/a` and why, naming the checklist and
+    the header define-done asks for, over rows whose planned-test cells all
+    read `n/a`."""
+    body = section(text, story)
+    notes = _notes(body)
+    if len(notes) != 1:
+        return [f"{len(notes)} note lines, not one"]
+    note = notes[0]
+    found = []
+    lines = body.splitlines()
+    if not lines[lines.index(note) + 1].startswith("- Gate artifact:"):
+        found.append("the note is not one line of its own")
+    if not note.startswith(f"{_NOTE_PREFIX} {gate_trail.NA} in every row, because "):
+        found.append("the note does not say every planned-test cell reads n/a")
+    if "has no test column under a header this trail reads" not in note:
+        found.append("the note does not say why")
+    if f"atdd-checklist-{story}.md" not in note:
+        found.append("the note does not name the checklist")
+    if f"`{gate_trail.CHECKLIST_TEST_HEADER}`" not in note:
+        found.append("the note does not name the header the trail reads")
+    if [f"`{header}`" in note for header in _define_done_headers()] != [True]:
+        found.append("the note does not name the one header define-done asks for")
+    if [row[0] for row in rows(body)] != [f"AC-{n}" for n in (1, 2)]:
+        found.append("the criteria are not the checklist's")
+    if any(row[1] != "n/a" for row in rows(body)):
+        found.append("a planned-test cell reads other than n/a")
+    return found
+
+
+@pytest.mark.parametrize("header", ["Planned test(s)", "**Planned test(s)**", "`Planned Test(s)`"])
+def test_define_dones_own_wording_is_a_test_header_the_trail_reads(header):
+    rows_ = gate_trail.criterion_rows(_checklist_with(header))
+    assert rows_ == [(f"AC-{n}", cell, "n/a") for n, cell in zip((1, 2), _PLANNED)]
+
+
+def test_the_planned_tests_wording_pin_reds_on_the_header_list_before_it(monkeypatch):
+    """Twin: without `planned test(s)` in the list, the same table reads `n/a`."""
+    assert "planned test(s)" in gate_trail._TEST_HEADER_PREFERENCE
+    monkeypatch.setattr(
+        gate_trail,
+        "_TEST_HEADER_PREFERENCE",
+        tuple(h for h in gate_trail._TEST_HEADER_PREFERENCE if h != "planned test(s)"),
+    )
+    rows_ = gate_trail.criterion_rows(_checklist_with("Planned test(s)"))
+    assert [row[1] for row in rows_] == ["n/a", "n/a"]
+
+
+def test_the_note_names_a_header_the_trail_reads():
+    assert gate_trail._normalize_header(gate_trail.CHECKLIST_TEST_HEADER) in gate_trail._TEST_HEADER_PREFERENCE
+    assert gate_trail.CHECKLIST_TEST_HEADER in _define_done_headers()
+
+
+def _threshold_table_first(text: str) -> str:
+    """`text` with TEA's gate-threshold table ahead of its AC table: keyed by a
+    bare `Criterion` and naming no test, the trail skips it."""
+    threshold = (
+        "## Gate Thresholds\n\n| Criterion | Threshold | Actual | Status |\n"
+        "| -- | -- | -- | -- |\n| P0 coverage | 100% | 100% | PASS |\n\n"
+    )
+    return text.replace("## Acceptance Criteria\n\n", threshold + "## Acceptance Criteria\n\n", 1)
+
+
+def _bare_keyed_checklist() -> str:
+    """A checklist whose AC table is keyed only by bare `ID` and `Criterion`
+    headers and names its tests under a header the trail does not read."""
+    rows_ = "".join(f"| AC-{n} | criterion {n} | {cell} |\n" for n, cell in zip((1, 2), _PLANNED))
+    return (
+        "# ATDD Checklist\n\n## Acceptance Criteria\n\n"
+        "| ID | Criterion | Primary red-phase leaf |\n| -- | -- | -- |\n" + rows_
+    )
+
+
+_UNREAD_LAYOUTS = {
+    "another-header": _checklist_with("Primary red-phase leaf"),
+    "tea-table-alone": _checklist_with(None),
+    "tea-table-then-a-later-table": _checklist_with(None) + _later_table(),
+    "tea-table-then-a-list": _checklist_with(None) + _later_list(),
+    "gate-threshold-table-then-tea-table": _threshold_table_first(_checklist_with(None)),
+}
+
+
+@pytest.mark.parametrize("layout", sorted(_UNREAD_LAYOUTS))
+def test_a_checklist_whose_test_column_the_trail_cannot_read_says_so(tmp_path, layout):
+    """The note is in that story's section alone: a story beside it whose
+    checklist heads the column `Planned test` shows its tests and no note."""
+    text = _render_stories(
+        tmp_path, {_UNREAD_STORY: _UNREAD_LAYOUTS[layout], _READ_STORY: _checklist_with("Planned test")}
+    )
+    assert _note_failures(text, _UNREAD_STORY) == []
+    read = section(text, _READ_STORY)
+    assert _notes(read) == []
+    assert [row[1] for row in rows(read)] == list(_PLANNED)
+
+
+@pytest.mark.parametrize("layout", sorted(_UNREAD_LAYOUTS))
+def test_the_note_pin_reds_on_a_trail_that_prints_no_note(tmp_path, layout):
+    """Twin: a trail that never notes fails the pin on every layout."""
+    never = _mutant(_NOTE_RULE, "unread_test_column = False")
+    text = _render_stories(tmp_path, {_UNREAD_STORY: _UNREAD_LAYOUTS[layout]}, trail=never)
+    assert _note_failures(text, _UNREAD_STORY) == ["0 note lines, not one"]
+
+
+# One clause of the note's reason each: (what the script spells, the mutant's
+# spelling, the failure the pin must report).
+_NOTE_REASON_MUTANTS = {
+    "some-rows": (
+        "in every row, because",
+        "in some rows, because",
+        "the note does not say every planned-test cell reads n/a",
+    ),
+    "another-reason": (
+        "has no test column under a header this trail ",
+        "has its tests under a header this trail ",
+        "the note does not say why",
+    ),
+}
+
+
+@pytest.mark.parametrize("mutant", sorted(_NOTE_REASON_MUTANTS))
+def test_the_note_pin_reds_on_a_note_that_misstates_its_reason(tmp_path, mutant):
+    """Twin: a note that says less than every row, or gives another reason,
+    fails the pin on exactly that clause."""
+    old, new, failure = _NOTE_REASON_MUTANTS[mutant]
+    text = _render_stories(tmp_path, {_UNREAD_STORY: _UNREAD_LAYOUTS["another-header"]}, trail=_mutant(old, new))
+    assert _note_failures(text, _UNREAD_STORY) == [failure]
+
+
+_NO_NOTE_CASES = {
+    # A column the trail reads, one cell left empty (an operator-evidence AC).
+    "planned-test-with-an-empty-cell": (
+        {_UNREAD_STORY: _checklist_with("Planned test", (_PLANNED[0], ""))},
+        (),
+        "production",
+    ),
+    "planned-test-s": ({_UNREAD_STORY: _checklist_with("Planned test(s)")}, (), "production"),
+    "no-checklist-trace-report": ({_UNREAD_STORY: None}, (_UNREAD_STORY,), "production"),
+    "checklist-without-a-criteria-table": (
+        {_UNREAD_STORY: "# ATDD Checklist\n\n1. criterion one\n2. criterion two\n"},
+        (_UNREAD_STORY,),
+        "production",
+    ),
+    "light-profile-ignores-the-checklist": (
+        {_UNREAD_STORY: _checklist_with("Primary red-phase leaf")},
+        (_UNREAD_STORY,),
+        "light",
+    ),
+    "nothing-at-all": ({_UNREAD_STORY: None}, (), "production"),
+    # Keyed only by bare headers with no test column it reads: skipped, so the
+    # criteria come from the trace report.
+    "bare-keyed-table-falls-to-the-trace-report": (
+        {_UNREAD_STORY: _bare_keyed_checklist()},
+        (_UNREAD_STORY,),
+        "production",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_NO_NOTE_CASES))
+def test_no_note_where_the_planned_tests_were_read_or_not_sought_in_a_checklist(tmp_path, case):
+    checklists, traced, profile = _NO_NOTE_CASES[case]
+    text = _render_stories(tmp_path, checklists, traced=traced, profile=profile)
+    assert _notes(section(text, _UNREAD_STORY)) == []
+
+
+def test_an_empty_cell_under_a_column_the_trail_reads_is_its_only_n_a(tmp_path):
+    checklists, traced, profile = _NO_NOTE_CASES["planned-test-with-an-empty-cell"]
+    body = section(_render_stories(tmp_path, checklists, traced=traced, profile=profile), _UNREAD_STORY)
+    assert [row[1] for row in rows(body)] == [_PLANNED[0], "n/a"]
+
+
+@pytest.mark.parametrize("case", sorted(_NO_NOTE_CASES))
+def test_the_no_note_pin_reds_on_a_trail_that_notes_every_story(tmp_path, case):
+    """Twin: a trail that prints the note on every story fails the pin above."""
+    always = _mutant(_NOTE_RULE, "unread_test_column = True")
+    checklists, traced, profile = _NO_NOTE_CASES[case]
+    text = _render_stories(tmp_path, checklists, traced=traced, profile=profile, trail=always)
+    assert len(_notes(section(text, _UNREAD_STORY))) == 1
+
+
+# A checklist that gives the trail no criteria: define-done says they then come
+# from the trace report, with no note.
+_NO_CRITERIA_LAYOUTS = {
+    "a-list": "# ATDD Checklist\n\n## Acceptance Criteria\n\n" + "".join(f"{n}. criterion {n}\n" for n in (1, 2)),
+    "a-bare-keyed-table": _bare_keyed_checklist(),
+}
+# The trail's fallback to the trace report, and its skip of a bare-keyed table
+# that names no test it reads, each as the script spells it.
+_TRACE_FALLBACK = "rows = criterion_rows(trace_text, prefer_tested=True)"
+_BARE_SKIP = '_AMBIGUOUS_AC_HEADERS = frozenset({"id", "criterion", "criteria"})'
+
+
+def _trace_fallback_failures(text: str, story: str) -> list[str]:
+    """What the story's section lacks of criteria taken from its trace report:
+    the trace report named as their source, its rows and tests, and no note."""
+    body = section(text, story)
+    found = []
+    if f"- Criteria and planned tests: trace-{story}.md" not in body.splitlines():
+        found.append("the criteria do not come from the trace report")
+    if [row[:2] for row in rows(body)] != [[f"AC-{n}", f"`test_trace_{n}`"] for n in (1, 2)]:
+        found.append("the rows are not the trace report's")
+    if _notes(body):
+        found.append("a note line")
+    return found
+
+
+@pytest.mark.parametrize("layout", sorted(_NO_CRITERIA_LAYOUTS))
+def test_a_checklist_that_gives_no_criteria_leaves_them_to_the_trace_report(tmp_path, layout):
+    text = _render_stories(tmp_path, {_UNREAD_STORY: _NO_CRITERIA_LAYOUTS[layout]}, traced=(_UNREAD_STORY,))
+    assert _trace_fallback_failures(text, _UNREAD_STORY) == []
+
+
+@pytest.mark.parametrize(
+    "layout, old, new",
+    [
+        ("a-list", _TRACE_FALLBACK, "rows = []"),
+        ("a-bare-keyed-table", _TRACE_FALLBACK, "rows = []"),
+        ("a-bare-keyed-table", _BARE_SKIP, "_AMBIGUOUS_AC_HEADERS = frozenset()"),
+    ],
+)
+def test_the_trace_fallback_pin_reds_on_a_trail_that_keeps_the_checklist(tmp_path, layout, old, new):
+    """Twin: a trail with no fallback, or one that takes a bare-keyed table as
+    the criteria, fails the pin."""
+    text = _render_stories(
+        tmp_path, {_UNREAD_STORY: _NO_CRITERIA_LAYOUTS[layout]}, traced=(_UNREAD_STORY,), trail=_mutant(old, new)
+    )
+    assert "the criteria do not come from the trace report" in _trace_fallback_failures(text, _UNREAD_STORY)
+
+
+def _untested_summary() -> str:
+    return "| AC | Description |\n| -- | -- |\n" + "".join(f"| AC-{n} | criterion {n} |\n" for n in (1, 2))
+
+
+def _tested_table(key: str) -> str:
+    return f"| {key} | Test | Result |\n| -- | -- | -- |\n" + "".join(f"| AC-{n} | `t{n}` | PASS |\n" for n in (1, 2))
+
+
+_UNTESTED_ROWS = [(f"AC-{n}", "n/a", "n/a") for n in (1, 2)]
+_TESTED_ROWS = [(f"AC-{n}", f"`t{n}`", "PASS") for n in (1, 2)]
+# The trace-report mode (`prefer_tested`): its rows, and whether the table they
+# came from carries a test column the trail reads.
+_PREFER_TESTED_CASES = {
+    "an-untested-table-alone": (_untested_summary(), _UNTESTED_ROWS, False),
+    "a-tested-id-table-alone": (_tested_table("ID"), _TESTED_ROWS, True),
+    "an-untested-summary-then-an-id-case-list": (
+        _untested_summary() + "\n" + _tested_table("ID"),
+        _UNTESTED_ROWS,
+        False,
+    ),
+    "an-untested-summary-then-a-matrix": (_untested_summary() + "\n" + _tested_table("AC"), _TESTED_ROWS, True),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_PREFER_TESTED_CASES))
+def test_the_test_column_flag_in_trace_report_mode(case):
+    text, expected, tested = _PREFER_TESTED_CASES[case]
+    assert gate_trail._criterion_table(text, prefer_tested=True) == (expected, tested)
+    assert gate_trail.criterion_rows(text, prefer_tested=True) == expected
+
+
+@pytest.mark.parametrize("new", ["first_tested = True", "first_tested = False"])
+def test_the_test_column_flag_pin_reds_on_a_constant_flag(new):
+    """Twin: a flag that ignores the first table's test column fails a case."""
+    trail = _mutant("first_tested = test_at is not None", new)
+    assert any(
+        trail._criterion_table(text, prefer_tested=True) != (expected, tested)
+        for text, expected, tested in _PREFER_TESTED_CASES.values()
+    )
 
 
 def test_missing_source_renders_na_without_raising(tmp_path):

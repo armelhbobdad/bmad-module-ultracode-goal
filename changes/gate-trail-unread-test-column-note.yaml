@@ -1,0 +1,5 @@
+type: changed
+scope: ultracode-goal
+summary: |
+  The gate trail (`gate-trail.md`) now reads planned tests from a column headed `Planned test(s)`, in a checklist or a trace report, the wording define-done uses for what the checklist maps each criterion to, as well as from `Planned test` and the other headers it read before. And when a story's criteria come from its `atdd-checklist-<story_key>.md` but the table they come from has no test column under a header the trail reads, the story's section now carries one `- Planned tests:` line that says every planned-test cell reads `n/a` for that reason and names `Planned test`. Before, those cells read `n/a` with nothing to say why, and the trail's header describes `n/a` only as an absent or unreadable source. A column the trail reads, even with empty cells, a story whose criteria come from its trace report, and a story with no checklist get no such line.
+issues: [284]

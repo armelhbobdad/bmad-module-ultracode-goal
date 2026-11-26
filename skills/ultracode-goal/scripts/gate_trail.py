@@ -67,6 +67,18 @@ renders `n/a` in its cell and the synthesis continues. This is the opposite of
 authority and must not advance on evidence it could not read, while this report
 has none - failing closed here would turn a reporting bug into a blocked run.
 
+A source that was read can render `n/a` too: an empty cell, or a column its
+table does not carry. One such case gets a line of its own. When a production
+story's criteria come from a checklist table that carries no test column under
+a header this script reads, every planned-test cell reads `n/a`, so the
+story's section says so on one `- Planned tests:` line naming
+`CHECKLIST_TEST_HEADER`, the header `references/define-done.md` has ATDD
+write. A column it reads with empty cells, and criteria taken from the trace
+report, add no such line. A checklist that gives no criteria, because it lists
+them or keys its table only by a bare `ID`, `Criterion` or `Criteria` with no
+test column (a table `criterion_rows` skips), leaves them to the trace report,
+so it adds none either.
+
 That covers the SOURCES, not the invocation. The story list is an argument, not
 an artifact to be read: with no ids this script would write a well-formed
 document carrying no sections at all, an evidence trail that traces nothing and
@@ -131,10 +143,13 @@ _AC_HEADERS = {"ac", "acs", "ac #", "id", "criterion", "criteria", "acceptance c
 # Ordered by preference, because a TEA trace matrix can carry several matching
 # columns (`Test ID` beside `Test (node)`, `Result` beside `Coverage`): the house
 # names first, then TEA's node and file columns, and a bare test id last.
+# `planned test(s)` is define-done's own wording for what the checklist maps
+# each criterion to, so a checklist that took it as its header is read too.
 _TEST_HEADER_PREFERENCE = (
     "verification",
     "planned test",
     "planned tests",
+    "planned test(s)",
     "named verification",
     "test",
     "tests",
@@ -144,6 +159,10 @@ _TEST_HEADER_PREFERENCE = (
     "test id",
 )
 _RESULT_HEADER_PREFERENCE = ("result", "status", "outcome", "coverage", "coverage status")
+# The test-column header `references/define-done.md` has ATDD write in the
+# checklist's acceptance-criteria table, named by the note a story's section
+# carries when its checklist's criteria table has no test column listed above.
+CHECKLIST_TEST_HEADER = "Planned test"
 # Bare criterion headers that also key tables that are not acceptance criteria:
 # TEA's gate-threshold tables read `| Criterion | Threshold | Actual | Status |`.
 # Keyed only by one of these, a table counts only when it names a planned test.
@@ -320,9 +339,24 @@ def criterion_rows(text: str | None, *, prefer_tested: bool = False) -> list[tup
     gate-threshold tables never render as acceptance criteria. Columns are
     located by header name; any column the table does not carry renders `n/a`.
     """
+    return _criterion_table(text, prefer_tested=prefer_tested)[0]
+
+
+def _criterion_table(
+    text: str | None, *, prefer_tested: bool = False
+) -> tuple[list[tuple[str, str, str]], bool]:
+    """`criterion_rows`' triples, and whether the table they came from carries a
+    test column under a header `_TEST_HEADER_PREFERENCE` holds.
+
+    The flag is what tells an absent test column from an empty one: either way
+    a planned-test cell reads `n/a`, but only an absent column means the table
+    was written under a header this trail does not read. It is False when no
+    table yielded rows. `criterion_rows` keeps returning the triples alone.
+    """
     if not text:
-        return []
+        return [], False
     first: list[tuple[str, str, str]] = []
+    first_tested = False
     skipped_ambiguous = False
     for headers, rows in _tables(text):
         ac_cols = [i for i, h in enumerate(headers) if h in _AC_HEADERS]
@@ -367,12 +401,13 @@ def criterion_rows(text: str | None, *, prefer_tested: bool = False) -> list[tup
         if not extracted:
             continue
         if not prefer_tested:
-            return extracted
+            return extracted, test_at is not None
         if test_at is not None and keys & _OVERRIDE_AC_HEADERS:
-            return extracted
+            return extracted, True
         if not first:
             first = extracted
-    return first
+            first_tested = test_at is not None
+    return first, first_tested
 
 
 # --------------------------------------------------------------------------
@@ -951,8 +986,13 @@ def story_section(
     trace = trace_report_path(trace_output, story)
     trace_text = read_text(trace)
 
-    rows = criterion_rows(checklist_text)
+    rows, reads_tests = _criterion_table(checklist_text)
     criteria_source = checklist.name if (rows and checklist is not None) else None
+    # The checklist gave the criteria from a table with no test column this
+    # trail reads, so every planned-test cell reads `n/a` from a source that was
+    # read: the section says why, on one line (module docstring). An empty cell
+    # under a column it reads, or criteria from the trace report, add no line.
+    unread_test_column = bool(criteria_source) and not reads_tests
     if not rows:
         rows = criterion_rows(trace_text, prefer_tested=True)
         criteria_source = trace.name if (rows and trace is not None) else criteria_source
@@ -994,6 +1034,12 @@ def story_section(
 
     lines = [f"## Story {story}", ""]
     lines.append(f"- Criteria and planned tests: {criteria_source or NA}")
+    if unread_test_column:
+        lines.append(
+            f"- Planned tests: {NA} in every row, because the first table keyed by acceptance "
+            f"criterion in {criteria_source} has no test column under a header this trail "
+            f"reads, such as `{CHECKLIST_TEST_HEADER}`"
+        )
     lines.append(f"- Gate artifact: {gate_source or NA} (gate status `{gate_status or NA}`)")
     lines.append(f"- Verdict source: {source}")
     lines.append(f"- Baseline: `{start}`" if start else f"- Baseline: {NA}")
