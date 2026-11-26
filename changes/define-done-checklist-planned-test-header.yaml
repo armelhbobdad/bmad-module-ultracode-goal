@@ -1,0 +1,5 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  Define-done now has `bmad-testarch-atdd` keep the acceptance criteria of `atdd-checklist-<story_key>.md` in the table TEA's checklist template gives them (`| ID | ID source | Acceptance criterion |`), never in a list, and write each criterion's planned tests, by file and test name, in a column headed `Planned test` added to that table, the first table in the checklist keyed by criterion. The gate trail (`gate-trail.md`) reads a production story's planned tests from that table and only under a header it knows, and the stage named none, while TEA's own checklist template gives that table no test column. So a checklist that mapped every criterion to its test under a header of its own, such as `Primary red-phase leaf`, or in a later table, showed `n/a` in every planned-test cell of a story whose tests were all there, and one that listed its criteria gave the trail none, so the story's section took them from the trace report. An acceptance criterion with no scaffold, such as an operator-evidence one or a parent criterion a decomposed child does not claim, leaves its cell empty.
+issues: [284]
