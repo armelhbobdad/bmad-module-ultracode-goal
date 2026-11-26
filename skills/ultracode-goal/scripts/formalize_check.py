@@ -1086,10 +1086,11 @@ def _scan_test_design(
 
 def _scan_nfr_assessment(text: str, rel: str) -> list[dict]:
     """Read TEA's per-category PASS rows; flag PASS-on-UNKNOWN and PASS-without-evidence
-    as judgment_candidates. overallStatus is READ via the gate_eval recognizer, never
-    re-derived or overwritten."""
+    as judgment_candidates. overallStatus is READ via gate_eval's fallback recognizer,
+    never re-derived or overwritten."""
     candidates: list[dict] = []
-    # READ TEA's overallStatus via the same recognizer gate_eval.py uses;
+    # READ TEA's overallStatus via the recognizer gate_eval.py falls back on (it
+    # reads the audit's labelled lines first);
     # the kernel never re-derives or emits it. A present-but-unreadable assessment
     # (no parseable overallStatus at all) is itself a JUDGMENT a human must resolve.
     overall = _OVERALL_STATUS_RE.search(text)
