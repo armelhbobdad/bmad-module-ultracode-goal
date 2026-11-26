@@ -369,6 +369,8 @@ gh run watch "$RUN_ID"
 1. The `release` environment deployment gate, at job start: "Review deployments", then "Approve and deploy" on the run page.
 2. The bot PR, after the required status checks pass: EITHER approve it in the review UI, OR admin-bypass-merge it with the PR merge button. The `Wait for PR approval or admin-bypass merge` step accepts both, and waits 30 minutes. Read its **Review before approving** section and the `CHANGELOG.md` diff first.
 
+   The 30 minutes start when `Wait for required status checks` completes, about 10 minutes after the bot PR opens (9 to 12 at recent cuts). `gh pr checks` on the bot PR prints `no checks reported`, because the run dispatches `quality.yaml` on the temp branch instead of running the checks for the pull request, so a script or an agent that waits on it never sees them pass. Watch the run's steps instead (`gh run view "$RUN_ID" --json jobs`), and clear this gate once `Wait for PR approval or admin-bypass merge` is in progress. A gate left past the 30 minutes fails the run, which closes the bot PR and deletes its branch with nothing tagged or published: re-run its failed job (`gh run rerun "$RUN_ID" --failed`), or dispatch again from `main` when `main` has moved since, and clear both gates again.
+
 ### Pre-dispatch: preview the notes and the version bump
 
 Release notes come from the change fragments in `changes/` (one YAML file per user-visible change; the format and the type rule are in [`changes/README.md`](../../changes/README.md)), not from commit subjects. Before dispatching, on an up-to-date `main` with its tags:
