@@ -96,6 +96,20 @@ When `{{parent_story_path}}` is provided, the workflow runs as written except:
 - **Move only the child's row.** Step 4 sets development_status[{{story_key}}] to `in-progress` and step 9 sets it to `review`. The parent's row stays `done`.
 - **HALT rather than repair.** HALT when the parent's file cannot be read, when `sprint-status.yaml` has no row for `{{story_key}}`, when an id in `{{claimed_acs}}` names no AC in the parent's file, or when a claimed AC is too vague to implement, and name the ACs concerned. Never edit the parent's file to fix one.
 
+## Declared Gates
+
+A repository can declare quality gates its default test task does not run: a coverage threshold or a component-test task declared beside the test task, not under it. An UltraCode Goal run sweeps those gates once this workflow has returned, so a story that closed on the default suite alone meets their red one fix round later. To close on them here, the run passes one more input, with a story path or with a decomposed child's inputs:
+
+- `{{declared_gates}}`: the commands that run the quality gates the run will sweep and the default test task leaves out.
+
+When `{{declared_gates}}` is provided, the workflow runs as written except:
+
+- **Run each one where the regression suite runs last.** Step 9 runs every command in `{{declared_gates}}` after the full regression suite, for the packages this story's changes touch when the command can be narrowed to them, and whole otherwise.
+- **Fix a red one before any status moves, and never halt for it.** Fix a red one and run it again, and after a fix that changed any file run the full regression suite again, before step 9 sets a status to `review`, in the story file or in `sprint-status.yaml`. Keep no fix that turns the suite red: undo it, and treat that gate as one this workflow cannot get green. A fix that needs a dependency or a configuration file the story does not specify is not made: that gate is then one this workflow cannot get green. A declared gate is no HALT condition of this workflow: not a regression failure, an implementation failure or a definition-of-done failure, in step 9's list or in `checklist.md`, whose **Regression Prevention**, **Code Quality**, **Quality Gates Passed** and **No HALT Conditions** items count a declared gate still red as reported, never failed. One this workflow cannot get green, whether this story's changes turned it red or it was red before them, stops nothing: name it, with its last output, in the completion notes (step 10's summary for a decomposed child), and let step 9 set the status as it would without the input. The run's sweep, which runs every declared gate again, owns it from there.
+- **Run nothing else in its name.** A declared gate the input does not list is the run's to sweep, not this workflow's; the checks steps 7 to 9 run without the input still run as written.
+
+When it is not provided, the workflow runs as written.
+
 ## Execution
 
 <workflow>
@@ -469,6 +483,7 @@ When `{{parent_story_path}}` is provided, the workflow runs as written except:
     <action if="{{parent_story_path}} is not provided">Verify ALL tasks and subtasks are marked [x] (re-scan the story document now)</action>
     <action if="{{parent_story_path}} is provided">Verify every AC in {{claimed_acs}} is implemented and tested, and every finding in {{review_findings}} resolved</action>
     <action>Run the full regression suite (do not skip)</action>
+    <action if="{{declared_gates}} is provided">Run every command in {{declared_gates}} (do not skip); fix a red one and run it again, and after a fix that changed any file run the full regression suite again, before any status moves, keeping no fix that turns the suite red; never HALT for a declared gate: report one still red as "Declared Gates" says</action>
     <action>Confirm File List includes every changed file</action>
     <action>Execute enhanced definition-of-done validation</action>
     <action if="{{parent_story_path}} is not provided">Update the story Status to: "review"</action>
