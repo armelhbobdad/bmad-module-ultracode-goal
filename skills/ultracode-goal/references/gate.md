@@ -146,7 +146,7 @@ Write a PASS only when the story is demonstrably done to its profile's Definitio
 **Recommendation**: Approve
 ```
 
-The score **must** carry the `/100` denominator: a bare `score: 89` matches nothing, is read as *not found*, and fail-closes to `reloop` — always write it as `N/100` (a `Quality Score` label or a bare `score` both parse, but only with `/100`). `Recommendation` ∈ `Approve` | `Approve with Comments` | `Request Changes` | `Block`; a `Block`, or a score `< 80`, downgrades `advance`→`reloop`.
+The score **must** carry the `/100` denominator: a bare `score: 89` matches nothing, is read as *not found*, and fail-closes to `reloop`: always write it as `N/100` (a `Quality Score` label or a bare `score` both parse, but only with `/100`). `Recommendation` ∈ `Approve` | `Approve with Comments` | `Request Changes` | `Block`; a `Block`, or a score `< 80`, downgrades `advance`→`reloop`. Write each field once, at the start of its own line. The reader takes a line that opens with `Quality Score`, `Recommendation` or `Overall Status` (after list, quote, heading or emphasis marks, or a leading number or date) before any other mention: two such lines with different scores fail the signal, a `Block` on any of them is a `Block`, and the most severe status among them is the one read. Quote an earlier value inside a sentence, never on a line that opens with its label.
 
 ## Run the gate
 

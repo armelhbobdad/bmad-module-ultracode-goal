@@ -698,8 +698,95 @@ def load_gate(trace_output: Path, reasons: list[str], story: str | None = None) 
     }
 
 
+# A production signal is read from the artifact's own LABELLED lines first. TEA
+# writes each one on a line of its own: `**Quality Score**: 85/100`,
+# `**Recommendation**: Approve` (twice, with one value) and the NFR audit's
+# `**Overall Status:** PASS` (again as `- Overall Status: PASS` at its sign-off).
+# A labelled line opens with the label, after optional indentation, list marks
+# (ordered-list numbers too), quote, heading or emphasis marks, and the label is
+# followed by a value in the form the fallback regex below accepts (`N/100`, one
+# of the four recommendations, one of the four statuses), so
+# `## Quality Score Breakdown` is not one. A table row is not one either: TEA's
+# trend and per-file tables list other scores. A first match anywhere in the
+# file read a review that quotes an earlier score, an earlier Approve or an
+# earlier status above its own result at the quoted value. A file with no
+# labelled line is read by the fallback regex, as it always was, so a
+# hand-written artifact keeps its reading. Each scanner falls back on its own.
+#
+# The leading marks are ONE character class, and so is the separator between a
+# label and its value: two repeats that can each take the same character, nested
+# or side by side, make a long run of marks cost time quadratic in its length or
+# worse (a nested pair never finishes on a long line of dashes). Neither class
+# crosses a line end. A byte-order mark may open the line: `_read_text` keeps
+# one at the start of the file, and without it a file whose own value sits on
+# line 1 behind the mark would have that line missed and a quoted value on a
+# later labelled line read in its place. It is optional and outside the class,
+# so no two repeats share a character.
+_LINE_MARKS = r"^\ufeff?[ \t>#*_+\-0-9.)]*"
+_LABEL_SEP = r"[*:_` \t]*"
+_LABELLED_FLAGS = re.IGNORECASE | re.MULTILINE
+
+_LABELLED_SCORE_RE = re.compile(
+    _LINE_MARKS + r"Quality[ \t]+Score" + _LABEL_SEP + r"(\d{1,3})[ \t]*/[ \t]*100",
+    _LABELLED_FLAGS,
+)
+_LABELLED_RECOMMENDATION_RE = re.compile(
+    _LINE_MARKS + r"Recommendation" + _LABEL_SEP
+    + r"(Approve with Comments|Approve|Request Changes|Block)",
+    _LABELLED_FLAGS,
+)
+_LABELLED_NFR_STATUS_RE = re.compile(
+    _LINE_MARKS + r"(?:Overall[ \t]+Status|overallStatus)" + _LABEL_SEP
+    + r"(PASS|CONCERNS|FAIL|NOT_ASSESSED)",
+    _LABELLED_FLAGS,
+)
+
+# Most severe first. FAIL and NOT_ASSESSED fail the production AND, CONCERNS and
+# PASS do not, so a failing value on any labelled line is never hidden by a
+# passing one. FAIL leads because it is a measured failure and TEA's own roll-up
+# takes the worst finding; CONCERNS outranks PASS for the same reason.
+_NFR_SEVERITY = ("FAIL", "NOT_ASSESSED", "CONCERNS", "PASS")
+
+
+def _labelled_review_scores(text: str) -> list[int]:
+    """The distinct Quality Scores on the review's labelled lines, in file order."""
+    scores: list[int] = []
+    for value in _LABELLED_SCORE_RE.findall(text):
+        if int(value) not in scores:
+            scores.append(int(value))
+    return scores
+
+
+def _labelled_review_recommendations(text: str) -> list[str]:
+    """The distinct Recommendations on the review's labelled lines, in file order.
+
+    Compared without case, each kept as first written.
+    """
+    values: list[str] = []
+    for value in _LABELLED_RECOMMENDATION_RE.findall(text):
+        if value.lower() not in {seen.lower() for seen in values}:
+            values.append(value)
+    return values
+
+
+def _labelled_nfr_statuses(text: str) -> list[str]:
+    """The distinct statuses on the audit's labelled lines, upper-cased, in file order."""
+    statuses: list[str] = []
+    for value in _LABELLED_NFR_STATUS_RE.findall(text):
+        if value.upper() not in statuses:
+            statuses.append(value.upper())
+    return statuses
+
+
 def _scan_nfr_overall_status(text: str) -> str | None:
-    """Read the NFR audit's Overall Status (PASS | CONCERNS | FAIL)."""
+    """Read the NFR audit's Overall Status (PASS | CONCERNS | FAIL | NOT_ASSESSED).
+
+    The most severe value on the audit's labelled lines (``_NFR_SEVERITY``); a
+    file with no labelled line falls back to the first match anywhere.
+    """
+    labelled = _labelled_nfr_statuses(text)
+    if labelled:
+        return next(status for status in _NFR_SEVERITY if status in labelled)
     match = re.search(
         r"(?:Overall\s+Status|overallStatus)[*:_\s]*[`*]*\s*(PASS|CONCERNS|FAIL|NOT_ASSESSED)",
         text,
@@ -709,13 +796,32 @@ def _scan_nfr_overall_status(text: str) -> str | None:
 
 
 def _scan_review_score(text: str) -> int | None:
-    """Read the test-review Quality Score (``{score}/100``)."""
+    """Read the test-review Quality Score (``{score}/100``).
+
+    One distinct value on the review's labelled lines is the score. Two or more
+    are no score at all (None, a failing signal whose reason
+    ``apply_production_and`` words from ``_labelled_review_scores``), because
+    this reader cannot tell which one the review gave its own tests. A file with
+    no labelled line falls back to the first match anywhere, bare ``score``
+    label included.
+    """
+    scores = _labelled_review_scores(text)
+    if scores:
+        return scores[0] if len(scores) == 1 else None
     match = re.search(r"(?:Quality\s+Score|score)[*:_\s]*[`*]*\s*(\d{1,3})\s*/\s*100", text, re.IGNORECASE)
     return int(match.group(1)) if match else None
 
 
 def _scan_review_recommendation(text: str) -> str | None:
-    """Read the test-review Recommendation (Approve / ... / Block)."""
+    """Read the test-review Recommendation (Approve / ... / Block).
+
+    Block on any of the review's labelled lines is Block; otherwise the first
+    labelled value. A file with no labelled line falls back to the first match
+    anywhere.
+    """
+    labelled = _labelled_review_recommendations(text)
+    if labelled:
+        return next((value for value in labelled if value.lower() == "block"), labelled[0])
     match = re.search(
         r"Recommendation[*:_\s]*[`*]*\s*"
         r"(Approve with Comments|Approve|Request Changes|Block)",
@@ -785,6 +891,13 @@ def apply_production_and(
         elif nfr_status is None:
             reasons.append(f"nfr Overall Status not found in {nfr_path.name}; treated as failing")
             failed = True
+        if nfr_text is not None and len(statuses := _labelled_nfr_statuses(nfr_text)) > 1:
+            # Beside the status reason above, not instead of it: the audit's own
+            # labelled lines disagree, and only the most severe one was read.
+            reasons.append(
+                f"nfr file {nfr_path.name} holds more than one Overall Status "
+                f"({', '.join(statuses)}); the most severe is read"
+            )
     elif nfr_path is not None:
         reasons.append(f"nfr file {nfr_path} not found; treated as failing")
         failed = True
@@ -805,7 +918,14 @@ def apply_production_and(
         else:
             review_score = _scan_review_score(review_text)
             recommendation = _scan_review_recommendation(review_text)
-            if review_score is None:
+            scores = _labelled_review_scores(review_text)
+            if len(scores) > 1:
+                reasons.append(
+                    f"test-review file {review_path.name} holds more than one Quality Score "
+                    f"({', '.join(f'{score}/100' for score in scores)}); treated as failing"
+                )
+                failed = True
+            elif review_score is None:
                 reasons.append(
                     f"test-review score not found in {review_path.name}; treated as failing"
                 )
@@ -816,6 +936,19 @@ def apply_production_and(
             if recommendation is not None and recommendation.lower() == "block":
                 reasons.append("test-review recommendation is Block")
                 failed = True
+            recommendations = _labelled_review_recommendations(review_text)
+            if len(recommendations) > 1:
+                # Beside the Block reason above, as the NFR one is: the review's
+                # own labelled lines disagree, and only one of them was read.
+                read = (
+                    "a Block on any of them is read"
+                    if recommendation is not None and recommendation.lower() == "block"
+                    else "the first is read"
+                )
+                reasons.append(
+                    f"test-review file {review_path.name} holds more than one Recommendation "
+                    f"({', '.join(recommendations)}); {read}"
+                )
     elif review_path is not None:
         reasons.append(f"test-review file {review_path} not found; treated as failing")
         failed = True
