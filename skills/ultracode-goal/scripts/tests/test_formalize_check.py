@@ -305,8 +305,9 @@ _STDLIB_ALLOW = frozenset(
 
 # Sibling scripts of the same folder, imported lazily: shipped with it, and
 # stdlib-only themselves. The TEA config is read with preflight_check's reader,
-# never a copy (test_formalize_tea_root.py).
-_SIBLING_SCRIPTS = frozenset({"preflight_check"})
+# never a copy (test_formalize_tea_root.py). An NFR audit's Overall Status is
+# read with gate_eval's reader, never a copy (test_formalize_nfr_status_reader.py).
+_SIBLING_SCRIPTS = frozenset({"preflight_check", "gate_eval"})
 
 
 def _mutant_path(tmp_path: Path) -> Path:

@@ -722,24 +722,55 @@ def load_gate(trace_output: Path, reasons: list[str], story: str | None = None) 
 # line 1 behind the mark would have that line missed and a quoted value on a
 # later labelled line read in its place. It is optional and outside the class,
 # so no two repeats share a character.
+#
+# One icon may stand between the separator and the value: an emoji or symbol
+# character, an optional variation selector (U+FE0F), then spaces or tabs. TEA
+# 1.27.2's NFR workflow loads a knowledge fragment
+# (adr-quality-readiness-checklist.md) whose sample report writes each category's
+# `**Overall Status:**` with the warning sign (U+26A0 U+FE0F) BEFORE `CONCERNS`,
+# and a line written that way was no labelled line: a file whose only status was
+# on one read as no status, and the gate failed it. An icon after the value
+# (`PASS` then a check mark, as TEA's own template writes it) was always read,
+# since nothing after the value is matched. The icon ranges hold no separator
+# character, no space and no value character, so the separator's repeat and the
+# spaces after the icon are parted by one required character and no two repeats
+# share one. The symbol blocks are arrows, technical symbols, geometric shapes,
+# miscellaneous symbols, dingbats, the symbols-and-arrows block and the emoji
+# planes. The mathematical operators are left out, so a less-than-or-equal sign
+# (U+2264) before `85/100` still leaves the line unlabelled.
 _LINE_MARKS = r"^\ufeff?[ \t>#*_+\-0-9.)]*"
 _LABEL_SEP = r"[*:_` \t]*"
+_VALUE_ICON = (
+    r"(?:[\u2190-\u21ff\u2300-\u23ff\u25a0-\u27bf\u2b00-\u2bff\U0001f000-\U0001faff]"
+    r"\ufe0f?[ \t]*)?"
+)
 _LABELLED_FLAGS = re.IGNORECASE | re.MULTILINE
 
 _LABELLED_SCORE_RE = re.compile(
-    _LINE_MARKS + r"Quality[ \t]+Score" + _LABEL_SEP + r"(\d{1,3})[ \t]*/[ \t]*100",
+    _LINE_MARKS + r"Quality[ \t]+Score" + _LABEL_SEP + _VALUE_ICON + r"(\d{1,3})[ \t]*/[ \t]*100",
     _LABELLED_FLAGS,
 )
 _LABELLED_RECOMMENDATION_RE = re.compile(
-    _LINE_MARKS + r"Recommendation" + _LABEL_SEP
+    _LINE_MARKS + r"Recommendation" + _LABEL_SEP + _VALUE_ICON
     + r"(Approve with Comments|Approve|Request Changes|Block)",
     _LABELLED_FLAGS,
 )
 _LABELLED_NFR_STATUS_RE = re.compile(
-    _LINE_MARKS + r"(?:Overall[ \t]+Status|overallStatus)" + _LABEL_SEP
+    _LINE_MARKS + r"(?:Overall[ \t]+Status|overallStatus)" + _LABEL_SEP + _VALUE_ICON
     + r"(PASS|CONCERNS|FAIL|NOT_ASSESSED)",
     _LABELLED_FLAGS,
 )
+
+# The fallback regexes below are the readers as they were before labelled lines,
+# in the same language: each accepts exactly the strings it accepted, and reads
+# the same value from each. Their separator was three side-by-side repeats,
+# `[*:_\s]*[`*]*\s*`, and the first shares `*` with the second and whitespace
+# with the third, so a long run of either after a label, with no value behind
+# it, cost time quadratic in its length. Since `*` and whitespace are both in
+# the first class, a separator leaves that class only at its first backtick:
+# `[*:_\s]*(?:`[`*]*\s*)?` is the same language, and in it no two adjacent
+# repeats can take the same character.
+_FALLBACK_SEP = r"[*:_\s]*(?:`[`*]*\s*)?"
 
 # Most severe first. FAIL and NOT_ASSESSED fail the production AND, CONCERNS and
 # PASS do not, so a failing value on any labelled line is never hidden by a
@@ -788,7 +819,7 @@ def _scan_nfr_overall_status(text: str) -> str | None:
     if labelled:
         return next(status for status in _NFR_SEVERITY if status in labelled)
     match = re.search(
-        r"(?:Overall\s+Status|overallStatus)[*:_\s]*[`*]*\s*(PASS|CONCERNS|FAIL|NOT_ASSESSED)",
+        r"(?:Overall\s+Status|overallStatus)" + _FALLBACK_SEP + r"(PASS|CONCERNS|FAIL|NOT_ASSESSED)",
         text,
         re.IGNORECASE,
     )
@@ -808,7 +839,9 @@ def _scan_review_score(text: str) -> int | None:
     scores = _labelled_review_scores(text)
     if scores:
         return scores[0] if len(scores) == 1 else None
-    match = re.search(r"(?:Quality\s+Score|score)[*:_\s]*[`*]*\s*(\d{1,3})\s*/\s*100", text, re.IGNORECASE)
+    match = re.search(
+        r"(?:Quality\s+Score|score)" + _FALLBACK_SEP + r"(\d{1,3})\s*/\s*100", text, re.IGNORECASE
+    )
     return int(match.group(1)) if match else None
 
 
@@ -823,8 +856,8 @@ def _scan_review_recommendation(text: str) -> str | None:
     if labelled:
         return next((value for value in labelled if value.lower() == "block"), labelled[0])
     match = re.search(
-        r"Recommendation[*:_\s]*[`*]*\s*"
-        r"(Approve with Comments|Approve|Request Changes|Block)",
+        r"Recommendation" + _FALLBACK_SEP
+        + r"(Approve with Comments|Approve|Request Changes|Block)",
         text,
         re.IGNORECASE,
     )

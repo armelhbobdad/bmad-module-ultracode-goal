@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  Under `--profile production`, `gate_eval.py` now reads a `test-review.md` or `nfr-assessment.md` that has no labelled line in time linear in its length. Its fallback readers took time in the square of the length of a run of `*`, `:`, `_` or whitespace after a `Quality Score`, `score`, `Recommendation` or `Overall Status` label with no value behind it: a run of 20,000 characters took about 13 seconds, and one of 200,000 took minutes. Such a file is now read in milliseconds, and every file reads the same values as before.
