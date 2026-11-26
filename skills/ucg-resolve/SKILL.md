@@ -366,6 +366,23 @@ The two dispositions are genuinely different things, not two names for one:
   this surface to record or for the resumed run to apply, so whatever the operator rules
   for it is their own edit of those files: record `defer` until they have made it, then
   `close`.
+  **Closing an `ac-amendment-needed` escalation needs the amended AC in the story file.**
+  The gate wrote it because a production signal failed on findings the story's own AC
+  prescribes, and the gate has no waiver for a failed production signal
+  (`{ucg-root}/references/gate.md`, "A downgrade the story's own AC prescribes is not a
+  re-loop"). The amendment is the operator's own story edit: once the story file states the
+  amended text of each AC the escalation names, record the ruling and close, and the
+  resumed run drives the story again. Its turn count stands, so a count already at the
+  ceiling escalates the resume as `budget-overrun` first. While an AC it names still reads
+  as `decision_needed` quotes it, say which and record `defer`: a resume would drive the
+  story to the same downgrade. An operator's written ruling that the finding such an AC
+  forces is not prescribed closes it too, in place of the amendment, and the next gate
+  re-loops on that finding. Log either ruling in `.decision-log.md` under the story's key,
+  where every later gate cycle of the story reads it. A decomposed child's AC lives in its
+  parent's story file, which the run never edits and which every sibling reads, so for a
+  child the close waits on the parent's story file stating the amended text, the operator's
+  own edit of that file. An amendment keeps the AC's number and its claim, so, unlike a
+  move, it retires nothing a sibling reads. This surface never edits an AC itself.
 - **`defer`** — the decision is not made yet. Record the entry **without clearing
   anything**. The artifact stays exactly where it is, the item stays pending, and the next
   preflight still blocks on it.
