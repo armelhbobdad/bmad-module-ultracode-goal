@@ -54,7 +54,7 @@ flowchart TD
     class NotBmad,Blocked stop
 ```
 
-A `defer` verdict appends non-blocking items to the ledger and advances anyway; an `escalate` ends the run as `blocked` at Stage 6 rather than `complete`. The reloop edge re-runs the story only while turn budget remains (`max_turns_per_story`); once exhausted, a FAIL becomes an escalate. A FAIL that only evidence a person records can change (an acceptance criterion tagged `**Gate-ability:** operator-evidence` with no recorded live result, or one that covers only part of it) escalates at once with kind `operator-evidence-owed`, since no re-loop can produce that evidence.
+A `defer` verdict appends non-blocking items to the ledger and advances anyway; an `escalate` ends the run as `blocked` at Stage 6 rather than `complete`. The reloop edge re-runs the story only while turn budget remains (`max_turns_per_story`); once exhausted, a FAIL becomes an escalate. A FAIL that only evidence a person records can change (an acceptance criterion tagged `**Gate-ability:** operator-evidence` with no recorded live result, or one that covers only part of it) escalates at once with kind `operator-evidence-owed`, since no re-loop can produce that evidence. A production-signal downgrade whose failed signals were all read and list findings, each of them behaviour one of the story's own acceptance criteria prescribes, escalates at once too, with kind `ac-amendment-needed`, since no re-loop changes the criterion: the story is driven again once the operator amends it in the story file (for a decomposed child, its parent's).
 
 ### Stage 1: Ingest & Scope
 

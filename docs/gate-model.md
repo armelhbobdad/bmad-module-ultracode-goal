@@ -88,6 +88,8 @@ flowchart TD
     class A,D,K verdict
 ```
 
+One downgrade leaves the re-loop. When every failed signal's file was read and lists the findings behind the failure, and each of them is behaviour one of the story's own acceptance criteria prescribes (a criterion that orders two steps with a bare timer, under a test review that scores every such timer), no change to the code or the tests can clear those findings while the criterion stays met, so no re-loop can. The skill then stops with an escalation of kind `ac-amendment-needed` that names each such criterion, the finding it forces and a proposed amendment, and the story is driven again once its story file states the amended criterion (for a decomposed child, its parent's story file, which the run never edits), an edit only the operator makes. An amendment keeps the criterion's number and its claim, so, unlike a move, it retires nothing a sibling reads. `gate_eval.py` still prints `reloop` for such a story: the route is the skill's, read from the findings, and the gate has no waiver for a failed production signal. A finding no criterion prescribes keeps the re-loop, and so does a signal that failed with no finding to read, such as a missing file.
+
 Under `--profile light` none of this applies: the trace gate is the whole decision, and `--epic-level` is a no-op there.
 
 ## The sweep-scope cap
