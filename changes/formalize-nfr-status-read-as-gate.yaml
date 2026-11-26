@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal, ucg-formalize
+summary: |
+  The readiness kernel behind `/ucg-formalize` and the preflight readiness clause, `formalize_check.py`, now reads an `nfr-assessment.md`'s Overall Status with `gate_eval.py`'s own reader, labelled lines first, so it raises the `nfr_overall_status_unreadable` judgment candidate exactly when the production gate fails the audit because its status was not found. The kernel kept its own copy of the gate's fallback pattern, so a status the gate reads from a labelled line that the fallback cannot take, such as one with a backtick before its colon, raised the candidate, which kept the kernel's readiness verdict `blocked` until the judgment pass cleared it. A status written behind an icon, which `gate_eval.py` now reads, raises no candidate either. An audit with no status the gate can read still raises the candidate, in the same shape, and every other candidate the kernel raises is unchanged.

@@ -62,8 +62,8 @@ _KEYS = {
 }
 
 # The readers as they were before labelled lines: the first match anywhere in
-# the file. They are the fallback now, kept verbatim, so they are also pinned
-# against the script's source below.
+# the file. They are the fallback now, in the same language written in a linear
+# form, which test_gate_eval_reader_edges.py proves equal to these.
 _FIRST_MATCH_SCORE = r"(?:Quality\s+Score|score)[*:_\s]*[`*]*\s*(\d{1,3})\s*/\s*100"
 _FIRST_MATCH_RECOMMENDATION = (
     r"Recommendation[*:_\s]*[`*]*\s*"
@@ -390,13 +390,21 @@ def _readings(module, text: str) -> tuple:
 # --- The fallback is today's reader, unchanged --------------------------------
 
 
-def test_the_fallback_regexes_are_the_old_readers_verbatim():
+def test_the_fallback_regexes_are_the_old_readers_in_linear_form():
+    """The fallback regexes keep the old readers' language in a linear form
+    (`_FALLBACK_SEP`); test_gate_eval_reader_edges.py proves the two separators
+    accept the same strings and that each fallback reads what the old one read."""
     source = SCRIPT.read_text(encoding="utf-8")
-    assert _FIRST_MATCH_SCORE in source
+    assert '_FALLBACK_SEP = r"[*:_\\s]*(?:`[`*]*\\s*)?"' in source
+    assert 'r"(?:Quality\\s+Score|score)" + _FALLBACK_SEP + r"(\\d{1,3})\\s*/\\s*100"' in source
     assert "".join(
-        ['r"Recommendation[*:_\\s]*[`*]*\\s*"\n', '        r"(Approve with Comments|Approve|Request Changes|Block)"']
+        ['r"Recommendation" + _FALLBACK_SEP\n', '        + r"(Approve with Comments|Approve|Request Changes|Block)"']
     ) in source
-    assert _FIRST_MATCH_NFR in source
+    assert 'r"(?:Overall\\s+Status|overallStatus)" + _FALLBACK_SEP + r"(PASS|CONCERNS|FAIL|NOT_ASSESSED)"' in source
+    # The old three-repeat patterns are gone from the script.
+    assert _FIRST_MATCH_SCORE not in source
+    assert 'r"Recommendation[*:_\\s]*[`*]*\\s*"' not in source
+    assert _FIRST_MATCH_NFR not in source
 
 
 # --- TEA's stock forms read as before -----------------------------------------
@@ -976,9 +984,9 @@ def test_long_lines_of_marks_are_read_in_linear_time():
 
     The full scanners are timed on lines that hold no label, where the fallback
     finds nothing to start from. The labelled patterns are also timed on a label
-    followed by a long separator run. The fallback regexes are not timed on that
-    input: they are the old readers, unchanged, and that input takes them time
-    quadratic in its length."""
+    followed by a long separator run. The fallback regexes are timed on that
+    input in test_gate_eval_reader_edges.py, which also proves them the old
+    readers' language."""
     try:
         cpu = _sweep(SCRIPT, _LEADING_CHARACTERS, timeout=_WALL_TIMEOUT)
     except subprocess.TimeoutExpired:

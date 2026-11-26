@@ -937,11 +937,26 @@ def _leaked_tea_artifacts(
 # value->source-or-UNKNOWN provenance, recomputes ONLY a blank P×I score cell when
 # both P and I are stated (provenance arithmetic), and never originates an NFR
 # threshold, a P0-P3 percentage, a Quality Score, or an overallStatus.
+#
+# The overallStatus is read by gate_eval.py's own reader, `_scan_nfr_overall_status`,
+# imported lazily (`_gate_eval_nfr_status`), never by a copy of its pattern. The
+# kernel used to keep a copy of the fallback regex alone, and a status the gate
+# reads from a labelled line the fallback cannot take (one written behind an
+# icon, as `**Overall Status:**` then a warning sign then `CONCERNS`, or one
+# whose separator holds a backtick before a colon) would be readable at the gate
+# and an `nfr_overall_status_unreadable` candidate here. The full reader reads
+# every file the fallback reads (a file with no labelled line IS read by the
+# fallback), so the switch only clears candidates the gate never fails on.
 
-_OVERALL_STATUS_RE = re.compile(
-    r"(?:Overall\s+Status|overallStatus)[*:_\s]*[`*]*\s*(PASS|CONCERNS|FAIL|NOT_ASSESSED)",
-    re.IGNORECASE,
-)
+
+def _gate_eval_nfr_status(text: str) -> str | None:
+    """The NFR audit's Overall Status as gate_eval.py reads it, or None."""
+    scripts = str(Path(__file__).resolve().parent)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import gate_eval  # noqa: PLC0415  (sibling script, path set above)
+
+    return gate_eval._scan_nfr_overall_status(text)
 
 
 def _tea_files_named(root: Path, name: str) -> list[Path]:
@@ -1086,14 +1101,15 @@ def _scan_test_design(
 
 def _scan_nfr_assessment(text: str, rel: str) -> list[dict]:
     """Read TEA's per-category PASS rows; flag PASS-on-UNKNOWN and PASS-without-evidence
-    as judgment_candidates. overallStatus is READ via gate_eval's fallback recognizer,
-    never re-derived or overwritten."""
+    as judgment_candidates. overallStatus is READ via gate_eval's own reader
+    (labelled lines first, then its fallback), never re-derived or overwritten."""
     candidates: list[dict] = []
-    # READ TEA's overallStatus via the recognizer gate_eval.py falls back on (it
-    # reads the audit's labelled lines first);
+    # READ TEA's overallStatus with the reader gate_eval.py itself uses, so a file
+    # the gate reads a status from is never unreadable here, and one the gate
+    # fails as status-not-found is unreadable here too;
     # the kernel never re-derives or emits it. A present-but-unreadable assessment
     # (no parseable overallStatus at all) is itself a JUDGMENT a human must resolve.
-    overall = _OVERALL_STATUS_RE.search(text)
+    overall = _gate_eval_nfr_status(text)
     if overall is None:
         candidates.append({
             "source": "%s:1" % rel,
