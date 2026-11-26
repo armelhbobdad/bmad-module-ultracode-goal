@@ -500,6 +500,17 @@ def test_the_longest_location_holds_the_most_non_digits_the_search_reads(mod):
     assert sum(ch not in "0123456789" for ch in longest) == mod._NAME_LOCATION_NON_DIGITS
 
 
+# Seconds of CPU one long name below may take. The slowest of them takes about 0.3 s here. A search for each location
+# from the start takes about 160 s on `locations`, and a backtracking edge pattern about 140 s on `spaces`, so neither
+# comes near the bound. CPU time, not wall time: the suite runs under pytest-xdist beside other jobs, and a loaded
+# machine stretched a read's wall time about tenfold (past 3 s) but its CPU time about twofold, measured.
+# It counts this process only, threads included: `defect_key` is a plain string function that starts no child process.
+_LONG_NAME_CPU_BOUND = 2.0
+# Tries one name gets, so that a single try slowed by load does not fail the test. A try that takes more than twice the
+# bound is no slowed linear read, so it is not tried again: a quadratic read fails after one try, not three.
+_LONG_NAME_TRIES = 3
+
+
 @pytest.mark.parametrize(
     "name, key",
     [
@@ -516,11 +527,16 @@ def test_the_longest_location_holds_the_most_non_digits_the_search_reads(mod):
 )
 def test_a_long_name_gives_its_key_in_linear_time(mod, name, key):
     """A 100,000-character name: a search for each location from the start, or a backtracking edge pattern, would
-    take minutes."""
+    take minutes. The read is timed in this process's CPU seconds, and the best of a few tries counts."""
     assert len(name) >= 100_000
-    started = time.perf_counter()
-    assert mod.defect_key(name) == key
-    assert time.perf_counter() - started < 2
+    spent = []
+    for _ in range(_LONG_NAME_TRIES):
+        started = time.process_time()
+        assert mod.defect_key(name) == key
+        spent.append(time.process_time() - started)
+        if spent[-1] < _LONG_NAME_CPU_BOUND or spent[-1] > 2 * _LONG_NAME_CPU_BOUND:
+            break
+    assert min(spent) < _LONG_NAME_CPU_BOUND, f"CPU seconds per try: {spent}"
 
 
 @pytest.mark.parametrize(
