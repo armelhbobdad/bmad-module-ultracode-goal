@@ -23,34 +23,42 @@ a file an assessor wrote. When the host refuses the agent's write of its file,
 the agent returns the file's full text and the conductor writes that text
 unchanged, as "Automate's summary records its rows" has it write automate's. A
 file written to the hand-authored shapes is for a story whose TEA skill cannot
-run, and a delegated agent writes it. Two cases leave the work to the
+run, and a delegated agent writes it. Three cases leave the work to the
 conductor's own context: a session that cannot start such an agent runs the
-skill itself, or, where the skill cannot run, writes that file itself, and so
-does one whose delegated assessment ends in TEA's error that its execution mode
+skill itself, or, where the skill cannot run, writes that file itself; so does
+one whose delegated assessment ends in TEA's error that its execution mode
 cannot run (`tea_capability_probe: false` with `tea_execution_mode` `subagent`
 or `agent-team`), which runs the skill where that mode can run, for the rest of
-the run. In each case the conductor says so in `.decision-log.md`, and the rule
-stops none of them. Execute step 3, where the test review normally runs, points
-at the paragraph and names the fork it excludes.
+the run; and so does a session that cannot wait for an agent it starts, when
+`tea_execution_mode` is `sequential`, since there each delegated assessment
+would spend a turn of `{workflow.max_turns_per_story}` that running the skill yourself
+does not. In each case the conductor says so in `.decision-log.md`, and the
+rule stops none of them. Execute step 3, where the test review normally runs,
+points at the paragraph and names the fork it excludes, and Execute's "Make
+each wait report once" says a lone subagent, such as each delegated test review
+or NFR assessment, is a call the session waits for where it can, and then costs
+no wake-up.
 
 Each predicate is checked against the live text and, as its anti-vacuous twin,
 against the text without the change and one-clause mutants it must reject. The
-paragraph is pinned whole and in place, and the mode case has a test of its
-own. Its cross-reference to automate's summary is checked against that
-paragraph, below this one, its facts about forks against the tracked reference
-skill under `skf-skills/cc-primitives/`, and its facts about TEA against the
-tracked reference skill under `skf-skills/tea-testarch/` (the installed skills
-under `.claude/skills/` are not tracked, so no test reads them). Stated limit:
-this is a presence proof over prose. It shows the instruction is in the files,
-not that a conductor obeys it, that an agent it starts can or cannot start
-agents, that a host refuses or allows a write, or that TEA and Claude Code
-behave as their references say.
+paragraph is pinned whole and in place, and the mode case and the wait case
+each have tests of their own. Its cross-reference to automate's summary is
+checked against that paragraph, below this one, its facts about forks against
+the tracked reference skill under `skf-skills/cc-primitives/`, and its facts
+about TEA against the tracked reference skill under `skf-skills/tea-testarch/`
+(the installed skills under `.claude/skills/` are not tracked, so no test reads
+them). Stated limit: this is a presence proof over prose. It shows the
+instruction is in the files, not that a conductor obeys it, that an agent it
+starts can or cannot start agents, that a session can or cannot wait for one,
+that a host refuses or allows a write, or that TEA and Claude Code behave as
+their references say.
 
 Stdlib + pytest only.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -137,8 +145,15 @@ _MODE_CASE = (
     "(`tea_capability_probe: false` with a `tea_execution_mode` of `subagent` or `agent-team`, since an agent you "
     "start may be unable to start agents): it runs the skill where that mode can run, for the rest of the run."
 )
+_WAIT_OPENER = "So does a session that cannot wait for an agent it starts, when "
+_SEQUENTIAL = "`tea_execution_mode` is `sequential`"
+_WAIT_REASON = (
+    ": there each delegated assessment would spend a turn of `{workflow.max_turns_per_story}` that running the skill "
+    "yourself does not."
+)
+_WAIT_CASE = _WAIT_OPENER + _SEQUENTIAL + _WAIT_REASON
 _LOGGED = "In each of these cases, say so in `.decision-log.md`: this rule stops none of them."
-_SENTENCES = (_WHY, _DELEGATE, _REFUSED, _HAND_AUTHORED, _NO_AGENT, _MODE_CASE, _LOGGED)
+_SENTENCES = (_WHY, _DELEGATE, _REFUSED, _HAND_AUTHORED, _NO_AGENT, _MODE_CASE, _WAIT_CASE, _LOGGED)
 
 
 def _mutant(old: str, new: str) -> str:
@@ -422,9 +437,9 @@ def _no_agent_does_it_itself(rule: str) -> bool:
     ("that file") itself only where the skill cannot run. The sentence follows
     the delegation, which gives "such an agent" its kind, and directly follows
     the hand-authored sentence, which gives "that file" its antecedent; the mode
-    case and the log sentence follow it."""
+    case, the wait case and the log sentence follow it."""
     flat = _flat(rule)
-    if (_HAND_AUTHORED + " " + _NO_AGENT + " " + _MODE_CASE + " " + _LOGGED) not in flat:
+    if (_HAND_AUTHORED + " " + _NO_AGENT + " " + _MODE_CASE + " " + _WAIT_CASE + " " + _LOGGED) not in flat:
         return False
     return (_DELEGATES + _FRESH) in flat and flat.index(_DELEGATES + _FRESH) < flat.index(_NO_AGENT)
 
@@ -486,14 +501,17 @@ def _mode_case_falls_back(rule: str) -> bool:
         and re.search(r"a `tea_execution_mode` of `subagent` or `agent-team`(?:,|$)", condition)
     ):
         return False
-    # "So does one" takes its verb from the no-agent sentence, and the log
-    # sentence after it covers each case.
+    # "So does one" takes its verb from the no-agent sentence, the wait case
+    # follows it, and the log sentence after that covers each case.
     sentence = flat[start : end + len(_FALLBACK)]
-    return (_NO_AGENT + " " + sentence + " " + _LOGGED) in flat and _adds_no_stop(rule)
+    return (_NO_AGENT + " " + sentence + " " + _WAIT_CASE + " " + _LOGGED) in flat and _adds_no_stop(rule)
 
 
+# "cannot wait" is the wait case's condition on the session, not a wait the run
+# makes, so it alone passes; every other "wait" is a stop.
 _STOP_WORDS = re.compile(
-    r"escalat|halt|park|block|re-?loop|abort|paus|\bwait|\bends? the run|\bstop(?!s none of them)", re.IGNORECASE
+    r"escalat|halt|park|block|re-?loop|abort|paus|(?<!cannot )\bwait|\bends? the run|\bstop(?!s none of them)",
+    re.IGNORECASE,
 )
 
 
@@ -539,10 +557,98 @@ def test_mode_case_predicate_rejects_a_one_clause_mutant(old, new):
 
 
 def test_the_paragraph_adds_no_stop():
-    """Neither fallback stops the run, and the paragraph names no stop of any
-    kind, so no run that works today starts to stop on it."""
+    """None of the three fallbacks (a session that cannot start such an agent,
+    TEA's mode error, a session that cannot wait for an agent under `sequential`)
+    stops the run: each runs the skill in the conductor's own context, or writes
+    the hand-authored file there where the skill cannot run. The paragraph names
+    no stop of any kind, so no run that works today starts to stop on it."""
     assert _adds_no_stop(_rule())
-    assert _LOGGED in _flat(_rule())
+    flat = _flat(_rule())
+    assert _NO_AGENT in flat and _MODE_CASE in flat and _WAIT_CASE in flat
+    assert _LOGGED in flat
+
+
+# --- THE WAIT CASE: a session that cannot wait, under `sequential`, runs it ------
+
+
+def _wait_case_runs_the_skill(rule: str) -> bool:
+    """A session that cannot wait for an agent it starts, with TEA's mode
+    `sequential`, runs the skill itself, because there each delegated assessment
+    would spend a turn of the story's ceiling that running the skill yourself does not.
+    "So does" takes its verb from the sentences before it, so the case follows
+    the mode case directly; the log sentence directly after it covers it and ends
+    the paragraph; and nothing in the paragraph names a stop."""
+    flat = _flat(rule).strip()
+    return (
+        (_MODE_CASE + " " + _WAIT_CASE + " " + _LOGGED) in flat
+        and flat.endswith(_LOGGED)
+        and _adds_no_stop(rule)
+    )
+
+
+def test_a_session_that_cannot_wait_under_sequential_runs_the_skill_itself():
+    assert _wait_case_runs_the_skill(_rule())
+    assert _WAIT_CASE in _flat(_rule())
+
+
+def test_wait_case_predicate_rejects_the_text_without_it():
+    assert not _wait_case_runs_the_skill(_backfill_section(_without_the_rule()))
+    # The paragraph as it stood before this sentence.
+    assert not _wait_case_runs_the_skill(_mutant(" " + _WAIT_CASE, ""))
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param(" " + _WAIT_CASE, "", id="dropped"),
+        pytest.param("a session that cannot wait for an agent it starts, when", "any session, when",
+                     id="any-session"),
+        pytest.param(", when " + _SEQUENTIAL + ":", ":", id="any-mode"),
+        pytest.param("is `sequential`:", "is `subagent`:", id="subagent-mode"),
+        pytest.param("is `sequential`:", "is `auto`:", id="auto-mode"),
+        pytest.param(_WAIT_REASON, ".", id="reason-dropped"),
+        pytest.param("that running the skill yourself does not.", "that running the skill yourself spends too.",
+                     id="reason-inverted"),
+        pytest.param(_WAIT_OPENER + _SEQUENTIAL + ":",
+                     "A session that cannot wait for an agent it starts, when " + _SEQUENTIAL + ", stops the run:",
+                     id="stops"),
+        pytest.param(_WAIT_OPENER + _SEQUENTIAL + ":",
+                     "A session that cannot wait for an agent it starts, when " + _SEQUENTIAL
+                     + ", escalates the story:", id="escalates"),
+        pytest.param(_WAIT_OPENER + _SEQUENTIAL + ":",
+                     "A session that cannot wait for an agent it starts, when " + _SEQUENTIAL
+                     + ", waits for the operator:", id="waits-for-the-operator"),
+        pytest.param("So does a session that cannot wait", "Nor does a session that cannot wait",
+                     id="does-not-run-the-skill"),
+        pytest.param(_WAIT_CASE + " " + _LOGGED, _LOGGED + " " + _WAIT_CASE, id="after-the-closing-sentence"),
+        pytest.param(_MODE_CASE + " " + _WAIT_CASE, _WAIT_CASE + " " + _MODE_CASE, id="before-the-mode-case"),
+    ],
+)
+def test_wait_case_predicate_rejects_a_one_clause_mutant(old, new):
+    assert not _wait_case_runs_the_skill(_mutant(old, new))
+
+
+def test_the_wait_case_rests_on_the_hook_count_and_tea_s_sequential_mode():
+    """The facts the reason rests on: the Stop hook counts one turn per response,
+    a subagent reporting back to an idle session starts a response, an attended
+    session often cannot wait for one in the foreground, the ceiling the sentence
+    names is the hook's count, and TEA's sequential mode runs each worker to
+    completion where the parallel modes launch theirs non-blocking."""
+    execute = _flat(EXECUTE)
+    assert "The Stop hook counts one turn per response, whatever the response did." in execute
+    assert (
+        "A background task's notification (a background command exiting, a background subagent or workflow "
+        "reporting back, a watch's event) that lands while the session is idle starts a response of its own"
+    ) in execute
+    assert "an attended session often cannot wait for a subagent in the foreground" in execute
+    assert (
+        "**Turn ceiling:** `{workflow.max_turns_per_story}` turns per story, as the Stop hook counts them (one per "
+        "response)."
+    ) in _flat(PREFLIGHT)
+    shared = _flat(
+        (_repo_tea_reference() / "references" / "pattern-atdd-and-automate.md").read_text(encoding="utf-8")
+    )
+    assert "Parallel modes launch workers non-blocking; sequential runs each to completion." in shared
 
 
 # --- the last sentence: each case is logged, and the rule stops none ------------
@@ -551,10 +657,11 @@ _NO_STOP_CLAUSE = ": this rule stops none of them."
 
 
 def _logs_each_case_and_stops_none(rule: str) -> bool:
-    """The paragraph ends on one sentence, right after the mode case, that has
-    each case it names logged in `.decision-log.md` and says the rule stops none
-    of them, and nothing in the paragraph names a stop (the word check)."""
-    return _flat(rule).strip().endswith(_MODE_CASE + " " + _LOGGED) and _adds_no_stop(rule)
+    """The paragraph ends on one sentence, right after the wait case, which
+    itself directly follows the mode case, that has each case it names logged in
+    `.decision-log.md` and says the rule stops none of them, and nothing in the
+    paragraph names a stop (the word check)."""
+    return _flat(rule).strip().endswith(_MODE_CASE + " " + _WAIT_CASE + " " + _LOGGED) and _adds_no_stop(rule)
 
 
 def test_the_last_sentence_logs_each_case_and_stops_none():
@@ -579,7 +686,10 @@ def test_logged_predicate_rejects_the_text_without_the_paragraph():
         pytest.param("this rule stops none of them", "this rule stops the second of them", id="stops-one"),
         pytest.param(_NO_STOP_CLAUSE, ", then escalate the story.", id="log-then-escalate"),
         pytest.param(_LOGGED, _LOGGED + " A mode error that recurs halts the run.", id="stop-appended"),
-        pytest.param(_MODE_CASE + " " + _LOGGED, _LOGGED + " " + _MODE_CASE, id="before-the-mode-case"),
+        pytest.param(_WAIT_CASE + " " + _LOGGED, _LOGGED + " " + _WAIT_CASE, id="before-the-wait-case"),
+        pytest.param(_MODE_CASE + " " + _WAIT_CASE + " " + _LOGGED, _LOGGED + " " + _MODE_CASE + " " + _WAIT_CASE,
+                     id="before-the-mode-case"),
+        pytest.param(" " + _WAIT_CASE, "", id="wait-case-dropped"),
     ],
 )
 def test_logged_predicate_rejects_a_one_clause_mutant(old, new):
@@ -597,6 +707,7 @@ def test_logged_predicate_rejects_a_one_clause_mutant(old, new):
         pytest.param("A mode error is a re-loop.", id="re-loop"),
         pytest.param("A mode error stops the run.", id="stop"),
         pytest.param("The run waits for the operator.", id="wait"),
+        pytest.param("The conductor waits for the operator before the gate.", id="conductor-waits"),
         pytest.param("A mode error aborts the run.", id="abort"),
         pytest.param("The run pauses for the operator.", id="pause"),
         pytest.param("A mode error ends the run.", id="ends-the-run"),
@@ -611,10 +722,17 @@ def test_no_stop_predicate_rejects_a_no_agent_sentence_that_stops_the_run():
 
 
 def test_the_stop_word_check_does_not_match_the_live_paragraph():
-    """The one stop word the paragraph holds is its own "stops none of them"."""
+    """Two phrases in the paragraph come near a stop word and name no stop: its
+    own "stops none of them", and the wait case's "cannot wait for an agent it
+    starts", a condition on the session and not a wait the run makes. The check
+    exempts "stops none of them" by that exact phrase, and "cannot wait" wherever
+    it appears; the whole-paragraph pin holds the rest of the wait case's words."""
     flat = _flat(_rule())
     assert _STOP_WORDS.search(flat) is None
     assert _STOP_WORDS.search(flat.replace("stops none of them", "stops each of them")) is not None
+    assert "a session that cannot wait for an agent it starts" in flat
+    assert _STOP_WORDS.search(flat.replace("cannot wait for an agent", "will wait for an agent")) is not None
+    assert _STOP_WORDS.search(flat.replace("cannot wait for an agent", "can wait for an agent")) is not None
 
 
 def test_the_modes_are_the_ones_tea_and_preflight_name():
@@ -666,10 +784,16 @@ def test_rule_holds_nothing_else():
     [
         pytest.param(_LOGGED, _LOGGED + " A ruling may lift a status.", id="appended"),
         pytest.param(_WHY, _WHY + " A summary of the rulings may go with each delegation.", id="after-the-why"),
+        pytest.param(_WAIT_CASE, _WAIT_CASE + " A session that can wait may still run the skill itself.",
+                     id="after-the-wait-case"),
     ],
 )
 def test_whole_rule_predicate_rejects_an_added_sentence(old, new):
     assert not _rule_is_whole(_mutant(old, new))
+
+
+def test_whole_rule_predicate_rejects_the_paragraph_without_the_wait_case():
+    assert not _rule_is_whole(_mutant(" " + _WAIT_CASE, ""))
 
 
 _BACKFILL_COMMIT_HEAD = "**When automate backfills, commit the backfill before trace runs.**"
@@ -720,13 +844,17 @@ _POINTER = (
 )
 
 
+_STEP3_OPENING = (
+    "3. **Production profile only:** `bmad-testarch-test-review`, then `bmad-code-review`. A `CONCERNS`-grade or "
+    "non-critical finding appends to `{workflow.deferred_work_path}` and the story proceeds. A **P0 / critical FAIL "
+    "never defers**: re-loop within the turn budget or escalate."
+)
+
+
 def _step3_points_at_the_rule(step: str) -> bool:
-    """Step 3 still opens with the test review and ends with the 8.1.0 pointer
-    followed directly by this one, so no sentence after it can take it back."""
-    flat = _flat(step).strip()
-    return flat.startswith("3. **Production profile only:** `bmad-testarch-test-review`") and flat.endswith(
-        _POINTER_8_1_0 + " " + _POINTER
-    )
+    """Step 3 is its 8.1.0 text, the 8.1.0 pointer and this one, and nothing
+    else, so no sentence before or after the pointer can take it back."""
+    return _flat(step).strip() == _STEP3_OPENING + " " + _POINTER_8_1_0 + " " + _POINTER
 
 
 def test_execute_step_3_points_at_the_rule():
@@ -735,6 +863,19 @@ def test_execute_step_3_points_at_the_rule():
     assert _HEAD == "**" + _CITED.strip('"') + ".**"
     assert _HEAD in _backfill_section()
     assert EXECUTE.count(_CITED) == 1
+    # The name opens one paragraph only, so the pointer cites no other.
+    assert GATE.count(_HEAD) == 1
+
+
+def test_no_other_sentence_of_gate_md_speaks_of_a_fork_or_your_own_context():
+    """"fork" and "own context" occur in gate.md only inside this paragraph, so a
+    sentence added elsewhere that allows a fork or an assessment in your own
+    context is seen here. A sentence that says it in other words is not."""
+    rule = _rule()
+    assert GATE.count("fork") == rule.count("fork") > 0
+    assert GATE.count("own context") == rule.count("own context") > 0
+    added = GATE.replace(_BACKFILL_COMMIT_HEAD, "Where fork mode is on, a fork will do.\n\n" + _BACKFILL_COMMIT_HEAD, 1)
+    assert added != GATE and added.count("fork") != rule.count("fork")
 
 
 def test_step_3_predicate_rejects_the_step_without_the_pointer():
@@ -744,6 +885,10 @@ def test_step_3_predicate_rejects_the_step_without_the_pointer():
     assert not _step3_points_at_the_rule(without)
     # The 8.1.0 pointer is still in the step once this one is cut.
     assert _POINTER_8_1_0 in _flat(without)
+    # A sentence added before the pointers is rejected too.
+    fork = "Where fork mode is on, run the test review in a fork. "
+    mid = _flat(step).replace(_POINTER_8_1_0, fork + _POINTER_8_1_0, 1)
+    assert mid != _flat(step) and not _step3_points_at_the_rule(mid)
     # A sentence added after the pointer could take it back, so it is rejected.
     for added in ("When no such agent can be started, escalate the story.",
                   "Where fork mode is on, a fork will do.",
@@ -771,3 +916,131 @@ def test_step_3_predicate_rejects_a_one_clause_mutant(old, new):
     mutant = step.replace(old, new)
     assert mutant != step, "the mutant must actually change the text"
     assert not _step3_points_at_the_rule(mutant)
+
+
+# --- Execute's "Make each wait report once" waits for a lone subagent ------------
+
+_WAITS_HEAD = "**Waiting spends turns.**"
+_WAIT_BULLET_HEAD = "- **Make each wait report once.**"
+_LIKEWISE_ANTECEDENT = "or as calls the session waits for where it can (a `-p` run can)."
+_SEPARATE = "Separate background tasks each wake the session when they end."
+_LONE_SUBAGENT = (
+    "A lone subagent, such as each test review or NFR assessment you delegate, is likewise a call the session waits "
+    "for where it can, and then costs no wake-up."
+)
+
+
+def _wait_bullet(text: str = EXECUTE) -> str:
+    """The "Make each wait report once" bullet of the list under "Waiting spends
+    turns", or "" when that list holds no such bullet."""
+    start = text.find("\n" + _WAITS_HEAD)
+    if start == -1:
+        return ""
+    list_start = text.find("\n\n", start + 1)
+    if list_start == -1:
+        return ""
+    end = text.find("\n\n", list_start + 2)
+    lines = text[list_start + 2 : end if end != -1 else len(text)].split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith(_WAIT_BULLET_HEAD + " "):
+            # The bullet runs on over its continuation lines, up to the next bullet.
+            bullet = [line]
+            for more in lines[i + 1 :]:
+                if more.startswith("- "):
+                    break
+                bullet.append(more)
+            return " ".join(part.strip() for part in bullet)
+    return ""
+
+
+def _lone_subagent_is_waited_for(text: str = EXECUTE) -> bool:
+    """The bullet ends on the sentence, directly after the one that says separate
+    background tasks each wake the session, that has a lone subagent, each
+    delegated test review and NFR assessment named, waited for where the session
+    can, which then costs no wake-up. "Likewise" points back at the bullet's own
+    "calls the session waits for where it can", so that clause stays in it, before
+    the sentence; nothing after the sentence can take it back."""
+    bullet = _flat(_wait_bullet(text)).strip()
+    if not bullet.endswith(_SEPARATE + " " + _LONE_SUBAGENT):
+        return False
+    return _LIKEWISE_ANTECEDENT in bullet and bullet.index(_LIKEWISE_ANTECEDENT) < bullet.index(_LONE_SUBAGENT)
+
+
+def _execute_mutant(old: str, new: str) -> str:
+    mutant = EXECUTE.replace(old, new)
+    assert mutant != EXECUTE, "the mutant must actually change the text"
+    return mutant
+
+
+def test_execute_waits_for_a_lone_delegated_assessor_where_it_can():
+    assert _lone_subagent_is_waited_for()
+    assert EXECUTE.count(_LONE_SUBAGENT) == 1
+
+
+def test_lone_subagent_predicate_rejects_the_bullet_without_it():
+    without = _execute_mutant(" " + _LONE_SUBAGENT, "")
+    assert not _lone_subagent_is_waited_for(without)
+    # The rest of the bullet is untouched by the cut.
+    assert _flat(_wait_bullet(without)).strip().endswith(_SEPARATE)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # A demand a host cannot meet: an attended session often cannot wait.
+        pytest.param("is likewise a call the session waits for where it can, and then costs no wake-up.",
+                     "is likewise a call the session waits for, and costs no wake-up.", id="where-it-can-dropped"),
+        pytest.param("and then costs no wake-up.", "and then costs a wake-up.", id="costs-a-wake-up"),
+        pytest.param(" " + _LONE_SUBAGENT, "", id="dropped"),
+        pytest.param("such as each test review or NFR assessment you delegate",
+                     "such as each test review you delegate", id="test-review-only"),
+        pytest.param("such as each test review or NFR assessment you delegate",
+                     "such as each NFR assessment you delegate", id="nfr-assessment-only"),
+        pytest.param(_LONE_SUBAGENT, _LONE_SUBAGENT + " A delegated assessment runs in the background.",
+                     id="taken-back"),
+        pytest.param(_SEPARATE + " " + _LONE_SUBAGENT, _LONE_SUBAGENT + " " + _SEPARATE, id="before-separate"),
+        pytest.param(" (a `-p` run can).", ".", id="antecedent-changed"),
+    ],
+)
+def test_lone_subagent_predicate_rejects_a_one_clause_mutant(old, new):
+    assert not _lone_subagent_is_waited_for(_execute_mutant(old, new))
+
+
+def test_lone_subagent_predicate_rejects_the_sentence_in_another_bullet():
+    watch_end = "and schedule no wake-up only to check progress."
+    assert EXECUTE.count(watch_end) == 1
+    moved = _execute_mutant(" " + _LONE_SUBAGENT, "").replace(watch_end, watch_end + " " + _LONE_SUBAGENT, 1)
+    assert moved.count(_LONE_SUBAGENT) == 1
+    assert not _lone_subagent_is_waited_for(moved)
+    # Moved out of the list under "Waiting spends turns" altogether, it is rejected too.
+    outside = _execute_mutant(" " + _LONE_SUBAGENT, "").replace(
+        "\n" + _WAITS_HEAD, "\n" + _WAIT_BULLET_HEAD + " " + _LIKEWISE_ANTECEDENT + " " + _SEPARATE + " "
+        + _LONE_SUBAGENT + "\n\n" + _WAITS_HEAD, 1
+    )
+    assert outside.count(_LONE_SUBAGENT) == 1
+    assert not _lone_subagent_is_waited_for(outside)
+
+
+def _turn_bound_pins():
+    """test_turn_bound_prose.py, loaded under its own name, for its pins of the
+    same bullet."""
+    path = Path(__file__).with_name("test_turn_bound_prose.py")
+    spec = importlib.util.spec_from_file_location("ucg_turn_bound_prose_pins", path)
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+def test_the_turn_bound_pins_of_the_bullet_still_hold():
+    """The sentence takes nothing from what test_turn_bound_prose.py pins of
+    "Make each wait report once": its predicate still holds, each of its clauses
+    that the bullet held without the sentence still holds with it, and the
+    retired background-command form is not back."""
+    pins = _turn_bound_pins()
+    assert pins._states_that_waits_spend_turns(EXECUTE)
+    live = _wait_bullet()
+    before = _wait_bullet(_execute_mutant(" " + _LONE_SUBAGENT, ""))
+    held = [clause for clause in pins._WAIT_CLAUSES if re.search(clause, before)]
+    assert held, "the bullet must hold some of the turn-bound pins"
+    assert all(re.search(clause, live) for clause in held)
+    assert pins._RETIRED_WAIT_FORM not in live
