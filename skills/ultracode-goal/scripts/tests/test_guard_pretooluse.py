@@ -7436,15 +7436,66 @@ def test_csr_heredoc_report_after_a_strip_expansion_passes(latch_world: _StoreWo
     _assert_latch_denied(*_bash(latch_world, f": ${{x:=1}}\n{report}", cwd=latch_world.impl), latch_world.latch)
 
 
+# Tries a linear-time reading below gets, each timed in this process's CPU seconds, not wall seconds: the suite runs
+# under pytest-xdist beside other jobs, and a loaded machine stretches a reading's wall time far more than its CPU
+# time. Each reading timed this way is a call into the guard module in this process, which starts no child process,
+# so this process's CPU time sees all of it. A try past twice its bound is no slowed linear reading, so it is not
+# tried again: a quadratic reading fails after one try, not three.
+_LINEAR_TRIES = 3
+
+
+def _cpu_seconds_per_try(guard_module, read, bound: float) -> list[float]:
+    """Time `read()` in this process's CPU seconds, up to `_LINEAR_TRIES`
+    times, stopping at the first try under `bound` or over twice it. Every
+    cache of the guard module is cleared before each try, so no try measures
+    a cache hit left by the one before: `_command_rebinds` and
+    `_without_heredoc_data` keep one, and `_without_heredoc_data` calls
+    `_command_rebinds`."""
+    import time
+
+    spent: list[float] = []
+    for _ in range(_LINEAR_TRIES):
+        for value in vars(guard_module).values():
+            if callable(getattr(value, "cache_clear", None)):
+                value.cache_clear()
+        started = time.process_time()
+        read()
+        spent.append(time.process_time() - started)
+        if spent[-1] < bound or spent[-1] > 2 * bound:
+            break
+    return spent
+
+
+def test_cpu_seconds_per_try_clears_the_caches_before_each_try(guard_module, monkeypatch) -> None:
+    """A second try that found the first try's results cached would measure a
+    cache hit, and could pass a quadratic reading whose first try landed
+    between the bound and twice the bound. A clock that gives every try 1.5
+    CPU seconds against a bound of 1 keeps all three tries going."""
+    import time
+
+    ticks = iter([0.0, 1.5, 3.0, 4.5, 6.0, 7.5])
+    monkeypatch.setattr(time, "process_time", lambda: next(ticks))
+    command = "time -p " * 50 + "ls"
+    sizes = []
+
+    def read() -> None:
+        before = guard_module._command_rebinds.cache_info().currsize
+        assert guard_module._command_rebinds(command)
+        sizes.append((before, guard_module._command_rebinds.cache_info().currsize))
+
+    assert _cpu_seconds_per_try(guard_module, read, 1.0) == [1.5] * _LINEAR_TRIES
+    # Each try starts with an empty cache, and fills it, so the next try's empty start is the clearing's work.
+    assert sizes == [(0, 1)] * _LINEAR_TRIES
+
+
 def test_csr_rebinding_text_is_linear_in_the_command_length(guard_module) -> None:
     """The text scan for rebinding shapes once took time quadratic in the
     command's length: a `[[ ]]` test read lazily to its `]]` from every `[[`,
     a subscript tried from every letter of a long word, and a `${...}` or a
     `PATH[` read to the end from each opener. A hook past its timeout lets
     the call through, so the scan pairs brackets and braces in one pass now.
-    The bound is generous: each input took tens of seconds to minutes before."""
-    import time
-
+    The bound is generous: each input took tens of seconds to minutes before.
+    It counts CPU seconds, and the best of a few tries counts."""
     inputs = (
         "[[ -eq " * 50000,
         "a" * 200000,
@@ -7453,11 +7504,13 @@ def test_csr_rebinding_text_is_linear_in_the_command_length(guard_module) -> Non
         "${a[" * 50000,
         "test -v a[" * 30000,
     )
-    start = time.perf_counter()
-    for text in inputs:
-        guard_module._rebinding_text(text)
-    elapsed = time.perf_counter() - start
-    assert elapsed < 10.0, f"took {elapsed:.1f}s"
+
+    def read() -> None:
+        for text in inputs:
+            guard_module._rebinding_text(text)
+
+    spent = _cpu_seconds_per_try(guard_module, read, 10.0)
+    assert min(spent) < 10.0, f"CPU seconds per try: {spent}"
 
 
 def test_csr_a_run_of_wrappers_is_bounded(guard_module) -> None:
@@ -7465,17 +7518,18 @@ def test_csr_a_run_of_wrappers_is_bounded(guard_module) -> None:
     segment, so the scan reads at most _MAX_WRAPPERS of them and counts a
     longer run as a rebind: a long run once took time quadratic in its length,
     and a hook past its timeout lets the call through. A short run is read
-    through to its head."""
-    import time
-
+    through to its head. The long runs are timed in CPU seconds, and the best
+    of a few tries counts."""
     limit = guard_module._MAX_WRAPPERS
     assert not guard_module._command_rebinds("time " * limit + "ls")
     assert guard_module._command_rebinds("time " * (limit + 1) + "ls")
-    start = time.perf_counter()
-    assert guard_module._command_rebinds("time -p " * 50000 + "ls")
-    assert guard_module._command_rebinds("command " * 50000 + "ls")
-    elapsed = time.perf_counter() - start
-    assert elapsed < 10.0, f"took {elapsed:.1f}s"
+
+    def read() -> None:
+        assert guard_module._command_rebinds("time -p " * 50000 + "ls")
+        assert guard_module._command_rebinds("command " * 50000 + "ls")
+
+    spent = _cpu_seconds_per_try(guard_module, read, 10.0)
+    assert min(spent) < 10.0, f"CPU seconds per try: {spent}"
 
 
 def test_csr_rebinding_prose_matches_the_reading() -> None:
@@ -7514,16 +7568,13 @@ def test_csr_heredoc_reading_is_linear_in_the_number_of_heredocs(guard_module) -
     re-scanned the whole growing prefix. It is linear now, so a command with a
     few thousand data heredocs and a trailing `rm <latch>` resolves fast. The
     bound is generous: a regression to the quadratic cost took tens of seconds
-    at this size."""
-    import time
-
+    at this size. It counts CPU seconds, and the best of a few tries counts."""
     command = "".join(f"cat >>f{i} <<'EOF'\nrow .**\nEOF\n" for i in range(2000))
     command += "rm -f _bmad-output/implementation-artifacts/.mem-state.json"
-    guard_module._without_heredoc_data.cache_clear()
-    start = time.perf_counter()
-    read = guard_module._without_heredoc_data(command)
-    elapsed = time.perf_counter() - start
-    assert elapsed < 10.0, f"took {elapsed:.1f}s"
+    reads = []
+    spent = _cpu_seconds_per_try(guard_module, lambda: reads.append(guard_module._without_heredoc_data(command)), 10.0)
+    assert min(spent) < 10.0, f"CPU seconds per try: {spent}"
+    read = reads[-1]
     # The trailing `rm` is kept (the data bodies are left out), so the command
     # still names the latch and would be denied.
     assert "rm -f _bmad-output/implementation-artifacts/.mem-state.json" in read
@@ -7675,16 +7726,17 @@ def test_a_run_of_bang_words_is_linear(guard_module) -> None:
     """Issue #179: a segment opening with n `!` words cost time quadratic in
     n, and a hook past its timeout lets the call through. The bound is
     generous: at this size the strip, the git reading and the rebinding scan
-    took tens of seconds before, and a second or two now."""
-    import time
-
+    took tens of seconds before, and a second or two now. It counts CPU
+    seconds, and the best of a few tries counts."""
     n = 50_000
-    start = time.perf_counter()
-    assert guard_module._strip_leading_noise(["!"] * n + ["git", "x"]) == ["git", "x"]
-    assert guard_module._git_writes("! " * n + _V + " -m x") == {"commit"}
-    assert not guard_module._command_rebinds("! " * n + "ls")
-    elapsed = time.perf_counter() - start
-    assert elapsed < 10.0, f"took {elapsed:.1f}s"
+
+    def read() -> None:
+        assert guard_module._strip_leading_noise(["!"] * n + ["git", "x"]) == ["git", "x"]
+        assert guard_module._git_writes("! " * n + _V + " -m x") == {"commit"}
+        assert not guard_module._command_rebinds("! " * n + "ls")
+
+    spent = _cpu_seconds_per_try(guard_module, read, 10.0)
+    assert min(spent) < 10.0, f"CPU seconds per try: {spent}"
 
 
 def test_a_short_run_of_exec_wrappers_is_read_through(guard_module) -> None:
@@ -7794,14 +7846,15 @@ def test_a_run_past_the_wrapper_bound_is_read_in_linear_time(guard_module) -> No
     it to the matches-anywhere scan, which restarts at every `git` word in
     the segment, so `--git` words ahead of the run cost time quadratic in
     their number (tens of seconds at this size) where the unbounded reading
-    took linear time. Past the bound the reading decides on its own now."""
-    import time
-
+    took linear time. Past the bound the reading decides on its own now. It
+    counts CPU seconds, and the best of a few tries counts."""
     command = "env" + " --git" * 8000 + " env" * (guard_module._MAX_WRAPPERS + 1) + " ls"
-    start = time.perf_counter()
-    assert guard_module._git_writes(command) == {"commit", "push"}
-    elapsed = time.perf_counter() - start
-    assert elapsed < 10.0, f"took {elapsed:.1f}s"
+
+    def read() -> None:
+        assert guard_module._git_writes(command) == {"commit", "push"}
+
+    spent = _cpu_seconds_per_try(guard_module, read, 10.0)
+    assert min(spent) < 10.0, f"CPU seconds per try: {spent}"
 
 
 def test_the_wrapper_bound_is_one_constant_beside_the_wrappers(guard_module) -> None:
@@ -8260,18 +8313,19 @@ def test_the_linear_lexer_reads_every_text_as_shlex_does(guard_module) -> None:
 def test_one_long_word_is_read_in_linear_time(guard_module) -> None:
     """Issue #186: at this size the stdlib lexer took about a minute for each
     reading, and these four calls make several. The bound is generous for a
-    slow, busy runner; the readings take seconds."""
-    import time
-
+    slow, busy runner; the readings take seconds. It counts CPU seconds, and
+    the best of a few tries counts."""
     n = 1_000_000
     word = "a" * n
-    start = time.perf_counter()
-    assert guard_module._tokenize(word) == [word]
-    assert guard_module._quoted_segments("echo " + word) == [["echo", word]]
-    assert guard_module._git_writes("echo " + word) == set()
-    assert guard_module._git_writes(_V + " -m '" + word + "'") == {"commit"}
-    elapsed = time.perf_counter() - start
-    assert elapsed < 120.0, f"took {elapsed:.1f}s"
+
+    def read() -> None:
+        assert guard_module._tokenize(word) == [word]
+        assert guard_module._quoted_segments("echo " + word) == [["echo", word]]
+        assert guard_module._git_writes("echo " + word) == set()
+        assert guard_module._git_writes(_V + " -m '" + word + "'") == {"commit"}
+
+    spent = _cpu_seconds_per_try(guard_module, read, 120.0)
+    assert min(spent) < 120.0, f"CPU seconds per try: {spent}"
 
 
 def test_a_path_longer_than_the_bound_is_resolved_a_stretch_at_a_time(
