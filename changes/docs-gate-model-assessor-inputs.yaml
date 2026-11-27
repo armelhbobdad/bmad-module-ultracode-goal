@@ -1,0 +1,3 @@
+type: docs
+summary: |
+  The Gate Model page now says who makes each file the gate reads and what each assessor is handed. Trace, each test review and each NFR assessment run in an agent the run starts for that one job, never in the session that holds the run's rulings, and the page names the cases that still run a skill in that session. The test reviewer and the NFR assessor are handed the tree they assess, the story's acceptance criteria and the files a tool wrote when it measured the commit, copied into the gate worktree for the NFR audit, and none of the run's own account of the work. After an operator moves or amends an acceptance criterion, trace and the NFR assessor read the criteria and the edited sources from the main tree.
