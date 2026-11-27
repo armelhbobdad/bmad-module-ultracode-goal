@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  In production, the run now tells `bmad-code-review` that each Operator notes entry and the class ledger it hands the review for a story can add a finding and never waive one or lower its severity. Execute surfaces into the review's context each Operator notes entry from `.decision-log.md` that names the story, and the Epic's class ledger of the defect classes earlier reviews caught, so that the reviewers look harder. Until now the run did not tell the review that this context can add a finding but never waive one, so an entry such as one that accepts a retry delay could read as leave to drop a finding, or to file it lower. A critical finding filed lower is a non-critical one, which goes to the deferred-work ledger and lets the story proceed where the critical one would have re-looped it.

@@ -18,7 +18,8 @@ steps that offered the nonexistent `validate-create-story` replaced by a check a
 description, a note in the checklist, and its routes in steps 1, 3, 4, 5 and 8 to 10), under which
 the skill implements only the parent acceptance criteria a child row claims, takes a re-loop's
 findings as an input, writes no story file, checks its definition of done against those criteria
-and moves only the child's sprint-status row; a declared-gates input (the "Declared Gates" section
+and moves only the child's sprint-status row; a clause on four checklist items and a note under the
+definition-of-done list on a declared gate still red; a declared-gates input (the "Declared Gates" section
 and its action in step 9), under which the skill also runs, before it sets a story to review, the
 quality gates a run names, and fixes a red one where it can; and em dashes replaced by other punctuation. The workflow steps are otherwise unchanged.
 

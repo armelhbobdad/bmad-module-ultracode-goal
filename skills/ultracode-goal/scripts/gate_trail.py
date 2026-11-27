@@ -119,7 +119,8 @@ COLUMNS = (
     "Commit",
 )
 
-# Rendered in any cell whose source artifact is absent or unreadable.
+# Rendered in a cell whose source artifact is absent or unreadable, and in one a read source leaves empty or
+# whose table has no such column.
 NA = "n/a"
 
 # The un-suffixed artifact names `references/gate.md` documents for a directory
@@ -1093,7 +1094,8 @@ def render(
         "the decision log, the open escalations and the recorded baseline and end commits.",
         "",
         "It renders the gate's verdicts; it never forms one. A cell whose source artifact "
-        f"was absent or unreadable reads `{NA}`.",
+        f"was absent or unreadable reads `{NA}`, and so can one whose source was read, when the "
+        "cell is empty or its table has no such column.",
         "",
         f"- Profile: {profile}",
         f"- Stories: {len(stories)}",

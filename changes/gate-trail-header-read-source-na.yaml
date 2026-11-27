@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  The header of the gate trail (`gate-trail.md`) now says that a cell can also read `n/a` when the trail did read its source but the cell is empty or the source's table has no such column, as the user docs already said. It said only that a cell reads `n/a` when its source artifact was absent or unreadable, so a reader who trusted it took every `n/a` for a missing or unreadable file.

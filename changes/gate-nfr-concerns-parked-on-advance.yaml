@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  In production, a story that advances with an NFR assessment at `CONCERNS` now has each criterion that assessment rates `CONCERNS` parked on the deferred-work ledger, with `source` `nfr`, before it passes, as an operator-evidence AC still owed its evidence already is. The stage text called an NFR `CONCERNS` a `defer`, while `gate_eval.py` has always read it as a status that does not fail the production AND, so it moves no verdict: a `PASS` or `WAIVED` `gate_status` still gives `advance`. A run that took the text at its word looked for a `defer` the gate never returned, and the `advance` route it did take did not say to park the criteria the assessment rated `CONCERNS`, though TEA marks a `CONCERNS` as needing follow-up. The text now says `CONCERNS` does not fail the AND and moves no verdict, and calls it no `defer`. `gate_eval.py` is unchanged, so a given set of files returns the verdict it returned before.
