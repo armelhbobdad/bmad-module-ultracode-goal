@@ -858,12 +858,21 @@ _STEP3_OPENING = (
     "non-critical finding appends to `{workflow.deferred_work_path}` and the story proceeds. A **P0 / critical FAIL "
     "never defers**: re-loop within the turn budget or escalate."
 )
+# The step's last sentence, after the pointer, which
+# test_execute_code_review_rider_prose.py checks clause by clause.
+_CODE_REVIEW_RIDER = (
+    "Tell `bmad-code-review` that each Operator notes entry and the class ledger that step 1 hands the review can "
+    "add a finding and never waive one or lower its severity."
+)
 
 
 def _step3_points_at_the_rule(step: str) -> bool:
-    """Step 3 is its 8.1.0 text, the 8.1.0 pointer and this one, and nothing
-    else, so no sentence before or after the pointer can take it back."""
-    return _flat(step).strip() == _STEP3_OPENING + " " + _POINTER_8_1_0 + " " + _POINTER
+    """Step 3 is its 8.1.0 text, the 8.1.0 pointer, this one and the code-review
+    rider after it, and nothing else, so no sentence before or after the pointer
+    can take it back."""
+    return _flat(step).strip() == (
+        _STEP3_OPENING + " " + _POINTER_8_1_0 + " " + _POINTER + " " + _CODE_REVIEW_RIDER
+    )
 
 
 def test_execute_step_3_points_at_the_rule():

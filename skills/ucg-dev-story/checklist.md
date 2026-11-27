@@ -45,8 +45,8 @@ validation-rules:
 - [ ] **Integration Tests:** Integration tests added/updated for component interactions when story requirements demand them
 - [ ] **End-to-End Tests:** End-to-end tests created for critical user flows when story requirements specify them
 - [ ] **Test Coverage:** Tests cover acceptance criteria and edge cases from story Dev Notes
-- [ ] **Regression Prevention:** ALL existing tests pass (no regressions introduced)
-- [ ] **Code Quality:** Linting and static checks pass when configured in project
+- [ ] **Regression Prevention:** ALL existing tests pass (no regressions introduced); a gate in `{{declared_gates}}` still red counts as reported, never failed
+- [ ] **Code Quality:** Linting and static checks pass when configured in project; a gate in `{{declared_gates}}` still red counts as reported, never failed
 - [ ] **Test Framework Compliance:** Tests use project's testing frameworks and patterns from Dev Notes
 
 ## 📝 Documentation & Tracking
@@ -61,8 +61,8 @@ validation-rules:
 
 - [ ] **Story Status Updated:** Story Status set to "review"
 - [ ] **Sprint Status Updated:** Sprint status updated to "review" (when sprint tracking is used)
-- [ ] **Quality Gates Passed:** All quality checks and validations completed successfully
-- [ ] **No HALT Conditions:** No blocking issues or incomplete work remaining
+- [ ] **Quality Gates Passed:** All quality checks and validations completed successfully; a gate in `{{declared_gates}}` still red counts as reported, never failed
+- [ ] **No HALT Conditions:** No blocking issues or incomplete work remaining; a gate in `{{declared_gates}}` still red is no HALT condition
 - [ ] **User Communication Ready:** Implementation summary prepared for user review
 
 ## 🎯 Final Validation Output

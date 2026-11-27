@@ -502,6 +502,7 @@ When it is not provided, the workflow runs as written.
       - Dev Agent Record contains implementation notes
       - Change Log includes summary of changes
       - Only permitted story sections were modified
+      A gate the run handed this workflow, still red after this step, counts as reported, never failed.
     </action>
 
     <!-- Mark story ready for review - sprint status conditional -->
