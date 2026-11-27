@@ -1,0 +1,4 @@
+type: fixed
+scope: ultracode-goal
+summary: |
+  In production, after an acceptance criterion is moved out of a story, or once an `ac-amendment-needed` escalation is closed, the NFR assessment now reads the story's criteria as they stand. No commit carries the move or the amendment before the story advances, so the gate worktree's copy of the story file, and of each oracle source the operator edited, still states the old criterion, and an assessor handed those copies could take a threshold from it. On each such gate cycle, the run now copies the criteria out of the main tree's story file (for a decomposed child, its parent's), the file it already names to trace, and hands the assessor from the main tree each other source an `oracle=` line of the story's `.moved-<story_id>` record names. The story file itself is never handed to the assessor, even when an `oracle=` line names it: its criteria are copied out of the main-tree file instead.
