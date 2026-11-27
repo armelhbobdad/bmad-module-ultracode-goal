@@ -124,6 +124,21 @@ _NO_WAIVER = (
     "Tell it to open none of them, and that nothing it was handed waives a breach, moves a threshold or lifts a "
     "status: a threshold is what its source states, and a result no tool recorded proves no pass."
 )
+# The measured files copied into the worktree, and the criteria and sources taken
+# from the main tree after a move or an amendment; test_gate_nfr_measured_files_prose.py
+# checks them.
+_MEASURED_COPIED = (
+    "TEA's NFR audit takes evidence only from files under the root it audits, and those measured files sit outside "
+    "the worktree, so copy each into the worktree before the assessment, untracked and not as a link, at its path "
+    "relative to `{project-root}` under a `.ucg-measured/` folder you name to the assessor, and after the cycle's "
+    "rebuild when it has one, which would discard them, as the worktree's removal does once the verdict is recorded."
+)
+_MAIN_TREE = (
+    "On each gate cycle that names the main-tree story file to trace, after a move or once an AC amendment is "
+    "closed, copy the criteria out of that file (a decomposed child's parent's), not the file itself, and hand each "
+    "other `oracle=` source of the `.moved-<story_id>` record from the main tree, since the worktree's copies still "
+    "state the old AC."
+)
 _BRIEF = "The instructions this file gives every assessor still go in its brief, as above."
 _DELTA_READER = (
     "A delta gate's concerns-only re-check is the one place the assessor reads its own earlier assessment, as the "
@@ -135,7 +150,7 @@ _MOVE_ASIDE = (
     "`{workflow.implementation_artifacts}/evidence-<story_id>/` under a `-cycle-<n>` name, as the paragraph above "
     "moves a test review."
 )
-_SENTENCES = (_WHY, _HANDED, _EXCLUDED, _NO_WAIVER, _BRIEF, _DELTA_READER, _MOVE_ASIDE)
+_SENTENCES = (_WHY, _HANDED, _EXCLUDED, _NO_WAIVER, _MEASURED_COPIED, _MAIN_TREE, _BRIEF, _DELTA_READER, _MOVE_ASIDE)
 
 
 def _mutant(old: str, new: str) -> str:
