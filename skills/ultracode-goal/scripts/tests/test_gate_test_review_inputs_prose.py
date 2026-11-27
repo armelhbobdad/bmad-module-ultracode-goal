@@ -143,7 +143,8 @@ def test_gate_bounds_what_the_test_reviewer_is_handed():
 _PRE_EDIT_SENTENCES = (
     "None of the three may edit a file in the worktree, so none of them runs a mutant: an assessor that would probe "
     "one names the mutant it would run as a finding in its own artifact instead, and when you delegate NFR or test "
-    "review, tell it so. `gate_eval.py` consumes all three artifacts without caring how they were produced. "
+    "review, tell it so. `gate_eval.py` reads the three as files and checks neither their order nor their author, "
+    "which is why the paragraphs below bind how each is made. "
     "(`bmad-testarch-test-review` normally runs in Execute per story: run it here only if you lack a current "
     "`test-review.md` for the story. One written before automate's backfill is not current, since no review has "
     "read the tests the backfill added.)"

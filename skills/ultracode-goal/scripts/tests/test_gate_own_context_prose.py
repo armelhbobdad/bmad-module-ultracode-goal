@@ -153,7 +153,15 @@ _WAIT_REASON = (
 )
 _WAIT_CASE = _WAIT_OPENER + _SEQUENTIAL + _WAIT_REASON
 _LOGGED = "In each of these cases, say so in `.decision-log.md`: this rule stops none of them."
-_SENTENCES = (_WHY, _DELEGATE, _REFUSED, _HAND_AUTHORED, _NO_AGENT, _MODE_CASE, _WAIT_CASE, _LOGGED)
+# Trace decides the verdict first, so the rule binds it too, right after the refused-write route
+# (test_gate_trace_delegated_prose.py holds its predicates).
+_TRACE = (
+    "Trace decides the verdict first, so it is bound the same way, in either profile: delegate each "
+    "`bmad-testarch-trace` run to such an agent, have one write each trace file the non-web section has you author "
+    "(the epic pair, and an `e2e-trace-summary` written instead, included), and change no `gate_status` in a file "
+    "trace or such an agent wrote; the route above and each case below hold for trace as for an assessment."
+)
+_SENTENCES = (_WHY, _DELEGATE, _REFUSED, _TRACE, _HAND_AUTHORED, _NO_AGENT, _MODE_CASE, _WAIT_CASE, _LOGGED)
 
 
 def _mutant(old: str, new: str) -> str:
@@ -384,8 +392,9 @@ def test_refused_write_predicate_rejects_a_citation_placed_above():
                      id="cites-a-paragraph-without-the-route"),
         pytest.param("(below) has you write automate's.", "(above) has you write automate's.", id="cited-above"),
         # The route moved after the fallbacks, away from the bans it qualifies.
-        pytest.param(" " + _REFUSED + " " + _HAND_AUTHORED + " " + _NO_AGENT + " " + _MODE_CASE,
-                     " " + _HAND_AUTHORED + " " + _NO_AGENT + " " + _MODE_CASE + " " + _REFUSED, id="moved-after"),
+        pytest.param(" " + _REFUSED + " " + _TRACE + " " + _HAND_AUTHORED + " " + _NO_AGENT + " " + _MODE_CASE,
+                     " " + _TRACE + " " + _HAND_AUTHORED + " " + _NO_AGENT + " " + _MODE_CASE + " " + _REFUSED,
+                     id="moved-after"),
     ],
 )
 def test_refused_write_predicate_rejects_a_one_clause_mutant(old, new):
