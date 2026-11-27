@@ -264,9 +264,8 @@ _STEP1_LAST_PINNED = "never a `ucg-create-story` run for the child"
 
 
 def test_the_hand_off_predicate_rejects_the_rule_inside_step_1():
-    # Step 1's item is read through a fixed-width window from its
-    # decomposed-child rule (`test_story_skills.py`); a rule run into the item
-    # before the window's last pinned phrase pushes that phrase out of it.
+    # A rule run into step 1's item, inside its decomposed-child rule and before
+    # that rule's last pinned phrase, is not a paragraph of its own.
     execute = _read(_EXECUTE)
     rule = _hand_off_rule(execute)
     anchor = "and the parent's file unedited."
@@ -275,9 +274,6 @@ def test_the_hand_off_predicate_rejects_the_rule_inside_step_1():
     assert pre.index(anchor) < pre.index(_STEP1_LAST_PINNED, pre.index(_STEP1_RULE))
     moved = pre.replace(anchor, f"{anchor} {rule}", 1)
     assert moved.count(_HEADING) == 1
-    flat = _flat(moved)
-    at = flat.index(_STEP1_RULE)
-    assert _STEP1_LAST_PINNED not in flat[at : at + 1600]
     assert _hands_the_declared_gates(moved) == [_OWN_PARAGRAPH]
 
 

@@ -2262,15 +2262,30 @@ def test_a_note_heading_after_a_defer_keeps_the_defer(tmp_path):
     assert _source_line(body) == "- Verdict source: recorded in the decision log"
 
 
+# Seconds of CPU the long blank run below may take. CPU time, not wall time: the suite runs under pytest-xdist beside
+# other jobs, and a loaded machine stretches a read's wall time far more than its CPU time. The match is a plain regex
+# call in this process, so this process's CPU time sees all of it.
+_BLANK_RUN_CPU_BOUND = 1.0
+# Tries the run gets, so that a single try slowed by load does not fail the test. A try past twice the bound is no
+# slowed linear read, so it is not tried again: a quadratic read fails after one try, not three.
+_BLANK_RUN_TRIES = 3
+
+
 def test_the_cycle_tail_reads_a_long_blank_run_in_linear_time():
     """The tail is matched against every story heading of a run's own log. Two
     blank runs in sequence around an optional separator split a run of n blanks
     in n ways before failing: 16,000 blanks took 8 s, measured. Read once, the
-    same run takes milliseconds."""
+    same run takes milliseconds. The read is timed in this process's CPU
+    seconds, and the best of a few tries counts."""
     tail = ": gate" + " " * 16_000 + "x"
-    started = time.perf_counter()
-    assert gate_trail._GATE_CYCLE_TAIL.fullmatch(tail) is None
-    assert time.perf_counter() - started < 1.0
+    spent = []
+    for _ in range(_BLANK_RUN_TRIES):
+        started = time.process_time()
+        assert gate_trail._GATE_CYCLE_TAIL.fullmatch(tail) is None
+        spent.append(time.process_time() - started)
+        if spent[-1] < _BLANK_RUN_CPU_BOUND or spent[-1] > 2 * _BLANK_RUN_CPU_BOUND:
+            break
+    assert min(spent) < _BLANK_RUN_CPU_BOUND, f"CPU seconds per try: {spent}"
 
 
 @pytest.mark.parametrize(

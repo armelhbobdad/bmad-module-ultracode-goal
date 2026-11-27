@@ -226,10 +226,13 @@ def test_dev_story_takes_a_decomposed_child_input():
 
 
 def test_execute_hands_ucg_dev_story_the_child_input():
-    text = _flat(EXECUTE)
+    text = _text(EXECUTE)
     at = text.find("**For a decomposed child row, skip `ucg-create-story` entirely**")
     assert at != -1, "execute.md step 1's decomposed-child rule moved"
-    window = text[at : at + 1600]
+    # The window runs from the rule to the end of its paragraph, not a fixed number of characters, so a sentence
+    # added to the rule does not push a phrase asserted below out of it.
+    end = text.find("\n\n", at)
+    window = re.sub(r"\s+", " ", text[at : end if end != -1 else len(text)])
     assert "Hand `ucg-dev-story` the child's input in place of a story path" in window
     for name in _CHILD_INPUTS:
         assert f"`{name}`" in window, name

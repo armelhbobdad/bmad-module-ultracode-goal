@@ -446,9 +446,13 @@ def test_timing_block_present_all_verdicts(monkeypatch):
 
     # Deterministic, jitter-independent anti-constant proof via an injected delay:
     args = _build_args("ready_epic", "1")
-    # (b) the un-injected mechanical_ms is small (defeats a raw unsubtracted clock read)
+    # (b) the un-injected mechanical_ms fits inside an interval this test reads around the same call, on the kernel's
+    #     own clock (defeats a raw unsubtracted clock read, which reads the clock's whole count). A fixed bound in
+    #     milliseconds failed under load, where the reads stretch; this one stretches with them.
+    outer_start_ns = time.monotonic_ns()
     base = fc.build_verdict(**args)
-    assert base["timing"]["mechanical_ms"] < INJECTED_MS
+    outer_ms = (time.monotonic_ns() - outer_start_ns) / 1e6
+    assert base["timing"]["mechanical_ms"] <= outer_ms
     # (a) inject a known fixed sleep into the mechanical half -> mechanical_ms >= INJECTED_MS
     #     (a monotonic-DELTA lower bound a hardcoded constant cannot satisfy)
     monkeypatch.setattr(fc, "_mechanical_hook", lambda: time.sleep(INJECTED_MS / 1000))
